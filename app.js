@@ -995,7 +995,7 @@ function showBottomNav() {
         const a = document.createElement('a');
         a.className = 'bn-item' + (currentPage === t.page ? ' active' : '');
         a.setAttribute('data-page', t.page);
-        a.onclick = function(e) { e.preventDefault(); navigateTo(t.page); };
+        a.href = '#';
         const iconSpan = document.createElement('span');
         iconSpan.className = 'bn-icon';
         iconSpan.textContent = t.icon;
@@ -1010,7 +1010,7 @@ function showBottomNav() {
     const moreBtn = document.createElement('a');
     moreBtn.className = 'bn-item';
     moreBtn.id = 'bn-more-btn';
-    moreBtn.onclick = function(e) { e.preventDefault(); toggleMoreSheet(); };
+    moreBtn.href = '#';
     const moreIcon = document.createElement('span');
     moreIcon.className = 'bn-icon';
     moreIcon.textContent = '\u2630';
@@ -1021,6 +1021,21 @@ function showBottomNav() {
     moreBtn.appendChild(moreLabel);
     bn.appendChild(moreBtn);
     bn.classList.remove('hidden');
+
+    // Use event delegation on the container to guarantee click handling
+    // This handles the case where individual element events are intercepted
+    bn.onclick = function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        const item = e.target.closest('.bn-item');
+        if (!item) return;
+        if (item.id === 'bn-more-btn') {
+            toggleMoreSheet();
+        } else if (item.dataset.page) {
+            navigateTo(item.dataset.page);
+        }
+    };
+
     buildMoreSheet();
 }
 
