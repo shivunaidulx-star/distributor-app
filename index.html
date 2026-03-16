@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>DistroManager — Distributor Business Management</title>
+    <meta name="description" content="A comprehensive distributor business management app for invoicing, inventory, payments, delivery, packing, and reports.">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📦</text></svg>">
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#f97316">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="DistroMgr">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css?v=18">
+</head>
+<body>
+    <!-- Setup Wizard (first launch) -->
+    <div id="setup-wizard" class="login-screen hidden">
+        <div class="login-card" style="max-width:480px">
+            <div class="login-logo">
+                <div class="logo-icon">D</div>
+                <h1>DistroManager Setup</h1>
+                <p>Let's configure your business</p>
+            </div>
+            <div id="setup-step" class="login-form"></div>
+        </div>
+    </div>
+
+    <!-- Login Screen -->
+    <div id="login-screen" class="login-screen hidden">
+        <div class="login-card">
+            <div class="login-logo">
+                <div class="logo-icon">D</div>
+                <h1 id="login-company-name">DistroManager</h1>
+                <p>Distributor Business Management</p>
+            </div>
+            <div class="login-form">
+                <div class="form-group">
+                    <label for="login-user">Select User</label>
+                    <select id="login-user"></select>
+                </div>
+                <div class="form-group">
+                    <label for="login-pin">PIN</label>
+                    <input type="password" id="login-pin" placeholder="Enter 4-digit PIN" maxlength="4">
+                </div>
+                <button id="btn-login" class="btn btn-primary btn-block">Sign In</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main App -->
+    <div id="app" class="app hidden">
+        <!-- Sidebar -->
+        <aside id="sidebar" class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo-icon-sm">D</div>
+                <span class="sidebar-brand" id="sidebar-brand">DistroManager</span>
+                <button id="sidebar-close" class="sidebar-close">&times;</button>
+            </div>
+            <nav class="sidebar-nav">
+                <a href="#" class="nav-item active" data-page="dashboard">
+                    <span class="nav-icon">📊</span><span class="nav-label">Dashboard</span>
+                </a>
+                <a href="#" class="nav-item" data-page="parties">
+                    <span class="nav-icon">👥</span><span class="nav-label">Parties</span>
+                </a>
+                <a href="#" class="nav-item" data-page="inventory">
+                    <span class="nav-icon">📦</span><span class="nav-label">Inventory</span><span id="nav-badge-inventory" style="display:none;margin-left:auto;background:#ef4444;color:#fff;font-size:0.65rem;font-weight:700;padding:1px 6px;border-radius:10px;line-height:1.6"></span>
+                </a>
+                <a href="#" class="nav-item" data-page="inventorysetup">
+                    <span class="nav-icon">⚙️</span><span class="nav-label">Inventory Setup</span>
+                </a>
+                <a href="#" class="nav-item" data-page="catalog">
+                    <span class="nav-icon">🛍️</span><span class="nav-label">Item Catalog</span>
+                </a>
+                <a href="#" class="nav-item" data-page="salesorders">
+                    <span class="nav-icon">📝</span><span class="nav-label">Sales Orders</span>
+                </a>
+                <a href="#" class="nav-item" data-page="purchaseorders">
+                    <span class="nav-icon">🛒</span><span class="nav-label">Purchase Orders</span>
+                </a>
+                <a href="#" class="nav-item" data-page="invoices">
+                    <span class="nav-icon">🧾</span><span class="nav-label">Invoices</span>
+                </a>
+                <a href="#" class="nav-item" data-page="payments">
+                    <span class="nav-icon">💰</span><span class="nav-label">Payments</span>
+                </a>
+                <a href="#" class="nav-item" data-page="expenses">
+                    <span class="nav-icon">💸</span><span class="nav-label">Expenses</span>
+                </a>
+                <a href="#" class="nav-item" data-page="packing">
+                    <span class="nav-icon">📋</span><span class="nav-label">Packing</span>
+                </a>
+                <a href="#" class="nav-item" data-page="delivery">
+                    <span class="nav-icon">🚚</span><span class="nav-label">Delivery</span>
+                </a>
+                <a href="#" class="nav-item" data-page="reports">
+                    <span class="nav-icon">📈</span><span class="nav-label">Reports</span>
+                </a>
+                <div class="nav-divider"></div>
+                <a href="#" class="nav-item" data-page="packers">
+                    <span class="nav-icon">🧑‍🏭</span><span class="nav-label">Packers Master</span>
+                </a>
+                <a href="#" class="nav-item" data-page="deliverypersons">
+                    <span class="nav-icon">🧑‍✈️</span><span class="nav-label">Delivery Persons</span>
+                </a>
+                <a href="#" class="nav-item" data-page="users">
+                    <span class="nav-icon">🔐</span><span class="nav-label">Users & Roles</span>
+                </a>
+                <a href="#" class="nav-item" data-page="setup">
+                    <span class="nav-icon">⚙️</span><span class="nav-label">Company Setup</span>
+                </a>
+            </nav>
+            <div class="sidebar-footer">
+                <div class="user-badge">
+                    <div class="user-avatar" id="sidebar-avatar">A</div>
+                    <div class="user-info">
+                        <span class="user-name" id="sidebar-username">Admin</span>
+                        <span class="user-role" id="sidebar-role">Admin</span>
+                    </div>
+                </div>
+                <button id="btn-logout" class="btn btn-sm btn-outline">Logout</button>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <header class="topbar">
+                <button id="sidebar-toggle" class="sidebar-toggle">☰</button>
+                <h2 id="page-title" class="page-title">Dashboard</h2>
+                <div class="topbar-right">
+                    <span class="current-date" id="current-date"></span>
+                </div>
+            </header>
+            <div id="page-content" class="page-content">
+                <!-- Dynamic content rendered here -->
+            </div>
+        </main>
+    </div>
+
+    <!-- Bottom Navigation Bar (mobile only) -->
+    <nav id="bottom-nav" class="bottom-nav hidden">
+        <a class="bn-item active" data-page="dashboard" onclick="navigateTo('dashboard')">
+            <span class="bn-icon">📊</span><span class="bn-label">Home</span>
+        </a>
+        <a class="bn-item" data-page="salesorders" onclick="navigateTo('salesorders')">
+            <span class="bn-icon">📝</span><span class="bn-label">Orders</span>
+        </a>
+        <a class="bn-item" data-page="invoices" onclick="navigateTo('invoices')">
+            <span class="bn-icon">🧾</span><span class="bn-label">Invoices</span>
+        </a>
+        <a class="bn-item" data-page="payments" onclick="navigateTo('payments')">
+            <span class="bn-icon">💰</span><span class="bn-label">Payments</span>
+        </a>
+        <a class="bn-item" id="bn-more-btn" onclick="toggleMoreSheet()">
+            <span class="bn-icon">☰</span><span class="bn-label">More</span>
+        </a>
+    </nav>
+
+    <!-- More Sheet (slide-up) -->
+    <div id="more-sheet-overlay" class="more-sheet-overlay hidden" onclick="closeMoreSheet()"></div>
+    <div id="more-sheet" class="more-sheet hidden">
+        <div class="more-sheet-handle"></div>
+        <div class="more-sheet-grid" id="more-sheet-grid"></div>
+    </div>
+
+    <!-- FAB -->
+    <button id="app-fab" class="app-fab hidden" onclick="fabAction()">＋</button>
+
+    <!-- Modal Overlay -->
+    <div id="modal-overlay" class="modal-overlay hidden">
+        <div class="modal" id="modal">
+            <div class="modal-header">
+                <h3 id="modal-title">Modal</h3>
+                <button id="modal-close" class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body" id="modal-body"></div>
+            <div class="modal-footer hidden" id="modal-footer"></div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script src="app.js?v=51"></script>
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/sw.js').catch(() => {});
+        }
+    </script>
+</body>
+</html>
