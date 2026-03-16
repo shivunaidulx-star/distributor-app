@@ -989,12 +989,37 @@ function showBottomNav() {
     if (!bn) return;
     const role = currentUser?.role || 'Admin';
     const tabs = BOTTOM_NAV_TABS[role] || BOTTOM_NAV_TABS['Admin'];
-    // Rebuild tabs dynamically
-    bn.innerHTML = tabs.map(t =>
-        `<a class="bn-item${currentPage === t.page ? ' active' : ''}" data-page="${t.page}" onclick="navigateTo('${t.page}')">
-            <span class="bn-icon">${t.icon}</span><span class="bn-label">${t.label}</span>
-        </a>`
-    ).join('') + `<a class="bn-item" id="bn-more-btn" onclick="toggleMoreSheet()"><span class="bn-icon">☰</span><span class="bn-label">More</span></a>`;
+    // Rebuild tabs using DOM API to avoid encoding/parsing issues with innerHTML
+    bn.innerHTML = '';
+    tabs.forEach(function(t) {
+        const a = document.createElement('a');
+        a.className = 'bn-item' + (currentPage === t.page ? ' active' : '');
+        a.setAttribute('data-page', t.page);
+        a.onclick = function(e) { e.preventDefault(); navigateTo(t.page); };
+        const iconSpan = document.createElement('span');
+        iconSpan.className = 'bn-icon';
+        iconSpan.textContent = t.icon;
+        const labelSpan = document.createElement('span');
+        labelSpan.className = 'bn-label';
+        labelSpan.textContent = t.label;
+        a.appendChild(iconSpan);
+        a.appendChild(labelSpan);
+        bn.appendChild(a);
+    });
+    // Add "More" button
+    const moreBtn = document.createElement('a');
+    moreBtn.className = 'bn-item';
+    moreBtn.id = 'bn-more-btn';
+    moreBtn.onclick = function(e) { e.preventDefault(); toggleMoreSheet(); };
+    const moreIcon = document.createElement('span');
+    moreIcon.className = 'bn-icon';
+    moreIcon.textContent = '\u2630';
+    const moreLabel = document.createElement('span');
+    moreLabel.className = 'bn-label';
+    moreLabel.textContent = 'More';
+    moreBtn.appendChild(moreIcon);
+    moreBtn.appendChild(moreLabel);
+    bn.appendChild(moreBtn);
     bn.classList.remove('hidden');
     buildMoreSheet();
 }
