@@ -733,9 +733,12 @@ function openModal(title, html, footer) {
     $('modal-overlay').classList.remove('hidden');
     // Prevent background page scroll while modal is open
     document.body.style.overflow = 'hidden';
+    // Hide FAB so it doesn't overlap modal buttons
+    const fab = $('app-fab');
+    if (fab) fab.classList.add('hidden');
     // Scroll modal to top
     const body = $('modal-body');
-    if (body) body.scrollTop = 0;
+    if (body) { body.scrollTop = 0; requestAnimationFrame(() => { body.scrollTop = 0; }); }
     // Auto-fix accessibility: link labels to inputs and ensure all inputs have id
     let autoIdx = 0;
     body.querySelectorAll('.form-group, .form-row').forEach(group => {
@@ -754,6 +757,8 @@ function closeModal() {
     const footerEl = $('modal-footer');
     if (footerEl) { footerEl.innerHTML = ''; footerEl.classList.add('hidden'); }
     endSave(); // Always reset save guard when modal closes
+    // Restore FAB visibility for current page
+    updateFab(currentPage);
 }
 
 // --- Custom Searchable Dropdown (replaces broken datalist inside modals) ---

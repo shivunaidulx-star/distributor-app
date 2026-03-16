@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node.exe --check \"c:/Users/Admin/.gemini/antigravity/scratch/distributor-app/app.js\")",
+      "Bash(ipconfig)",
+      "Bash(findstr /i \"IPv4\")",
+      "Bash(netlify deploy:*)",
+      "Bash(netstat -ano)",
+      "Bash(tasklist)",
+      "Bash(netlify status:*)",
+      "Bash(npx netlify-cli:*)",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); users=d.get\\(''''users'''',{}\\); [print\\(v.get\\(''''auth'''',{}\\).get\\(''''token'''',''''''''\\)\\) for k,v in users.items\\(\\)]\")",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(list\\(d.keys\\(\\)\\)\\)\\)\")",
+      "Bash(node -e \"const d=require\\(''/c/Users/Admin/AppData/Roaming/netlify/Config/config.json''\\); const users=d.users||{}; Object.values\\(users\\).forEach\\(v=>console.log\\(\\(v.auth||{}\\).token||''no-token''\\)\\)\")",
+      "Bash(node -e \"const fs=require\\(''fs''\\); const d=JSON.parse\\(fs.readFileSync\\(''C:/Users/Admin/AppData/Roaming/netlify/Config/config.json'',''utf8''\\)\\); const users=d.users||{}; Object.values\\(users\\).forEach\\(v=>console.log\\(JSON.stringify\\(Object.keys\\(v.auth||{}\\)\\)\\)\\)\")",
+      "Bash(NETLIFY_AUTH_TOKEN=nfc_iRJDAFTatiCzuejTPdKHD5j8PNLmBTE7a910 netlify deploy --prod --dir .)",
+      "Bash(netlify link:*)",
+      "Bash(git --version)",
+      "Bash(gh --version)",
+      "Bash(git config:*)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" \"https://shivunaidulx-star.github.io/distributor-app/\")",
+      "Bash(curl -sI \"https://shivunaidulx-star.github.io/distributor-app/\")"
+    ]
+  }
+}

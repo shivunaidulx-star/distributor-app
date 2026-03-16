@@ -1861,6 +1861,10 @@ body {
 
     /* Bottom safe area for iOS */
     .main-content { padding-bottom: env(safe-area-inset-bottom); }
+
+    /* Section toolbar buttons should wrap and not overflow */
+    .section-toolbar { flex-wrap: wrap; gap: 8px; }
+    .section-toolbar .btn { flex: 1; min-width: 0; text-align: center; justify-content: center; overflow: hidden; text-overflow: ellipsis; }
 }
 
 /* iOS safe area support */
@@ -1889,6 +1893,8 @@ body {
     padding-bottom: env(safe-area-inset-bottom);
     align-items: stretch;
     justify-content: space-around;
+    pointer-events: auto;
+    isolation: isolate;
 }
 .bn-item {
     display: flex;
@@ -1929,6 +1935,10 @@ body {
     .topbar { padding: 0 16px; height: 52px; }
     .page-title { font-size: 1rem; font-weight: 700; }
     .topbar-right .current-date { display: none; }
+    /* Ensure page-content does not extend behind the bottom nav */
+    .page-content { position: relative; z-index: 1; }
+    /* Ensure section toolbar buttons fit on mobile */
+    .section-toolbar .btn { font-size: 0.78rem; padding: 8px 12px; white-space: nowrap; }
 }
 
 /* =============================================

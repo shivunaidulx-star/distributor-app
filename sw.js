@@ -1,5 +1,6 @@
-const CACHE = 'distromanager-v14';
-const STATIC = ['/', '/index.html', '/style.css', '/app.js', '/manifest.json'];
+const CACHE = 'distromanager-v15';
+// Use relative paths so the SW works both at root and in subdirectories (e.g. GitHub Pages)
+const STATIC = ['./', './index.html', './style.css', './app.js', './manifest.json'];
 
 self.addEventListener('install', e => {
     e.waitUntil(caches.open(CACHE).then(c => c.addAll(STATIC)));

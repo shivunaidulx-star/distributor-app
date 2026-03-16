@@ -1,0 +1,11 @@
+{
+  "name": "distributor-app",
+  "version": "1.0.0",
+  "description": "Distributor Business Management App",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "tunnel": "npx localtunnel --port 8081 --subdomain distro-manager"
+  },
+  "dependencies": {}
+}
