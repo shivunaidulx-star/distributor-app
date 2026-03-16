@@ -1,4 +1,4 @@
-const CACHE = 'distromanager-v13';
+const CACHE = 'distromanager-v14';
 const STATIC = ['/', '/index.html', '/style.css', '/app.js', '/manifest.json'];
 
 self.addEventListener('install', e => {
