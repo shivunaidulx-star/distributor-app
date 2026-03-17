@@ -2303,6 +2303,8 @@ function openItemModal(id) {
     const cats = DB.get('db_categories') || [];
     const uomList = DB.get('db_uom') || [];
     const uomOpts = uomList.length ? uomList.map(u => `<option value="${u.name}">`).join('') : '<option value="Pcs"><option value="Kg"><option value="Ltr"><option value="Box"><option value="Pack"><option value="Bag">';
+    const taxCfg  = DB.ls.getObj('db_tax_settings') || {};
+    const gstSlabs = Array.isArray(taxCfg.gstSlabs) && taxCfg.gstSlabs.length ? taxCfg.gstSlabs : [0,3,5,12,18,28];
     const selCatOpts = cats.map(c => `<option value="${c.name}" ${i && i.category === c.name ? 'selected' : ''}>${c.name}</option>`).join('');
 
     // Pre-determine sub-categories for selected or first category
@@ -2338,7 +2340,7 @@ function openItemModal(id) {
             <div class="form-group">
                 <label>GST Rate %</label>
                 <select id="f-item-gstrate">
-                    ${[0,3,5,12,18,28].map(r=>`<option value="${r}" ${(i ? +(i.gstRate||0) : 0)===r?'selected':''}>${r}%</option>`).join('')}
+                    ${gstSlabs.map(r=>`<option value="${r}" ${(i ? +(i.gstRate||0) : 0)===r?'selected':''}>${r}%</option>`).join('')}
                 </select>
             </div>
             <div class="form-group"><label>Primary Unit</label>
