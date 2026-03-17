@@ -2155,11 +2155,27 @@ async function renderInventory() {
     window._inventoryReservedMap = reservedMap;
 
     pageContent.innerHTML = `
-        <div class="stats-grid-sm" style="margin-bottom:14px">
-            <div class="stat-card blue"><div class="stat-icon">📦</div><div class="stat-value">${totalItems}</div><div class="stat-label">Total Items</div></div>
-            <div class="stat-card green"><div class="stat-icon">📊</div><div class="stat-value">${totalStock}</div><div class="stat-label">Total Stock Qty</div></div>
-            <div class="stat-card amber"><div class="stat-icon">💰</div><div class="stat-value">${currency(totalValue)}</div><div class="stat-label">Stock Value</div></div>
-            <div class="stat-card ${lowStock ? 'red' : 'green'}"><div class="stat-icon">⚠️</div><div class="stat-value">${lowStock}</div><div class="stat-label">Low Stock Items</div></div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px">
+            <div class="dash-pulse-tile" style="--tile-color:#3b82f6;animation-delay:0.04s">
+                <div class="dash-pulse-icon">📦</div>
+                <div class="dash-pulse-val dash-count" data-val="${totalItems}" style="color:#3b82f6">${totalItems}</div>
+                <div class="dash-pulse-lbl">Total Items</div>
+            </div>
+            <div class="dash-pulse-tile" style="--tile-color:#10b981;animation-delay:0.08s">
+                <div class="dash-pulse-icon">📊</div>
+                <div class="dash-pulse-val dash-count" data-val="${totalStock}" style="color:#10b981">${totalStock}</div>
+                <div class="dash-pulse-lbl">Stock Qty</div>
+            </div>
+            <div class="dash-pulse-tile" style="--tile-color:#f59e0b;animation-delay:0.12s">
+                <div class="dash-pulse-icon">💰</div>
+                <div class="dash-pulse-val" style="color:#f59e0b;font-size:0.7rem">${currency(totalValue)}</div>
+                <div class="dash-pulse-lbl">Stock Value</div>
+            </div>
+            <div class="dash-pulse-tile${lowStock ? ' dash-pulse-alert' : ''}" onclick="document.getElementById('inv-search')&&(document.getElementById('inv-cat-filter').value='__low__',filterInvTable())" style="--tile-color:${lowStock?'#ef4444':'#10b981'};animation-delay:0.16s;cursor:${lowStock?'pointer':'default'}">
+                <div class="dash-pulse-icon">⚠️</div>
+                <div class="dash-pulse-val" style="color:${lowStock?'#ef4444':'#10b981'}">${lowStock}</div>
+                <div class="dash-pulse-lbl">Low Stock</div>
+            </div>
         </div>
         <div class="section-toolbar">
             <input class="search-box" id="inv-search" placeholder="Search items..." oninput="filterInvTable()">
@@ -2182,6 +2198,18 @@ async function renderInventory() {
         </div></div>
         <input type="file" id="stock-file-input" accept=".csv,.txt,.xlsx,.xls" style="display:none" onchange="processStockImport(event)">
         <input type="file" id="item-file-input" accept=".csv,.txt,.xlsx,.xls" style="display:none" onchange="processItemImport(event)">`;
+    requestAnimationFrame(() => {
+        document.querySelectorAll('.dash-count[data-val]').forEach(el => {
+            const target = parseFloat(el.dataset.val) || 0;
+            if (!target) return;
+            const dur = 600, start = Date.now();
+            const tick = () => {
+                const p = Math.min((Date.now()-start)/dur,1), e=1-Math.pow(1-p,3);
+                el.textContent = Math.round(target*e);
+                if(p<1) requestAnimationFrame(tick);
+            }; tick();
+        });
+    });
 }
 
 function renderInvRows(items, reservedMap = {}, abcMap = {}) {
