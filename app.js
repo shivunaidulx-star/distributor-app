@@ -5358,13 +5358,11 @@ async function saveInvoice() {
 
     if (!partyId) return alert('Invalid party selected. Please select from the dropdown.');
 
-    // Blocked customer check for sale invoices
     const invParty = parties.find(p => String(p.id) === String(partyId));
     if (invParty && invParty.blocked && ($('f-inv-type')||{}).value === 'sale') {
         return alert(`❌ "${invParty.name}" is blocked. Cannot create a sale invoice for a blocked customer. Contact admin to unblock.`);
     }
 
-    // Credit limit check for sale invoices
     const invType = ($('f-inv-type')||{}).value;
     if (invType === 'sale' && invParty && invParty.creditLimit > 0) {
         const sub2 = invoiceItems.reduce((s, li) => s + li.amount, 0);
@@ -5383,7 +5381,6 @@ async function saveInvoice() {
     const sub  = invoiceItems.reduce((s, li) => s + li.amount, 0);
     const gst  = +($('f-inv-gst').value || 0);
     const type = $('f-inv-type').value;
-    // Prices are GST-inclusive; total = subtotal + roundoff only
     let roundoff = +(($('f-inv-roundoff')||{}).value || 0);
     if (type === 'sale' && roundoff === 0) {
         roundoff = +(Math.round(sub) - sub).toFixed(2);
@@ -5394,12 +5391,14 @@ async function saveInvoice() {
     const vyaparInvNo = type === 'sale' ? ($('f-vyapar-inv-no') ? $('f-vyapar-inv-no').value.trim() : '') : '';
     if (type === 'sale' && !vyaparInvNo) return alert('Vyapar Invoice No. is mandatory for sale invoices.');
 
+    // Read fromOrder before modal closes
+    const fromOrderId = ($('f-inv-from-order') || {}).value || '';
+
     try {
-        // Use cached data — no Supabase round-trips for reads
         const inventory = DB.get('db_inventory');
         const co2 = DB.getObj('db_company');
 
-        // Stock checks (parallel availability)
+        // Stock availability checks
         if (type === 'sale') {
             const shortItems = [];
             await Promise.all(invoiceItems.map(async li => {
@@ -5418,6 +5417,85 @@ async function saveInvoice() {
             }
         }
 
+        // Build all DB operations
+        const ops = [];
+
+        for (const li of invoiceItems) {
+            const item = inventory.find(x => x.id === li.itemId);
+            if (!item) continue;
+            const qtyChange = type === 'sale' ? -li.qty : li.qty;
+            const newStock = (item.stock || 0) + qtyChange;
+            const itemUpdate = { stock: newStock };
+            if (type === 'sale' && item.batches && item.batches.length) {
+                const { updatedBatches, priceSync } = deductBatchQtyFifo(item, li.qty);
+                if (updatedBatches) { itemUpdate.batches = updatedBatches; Object.assign(itemUpdate, priceSync); }
+            }
+            ops.push(DB.rawUpdate('inventory', item.id, itemUpdate));
+            ops.push(DB.rawInsert('stock_ledger', {
+                date: today(), itemId: item.id, itemName: item.name,
+                entryType: type === 'sale' ? 'Sale' : 'Purchase', qty: qtyChange,
+                runningStock: newStock, documentNo: invNo,
+                reason: type === 'sale' ? 'Sale Invoice' : 'Purchase Invoice',
+                createdBy: currentUser.name
+            }));
+        }
+
+        // Party balance + ledger
+        const party = parties.find(p => p.id === partyId);
+        if (party) {
+            const balChange = type === 'sale' ? total : -total;
+            const newBal = (party.balance || 0) + balChange;
+            ops.push(DB.rawUpdate('parties', party.id, { balance: newBal }));
+            ops.push(DB.rawInsert('party_ledger', {
+                date: today(), partyId: party.id, partyName: party.name,
+                type: type === 'sale' ? 'Sale Invoice' : 'Purchase Invoice',
+                amount: balChange, balance: newBal, docNo: invNo,
+                notes: type === 'sale' ? 'Sale' : 'Purchase', createdBy: currentUser.name
+            }));
+        }
+
+        // Resolve fromOrder number
+        let fromOrderNo = '';
+        if (fromOrderId) {
+            const allOrders2 = DB.get('db_salesorders');
+            const fo = allOrders2.find(x => x.id === fromOrderId);
+            if (fo) fromOrderNo = fo.orderNo;
+        }
+
+        // Invoice record
+        const dueDateVal = $('f-inv-due-date') ? $('f-inv-due-date').value : '';
+        const invData = {
+            invoiceNo: invNo, date: $('f-inv-date').value, dueDate: dueDateVal || null,
+            type, partyId, partyName, items: [...invoiceItems],
+            subtotal: sub, gst, roundOff: roundoff, total,
+            status: fromOrderId ? 'from-packing' : 'created',
+            createdBy: currentUser.name,
+            ...(vyaparInvNo ? { vyaparInvoiceNo: vyaparInvNo } : {}),
+            ...(fromOrderNo ? { fromOrder: fromOrderNo } : {})
+        };
+        ops.push(DB.rawInsert('invoices', invData));
+        if (fromOrderId) ops.push(DB.rawUpdate('salesorders', fromOrderId, { invoiceNo: invNo }));
+
+        // Advance payment allocations
+        const advInputs = [...document.querySelectorAll('.inv-apply-adv-input')].filter(inp => +inp.value > 0);
+        if (advInputs.length) {
+            const payments = DB.get('db_payments');
+            for (const inp of advInputs) {
+                const pay = payments.find(p => p.id === inp.dataset.pay);
+                if (pay) {
+                    const allocs = { ...(pay.allocations || {}), [invNo]: (pay.allocations?.[invNo] || 0) + +inp.value };
+                    ops.push(DB.rawUpdate('payments', pay.id, { allocations: allocs }));
+                }
+            }
+        }
+
+        // Execute all in parallel
+        await Promise.all(ops);
+        await DB.refreshTables(['invoices', 'inventory', 'parties', 'payments', 'sales_orders']);
+
+        if (type === 'sale' && vyaparInvNo) incrementVyaparNo();
+
+        const andNew = window._saveAndNew; window._saveAndNew = false;
         const savedType = invType;
         closeModal();
         if (fromOrderId) {
