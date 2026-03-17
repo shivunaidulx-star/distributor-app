@@ -10573,7 +10573,6 @@ async function renderPartyLedgerLayout() {
                 📜 Ledger: ${party.name} <span class="badge ${party.type === 'Customer' ? 'badge-success' : 'badge-info'}" style="font-size:0.7rem">${party.type}</span>
             </h3>
             <div class="filter-group">
-                <button class="btn btn-outline btn-sm" onclick="showPaymentHistory('${partyId}')">💳 Payment History</button>
                 <button class="btn btn-outline btn-sm" onclick="exportPartyLedger('${partyId}')">📥 Export Excel</button>
             </div>
         </div>
@@ -10667,7 +10666,12 @@ async function renderPartyLedgerLayout() {
                                 <td>${bal !== '' ? currency(bal) : '-'}</td>
                                 <td class="ledg-reason" style="font-size:0.85rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${reason}">${reason || '-'}</td>
                                 <td style="font-size:0.8rem">${e.createdBy || '-'}</td>
-                                ${canEdit() ? `<td><div class="action-btns"><button class="btn-icon" onclick="editPartyLedgerEntry('${partyId}','${e.id}')" title="Edit Entry">✏️</button><button class="btn-icon" onclick="deletePartyLedgerEntry('${partyId}','${e.id}')" title="Delete Entry" style="color:var(--danger)">🗑️</button></div></td>` : ''}
+                                <td>
+                                    <div class="action-btns" style="flex-wrap:nowrap">
+                                        ${entryType.includes('Invoice') && docNo ? `<button class="btn-icon" onclick="showPaymentHistory('${partyId}', '${docNo}')" title="Payment History">💳</button>` : ''}
+                                        ${canEdit() ? `<button class="btn-icon" onclick="editPartyLedgerEntry('${partyId}','${e.id}')" title="Edit Entry">✏️</button><button class="btn-icon" onclick="deletePartyLedgerEntry('${partyId}','${e.id}')" title="Delete Entry" style="color:var(--danger)">🗑️</button>` : ''}
+                                    </div>
+                                </td>
                             </tr>`;
     }).join('')}
                         </tbody>
@@ -10679,14 +10683,24 @@ async function renderPartyLedgerLayout() {
 }
 
 // --- Payment History Modal ---
-async function showPaymentHistory(partyId) {
+async function showPaymentHistory(partyId, invoiceNo) {
     const payments = await DB.getAll('payments');
-    const invoices = await DB.getAll('invoices');
-    const partyPayments = payments.filter(p => String(p.partyId) === String(partyId))
-        .sort((a, b) => new Date(a.date || a.created_at) - new Date(b.date || b.created_at));
+    let partyPayments = payments.filter(p => String(p.partyId) === String(partyId));
+
+    if (invoiceNo) {
+        partyPayments = partyPayments.filter(p => {
+            if (p.invoiceNo === invoiceNo) return true;
+            if (p.allocations && p.allocations[invoiceNo]) return true;
+            return false;
+        });
+    }
+
+    partyPayments.sort((a, b) => new Date(a.date || a.created_at) - new Date(b.date || b.created_at));
+
+    const modalTitle = invoiceNo ? `Payment History for ${invoiceNo}` : 'Payment History';
 
     if (!partyPayments.length) {
-        openModal('Payment History', '<div class="empty-state"><span class="empty-icon">💳</span><p>No payment records found for this party.</p></div>');
+        openModal(modalTitle, '<div class="empty-state"><span class="empty-icon">💳</span><p>No payment records found for this invoice.</p></div>');
         return;
     }
 
@@ -10696,38 +10710,47 @@ async function showPaymentHistory(partyId) {
         const dt = p.date ? new Date(p.date).toLocaleDateString('en-IN', {day:'2-digit', month:'2-digit', year:'numeric'}) : '-';
         const refNo = p.payNo || p.id || '-';
         const txType = p.type === 'out' ? 'Payment-Out' : 'Payment-In';
-        const amt = p.amount || 0;
-        totalLinked += amt;
-
-        // Find linked invoices
+        
+        let linkedAmt = 0;
         let linkedInfo = '';
-        if (p.invoiceNo && p.invoiceNo !== 'Advance' && p.invoiceNo !== 'Multi') {
-            linkedInfo = p.invoiceNo;
-        } else if (p.allocations) {
-            linkedInfo = Object.keys(p.allocations).join(', ');
+        if (p.allocations && invoiceNo && p.allocations[invoiceNo]) {
+            linkedAmt = Number(p.allocations[invoiceNo]);
+            linkedInfo = invoiceNo;
+        } else if (p.invoiceNo === invoiceNo) {
+            linkedAmt = Number(p.amount || 0);
+            linkedInfo = invoiceNo;
         } else {
-            linkedInfo = 'Advance';
+            linkedAmt = Number(p.amount || 0); // fallback if no invoice specified
+            if (p.invoiceNo && p.invoiceNo !== 'Advance' && p.invoiceNo !== 'Multi') {
+                linkedInfo = p.invoiceNo;
+            } else if (p.allocations) {
+                linkedInfo = Object.keys(p.allocations).join(', ');
+            } else {
+                linkedInfo = 'Advance';
+            }
         }
+        
+        totalLinked += linkedAmt;
 
         return `<tr>
             <td style="font-size:0.85rem">${dt}</td>
             <td style="font-size:0.85rem;font-weight:600">${refNo}</td>
             <td><span class="badge ${p.type === 'out' ? 'badge-warning' : 'badge-success'}" style="font-size:0.75rem">${txType}</span></td>
             <td style="font-size:0.85rem;color:var(--text-muted)">${linkedInfo}</td>
-            <td style="text-align:right;font-weight:600;font-size:0.9rem">${currency(amt)}</td>
+            <td style="text-align:right;font-weight:600;font-size:0.9rem">${currency(linkedAmt)}</td>
         </tr>`;
     }).join('');
 
-    openModal('Payment History', `
+    openModal(modalTitle, `
         <div class="table-wrapper" style="max-height:500px;overflow-y:auto">
             <table class="data-table">
                 <thead style="position:sticky;top:0;background:var(--bg-body);z-index:5">
-                    <tr><th>Transaction Date</th><th>Ref No</th><th>Transaction Type</th><th>Linked Invoice</th><th style="text-align:right">Amount</th></tr>
+                    <tr><th>Transaction Date</th><th>Ref No</th><th>Transaction Type</th><th>Linked Invoice</th><th style="text-align:right">Linked Amount</th></tr>
                 </thead>
                 <tbody>${rows}</tbody>
                 <tfoot>
                     <tr style="border-top:2px solid var(--border);font-weight:700">
-                        <td colspan="4" style="text-align:right;font-size:0.9rem">Total:</td>
+                        <td colspan="4" style="text-align:right;font-size:0.9rem">Total Received for Invoice:</td>
                         <td style="text-align:right;font-size:1.05rem;color:var(--primary)">${currency(totalLinked)}</td>
                     </tr>
                 </tfoot>
