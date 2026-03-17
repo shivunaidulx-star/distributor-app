@@ -20,11 +20,12 @@ const DB = {
     },
 
     async refresh() {
-        // Load persisted settings from Supabase into localStorage first
-        await this.loadSettings();
-        // Only tables confirmed to exist in Supabase schema
+        // Load settings and all tables in parallel (not sequential)
         const tables = ['users', 'parties', 'inventory', 'sales_orders', 'invoices', 'payments', 'expenses', 'party_ledger', 'stock_ledger', 'categories', 'uom', 'packers', 'delivery_persons', 'delivery'];
-        const results = await Promise.all(tables.map(t => supabaseClient.from(t).select('*')));
+        const [, ...results] = await Promise.all([
+            this.loadSettings(),
+            ...tables.map(t => supabaseClient.from(t).select('*'))
+        ]);
         results.forEach((res, i) => {
             if (res.error) console.error(`Error caching ${tables[i]}:`, res.error);
             else this.cache[tables[i]] = this._toCamel(res.data || []);
@@ -43,6 +44,21 @@ const DB = {
         this.cache['db_brands'] = [];
         this.cache['db_packers'] = this.cache['packers'] || [];
         this.cache['db_delivery_persons'] = this.cache['delivery_persons'] || [];
+    },
+
+    // Refresh only specific tables — much faster than full refresh after saves
+    async refreshTables(tableList) {
+        const results = await Promise.all(tableList.map(t => supabaseClient.from(t).select('*')));
+        results.forEach((res, i) => {
+            if (res.error) { console.error(`Error refreshing ${tableList[i]}:`, res.error); return; }
+            const t = tableList[i];
+            const camel = this._toCamel(res.data || []);
+            this.cache[t] = camel;
+            this.cache[`db_${t}`] = camel;
+            // Legacy camelCase keys for renamed tables
+            if (t === 'sales_orders') this.cache['db_salesorders'] = camel;
+            if (t === 'purchase_orders') this.cache['db_purchaseorders'] = camel;
+        });
     },
 
     get(key) { 
@@ -1829,14 +1845,103 @@ async function saveParty(id) {
         } else {
             await DB.insert('parties', { ...data, balance: 0 });
         }
+        await updateDataHash();
+        
         closeModal();
         await renderParties();
         showToast('Party saved successfully', 'success');
-        if (window._saveAndNew) { window._saveAndNew = false; openPartyModal(); }
+        if (window._saveAndNew) {
+            window._saveAndNew = false;
+            openPartyModal();
+        }
     } catch (err) {
         window._saveAndNew = false;
         alert('Error saving party: ' + (err.message || err.details || JSON.stringify(err)));
     }
+}
+
+// ── GPS Quick Update Feature ──
+async function openPartyGpsModal() {
+    const parties = await DB.getAll('parties');
+    const noGpsParties = parties.filter(p => !p.lat || !p.lng);
+    
+    openModal('📍 Update Party GPS', `
+        <div style="margin-bottom:12px">
+            <input type="text" id="f-gps-search" placeholder="🔍 Search missing GPS parties..." 
+                   style="width:100%;padding:10px;border-radius:var(--radius-md);border:1px solid var(--border);"
+                   onkeyup="filterGpsPartyList(this.value)">
+        </div>
+        <div id="gps-party-list" style="max-height:60vh;overflow-y:auto;">
+            ${renderGpsPartyList(noGpsParties)}
+        </div>
+    `, `<button class="btn btn-outline" onclick="closeModal()">Close</button>`);
+    
+    // Store original list for filtering
+    window._gpsPartiesData = noGpsParties;
+}
+
+function renderGpsPartyList(parties) {
+    if (!parties.length) return `<div class="empty-state"><span class="empty-icon">🎉</span><p>All Caught Up</p><p class="empty-subtitle">All parties have GPS locations saved!</p></div>`;
+    
+    return parties.map(p => `
+        <div class="card" id="gps-row-${p.id}" style="margin-bottom:10px;padding:12px;display:flex;justify-content:space-between;align-items:center;gap:10px;background:#f8fafc;border:1px solid var(--border);">
+            <div style="flex:1;min-width:0;">
+                <div style="font-weight:600;font-size:0.95rem;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${p.name}</div>
+                <div style="font-size:0.8rem;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${p.phone || 'No phone'} • ${p.address || p.city || 'No address'}</div>
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="updatePartyLiveLocation('${p.id}')" style="white-space:nowrap;display:flex;align-items:center;gap:4px">
+                📍 Update
+            </button>
+        </div>
+    `).join('');
+}
+
+function filterGpsPartyList(q) {
+    const s = q.toLowerCase();
+    const filtered = (window._gpsPartiesData || []).filter(p => p.name.toLowerCase().includes(s) || (p.phone && p.phone.includes(s)));
+    $('gps-party-list').innerHTML = renderGpsPartyList(filtered);
+}
+
+async function updatePartyLiveLocation(partyId) {
+    if (!navigator.geolocation) return alert('Geolocation is not supported by this browser.');
+    
+    const row = document.getElementById('gps-row-' + partyId);
+    const btn = row.querySelector('button');
+    const origHtml = btn.innerHTML;
+    btn.innerHTML = '🕒 ...';
+    btn.disabled = true;
+
+    navigator.geolocation.getCurrentPosition(async (pos) => {
+        try {
+            const lat = pos.coords.latitude;
+            const lng = pos.coords.longitude;
+            await DB.update('parties', partyId, { lat, lng });
+            await updateDataHash();
+            
+            showToast('GPS Updated Successfully!', 'success');
+            
+            // Remove from list
+            row.style.opacity = '0';
+            setTimeout(() => {
+                row.remove();
+                if (window._gpsPartiesData) {
+                    window._gpsPartiesData = window._gpsPartiesData.filter(p => p.id !== partyId);
+                    if (window._gpsPartiesData.length === 0) {
+                        $('gps-party-list').innerHTML = renderGpsPartyList([]);
+                    }
+                }
+            }, 300);
+            
+        } catch (e) {
+            alert('Error updating GPS: ' + e.message);
+            btn.innerHTML = origHtml;
+            btn.disabled = false;
+        }
+    }, (err) => {
+        alert('GPS Failed: ' + err.message + '\nPlease enable location permissions.');
+        btn.innerHTML = origHtml;
+        btn.disabled = false;
+    }, { enableHighAccuracy: true });
 }
 function capturePartyLiveGPS() {
     if (!navigator.geolocation) return alert('Geolocation is not supported by this browser/device.');
@@ -2308,7 +2413,7 @@ function renderInvRows(items, reservedMap = {}, abcMap = {}) {
         const abc = abcMap[i.id] || 'C';
         const abcClass = abc === 'A' ? 'badge-primary' : abc === 'B' ? 'badge-info' : 'badge-outline';
         const cellMap = {
-            name:          `<td><div style="color:var(--text-primary);font-weight:600">${i.name}${i.active === false ? ' <span class="badge badge-danger" style="font-size:0.7rem;padding:2px 5px">Inactive</span>' : ''}</div>${i.itemCode ? `<div style="font-size:0.75rem;color:var(--text-muted)">Code: ${i.itemCode}</div>` : ''}</td>`,
+            name:          `<td><div style="display:flex;align-items:center;gap:8px">${(i.imageUrl || i.photo) ? `<img src="${i.imageUrl || i.photo}" style="width:32px;height:32px;border-radius:6px;object-fit:cover;flex-shrink:0">` : ''}<div><div style="color:var(--text-primary);font-weight:600">${i.name}${i.active === false ? ' <span class="badge badge-danger" style="font-size:0.7rem;padding:2px 5px">Inactive</span>' : ''}</div>${i.itemCode ? `<div style="font-size:0.75rem;color:var(--text-muted)">Code: ${i.itemCode}</div>` : ''}</div></div></td>`,
             abc:           `<td><span class="badge ${abcClass}" style="width:24px;text-align:center">${abc}</span></td>`,
             warehouse:     `<td style="font-size:0.85rem;color:var(--text-muted)">${i.warehouse || 'Main Warehouse'}</td>`,
             hsn:           `<td>${i.hsn || '-'}</td>`,
@@ -2378,6 +2483,7 @@ function deductBatchQtyFifo(item, qtyToDeduct) {
 
 function openItemModal(id) {
     window._editItemId = id || '';
+    window._itemPhotoFile = null;
     const i = id ? DB.get('db_inventory').find(x => x.id === id) : null;
     currentItemTiers = i && i.priceTiers ? JSON.parse(JSON.stringify(i.priceTiers)) : [];
     currentItemBatches = i && i.batches ? JSON.parse(JSON.stringify(i.batches)) : [];
@@ -2399,15 +2505,15 @@ function openItemModal(id) {
     openModal(i ? 'Edit Item' : 'Add Item', `
         <div style="margin-bottom:14px;display:flex;align-items:center;gap:14px">
             <div id="item-photo-preview" style="width:70px;height:70px;border-radius:10px;border:2px dashed var(--border);display:flex;align-items:center;justify-content:center;overflow:hidden;cursor:pointer;flex-shrink:0;background:var(--bg-body)" onclick="document.getElementById('f-item-photo').click()">
-                ${i && i.photo ? `<img src="${i.photo}" style="width:100%;height:100%;object-fit:cover">` : '<span style="font-size:1.5rem">📷</span>'}
+                ${i && (i.imageUrl || i.photo) ? `<img src="${i.imageUrl || i.photo}" style="width:100%;height:100%;object-fit:cover">` : '<span style="font-size:1.5rem">📷</span>'}
             </div>
             <div style="flex:1">
-                <div style="font-size:0.82rem;color:var(--text-muted);margin-bottom:4px">Item Photo (optional, max 300KB)</div>
+                <div style="font-size:0.82rem;color:var(--text-muted);margin-bottom:4px">Item Photo (optional)</div>
                 <input type="file" id="f-item-photo" accept="image/*" style="display:none" onchange="previewItemPhoto(event)">
                 <button class="btn btn-outline btn-sm" onclick="document.getElementById('f-item-photo').click()" style="font-size:0.78rem">📷 Upload Photo</button>
-                ${i && i.photo ? ' <button class="btn btn-outline btn-sm" onclick="removeItemPhoto()" style="font-size:0.78rem">✕ Remove</button>' : ''}
+                ${i && (i.imageUrl || i.photo) ? ' <button class="btn btn-outline btn-sm" onclick="removeItemPhoto()" style="font-size:0.78rem">✕ Remove</button>' : ''}
             </div>
-            <input type="hidden" id="f-item-photo-data" value="${i && i.photo ? i.photo : ''}">
+            <input type="hidden" id="f-item-existing-url" value="${i && i.imageUrl ? i.imageUrl : (i && i.photo ? i.photo : '')}">
         </div>
         <div class="form-row">
             <div class="form-group"><label>Item Code</label><input id="f-item-code" value="${i ? i.itemCode || '' : ''}" placeholder="SKU/Barcode"></div>
@@ -2479,21 +2585,19 @@ function openItemModal(id) {
 function previewItemPhoto(event) {
     const file = event.target.files[0];
     if (!file) return;
-    if (file.size > 300000) return alert('Photo must be under 300KB');
-    const reader = new FileReader();
-    reader.onload = function (e) {
-        const preview = $('item-photo-preview');
-        if (preview) preview.innerHTML = `<img src="${e.target.result}" style="width:100%;height:100%;object-fit:cover">`;
-        const hidden = $('f-item-photo-data');
-        if (hidden) hidden.value = e.target.result;
-    };
-    reader.readAsDataURL(file);
+    window._itemPhotoFile = file;
+    const preview = $('item-photo-preview');
+    if (preview) preview.innerHTML = `<img src="${URL.createObjectURL(file)}" style="width:100%;height:100%;object-fit:cover">`;
+    // Clear existing URL since a new file will replace it
+    const existing = $('f-item-existing-url');
+    if (existing) existing.value = '';
 }
 function removeItemPhoto() {
+    window._itemPhotoFile = null;
     const preview = $('item-photo-preview');
     if (preview) preview.innerHTML = '<span style="font-size:1.5rem">📷</span>';
-    const hidden = $('f-item-photo-data');
-    if (hidden) hidden.value = '';
+    const existing = $('f-item-existing-url');
+    if (existing) existing.value = '__remove__';
 }
 
 function onCatChangeItemModal() {
@@ -2667,8 +2771,30 @@ async function saveItem(id) {
         warehouse: $('f-item-warehouse').value || 'Main Warehouse',
         priceTiers: currentItemTiers,
         batches: currentItemBatches,
-        photo: $('f-item-photo-data') ? $('f-item-photo-data').value : ''
     };
+    // Handle image upload to Supabase Storage
+    const existingUrlEl = $('f-item-existing-url');
+    const existingUrl = existingUrlEl ? existingUrlEl.value : '';
+    if (window._itemPhotoFile) {
+        try {
+            const ext = window._itemPhotoFile.name.split('.').pop() || 'jpg';
+            const fileName = `item_${Date.now()}_${Math.random().toString(36).substr(2,6)}.${ext}`;
+            const { data: upData, error: upErr } = await supabaseClient.storage
+                .from('item-images')
+                .upload(fileName, window._itemPhotoFile, { upsert: true });
+            if (upErr) throw upErr;
+            const { data: urlData } = supabaseClient.storage.from('item-images').getPublicUrl(fileName);
+            data.imageUrl = urlData.publicUrl;
+            window._itemPhotoFile = null;
+        } catch (uploadErr) {
+            console.error('Image upload failed:', uploadErr);
+            alert('Image upload failed: ' + uploadErr.message + '\nItem will be saved without photo.');
+        }
+    } else if (existingUrl === '__remove__') {
+        data.imageUrl = null;
+    } else if (existingUrl) {
+        data.imageUrl = existingUrl;
+    }
     // Sync item prices using FIFO: salePrice/MRP from oldest active batch with stock, purchasePrice from newest
     if (currentItemBatches.length) {
         const priceSync = syncItemPricesFromBatches(currentItemBatches);
@@ -5123,7 +5249,7 @@ async function saveInvoice() {
     if (!beginSave()) return;
     const pe = $('f-inv-party'); if (!pe.value) { endSave(); return alert('Select a party'); } if (!invoiceItems.length) { endSave(); return alert('Add items'); }
 
-    const parties = await DB.getAll('parties');
+    const parties = DB.get('db_parties');
     let partyId = '';
     let partyName = pe.value;
     const match = pe.value.match(/^(.*) \[(.*)\]$/);
@@ -5157,7 +5283,7 @@ async function saveInvoice() {
     }
 
     const invNo = $('f-inv-no').value.trim();
-    const invoices = await DB.getAll('invoices');
+    const invoices = DB.get('db_invoices');
     if (invoices.find(i => i.invoiceNo === invNo)) return alert('Invoice number ' + invNo + ' already exists!');
 
     const sub  = invoiceItems.reduce((s, li) => s + li.amount, 0);
@@ -5175,8 +5301,8 @@ async function saveInvoice() {
     if (type === 'sale' && !vyaparInvNo) return alert('Vyapar Invoice No. is mandatory for sale invoices.');
 
     try {
-        // Fetch inventory once (already have parties from above)
-        const inventory = await DB.getAll('inventory');
+        // Use cached data — no Supabase round-trips for reads
+        const inventory = DB.get('db_inventory');
         const co2 = DB.getObj('db_company');
 
         // Stock checks (parallel availability)
@@ -5242,7 +5368,7 @@ async function saveInvoice() {
         const fromOrderId = ($('f-inv-from-order') || {}).value || '';
         let fromOrderNo = '';
         if (fromOrderId) {
-            const allOrders2 = await DB.getAll('salesorders');
+            const allOrders2 = DB.get('db_salesorders');
             const fo = allOrders2.find(x => x.id === fromOrderId);
             if (fo) fromOrderNo = fo.orderNo;
         }
@@ -5256,7 +5382,7 @@ async function saveInvoice() {
         // Advance allocations
         const advInputs = [...document.querySelectorAll('.inv-apply-adv-input')].filter(inp => +inp.value > 0);
         if (advInputs.length) {
-            const payments = await DB.getAll('payments');
+            const payments = DB.get('db_payments');
             for (const inp of advInputs) {
                 const pay = payments.find(p => p.id === inp.dataset.pay);
                 if (pay) {
@@ -5268,8 +5394,8 @@ async function saveInvoice() {
 
         // Execute all in parallel — single network round
         await Promise.all(ops);
-        // ONE refresh to sync cache
-        await DB.refresh();
+        // Refresh only the tables that changed (not all 14)
+        await DB.refreshTables(['invoices', 'inventory', 'parties', 'payments', 'sales_orders']);
 
         if (type === 'sale' && vyaparInvNo) incrementVyaparNo();
 
@@ -10487,7 +10613,7 @@ async function renderCatalogCards(items) {
         const isLow = i.stock <= (i.lowStockAlert || 5);
         return `<div class="catalog-card">
             <div class="catalog-card-img" onclick="viewCatalogItem('${i.id}')">
-                ${i.photo ? `<img src="${i.photo}" alt="${i.name}">` : `<div class="catalog-card-placeholder">${i.name.charAt(0).toUpperCase()}</div>`}
+                ${(i.imageUrl || i.photo) ? `<img src="${i.imageUrl || i.photo}" alt="${i.name}">` : `<div class="catalog-card-placeholder">${i.name.charAt(0).toUpperCase()}</div>`}
             </div>
             <div class="catalog-card-body">
                 <div class="catalog-card-name">${i.name}</div>
