@@ -1122,7 +1122,10 @@ table { border-collapse: collapse; width: 100%; }
     position: relative;
 }
 .search-dropdown-list {
-    position: fixed;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    width: 100%;
     background: #ffffff;
     border: 1px solid rgba(249,115,22,0.3);
     border-top: none;

@@ -772,24 +772,24 @@ function initSearchDropdown(inputId, items, onSelect) {
     const sig = { signal: ac.signal };
     inp._ddAbortCtrl = ac;
 
+    // Wrap input in a relative container if not already wrapped
+    let wrapper = inp.closest('.search-dropdown-wrapper');
+    if (!wrapper) {
+        wrapper = document.createElement('div');
+        wrapper.className = 'search-dropdown-wrapper';
+        inp.parentNode.insertBefore(wrapper, inp);
+        wrapper.appendChild(inp);
+    }
+
     // Create dropdown container
     let dd = document.getElementById(inputId + '-dropdown');
     if (dd) dd.remove();
     dd = document.createElement('div');
     dd.id = inputId + '-dropdown';
     dd.className = 'search-dropdown-list';
-    document.body.appendChild(dd);
+    wrapper.appendChild(dd);
 
     let highlightIdx = -1;
-
-    function positionDropdown() {
-        const rect = inp.getBoundingClientRect();
-        dd.style.left = rect.left + 'px';
-        // BUG-004 fix: account for visual viewport offset when keyboard is open
-        const vvTop = window.visualViewport ? window.visualViewport.offsetTop : 0;
-        dd.style.top = (rect.bottom + vvTop) + 'px';
-        dd.style.width = rect.width + 'px';
-    }
 
     function renderItems(query) {
         const q = (query || '').toLowerCase();
@@ -814,7 +814,6 @@ function initSearchDropdown(inputId, items, onSelect) {
     }
 
     function openDD() {
-        positionDropdown();
         renderItems(inp.value);
         dd.classList.add('open');
     }
@@ -878,17 +877,6 @@ function initSearchDropdown(inputId, items, onSelect) {
     });
 
     inp.addEventListener('blur', () => { setTimeout(closeDD, 200); }, sig);
-
-    // Handle scroll/resize repositioning
-    const modalBody = inp.closest('.modal-body');
-    if (modalBody) {
-        modalBody.addEventListener('scroll', positionDropdown, sig);
-    }
-
-    // BUG-004 fix: reposition when virtual keyboard opens/closes
-    if (window.visualViewport) {
-        window.visualViewport.addEventListener('resize', positionDropdown, sig);
-    }
 
     return { openDD, closeDD, renderItems };
 }
