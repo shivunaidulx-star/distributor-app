@@ -3475,6 +3475,16 @@ async function commitItemImport() {
 let soItems = [];
 async function renderSalesOrders() {
     const orders = await DB.getAll('salesorders');
+    const soStatusRank = o => {
+        if (o.status === 'pending')   return 0;
+        if (o.status === 'approved' && !o.packed && !o.invoiceNo) return 1;
+        if (o.packed && !o.invoiceNo) return 2;
+        if (o.invoiceNo)              return 3;
+        if (o.status === 'rejected')  return 4;
+        if (o.status === 'cancelled') return 5;
+        return 6;
+    };
+    orders.sort((a, b) => soStatusRank(a) - soStatusRank(b) || (b.date || '').localeCompare(a.date || ''));
     const isApprover = currentUser.role === 'Admin' || currentUser.role === 'Manager';
     const p = orders.filter(o => o.status === 'pending'), a = orders.filter(o => o.status === 'approved'), r = orders.filter(o => o.status === 'rejected');
     pageContent.innerHTML = `
@@ -3618,12 +3628,23 @@ async function filterSOTable() {
     if (st) orders = orders.filter(o => o.status === st);
     if (pf) orders = orders.filter(o => (o.priority || 'Normal') === pf);
     // Sorting
+    const statusRank = o => {
+        if (o.status === 'pending')   return 0;
+        if (o.status === 'approved' && !o.packed && !o.invoiceNo) return 1;
+        if (o.packed && !o.invoiceNo) return 2;
+        if (o.invoiceNo)              return 3;
+        if (o.status === 'rejected')  return 4;
+        if (o.status === 'cancelled') return 5;
+        return 6;
+    };
     orders.sort((a, b) => {
+        const rankDiff = statusRank(a) - statusRank(b);
+        if (rankDiff !== 0) return rankDiff;
         if (sort === 'date-asc') return (a.date || '').localeCompare(b.date || '');
         if (sort === 'date-desc') return (b.date || '').localeCompare(a.date || '');
         if (sort === 'delivery-asc') return (a.expectedDeliveryDate || '9999').localeCompare(b.expectedDeliveryDate || '9999');
         if (sort === 'delivery-desc') return (b.expectedDeliveryDate || '').localeCompare(a.expectedDeliveryDate || '');
-        return 0;
+        return (b.date || '').localeCompare(a.date || '');
     });
     const isApprover = currentUser.role === 'Admin' || currentUser.role === 'Manager';
     $('so-tbody').innerHTML = renderSORows(orders, isApprover);
@@ -5942,8 +5963,8 @@ async function openPaymentModal(prefillPartyId) {
         <!-- Sticky save footer -->
         <div class="pay-page-footer">
             ${!isSalesmanRole ? `<button class="btn btn-outline" style="flex:1;min-height:48px" onclick="renderPayments()">Cancel</button>` : ''}
-            <button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;savePayment()">＋ Save & New</button>
-            <button class="btn btn-primary" style="flex:2;min-height:48px;font-size:1rem;font-weight:700" onclick="savePayment()">💾 Save Payment</button>
+            <button class="btn btn-outline btn-save-new" id="btn-save-new" onclick="window._saveAndNew=true;savePayment()">＋ Save & New</button>
+            <button class="btn btn-primary" id="btn-save-payment" style="flex:2;min-height:48px;font-size:1rem;font-weight:700" onclick="savePayment()">💾 Save Payment</button>
         </div>
     `;
 
@@ -6186,6 +6207,13 @@ window.calcTotalAllocation = function () {
 };
 async function savePayment() {
     if (!beginSave()) return;
+    
+    // UI lock
+    const saveBtn = document.getElementById('btn-save-payment');
+    const saveNewBtn = document.getElementById('btn-save-new');
+    if (saveBtn) { saveBtn.disabled = true; saveBtn.innerHTML = '🕒 Saving...'; }
+    if (saveNewBtn) { saveNewBtn.disabled = true; saveNewBtn.innerHTML = '🕒 ...'; }
+    
     const payPartyId = ($('f-pay-party-id') || {}).value || '';
     const payPartyName = ($('f-pay-party') || {}).value?.trim() || '';
     if (!payPartyId) { endSave(); return alert('Please select a party from the dropdown'); }
@@ -6255,6 +6283,8 @@ async function savePayment() {
         window._saveAndNew = false;
         alert('Error: ' + err.message);
     } finally {
+        if (saveBtn) { saveBtn.disabled = false; saveBtn.innerHTML = '💾 Save Payment'; }
+        if (saveNewBtn) { saveNewBtn.disabled = false; saveNewBtn.innerHTML = '＋ Save & New'; }
         endSave();
     }
 }
