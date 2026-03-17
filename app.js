@@ -12114,31 +12114,38 @@ async function cpInitAuth(forRegister, regData) {
 async function cpSendOTP(phone, forRegister, regData) {
     const otp = String(Math.floor(100000 + Math.random() * 900000));
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-    try {
-        await supabaseClient.from('customer_otps').upsert({ phone, otp, expires_at: expiresAt, purpose: forRegister ? 'register' : 'login' }, { onConflict: 'phone' });
-        // Show OTP to admin via alert (in real app, send SMS)
-        const company = DB.get('db_settings') && DB.get('db_settings').companyName ? DB.get('db_settings').companyName : 'DistroManager';
-        console.log(`OTP for ${phone}: ${otp}`); // Admin can see in console
-        showToast(`OTP generated. Share ${otp} with customer on WhatsApp.`, 'info', 6000);
-        cpRenderOTP(phone, otp, forRegister, regData);
-    } catch(err) {
-        alert('Error sending OTP: ' + err.message);
+    const { error } = await supabaseClient.from('customer_otps').upsert(
+        { phone, otp, expires_at: expiresAt, purpose: forRegister ? 'register' : 'login' },
+        { onConflict: 'phone' }
+    );
+    if (error) {
+        showToast('OTP Error: ' + error.message, 'error', 8000);
+        console.error('cpSendOTP error:', error);
+        return;
     }
+    console.log(`OTP for ${phone}: ${otp}`);
+    cpRenderOTP(phone, otp, forRegister, regData);
 }
 
 function cpRenderOTP(phone, otpHint, forRegister, regData) {
+    const regDataJson = JSON.stringify(regData || null).replace(/"/g, '&quot;');
+    const regDataStr  = regData ? JSON.stringify(regData).replace(/"/g, "'") : 'null';
     cpShell(`
     <div class="cp-card" style="margin-top:32px">
         <h2 style="margin:0 0 4px;font-size:1.3rem">Enter OTP</h2>
-        <p style="color:var(--text-muted);font-size:0.85rem;margin:0 0 4px">OTP sent for <strong>${phone}</strong></p>
-        <p style="color:var(--text-muted);font-size:0.78rem;margin:0 0 20px">Valid for 10 minutes</p>
+        <p style="color:var(--text-muted);font-size:0.85rem;margin:0 0 4px">OTP for <strong>${phone}</strong></p>
+        <p style="color:var(--text-muted);font-size:0.78rem;margin:0 0 14px">Valid for 10 minutes</p>
+        <div style="background:rgba(99,102,241,0.1);border:2px dashed rgba(99,102,241,0.4);border-radius:12px;padding:14px;text-align:center;margin-bottom:18px">
+            <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:6px">Share this OTP with customer on WhatsApp</div>
+            <div style="font-size:2rem;font-weight:800;letter-spacing:8px;color:var(--accent)">${otpHint}</div>
+        </div>
         <div class="cp-otp-row" id="cp-otp-row">
             ${[0,1,2,3,4,5].map(i => `<input class="cp-otp-box" maxlength="1" type="text" inputmode="numeric" pattern="[0-9]" id="cp-otp-${i}" oninput="cpOTPInput(this,${i})" onkeydown="cpOTPKey(this,${i},event)">`).join('')}
         </div>
         <input type="hidden" id="cp-otp-phone" value="${phone}">
         <input type="hidden" id="cp-otp-for-reg" value="${forRegister ? '1' : '0'}">
-        <button class="btn btn-primary btn-block" style="margin-top:20px" onclick="cpVerifyOTP(${JSON.stringify(regData || null).replace(/"/g,'&quot;')})">Verify OTP</button>
-        <button class="btn btn-outline btn-block" style="margin-top:8px" onclick="cpSendOTP('${phone}',${forRegister},${regData ? JSON.stringify(regData).replace(/"/g,"'") : 'null'})">Resend OTP</button>
+        <button class="btn btn-primary btn-block" style="margin-top:20px" onclick="cpVerifyOTP(${regDataJson})">Verify OTP</button>
+        <button class="btn btn-outline btn-block" style="margin-top:8px" onclick="cpSendOTP('${phone}',${forRegister},${regDataStr})">Resend OTP</button>
     </div>`, true, cpRenderAuth);
     setTimeout(() => { const el = document.getElementById('cp-otp-0'); if(el) el.focus(); }, 100);
 }
