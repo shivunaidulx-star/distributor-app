@@ -4830,6 +4830,13 @@ function renderInvoiceLines() {
             ${gstLabel ? `<div style="padding-left:32px;margin-top:2px">${gstLabel}</div>` : ''}
         </div>`;
     }).join('');
+    // Auto round-off for sale invoices on every line change
+    const invTypeEl = $('f-inv-type');
+    if (invTypeEl && invTypeEl.value === 'sale') {
+        const sub  = invoiceItems.reduce((s, li) => s + li.amount, 0);
+        const roEl = $('f-inv-roundoff');
+        if (roEl) roEl.value = +(Math.round(sub) - sub).toFixed(2);
+    }
     updateInvoiceTotal();
 }
 function updateInvoiceTotal() {
