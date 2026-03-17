@@ -9097,8 +9097,8 @@ async function renderCompanySetup() {
         </div></div>
         <div class="card" style="margin-top:20px"><div class="card-body padded">
             <h3 style="margin-bottom:10px;font-size:1rem;color:var(--danger)">⚠️ Danger Zone</h3>
-            <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:14px">Clear all data and start fresh. This cannot be undone.</p>
-            <button class="btn btn-danger" onclick="resetAllData()">Reset All Data</button>
+            <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:14px">Selectively delete entries or master data. Cannot be undone.</p>
+            <button class="btn btn-danger" onclick="openSmartReset()">🗑️ Reset Data</button>
         </div></div>`;
 }
 async function saveCompanySetup() {
@@ -9202,10 +9202,88 @@ async function removeCompanyLogo() {
     renderCompanySetup();
     showToast('Logo removed.', 'info');
 }
-function resetAllData() {
-    if (!confirm('This will DELETE ALL DATA. Are you sure?')) return;
-    if (!confirm('Last chance! All invoices, orders, parties will be lost.')) return;
-    localStorage.clear(); location.reload();
+function openSmartReset() {
+    window._resetOption = 'entries';
+    openModal('🗑️ Reset Data', `
+        <p style="color:var(--text-secondary);font-size:0.88rem;margin-bottom:14px">Choose what to delete. This <strong>cannot be undone</strong>.</p>
+        <div id="reset-opt-entries" class="reset-option-card active" onclick="selectResetOption('entries')">
+            <div style="font-weight:700">📋 Entries Only</div>
+            <div style="font-size:0.8rem;color:var(--text-muted);margin-top:4px">Orders, Invoices, Payments, Expenses, Packing, Delivery, Ledger entries</div>
+            <div style="font-size:0.78rem;color:var(--success);margin-top:4px">✅ Masters (Parties, Items, etc.) kept</div>
+        </div>
+        <div id="reset-opt-all" class="reset-option-card" onclick="selectResetOption('all')" style="margin-top:10px">
+            <div style="font-weight:700">💣 Entries + Masters</div>
+            <div style="font-size:0.8rem;color:var(--text-muted);margin-top:4px">Transactions AND selected master data</div>
+        </div>
+        <div id="reset-masters-section" style="display:none;margin-top:12px;padding:12px;background:var(--bg-input);border-radius:var(--radius-md)">
+            <div style="font-size:0.8rem;font-weight:700;margin-bottom:10px;color:var(--text-secondary);letter-spacing:0.05em">SELECT MASTERS TO DELETE:</div>
+            <label class="reset-master-check"><input type="checkbox" id="rm-parties" checked> Parties / Customers / Suppliers</label>
+            <label class="reset-master-check"><input type="checkbox" id="rm-inventory" checked> Items / Inventory</label>
+            <label class="reset-master-check"><input type="checkbox" id="rm-categories"> Categories</label>
+            <label class="reset-master-check"><input type="checkbox" id="rm-uom"> Units of Measure (UOM)</label>
+            <label class="reset-master-check"><input type="checkbox" id="rm-brands"> Brands</label>
+            <label class="reset-master-check"><input type="checkbox" id="rm-delpersons"> Delivery Persons</label>
+            <label class="reset-master-check"><input type="checkbox" id="rm-packers"> Packers</label>
+            <label class="reset-master-check"><input type="checkbox" id="rm-users"> Users</label>
+        </div>
+        <div style="margin-top:16px">
+            <label style="font-size:0.85rem;color:var(--text-secondary)">Type <strong>RESET</strong> to confirm:</label>
+            <input id="reset-confirm-input" type="text" class="form-input" placeholder="RESET" style="margin-top:6px;font-weight:700;letter-spacing:2px;text-transform:uppercase">
+        </div>`,
+        `<button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+         <button class="btn btn-danger" onclick="executeSmartReset()">🗑️ Reset Now</button>`);
+}
+
+function selectResetOption(opt) {
+    window._resetOption = opt;
+    document.getElementById('reset-opt-entries').classList.toggle('active', opt === 'entries');
+    document.getElementById('reset-opt-all').classList.toggle('active', opt === 'all');
+    document.getElementById('reset-masters-section').style.display = opt === 'all' ? 'block' : 'none';
+}
+
+async function executeSmartReset() {
+    const confirmVal = ($('reset-confirm-input') || {}).value || '';
+    if (confirmVal.trim().toUpperCase() !== 'RESET') { showToast('Type RESET to confirm', 'error'); return; }
+
+    const entryTables = ['sales_orders', 'invoices', 'payments', 'expenses', 'stock_ledger', 'party_ledger', 'delivery'];
+    const entryLsKeys = ['db_salesorders', 'db_invoices', 'db_payments', 'db_expenses', 'db_packing', 'db_delivery', 'db_stock_ledger', 'db_party_ledger', 'db_counters'];
+    const masterMap = [
+        { id: 'rm-parties',    supabase: 'parties',          ls: 'db_parties' },
+        { id: 'rm-inventory',  supabase: 'inventory',        ls: 'db_inventory' },
+        { id: 'rm-categories', supabase: 'categories',       ls: 'db_categories' },
+        { id: 'rm-uom',        supabase: 'uom',              ls: 'db_uom' },
+        { id: 'rm-brands',     supabase: null,               ls: 'db_brands' },
+        { id: 'rm-delpersons', supabase: 'delivery_persons', ls: 'db_delivery_persons' },
+        { id: 'rm-packers',    supabase: 'packers',          ls: 'db_packers' },
+        { id: 'rm-users',      supabase: 'users',            ls: 'db_users' },
+    ];
+
+    const btn = document.querySelector('#modal-overlay .btn-danger');
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Resetting...'; }
+
+    try {
+        for (const t of entryTables) {
+            await supabaseClient.from(t).delete().not('id', 'is', null);
+        }
+        entryLsKeys.forEach(k => localStorage.removeItem(k));
+
+        if (window._resetOption === 'all') {
+            for (const m of masterMap) {
+                const el = document.getElementById(m.id);
+                if (el && el.checked) {
+                    if (m.supabase) await supabaseClient.from(m.supabase).delete().not('id', 'is', null);
+                    localStorage.removeItem(m.ls);
+                }
+            }
+        }
+
+        closeModal();
+        showToast('Reset complete! Reloading...', 'success');
+        setTimeout(() => location.reload(), 1200);
+    } catch(e) {
+        showToast('Reset failed: ' + e.message, 'error');
+        if (btn) { btn.disabled = false; btn.textContent = '🗑️ Reset Now'; }
+    }
 }
 
 // --- Data Backup & Restore ---

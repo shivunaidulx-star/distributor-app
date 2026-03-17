@@ -2281,3 +2281,32 @@ body {
         padding-bottom: env(safe-area-inset-bottom, 12px);
     }
 }
+
+/* ============ SMART RESET MODAL ============ */
+.reset-option-card {
+    padding: 14px 16px;
+    border: 2px solid var(--border);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+}
+.reset-option-card.active {
+    border-color: var(--danger);
+    background: rgba(239, 68, 68, 0.07);
+}
+.reset-master-check {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.9rem;
+    cursor: pointer;
+}
+.reset-master-check:last-child { border-bottom: none; }
+.reset-master-check input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--danger);
+    flex-shrink: 0;
+}
