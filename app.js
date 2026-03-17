@@ -4158,6 +4158,17 @@ async function saveSalesOrder() {
                 packed: false
             };
             await DB.insert('salesorders', order);
+
+            // Expense Entry for Discount
+            const totalDiscount = soItems.reduce((s, li) => s + (li.discountAmt || 0), 0);
+            if (totalDiscount > 0) {
+                await DB.insert('expenses', {
+                    date: data.date,
+                    category: 'Sales Discount',
+                    amount: +totalDiscount.toFixed(2),
+                    description: `Discount on Sales Order ${order.orderNo} for ${partyName}`
+                });
+            }
             showToast(`Order submitted!`, 'success');
         }
         const andNew = window._saveAndNew; window._saveAndNew = false;
@@ -5551,6 +5562,17 @@ async function saveInvoice() {
             }));
         }
 
+        // Expense Entry for Discount
+        const totalDiscount = invoiceItems.reduce((s, li) => s + (li.discountAmt || 0), 0);
+        if (totalDiscount > 0 && type === 'sale') {
+            ops.push(DB.rawInsert('expenses', {
+                date: $('f-inv-date').value,
+                category: 'Sales Discount',
+                amount: +totalDiscount.toFixed(2),
+                description: `Discount on Sales Invoice ${invNo} for ${partyName}`
+            }));
+        }
+
         // Party balance + ledger
         const party = parties.find(p => p.id === partyId);
         if (party) {
@@ -6156,10 +6178,20 @@ async function openPaymentModal(prefillPartyId) {
         <div class="pay-section">
             <div style="font-size:0.72rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px">AMOUNT & MODE</div>
             <div style="margin-bottom:14px">
-                <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:6px">Amount ₹ *</div>
+                <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:6px">Amount Received ₹ *</div>
                 <input type="number" id="f-pay-amount" min="0" placeholder="0.00"
                     style="font-size:2rem;font-weight:700;color:var(--text-primary);border:none;border-bottom:2px solid var(--primary);background:transparent;width:100%;padding:6px 0;outline:none"
                     oninput="onPayAmountChange()">
+            </div>
+            <div style="margin-bottom:14px">
+                <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:6px">Discount ₹</div>
+                <input type="number" id="f-pay-discount" min="0" placeholder="0.00"
+                    style="font-size:1.5rem;font-weight:600;color:var(--text-secondary);border:none;border-bottom:1px solid var(--border);background:transparent;width:100%;padding:4px 0;outline:none"
+                    oninput="onPayAmountChange()">
+            </div>
+            <div style="margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-top:1px dashed var(--border)">
+                <span style="font-size:0.9rem;font-weight:700;color:var(--text-muted)">Total Balance Reduction:</span>
+                <span style="font-size:1.2rem;font-weight:800;color:var(--primary)" id="pay-total-display">₹0.00</span>
             </div>
             <!-- Mode chips -->
             <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
@@ -6349,13 +6381,21 @@ async function onPayPartyChange() {
 }
 
 window.onPayAmountChange = function () {
+    const amt = +($('f-pay-amount')?.value) || 0;
+    const disc = +($('f-pay-discount')?.value) || 0;
+    const total = amt + disc;
+    const el = $('pay-total-display');
+    if (el) el.textContent = currency(total);
+
     autoAllocPayment();
     if (typeof updatePaymentQR === 'function') updatePaymentQR();
 };
 
 // FIFO allocation across checked invoices only
 window.autoAllocPayment = function () {
-    let remaining = +($('f-pay-amount')?.value) || 0;
+    const amt = +($('f-pay-amount')?.value) || 0;
+    const disc = +($('f-pay-discount')?.value) || 0;
+    let remaining = amt + disc;
 
     // Zero out unchecked invoices first
     document.querySelectorAll('.pay-alloc-chk:not(:checked)').forEach(chk => {
@@ -6389,8 +6429,10 @@ window.togglePayAllocInv = function () {
 window.updatePayAllocSummary = function () {
     let allocated = 0;
     document.querySelectorAll('.pay-alloc-input').forEach(inp => allocated += (+inp.value || 0));
-    const totalAmt = +($('f-pay-amount')?.value) || 0;
-    const unused = +(totalAmt - allocated).toFixed(2);
+    const amt = +($('f-pay-amount')?.value) || 0;
+    const disc = +($('f-pay-discount')?.value) || 0;
+    const totalReduction = amt + disc;
+    const unused = +(totalReduction - allocated).toFixed(2);
 
     const lblAlloc  = document.getElementById('lbl-total-alloc');
     const lblUnused = document.getElementById('lbl-unused-alloc');
@@ -6462,6 +6504,8 @@ async function savePayment() {
     const payPartyName = ($('f-pay-party') || {}).value?.trim() || '';
     if (!payPartyId) { endSave(); return alert('Please select a party from the dropdown'); }
     const amt = +$('f-pay-amount').value; if (!amt || amt <= 0) { endSave(); return alert('Enter valid amount'); }
+    const disc = +($('f-pay-discount')?.value) || 0;
+    const totalReduction = amt + disc;
     const mode = $('f-pay-mode').value;
 
     let chequeNo = '', chequeBank = '', chequeDate = '';
@@ -6482,7 +6526,7 @@ async function savePayment() {
         }
     });
 
-    if (totalAlloc > amt + 0.01) return alert('Allocation exceeds payment amount.');
+    if (totalAlloc > totalReduction + 0.01) return alert('Allocation exceeds total amount (Received + Discount).');
 
     const payType = $('f-pay-type').value;
     const invNo = Object.keys(allocations).length === 1 ? Object.keys(allocations)[0] : (Object.keys(allocations).length > 1 ? 'Multi' : '');
@@ -6496,6 +6540,8 @@ async function savePayment() {
             partyId: payPartyId,
             partyName: payPartyName,
             amount: amt,
+            discount: disc,
+            totalReduction: totalReduction,
             mode: mode,
             note: $('f-pay-note').value.trim(),
             invoiceNo: invNo,
@@ -6509,11 +6555,21 @@ async function savePayment() {
         await DB.insert('payments', payData);
         incrementPayNo();
 
+        // Automatic Expense Entry for Discount
+        if (disc > 0 && payType === 'in') {
+            await DB.insert('expenses', {
+                date: $('f-pay-date').value,
+                category: 'Payment Discount',
+                amount: disc,
+                description: `Payment Discount for ${payPartyName} (${payRefNo})`
+            });
+        }
+
         // Update party balance
         const parties = await DB.getAll('parties');
         const party = parties.find(p => p.id === payPartyId);
         if (party) {
-            const balChange = payType === 'in' ? -amt : amt;
+            const balChange = payType === 'in' ? -totalReduction : totalReduction;
             const newBal = (party.balance || 0) + balChange;
             await DB.update('parties', party.id, { balance: newBal });
             await addPartyLedgerEntry(party.id, party.name, payType === 'in' ? 'Payment In' : 'Payment Out', balChange, payRefNo, mode);
@@ -12671,19 +12727,18 @@ async function renderHRPayroll() {
     const selMonth = window._payMonth || today().substring(0, 7);
     const [y, m] = selMonth.split('-').map(Number);
     const daysInMonth = new Date(y, m, 0).getDate();
-    // Working days = all days minus Sundays
     const workingDays = Array.from({length: daysInMonth}, (_, i) => i+1).filter(d => new Date(y, m-1, d).getDay() !== 0).length;
 
     const [staffRes, attRes, advRes, salRes] = await Promise.all([
         supabaseClient.from('staff').select('*').eq('status', 'active').order('name'),
         supabaseClient.from('attendance').select('*').gte('date', selMonth+'-01').lte('date', selMonth+'-31'),
-        supabaseClient.from('salary_advances').select('*').eq('month', selMonth),
+        supabaseClient.from('salary_advances').select('*').order('date', { ascending: true }), // ALL advances (all months)
         supabaseClient.from('salary_records').select('*').eq('month', selMonth)
     ]);
 
     const staff = staffRes.data || [];
     const attRecs = attRes.data || [];
-    const advRecs = advRes.data || [];
+    const allAdvRecs = advRes.data || [];
     const salRecs = salRes.data || [];
 
     // Build per-staff summary
@@ -12695,14 +12750,29 @@ async function renderHRPayroll() {
         const daysEff = p + hd * 0.5 + pl;
         const salary = s.monthly_salary || 0;
         const earned = workingDays > 0 ? +((salary / workingDays) * daysEff).toFixed(2) : 0;
-        const advances = advRecs.filter(r => r.staff_id === s.id).reduce((t, r) => t + (r.amount||0), 0);
-        const net = Math.max(0, earned - advances);
+
+        // Pending advance balance across ALL months (FIFO simulation)
+        const myAllAdvs = allAdvRecs.filter(r => r.staff_id === s.id);
+        const advPending = +myAllAdvs.reduce((t, a) => t + Math.max(0, (a.amount||0) - (a.deducted||0)), 0).toFixed(2);
+
+        // Simulate how much will be deducted this month (FIFO)
+        let toDeduct = 0, rem = earned;
+        for (const adv of myAllAdvs) {
+            if (rem <= 0) break;
+            const bal = Math.max(0, (adv.amount||0) - (adv.deducted||0));
+            const d = Math.min(bal, rem);
+            toDeduct += d; rem -= d;
+        }
+        toDeduct = +toDeduct.toFixed(2);
+        const net = +Math.max(0, earned - toDeduct).toFixed(2);
         const salRec = salRecs.find(r => r.staff_id === s.id);
-        return { s, p, hd, pl, daysEff, earned, advances, net, salRec, paid: salRec && salRec.status === 'paid' };
+        const paid = salRec && salRec.status === 'paid';
+        return { s, p, hd, pl, daysEff, earned, advPending, toDeduct, net, salRec, paid };
     });
 
     const totalEarned = rows.reduce((t, r) => t + r.earned, 0);
     const totalNet = rows.reduce((t, r) => t + r.net, 0);
+    const totalAdvPending = rows.reduce((t, r) => t + r.advPending, 0);
 
     pageContent.innerHTML = `
     <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-bottom:16px">
@@ -12715,14 +12785,14 @@ async function renderHRPayroll() {
     <div class="stats-grid" style="margin-bottom:16px">
         <div class="stat-card blue"><div class="stat-icon">👤</div><div class="stat-value">${staff.length}</div><div class="stat-label">Active Staff</div></div>
         <div class="stat-card green"><div class="stat-icon">💰</div><div class="stat-value">${currency(totalEarned)}</div><div class="stat-label">Total Earned</div></div>
-        <div class="stat-card amber"><div class="stat-icon">💵</div><div class="stat-value">${currency(advRecs.reduce((t,r)=>t+(r.amount||0),0))}</div><div class="stat-label">Advances Given</div></div>
+        <div class="stat-card amber"><div class="stat-icon">💵</div><div class="stat-value">${currency(totalAdvPending)}</div><div class="stat-label">Advance Balance</div></div>
         <div class="stat-card red"><div class="stat-icon">🏦</div><div class="stat-value">${currency(totalNet)}</div><div class="stat-label">Net Payable</div></div>
     </div>
 
     <div class="card" style="margin-bottom:20px"><div class="card-body">
     <div style="font-weight:700;margin-bottom:12px">Salary Sheet — ${selMonth}</div>
     <div class="table-wrapper"><table class="data-table">
-        <thead><tr><th>Staff</th><th>Salary/Mo</th><th style="text-align:center">P</th><th style="text-align:center">½</th><th style="text-align:center">Eff.Days</th><th style="text-align:right">Earned</th><th style="text-align:right">Advances</th><th style="text-align:right">Net Payable</th><th>Status</th><th>Actions</th></tr></thead>
+        <thead><tr><th>Staff</th><th>Salary/Mo</th><th style="text-align:center">P</th><th style="text-align:center">½</th><th style="text-align:center">Eff.Days</th><th style="text-align:right">Earned</th><th style="text-align:right">Adv Balance</th><th style="text-align:right">Deducting</th><th style="text-align:right">Net Payable</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody>
         ${rows.length ? rows.map(r => `<tr style="${r.paid?'background:rgba(34,197,94,0.05)':''}">
             <td style="font-weight:600">${escapeHtml(r.s.name)}<div style="font-size:0.72rem;color:var(--text-muted)">${r.s.role||'Staff'}</div></td>
@@ -12731,31 +12801,41 @@ async function renderHRPayroll() {
             <td style="text-align:center;color:#f59e0b;font-weight:600">${r.hd}</td>
             <td style="text-align:center;font-weight:700">${r.daysEff.toFixed(1)}</td>
             <td style="text-align:right;font-weight:600">${currency(r.earned)}</td>
-            <td style="text-align:right;color:#ef4444">${r.advances > 0 ? '- '+currency(r.advances) : '-'}</td>
+            <td style="text-align:right;color:${r.advPending>0?'#ef4444':'var(--text-muted)'}">
+                ${r.advPending > 0 ? currency(r.advPending) : '-'}
+            </td>
+            <td style="text-align:right;color:#ef4444;font-weight:600">
+                ${r.toDeduct > 0 ? '- '+currency(r.toDeduct) : '-'}
+            </td>
             <td style="text-align:right;font-weight:800;color:var(--accent);font-size:1rem">${currency(r.net)}</td>
-            <td><span class="badge ${r.paid?'badge-success':'badge-warning'}">${r.paid?'✅ Paid':'Pending'}</span></td>
+            <td><span class="badge ${r.paid?'badge-success':'badge-warning'}">${r.paid?'Paid':'Pending'}</span></td>
             <td><div class="action-btns" style="gap:4px">
-                ${!r.paid ? `<button class="btn btn-primary btn-sm" onclick="markSalaryPaid('${r.s.id}','${escapeHtml(r.s.name)}','${selMonth}',${r.s.monthly_salary||0},${workingDays},${r.daysEff},${r.earned},${r.advances},${r.net})">Mark Paid</button>` : `<button class="btn btn-outline btn-sm" onclick="viewPaySlip('${r.s.id}','${selMonth}')">Pay Slip</button>`}
+                ${!r.paid ? `<button class="btn btn-primary btn-sm" onclick="markSalaryPaid('${r.s.id}','${escapeHtml(r.s.name)}','${selMonth}',${r.s.monthly_salary||0},${workingDays},${r.daysEff},${r.earned})">Mark Paid</button>` : `<button class="btn btn-outline btn-sm" onclick="viewPaySlip('${r.s.id}','${selMonth}')">Pay Slip</button>`}
                 <button class="btn btn-outline btn-sm" onclick="openStaffAdvance('${r.s.id}','${escapeHtml(r.s.name)}')">+Advance</button>
             </div></td>
-        </tr>`).join('') : '<tr><td colspan="10"><div class="empty-state"><p>No active staff</p></div></td></tr>'}
+        </tr>`).join('') : '<tr><td colspan="11"><div class="empty-state"><p>No active staff</p></div></td></tr>'}
         </tbody>
     </table></div>
     </div></div>
 
-    <h4 style="margin-bottom:12px;font-size:0.95rem">Advances — ${selMonth}</h4>
+    <h4 style="margin-bottom:12px;font-size:0.95rem">All Advance Records</h4>
     <div class="card"><div class="card-body">
     <div class="table-wrapper"><table class="data-table">
-        <thead><tr><th>Staff</th><th>Date</th><th>Amount</th><th>Notes</th><th>Paid By</th><th>Action</th></tr></thead>
+        <thead><tr><th>Staff</th><th>Date</th><th style="text-align:right">Given</th><th style="text-align:right">Deducted</th><th style="text-align:right">Balance</th><th>Notes</th><th>Action</th></tr></thead>
         <tbody>
-        ${advRecs.length ? advRecs.map(a => `<tr>
-            <td style="font-weight:600">${escapeHtml(a.staff_name||'')}</td>
-            <td>${fmtDate(a.date)}</td>
-            <td style="font-weight:700;color:#ef4444">${currency(a.amount)}</td>
-            <td style="color:var(--text-muted);font-size:0.85rem">${escapeHtml(a.notes||'-')}</td>
-            <td style="font-size:0.82rem">${a.paid_by||'-'}</td>
-            <td><button class="btn-icon" onclick="deleteAdvance('${a.id}')" title="Delete">🗑️</button></td>
-        </tr>`).join('') : '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:20px">No advances this month</td></tr>'}
+        ${allAdvRecs.length ? allAdvRecs.map(a => {
+            const bal = Math.max(0, (a.amount||0) - (a.deducted||0));
+            const statusColor = bal === 0 ? '#22c55e' : bal < (a.amount||0) ? '#f59e0b' : '#ef4444';
+            return `<tr>
+                <td style="font-weight:600">${escapeHtml(a.staff_name||'')}</td>
+                <td>${fmtDate(a.date)}<div style="font-size:0.72rem;color:var(--text-muted)">${a.month||''}</div></td>
+                <td style="text-align:right;font-weight:700;color:#ef4444">${currency(a.amount||0)}</td>
+                <td style="text-align:right;color:#22c55e">${(a.deducted||0)>0?currency(a.deducted):'-'}</td>
+                <td style="text-align:right;font-weight:700;color:${statusColor}">${bal>0?currency(bal):'Cleared'}</td>
+                <td style="color:var(--text-muted);font-size:0.85rem">${escapeHtml(a.notes||'-')}</td>
+                <td>${bal>0?`<button class="btn-icon" onclick="deleteAdvance('${a.id}')" title="Delete">🗑️</button>`:''}</td>
+            </tr>`;
+        }).join('') : '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:20px">No advance records</td></tr>'}
         </tbody>
     </table></div>
     </div></div>`;
@@ -12813,28 +12893,90 @@ async function deleteAdvance(id) {
     renderHRPayroll();
 }
 
-async function markSalaryPaid(staffId, staffName, month, monthlySalary, workingDays, daysEff, earned, advances, net) {
-    if (!confirm(`Mark salary as PAID for ${staffName}?\nNet Payable: ${currency(net)}`)) return;
+async function markSalaryPaid(staffId, staffName, month, monthlySalary, workingDays, daysEff, earned) {
+    // Fetch ALL advances for this staff ordered oldest first (FIFO)
+    const { data: allAdvs } = await supabaseClient
+        .from('salary_advances').select('*')
+        .eq('staff_id', staffId)
+        .order('date', { ascending: true });
+
+    const pendingAdvs = (allAdvs || []).filter(a => Math.max(0, (a.amount||0) - (a.deducted||0)) > 0);
+    const totalPending = pendingAdvs.reduce((t, a) => t + Math.max(0, (a.amount||0) - (a.deducted||0)), 0);
+
+    // FIFO: deduct from oldest advance first
+    let remaining = earned;
+    let totalDeducted = 0;
+    const advUpdates = []; // { id, newDeducted, deductNow, date, notes, total, oldDeducted }
+
+    for (const adv of pendingAdvs) {
+        if (remaining <= 0) break;
+        const bal = Math.max(0, (adv.amount||0) - (adv.deducted||0));
+        const deductNow = +Math.min(bal, remaining).toFixed(2);
+        remaining = +(remaining - deductNow).toFixed(2);
+        totalDeducted = +(totalDeducted + deductNow).toFixed(2);
+        advUpdates.push({ id: adv.id, newDeducted: +((adv.deducted||0) + deductNow).toFixed(2), deductNow, date: adv.date, notes: adv.notes, total: adv.amount, oldDeducted: adv.deducted||0 });
+    }
+
+    const net = +Math.max(0, earned - totalDeducted).toFixed(2);
+    const carryForward = +(totalPending - totalDeducted).toFixed(2);
+
+    // Build confirmation message
+    let confLines = [`Staff: ${staffName}`, `Earned: ${currency(earned)}`];
+    if (totalDeducted > 0) {
+        confLines.push(`Advance deducted: - ${currency(totalDeducted)}`);
+        if (carryForward > 0) confLines.push(`Carry-forward balance: ${currency(carryForward)}`);
+    }
+    confLines.push(`Net Payable: ${currency(net)}`);
+    if (!confirm(confLines.join('\n'))) return;
+
+    // Update each advance's deducted amount
+    const ops = advUpdates.map(u =>
+        supabaseClient.from('salary_advances').update({ deducted: u.newDeducted }).eq('id', u.id)
+    );
+
+    // Upsert salary record
     const { data: existing } = await supabaseClient.from('salary_records').select('id').eq('staff_id', staffId).eq('month', month).single();
-    const rec = { staff_id: staffId, staff_name: staffName, month, monthly_salary: monthlySalary, working_days: workingDays, days_present: daysEff, earned_salary: earned, advances, net_payable: net, status: 'paid', paid_date: today(), paid_by: currentUser.name };
+    const rec = { staff_id: staffId, staff_name: staffName, month, monthly_salary: monthlySalary, working_days: workingDays, days_present: daysEff, earned_salary: earned, advances: totalDeducted, net_payable: net, status: 'paid', paid_date: today(), paid_by: currentUser.name };
     if (existing) {
-        await supabaseClient.from('salary_records').update(rec).eq('id', existing.id);
+        ops.push(supabaseClient.from('salary_records').update(rec).eq('id', existing.id));
     } else {
         rec.id = 'sal_' + Date.now() + '_' + staffId.slice(-4);
-        await supabaseClient.from('salary_records').insert(rec);
+        ops.push(supabaseClient.from('salary_records').insert(rec));
     }
-    showToast(`Salary marked as paid for ${staffName}!`, 'success');
+
+    await Promise.all(ops);
+    showToast(`Salary paid for ${staffName}! Net: ${currency(net)}${carryForward > 0 ? ' | Adv carry-forward: ' + currency(carryForward) : ''}`, 'success');
     renderHRPayroll();
 }
 
 async function viewPaySlip(staffId, month) {
-    const [{ data: s }, { data: sr }, { data: advs }] = await Promise.all([
+    const [{ data: s }, { data: sr }, { data: allAdvs }] = await Promise.all([
         supabaseClient.from('staff').select('*').eq('id', staffId).single(),
         supabaseClient.from('salary_records').select('*').eq('staff_id', staffId).eq('month', month).single(),
-        supabaseClient.from('salary_advances').select('*').eq('staff_id', staffId).eq('month', month)
+        supabaseClient.from('salary_advances').select('*').eq('staff_id', staffId).order('date', { ascending: true })
     ]);
     if (!sr) return alert('Salary record not found');
     const co = DB.getObj('db_company');
+
+    // Build advance deduction rows for pay slip
+    // Show advances that had deductions applied (deducted > 0) up to this month
+    const advRows = (allAdvs || []).filter(a => (a.deducted||0) > 0).map(a => {
+        const bal = Math.max(0, (a.amount||0) - (a.deducted||0));
+        return `<tr style="color:#ef4444">
+            <td style="padding:8px;border:1px solid var(--border)">
+                Advance (${fmtDate(a.date)})${a.notes?' — '+a.notes:''}
+                <div style="font-size:0.72rem;color:var(--text-muted)">Total: ${currency(a.amount)} | Deducted so far: ${currency(a.deducted)}${bal>0?' | Remaining: '+currency(bal):' | Cleared'}</div>
+            </td>
+            <td style="padding:8px;text-align:right;border:1px solid var(--border)">- ${currency(sr.advances)}</td>
+        </tr>`;
+    }).slice(0, 1); // show summary row (net advances in salary record is the total for this month)
+
+    // Simpler: just show the total deducted this month from salary record
+    const advDeductRow = sr.advances > 0 ? `<tr style="color:#ef4444">
+        <td style="padding:8px;border:1px solid var(--border)">Advance Adjustment${(allAdvs||[]).filter(a=>(a.deducted||0)>0).length > 0 ? ' (oldest first)' : ''}</td>
+        <td style="padding:8px;text-align:right;border:1px solid var(--border)">- ${currency(sr.advances)}</td>
+    </tr>` : '';
+
     openModal('Pay Slip', `
     <div id="payslip-print">
         <div style="text-align:center;border-bottom:2px solid var(--border);padding-bottom:12px;margin-bottom:16px">
@@ -12856,7 +12998,7 @@ async function viewPaySlip(staffId, month) {
             <tr><td style="padding:8px;border:1px solid var(--border)">Working Days (excl. Sun)</td><td style="padding:8px;text-align:right;border:1px solid var(--border)">${sr.working_days}</td></tr>
             <tr><td style="padding:8px;border:1px solid var(--border)">Days Present (effective)</td><td style="padding:8px;text-align:right;border:1px solid var(--border)">${(+sr.days_present).toFixed(1)}</td></tr>
             <tr style="background:rgba(34,197,94,0.07)"><td style="padding:8px;border:1px solid var(--border);font-weight:600">Earned Salary</td><td style="padding:8px;text-align:right;border:1px solid var(--border);font-weight:600">${currency(sr.earned_salary)}</td></tr>
-            ${(advs&&advs.length)?advs.map(a=>`<tr style="color:#ef4444"><td style="padding:8px;border:1px solid var(--border)">Advance (${fmtDate(a.date)})${a.notes?' — '+a.notes:''}</td><td style="padding:8px;text-align:right;border:1px solid var(--border)">- ${currency(a.amount)}</td></tr>`).join(''):''}
+            ${advDeductRow}
             <tr style="background:var(--accent);color:#fff"><td style="padding:10px;border:1px solid var(--border);font-weight:700;font-size:1rem">NET PAYABLE</td><td style="padding:10px;text-align:right;border:1px solid var(--border);font-weight:800;font-size:1.1rem">${currency(sr.net_payable)}</td></tr>
         </table>
         <div style="display:flex;justify-content:space-between;font-size:0.75rem;color:var(--text-muted);margin-top:16px;padding-top:12px;border-top:1px dashed var(--border)">
