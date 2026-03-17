@@ -1845,7 +1845,6 @@ async function saveParty(id) {
         } else {
             await DB.insert('parties', { ...data, balance: 0 });
         }
-        await updateDataHash();
         
         closeModal();
         await renderParties();
@@ -1916,7 +1915,6 @@ async function updatePartyLiveLocation(partyId) {
             const lat = pos.coords.latitude;
             const lng = pos.coords.longitude;
             await DB.update('parties', partyId, { lat, lng });
-            await updateDataHash();
             
             showToast('GPS Updated Successfully!', 'success');
             
