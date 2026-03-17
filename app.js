@@ -963,6 +963,7 @@ async function navigateTo(page) {
 //  BOTTOM NAV — More Sheet & FAB
 // =============================================
 const MORE_ITEMS = [
+    { page: 'payments',        icon: '💳', label: 'Payments' },
     { page: 'parties',         icon: '👥', label: 'Parties' },
     { page: 'inventory',       icon: '📦', label: 'Inventory' },
     { page: 'packing',         icon: '📋', label: 'Packing' },
