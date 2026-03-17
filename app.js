@@ -1692,7 +1692,7 @@ async function openPartyModal(id) {
             </div>
         </div>` : ''}
     `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-        ${!id ? `<button class="btn btn-outline" style="border-color:var(--primary);color:var(--primary)" onclick="window._saveAndNew=true;saveParty('')">＋ Save & New</button>` : ''}
+        ${!id ? `<button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveParty('')">＋ Save & New</button>` : ''}
         <button class="btn btn-primary" onclick="saveParty('${id || ''}')">Save Party</button>`);
 }
 async function saveParty(id) {
@@ -1988,7 +1988,7 @@ async function openCategoryModal(id) {
     openModal(c ? 'Edit Category' : 'Add Category', `
         <div class="form-group"><label>Category Name *</label><input id="f-cat-name" value="${c ? c.name : ''}"></div>
         <div class="form-group"><label>Sub-Categories (comma separated)</label><input id="f-cat-subs" value="${c ? (c.subCategories || []).join(', ') : ''}" placeholder="e.g. Mobile, Laptop, Tablet"></div>
-        <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button>${!id ? `<button class="btn btn-outline" style="border-color:var(--primary);color:var(--primary)" onclick="window._saveAndNew=true;saveCategory('')">＋ Save & New</button>` : ''}<button class="btn btn-primary" onclick="saveCategory('${id || ''}')">Save Category</button></div>
+        <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button>${!id ? `<button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveCategory('')">＋ Save & New</button>` : ''}<button class="btn btn-primary" onclick="saveCategory('${id || ''}')">Save Category</button></div>
     `);
 }
 
@@ -2290,7 +2290,7 @@ function openItemModal(id) {
             <div id="item-batches-container"></div>
         </div>
         <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-        ${!id ? `<button class="btn btn-outline" style="border-color:var(--primary);color:var(--primary)" onclick="window._saveAndNew=true;saveItem('')">＋ Save & New</button>` : ''}
+        ${!id ? `<button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveItem('')">＋ Save & New</button>` : ''}
         <button class="btn btn-primary" onclick="saveItem('${id || ''}')">Save Item</button></div>`);
 
     renderPriceTiers();
@@ -3221,7 +3221,7 @@ async function openSalesOrderModal() {
         <div style="text-align:right;font-size:1.1rem;font-weight:700;color:var(--accent)" id="so-total-display">Total: ₹0.00</div>
         
         <div class="form-group" style="margin-top:12px"><label>Notes</label><input id="f-so-notes" placeholder="Instructions..."></div>
-    `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-outline" style="border-color:var(--primary);color:var(--primary)" onclick="window._saveAndNew=true;saveSalesOrder()">＋ Save & New</button><button class="btn btn-primary" onclick="saveSalesOrder()">✅ Submit Order</button>`);
+    `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveSalesOrder()">＋ Save & New</button><button class="btn btn-primary" onclick="saveSalesOrder()">✅ Submit Order</button>`);
 
     // Init custom searchable dropdowns
     initSearchDropdown('f-so-party', buildPartySearchList(customers));
@@ -3739,7 +3739,7 @@ async function duplicateSalesOrder(id) {
         <div style="text-align:right;font-size:1.1rem;font-weight:700;color:var(--accent)" id="so-total-display">Total: ₹0.00</div>
         
         <div class="form-group" style="margin-top:12px"><label>Notes</label><input id="f-so-notes" value="${orig.notes ? escapeHtml(orig.notes) : ''}"></div>
-    `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-outline" style="border-color:var(--primary);color:var(--primary)" onclick="window._saveAndNew=true;saveSalesOrder()">＋ Save & New</button><button class="btn btn-primary" onclick="saveSalesOrder()">✅ Submit Order</button>`);
+    `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveSalesOrder()">＋ Save & New</button><button class="btn btn-primary" onclick="saveSalesOrder()">✅ Submit Order</button>`);
     initSearchDropdown('f-so-party', buildPartySearchList(customers));
     renderSOLines();
 }
@@ -4040,7 +4040,7 @@ async function openPurchaseOrderModal() {
         </div>
         <div id="po-lines-list" style="margin-top:10px"></div>
         <div style="text-align:right;font-size:1.1rem;font-weight:700;color:var(--accent);margin-top:15px" id="po-total-display">Total: ₹0.00</div>
-    `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-outline" style="border-color:var(--primary);color:var(--primary)" onclick="window._saveAndNew=true;savePurchaseOrder()">＋ Save & New</button><button class="btn btn-primary" onclick="savePurchaseOrder()">Save Purchase Order</button>`);
+    `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;savePurchaseOrder()">＋ Save & New</button><button class="btn btn-primary" onclick="savePurchaseOrder()">Save Purchase Order</button>`);
 
     initSearchDropdown('f-po-party', buildPartySearchList(suppliers), (party) => {
         if ($('f-po-party-id')) $('f-po-party-id').value = party.id || '';
@@ -4437,7 +4437,7 @@ async function openInvoiceModal(type) {
         <div style="text-align:right;font-size:1.1rem;font-weight:700;color:var(--accent)" id="inv-total-display">Total: ₹0.00</div>
         
         <div id="inv-advance-section" style="margin-top:10px"></div>
-    `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-outline" style="border-color:var(--primary);color:var(--primary)" onclick="window._saveAndNew=true;saveInvoice()">＋ Save & New</button><button class="btn btn-primary" onclick="saveInvoice()">💾 Save Invoice</button>`);
+    `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveInvoice()">＋ Save & New</button><button class="btn btn-primary" onclick="saveInvoice()">💾 Save Invoice</button>`);
 
     // Init custom searchable dropdowns
     initSearchDropdown('f-inv-party', buildPartySearchList(filteredParties), function (party) {
@@ -5368,7 +5368,7 @@ async function openPaymentModal(prefillPartyId) {
         <!-- Sticky save footer -->
         <div class="pay-page-footer">
             ${!isSalesmanRole ? `<button class="btn btn-outline" style="flex:1;min-height:48px" onclick="renderPayments()">Cancel</button>` : ''}
-            <button class="btn btn-outline" style="flex:1;min-height:48px;border-color:var(--primary);color:var(--primary)" onclick="window._saveAndNew=true;savePayment()">＋ Save & New</button>
+            <button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;savePayment()">＋ Save & New</button>
             <button class="btn btn-primary" style="flex:2;min-height:48px;font-size:1rem;font-weight:700" onclick="savePayment()">💾 Save Payment</button>
         </div>
     `;
@@ -6013,7 +6013,7 @@ function openExpenseModal() {
         </div>
         <div class="form-group"><label>Amount *</label><input type="number" id="f-exp-amt" min="0" step="0.01" placeholder="0.00"></div>
         <div class="form-group"><label>Description</label><input id="f-exp-desc" placeholder="Details..."></div>
-    `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-outline" style="border-color:var(--primary);color:var(--primary)" onclick="window._saveAndNew=true;saveExpense()">＋ Save & New</button><button class="btn btn-primary" onclick="saveExpense()">💾 Save Expense</button>`);
+    `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveExpense()">＋ Save & New</button><button class="btn btn-primary" onclick="saveExpense()">💾 Save Expense</button>`);
 }
 
 async function saveExpense() {
@@ -8791,7 +8791,7 @@ function openPackerModal(id) {
         <div class="form-group"><label>Name *</label><input id="f-packer-name" value="${p ? p.name : ''}"></div>
         <div class="form-group"><label>Phone</label><input id="f-packer-phone" value="${p ? p.phone || '' : ''}"></div>
         <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-        ${!id ? `<button class="btn btn-outline" style="border-color:var(--primary);color:var(--primary)" onclick="window._saveAndNew=true;savePacker('')">＋ Save & New</button>` : ''}
+        ${!id ? `<button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;savePacker('')">＋ Save & New</button>` : ''}
         <button class="btn btn-primary" onclick="savePacker('${id || ''}')">Save Packer</button></div>`);
 }
 async function savePacker(id) {
@@ -8836,7 +8836,7 @@ function openDelPersonModal(id) {
         <div class="form-row"><div class="form-group"><label>Phone</label><input id="f-dp-phone" value="${p ? p.phone || '' : ''}"></div>
         <div class="form-group"><label>Vehicle</label><input id="f-dp-vehicle" value="${p ? p.vehicle || '' : ''}" placeholder="e.g. Tempo, Bike"></div></div>
         <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-        ${!id ? `<button class="btn btn-outline" style="border-color:var(--primary);color:var(--primary)" onclick="window._saveAndNew=true;saveDelPerson('')">＋ Save & New</button>` : ''}
+        ${!id ? `<button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveDelPerson('')">＋ Save & New</button>` : ''}
         <button class="btn btn-primary" onclick="saveDelPerson('${id || ''}')">Save</button></div>`);
 }
 async function saveDelPerson(id) {
@@ -8884,7 +8884,7 @@ function openUserModal(id) {
         <div class="form-row"><div class="form-group"><label>Role</label><select id="f-user-role"><option ${u && u.role === 'Admin' ? 'selected' : ''}>Admin</option><option ${u && u.role === 'Manager' ? 'selected' : ''}>Manager</option><option ${u && u.role === 'Salesman' ? 'selected' : ''}>Salesman</option><option ${u && u.role === 'Delivery' ? 'selected' : ''}>Delivery</option><option ${u && u.role === 'Packing' ? 'selected' : ''}>Packing</option></select></div>
         <div class="form-group"><label>PIN (4 digits) *</label><input type="password" id="f-user-pin" maxlength="4" value="${u ? u.pin : ''}" placeholder="Enter PIN"></div></div>
         <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-        ${!id ? `<button class="btn btn-outline" style="border-color:var(--primary);color:var(--primary)" onclick="window._saveAndNew=true;saveUser('')">＋ Save & New</button>` : ''}
+        ${!id ? `<button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveUser('')">＋ Save & New</button>` : ''}
         <button class="btn btn-primary" onclick="saveUser('${id || ''}')">Save User</button></div>`);
 }
 async function saveUser(id) {
@@ -9742,7 +9742,7 @@ async function openUOMModal(id) {
         <div class="form-group"><label>Short Code</label><input id="f-uom-code" value="${u ? u.code || '' : ''}" placeholder="e.g. Kg"></div>
         <div class="form-group"><label>Description</label><input id="f-uom-desc" value="${u ? u.description || '' : ''}" placeholder="Optional description"></div>
         <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-        ${!id ? `<button class="btn btn-outline" style="border-color:var(--primary);color:var(--primary)" onclick="window._saveAndNew=true;saveUOM('')">＋ Save & New</button>` : ''}
+        ${!id ? `<button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveUOM('')">＋ Save & New</button>` : ''}
         <button class="btn btn-primary" onclick="saveUOM('${id || ''}')">Save UOM</button></div>`);
 }
 
@@ -10208,7 +10208,7 @@ async function createOrderFromCatalog() {
         <div style="text-align:right;font-size:1.1rem;font-weight:700;color:var(--accent)" id="so-total-display">Total: ${currency(soItems.reduce((s, li) => s + li.amount, 0))}</div>
         
         <div class="form-group" style="margin-top:12px"><label>Notes</label><input id="f-so-notes" placeholder="Instructions..."></div>
-    `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-outline" style="border-color:var(--primary);color:var(--primary)" onclick="window._saveAndNew=true;saveSalesOrder()">＋ Save & New</button><button class="btn btn-primary" onclick="saveSalesOrder()">✅ Submit Order</button>`);
+    `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveSalesOrder()">＋ Save & New</button><button class="btn btn-primary" onclick="saveSalesOrder()">✅ Submit Order</button>`);
 
     // Initialize party search and item list search
     initSearchDropdown('f-so-party', buildPartySearchList(customers));

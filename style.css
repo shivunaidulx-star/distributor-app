@@ -198,6 +198,15 @@ table { border-collapse: collapse; width: 100%; }
 .btn-outline:hover { border-color: var(--primary); color: var(--primary); background: rgba(249, 115, 22, 0.06); }
 
 .btn-sm { padding: 6px 14px; font-size: 0.8rem; }
+.btn-save-new {
+    padding: 6px 12px;
+    font-size: 0.8rem;
+    border-color: var(--primary) !important;
+    color: var(--primary) !important;
+    white-space: nowrap;
+    min-height: unset !important;
+    width: auto !important;
+}
 .btn-block { width: 100%; }
 .btn-icon { padding: 8px; border-radius: var(--radius-sm); background: #fff; border: 1px solid var(--border); color: var(--text-secondary); }
 .btn-icon:hover { border-color: var(--primary); color: var(--primary); background: rgba(249,115,22,0.05); }
@@ -1864,11 +1873,11 @@ body {
     .modal-body .form-row,
     .modal-body .form-row-3 { grid-template-columns: 1fr; }
 
-    /* Buttons full-width, stacked */
+    /* Buttons full-width, stacked — Save & New stays compact */
     .modal-actions { flex-direction: column-reverse; }
-    .modal-actions .btn { width: 100%; min-height: 48px; font-size: 1rem; }
+    .modal-actions .btn:not(.btn-save-new) { width: 100%; min-height: 48px; font-size: 1rem; }
     .modal-footer { flex-direction: column-reverse; gap: 8px; }
-    .modal-footer .btn { width: 100%; min-height: 48px; }
+    .modal-footer .btn:not(.btn-save-new) { width: 100%; min-height: 48px; }
 
     /* All table columns visible, scroll horizontally */
     .data-table th, .data-table td { display: table-cell; }
