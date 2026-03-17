@@ -7758,8 +7758,6 @@ async function bulkGenerateInvoicesFromPacked() {
             await Promise.all(ops);
             
             incrementVyaparNo();
-            incrementInvNo();
-            
             startInvNumber++;
             startVyaparNumber++;
             successCount++;
