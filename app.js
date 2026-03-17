@@ -7884,12 +7884,23 @@ async function renderDelivery() {
             <div class="stat-card green"><div class="stat-icon">✅</div><div class="stat-value">${delivered.length}</div><div class="stat-label">Delivered</div></div>
             <div class="stat-card red"><div class="stat-icon">↩️</div><div class="stat-value">${undelivered.length + returned.length}</div><div class="stat-label">Undelivered / Returned</div></div>
         </div>
-        ${(readyToDispatch.length && canEdit()) ? `<h3 style="margin-bottom:14px;font-size:1rem">📦 Ready to Dispatch</h3>
+        ${(readyToDispatch.length && canEdit()) ? `
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+            <h3 style="font-size:1rem;margin:0">📦 Ready to Dispatch (${readyToDispatch.length})</h3>
+            <button class="btn btn-primary btn-sm" onclick="openBulkDispatchModal()">🚚 Bulk Dispatch</button>
+        </div>
         <div class="card" style="margin-bottom:24px"><div class="card-body">
             <div class="table-wrapper">
-                <table class="data-table"><thead><tr><th>Order #</th><th>Invoice</th><th>Party</th><th>Total</th><th>Action</th></tr></thead>
+                <table class="data-table"><thead><tr>
+                    <th style="width:36px"><input type="checkbox" id="chk-disp-all" onchange="document.querySelectorAll('.chk-disp-row').forEach(c=>c.checked=this.checked)"></th>
+                    <th>Order #</th><th>Invoice</th><th>Party</th><th>Total</th><th>Action</th>
+                </tr></thead>
                 <tbody>${readyToDispatch.map(o => `<tr>
-                    <td style="font-weight:600">${o.orderNo}</td><td><span class="badge badge-success">${o.invoiceNo || '-'}</span></td><td>${o.partyName}</td><td class="amount-green">${currency(o.total)}</td>
+                    <td><input type="checkbox" class="chk-disp-row" value="${o.id}" data-source="${o.source}" data-orderno="${o.orderNo}" data-party="${escapeHtml(o.partyName)}"></td>
+                    <td style="font-weight:600">${o.orderNo}</td>
+                    <td><span class="badge badge-success">${o.invoiceNo || '-'}</span></td>
+                    <td>${o.partyName}</td>
+                    <td class="amount-green">${currency(o.total)}</td>
                     <td><button class="btn btn-primary btn-sm" onclick="openDispatchModalUnified('${o.id}','${o.source}')">🚚 Dispatch</button></td>
                 </tr>`).join('')}</tbody></table>
             </div>
@@ -7920,7 +7931,7 @@ function renderDelRows(dels, parties) {
         const actions = `<div class="action-btns">
             <button class="btn-icon" onclick="viewDeliveryDetail('${d.id}')">👁️</button>
             ${d.status !== 'Delivered' ? `<button class="btn btn-primary btn-sm" onclick="markDelivered('${d.id}')">✅ Delivered</button>` : ''}
-            ${d.status !== 'Returned' && d.status !== 'Delivered' ? `<button class="btn btn-outline btn-sm" onclick="markUndelivered('${d.id}')">↩ Return</button>` : ''}
+            ${d.status !== 'Returned' && d.status !== 'Delivered' ? `<button class="btn btn-outline btn-sm" onclick="openUndeliveredModal('${d.id}')">↩ Return</button>` : ''}
         </div>`;
         const partyPhone = party ? (party.phone || '') : '';
         // Location cell: show address/city from party, with delivery confirmation note if delivered
@@ -8545,6 +8556,69 @@ async function executeConfirmReturn(id) {
         closeModal();
     }
 }
+async function openBulkDispatchModal() {
+    const selected = [...document.querySelectorAll('.chk-disp-row:checked')];
+    if (!selected.length) return alert('Select at least one order to dispatch.');
+    const dp = await DB.getAll('delivery_persons');
+    const rows = selected.map(c => ({
+        id: c.value, source: c.dataset.source,
+        orderNo: c.dataset.orderno, party: c.dataset.party
+    }));
+    openModal('Bulk Dispatch', `
+    <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:14px">
+        Dispatching <strong>${rows.length}</strong> order(s) to the same delivery person.
+    </p>
+    <div style="max-height:200px;overflow-y:auto;margin-bottom:16px;border:1px solid var(--border);border-radius:8px;padding:8px">
+        ${rows.map((r,i) => `<div style="display:flex;justify-content:space-between;font-size:0.85rem;padding:5px 4px;${i?'border-top:1px solid var(--border)':''}">
+            <span style="font-weight:600">${r.orderNo}</span>
+            <span style="color:var(--text-muted)">${r.party}</span>
+        </div>`).join('')}
+    </div>
+    <div class="form-group">
+        <label>Delivery Person *</label>
+        <select id="f-bulk-del-person" class="form-control">
+            <option value="">— Select Person —</option>
+            ${dp.map(p => `<option value="${p.name}">${p.name}${p.phone ? ' ('+p.phone+')' : ''}</option>`).join('')}
+        </select>
+        ${!dp.length ? '<p style="font-size:0.78rem;color:var(--warning);margin-top:6px">⚠️ No delivery persons found. <a href="#" onclick="closeModal();navigateTo(\'deliverypersons\')" style="color:var(--accent)">Add Now</a></p>' : ''}
+    </div>
+    <input type="hidden" id="bulk-disp-rows" value="${encodeURIComponent(JSON.stringify(rows))}">
+    <div class="modal-actions">
+        <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="confirmBulkDispatch()">🚚 Dispatch All (${rows.length})</button>
+    </div>`);
+}
+
+async function confirmBulkDispatch() {
+    const person = $('f-bulk-del-person').value;
+    if (!person) { alert('Select a delivery person'); return; }
+    const rows = JSON.parse(decodeURIComponent($('bulk-disp-rows').value));
+    closeModal();
+    showToast('Dispatching…', 'info');
+    try {
+        const [orders, invoices] = await Promise.all([DB.getAll('salesorders'), DB.getAll('invoices')]);
+        const ops = rows.map(r => {
+            let delData;
+            if (r.source === 'order') {
+                const o = orders.find(x => x.id === r.id);
+                if (!o) return null;
+                delData = { orderId: o.id, orderNo: o.orderNo, partyName: o.partyName, partyId: o.partyId, invoiceNo: o.invoiceNo || '', deliveryPerson: person, status: 'Dispatched', dispatchedAt: today(), total: o.total, items: o.items };
+            } else {
+                const inv = invoices.find(x => x.id === r.id);
+                if (!inv) return null;
+                delData = { orderId: inv.id, orderNo: inv.invoiceNo, partyName: inv.partyName, partyId: inv.partyId, invoiceNo: inv.invoiceNo, deliveryPerson: person, status: 'Dispatched', dispatchedAt: today(), total: inv.total, items: inv.items };
+            }
+            return DB.rawInsert('delivery', delData);
+        }).filter(Boolean);
+        await Promise.all(ops);
+        await DB.refreshTables(['delivery']);
+        await renderDelivery();
+        showToast(`✅ ${ops.length} order(s) dispatched to ${person}!`, 'success');
+    } catch (err) {
+        alert('Bulk Dispatch Error: ' + err.message);
+    }
+}
+
 async function reDispatchOrder(id) {
     const dels = await DB.getAll('delivery');
     const d = dels.find(x => x.id === id);
