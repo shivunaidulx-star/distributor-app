@@ -2334,7 +2334,13 @@ function openItemModal(id) {
             <div class="form-group"><label>Sub-Category *</label><select id="f-item-subcat"><option value="">Select Sub-Category</option>${subOpts}</select></div>
         </div>
         <div class="form-row">
-            <div class="form-group"><label>HSN Code</label><input id="f-item-hsn" value="${i ? i.hsn || '' : ''}"></div>
+            <div class="form-group"><label>HSN Code</label><input id="f-item-hsn" value="${i ? i.hsn || '' : ''}" placeholder="e.g. 10063020"></div>
+            <div class="form-group">
+                <label>GST Rate %</label>
+                <select id="f-item-gstrate">
+                    ${[0,3,5,12,18,28].map(r=>`<option value="${r}" ${(i ? +(i.gstRate||0) : 0)===r?'selected':''}>${r}%</option>`).join('')}
+                </select>
+            </div>
             <div class="form-group"><label>Primary Unit</label>
                 <input id="f-item-unit" list="uom-options" value="${i ? i.unit || 'Pcs' : 'Pcs'}" placeholder="e.g. Pcs, Box, Kg...">
                 <datalist id="uom-options">
@@ -2567,6 +2573,7 @@ async function saveItem(id) {
         secUom: $('f-item-secuom').value.trim(),
         secUomRatio: +$('f-item-secratio').value || 0,
         hsn: $('f-item-hsn').value.trim(),
+        gstRate: +($('f-item-gstrate') ? $('f-item-gstrate').value : 0),
         unit: $('f-item-unit').value,
         purchasePrice: +$('f-item-pp').value,
         salePrice: +$('f-item-sp').value,
@@ -4753,7 +4760,11 @@ async function addInvoiceLine() {
     const customPrice = $('f-inv-price').value;
     const price = customPrice !== '' ? +customPrice : unitListedPrice;
 
-    invoiceItems.push({ itemId, name: itemObj.name, qty, price, listedPrice: unitListedPrice, amount: qty * price, unit, primaryQty });
+    const itemGstRate = +(itemObj.gstRate || 0);
+    const lineAmount  = qty * price;
+    const lineBase    = itemGstRate > 0 ? +(lineAmount / (1 + itemGstRate / 100)).toFixed(2) : lineAmount;
+    const lineTax     = +(lineAmount - lineBase).toFixed(2);
+    invoiceItems.push({ itemId, name: itemObj.name, qty, price, listedPrice: unitListedPrice, amount: lineAmount, unit, primaryQty, gstRate: itemGstRate, baseAmount: lineBase, taxAmount: lineTax });
 
     // Retroactively update listed prices for same item (volume tier changes)
     if (type === 'sale') {
@@ -4787,14 +4798,18 @@ function removeInvoiceLine(idx) { invoiceItems.splice(idx, 1); renderInvoiceLine
 function renderInvoiceLines() {
     const el = $('inv-lines-list'); if (!el) return;
     el.innerHTML = invoiceItems.map((li, i) => {
-        const edited = li.listedPrice !== undefined && li.price !== li.listedPrice;
-        return `<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border);${edited ? 'background:rgba(245,158,11,0.08);border-left:3px solid var(--warning);padding-left:7px' : ''}">
-            <span style="width:30px;text-align:center;font-size:0.8rem;color:var(--text-muted)">${i + 1}</span>
-            <span style="flex:1;font-size:0.88rem">${li.name}</span>
-            <span style="width:70px;text-align:center">${li.qty} <span style="font-size:0.75rem;color:var(--text-muted)">${li.unit || 'Pcs'}</span></span>
-            <span style="width:100px;text-align:right">${edited ? `<span style="text-decoration:line-through;color:var(--text-muted);font-size:0.75rem;margin-right:4px">${currency(li.listedPrice)}</span><span style="color:var(--warning);font-weight:600">${currency(li.price)}</span>` : currency(li.price)}</span>
-            <span style="width:90px;text-align:right;font-weight:600">${currency(li.amount)}</span>
-            <button class="btn-icon" onclick="removeInvoiceLine(${i})" style="flex-shrink:0">✕</button></div>`;
+        const edited   = li.listedPrice !== undefined && li.price !== li.listedPrice;
+        const gstLabel = li.gstRate ? `<span style="font-size:0.7rem;color:var(--text-muted)">Base ${currency(li.baseAmount||li.amount)} + GST ${li.gstRate}%: ${currency(li.taxAmount||0)}</span>` : '';
+        return `<div style="padding:7px 0;border-bottom:1px solid var(--border);${edited?'background:rgba(245,158,11,0.05);border-left:3px solid var(--warning);padding-left:7px':''}">
+            <div style="display:flex;align-items:center;gap:8px">
+                <span style="width:24px;text-align:center;font-size:0.75rem;color:var(--text-muted)">${i+1}</span>
+                <span style="flex:1;font-size:0.88rem;font-weight:600">${li.name}</span>
+                <span style="font-size:0.82rem;color:var(--text-muted)">${li.qty} ${li.unit||'Pcs'} × ${edited?`<s style="color:var(--text-muted);font-size:0.75rem">${currency(li.listedPrice)}</s> <b style="color:var(--warning)">${currency(li.price)}</b>`:currency(li.price)}</span>
+                <span style="font-weight:700;min-width:70px;text-align:right">${currency(li.amount)}</span>
+                <button class="btn-icon" onclick="removeInvoiceLine(${i})" style="flex-shrink:0;color:var(--danger)">✕</button>
+            </div>
+            ${gstLabel ? `<div style="padding-left:32px;margin-top:2px">${gstLabel}</div>` : ''}
+        </div>`;
     }).join('');
     updateInvoiceTotal();
 }
@@ -4802,19 +4817,51 @@ function updateInvoiceTotal() {
     const sub      = invoiceItems.reduce((s, li) => s + li.amount, 0);
     const gst      = +(($('f-inv-gst')      || {}).value || 0);
     const roundoff = +(($('f-inv-roundoff') || {}).value || 0);
-    const afterGst = sub + (sub * gst / 100);
-    const total    = afterGst + roundoff;
     const el = $('inv-total-display'); if (!el) return;
-    el.innerHTML = `
-        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;font-size:0.85rem">
-            <span style="color:var(--text-muted)">Subtotal: <b>${currency(sub)}</b>${gst ? ` + GST ${gst}%: <b>${currency(sub*gst/100)}</b>` : ''}</span>
-            ${roundoff ? `<span style="color:var(--text-muted)">Round Off: <b style="color:${roundoff<0?'#ef4444':'#10b981'}">${roundoff>0?'+':''}${currency(roundoff)}</b></span>` : ''}
-            <span style="font-size:1.15rem;font-weight:800;color:var(--accent)">Total: ${currency(total)}</span>
-        </div>`;
+
+    // Check if any items have per-item GST rates
+    const hasItemGst = invoiceItems.some(li => li.gstRate > 0);
+    if (hasItemGst) {
+        // Per-item GST breakdown
+        const totalTaxable = invoiceItems.reduce((s, li) => s + (li.baseAmount || li.amount), 0);
+        const totalTax     = invoiceItems.reduce((s, li) => s + (li.taxAmount  || 0), 0);
+        // Group by GST rate
+        const rateMap = {};
+        invoiceItems.forEach(li => {
+            if (li.gstRate > 0) {
+                rateMap[li.gstRate] = (rateMap[li.gstRate] || 0) + (li.taxAmount || 0);
+            }
+        });
+        const rateLines = Object.entries(rateMap).sort((a,b)=>+a[0]-+b[0])
+            .map(([r, amt]) => `<span style="color:var(--text-muted)">GST ${r}%: <b>${currency(amt)}</b></span>`).join('');
+        const afterGst = sub + (gst ? sub * gst / 100 : 0);
+        const total    = afterGst + roundoff;
+        el.innerHTML = `
+            <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;font-size:0.82rem">
+                <span style="color:var(--text-muted)">Taxable: <b>${currency(totalTaxable)}</b></span>
+                ${rateLines}
+                ${totalTax ? `<span style="color:var(--text-muted)">Total GST: <b>${currency(totalTax)}</b></span>` : ''}
+                ${gst ? `<span style="color:var(--text-muted)">Extra GST ${gst}%: <b>${currency(sub*gst/100)}</b></span>` : ''}
+                <span style="color:var(--text-muted);border-top:1px dashed var(--border);padding-top:3px;margin-top:2px">Subtotal: <b>${currency(sub)}</b></span>
+                ${roundoff ? `<span style="color:var(--text-muted)">Round Off: <b style="color:${roundoff<0?'#ef4444':'#10b981'}">${roundoff>0?'+':''}${currency(roundoff)}</b></span>` : ''}
+                <span style="font-size:1.15rem;font-weight:800;color:var(--accent)">Total: ${currency(total)}</span>
+            </div>`;
+    } else {
+        // Global GST only (no per-item rates)
+        const afterGst = sub + (sub * gst / 100);
+        const total    = afterGst + roundoff;
+        el.innerHTML = `
+            <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;font-size:0.85rem">
+                <span style="color:var(--text-muted)">Subtotal: <b>${currency(sub)}</b>${gst ? ` + GST ${gst}%: <b>${currency(sub*gst/100)}</b>` : ''}</span>
+                ${roundoff ? `<span style="color:var(--text-muted)">Round Off: <b style="color:${roundoff<0?'#ef4444':'#10b981'}">${roundoff>0?'+':''}${currency(roundoff)}</b></span>` : ''}
+                <span style="font-size:1.15rem;font-weight:800;color:var(--accent)">Total: ${currency(total)}</span>
+            </div>`;
+    }
 }
 function autoRoundOff() {
-    const sub      = invoiceItems.reduce((s, li) => s + li.amount, 0);
-    const gst      = +(($('f-inv-gst') || {}).value || 0);
+    const sub  = invoiceItems.reduce((s, li) => s + li.amount, 0);
+    const gst  = +(($('f-inv-gst') || {}).value || 0);
+    // GST is already included in item prices; global gst% is an extra charge
     const afterGst = sub + (sub * gst / 100);
     const rounded  = Math.round(afterGst);
     const diff     = +(rounded - afterGst).toFixed(2);
