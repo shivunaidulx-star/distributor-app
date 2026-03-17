@@ -12074,12 +12074,13 @@ function cpSaveSession() {
 }
 
 function cpShell(content, showBack, backFn) {
-    const company = DB.get('db_settings') && DB.get('db_settings').companyName ? DB.get('db_settings').companyName : 'DistroManager';
+    window._cpBackFn = backFn || null;
+    const company = DB.ls.getObj('db_company').name || 'DistroManager';
     const root = document.getElementById('cp-root');
     root.innerHTML = `
     <div class="cp-shell">
         <div class="cp-header">
-            ${showBack ? `<button class="cp-hbtn" onclick="(${backFn.toString()})()">&#8592;</button>` : `<div style="width:36px"></div>`}
+            ${showBack ? `<button class="cp-hbtn" onclick="window._cpBackFn && window._cpBackFn()">&#8592;</button>` : `<div style="width:36px"></div>`}
             <span class="cp-title">${company}</span>
             ${cpSession ? `<button class="cp-hbtn" onclick="cpLogout()" title="Logout">&#x23FB;</button>` : `<button class="cp-hbtn" onclick="cpExitPortal()">&#x2715;</button>`}
         </div>
