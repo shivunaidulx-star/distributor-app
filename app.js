@@ -1170,7 +1170,8 @@ function currency(n) { return '₹' + Number(n || 0).toLocaleString('en-IN', { m
 function fmtDate(d) { return d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '-'; }
 function today() { return new Date().toISOString().split('T')[0]; }
 function isSalesman() { return currentUser && currentUser.role === 'Salesman'; }
-function canEdit() { return currentUser && (currentUser.role === 'Admin' || currentUser.role === 'Manager'); }
+function isPacker()   { return currentUser && currentUser.role === 'Packing'; }
+function canEdit()    { return currentUser && (currentUser.role === 'Admin' || currentUser.role === 'Manager'); }
 
 // =============================================
 //  DASHBOARD
@@ -1694,7 +1695,8 @@ function renderPartyRows(parties) {
             balance: `<td class="${(p.balance||0) < 0 ? 'amount-green' : 'amount-red'}">${currency(Math.abs(p.balance || 0))} ${(p.balance||0) < 0 ? '(Cr)' : '(Dr)'}</td>`,
             actions: `<td><div class="action-btns">
                 <button class="btn-icon" onclick="openDedicatedPartyLedger('${p.id}')" title="View Ledger">📜</button>
-                ${p.lat && p.lng ? `<button class="btn-icon" onclick="openPartyMap('${p.lat}','${p.lng}','${escapeHtml(p.name)}')" title="Navigate">🗺️</button>` : ''}
+                ${p.lat && p.lng ? `<button class="btn-icon" onclick="openPartyMap('${p.lat}','${p.lng}','${escapeHtml(p.name)}')" title="Navigate to party">🗺️</button>` : ''}
+                ${!isPacker() ? `<button class="btn-icon" onclick="updatePartyLocation('${p.id}')" title="Update Location" style="color:#3b82f6">📍</button>` : ''}
                 ${canEdit() ? `<button class="btn-icon" onclick="openPartyModal('${p.id}')">✏️</button><button class="btn-icon" onclick="deleteParty('${p.id}')">🗑️</button>` : ''}
             </div></td>`,
             city:         `<td style="font-size:0.85rem">${escapeHtml(p.city || '-')}</td>`,
@@ -1815,6 +1817,32 @@ function capturePartyLiveGPS() {
                         err.code === 2 ? '⚠️ GPS unavailable. Make sure location is on.' :
                         '⚠️ Location timed out. Try again.';
             showToast(msg, 'warning');
+        },
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
+}
+async function updatePartyLocation(id) {
+    if (!navigator.geolocation) return alert('Geolocation not supported by this browser/device.');
+    // Find party name for the confirmation prompt
+    const parties = await DB.getAll('parties');
+    const p = parties.find(x => x.id === id);
+    if (!p) return;
+    showToast('Getting your live location...', 'info');
+    navigator.geolocation.getCurrentPosition(
+        async pos => {
+            const lat = pos.coords.latitude.toFixed(6);
+            const lng = pos.coords.longitude.toFixed(6);
+            const acc = Math.round(pos.coords.accuracy);
+            if (!confirm(`📍 Update location for:\n${p.name}\n\nCoordinates: ${lat}, ${lng}\nAccuracy: ±${acc}m\n\nConfirm?`)) return;
+            await DB.update('parties', id, { ...p, lat, lng });
+            showToast(`Location saved for ${p.name} (±${acc}m accuracy)`, 'success');
+            renderParties();
+        },
+        err => {
+            const msg = err.code === 1 ? 'Location permission denied — allow location access in browser settings.' :
+                        err.code === 2 ? 'GPS unavailable. Turn on location services.' :
+                        'Location timed out. Try again.';
+            alert('⚠️ ' + msg);
         },
         { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
     );
