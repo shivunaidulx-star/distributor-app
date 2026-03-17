@@ -4851,7 +4851,8 @@ async function saveInvoice() {
     if (invType === 'sale' && invParty && invParty.creditLimit > 0) {
         const sub2 = invoiceItems.reduce((s, li) => s + li.amount, 0);
         const gst2 = +($('f-inv-gst').value || 0);
-        const invoiceTotal = sub2 + (sub2 * gst2 / 100);
+        const ro2  = +(($('f-inv-roundoff')||{}).value || 0);
+        const invoiceTotal = sub2 + (sub2 * gst2 / 100) + ro2;
         if (((invParty.balance || 0) + invoiceTotal) > invParty.creditLimit) {
             if (!confirm(`⚠️ Credit limit exceeded!\nCredit Limit: ${currency(invParty.creditLimit)}\nCurrent Balance: ${currency(invParty.balance || 0)}\nThis Invoice: ${currency(invoiceTotal)}\n\nProceed anyway?`)) return;
         }
@@ -4863,9 +4864,16 @@ async function saveInvoice() {
 
     const sub = invoiceItems.reduce((s, li) => s + li.amount, 0);
     const gst = +($('f-inv-gst').value || 0);
-    const roundoff = +(($('f-inv-roundoff')||{}).value || 0);
-    const total = sub + (sub * gst / 100) + roundoff;
     const type = $('f-inv-type').value;
+    const afterGst = sub + (sub * gst / 100);
+    // Auto round-off for sales; manual/optional for purchases
+    let roundoff = +(($('f-inv-roundoff')||{}).value || 0);
+    if (type === 'sale' && roundoff === 0) {
+        roundoff = +(Math.round(afterGst) - afterGst).toFixed(2);
+        const roEl = $('f-inv-roundoff'); if (roEl) roEl.value = roundoff;
+        updateInvoiceTotal();
+    }
+    const total = afterGst + roundoff;
     const vyaparInvNo = type === 'sale' ? ($('f-vyapar-inv-no') ? $('f-vyapar-inv-no').value.trim() : '') : '';
     if (type === 'sale' && !vyaparInvNo) return alert('Vyapar Invoice No. is mandatory for sale invoices.');
 
@@ -6967,8 +6975,20 @@ async function generateInvoiceFromPacked(orderId) {
                 <div class="form-group"><label>&nbsp;</label><button class="btn btn-primary btn-block" onclick="addInvoiceLine()">Add</button></div>
             </div>
             <div id="inv-lines-list"></div>
-            <div class="form-group"><label>GST %</label><input type="number" id="f-inv-gst" value="0" onchange="updateInvoiceTotal()"></div>
-            <div style="text-align:right;font-size:1.1rem;font-weight:700;color:var(--accent)" id="inv-total-display">Total: ₹0.00</div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:8px">
+                <div class="form-group" style="min-width:100px">
+                    <label>GST %</label>
+                    <input type="number" id="f-inv-gst" value="0" min="0" step="0.1" onchange="updateInvoiceTotal()">
+                </div>
+                <div class="form-group" style="min-width:100px">
+                    <label>Round Off ₹</label>
+                    <input type="number" id="f-inv-roundoff" value="0" step="0.01" placeholder="0.00" oninput="updateInvoiceTotal()">
+                </div>
+                <div class="form-group" style="align-self:flex-end">
+                    <button class="btn btn-outline btn-sm" onclick="autoRoundOff()">⟳ Auto</button>
+                </div>
+            </div>
+            <div id="inv-total-display" style="text-align:right;font-size:1rem;color:var(--text-secondary);font-weight:600;margin-top:4px">Total: ₹0.00</div>
             <div id="inv-advance-section" style="margin-top:10px"></div>
             <div class="modal-actions">
                 <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
