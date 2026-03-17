@@ -729,6 +729,8 @@ window.addEventListener('mousedown', function (e) {
 });
 
 document.addEventListener('DOMContentLoaded', async () => {
+    // Check for saved customer portal session first
+    if (cpRestoreSession()) return;
     await DB.refresh(); // Populate cache immediately
     await repairCancelledInvoiceOrders();
     await checkFirstLaunch();
@@ -965,13 +967,13 @@ async function navigateTo(page) {
     // Update FAB for this page
     updateFab(page);
 
-    const titles = { dashboard: 'Dashboard', parties: 'Parties', partyledger: 'Party Ledger', inventorysetup: 'Inventory Setup', categories: 'Categories Master', uom: 'UOM Master', inventory: 'Inventory', catalog: 'Item Catalog', salesorders: 'Sales Orders', purchaseorders: 'Purchase Orders', invoices: 'Invoices', payments: 'Payments', expenses: 'Expenses', packing: 'Packing', delivery: 'Delivery', reports: 'Reports', packers: 'Packers Master', deliverypersons: 'Delivery Persons', users: 'Users & Roles', setup: 'Company Setup' };
+    const titles = { dashboard: 'Dashboard', parties: 'Parties', partyledger: 'Party Ledger', inventorysetup: 'Inventory Setup', categories: 'Categories Master', uom: 'UOM Master', inventory: 'Inventory', catalog: 'Item Catalog', salesorders: 'Sales Orders', purchaseorders: 'Purchase Orders', invoices: 'Invoices', payments: 'Payments', expenses: 'Expenses', packing: 'Packing', delivery: 'Delivery', reports: 'Reports', packers: 'Packers Master', deliverypersons: 'Delivery Persons', users: 'Users & Roles', setup: 'Company Setup', customerrequests: 'Customer Requests' };
     pageTitle.textContent = titles[page] || page;
 
     // Show a small loader in the content area
     pageContent.innerHTML = '<div style="display:flex;justify-content:center;align-items:center;height:200px"><div class="loader"></div></div>';
 
-    const renderers = { dashboard: renderDashboard, parties: renderParties, partyledger: renderPartyLedgerLayout, inventorysetup: renderInventorySetup, categories: renderCategories, uom: renderUOM, inventory: renderInventory, catalog: renderCatalog, salesorders: renderSalesOrders, purchaseorders: renderPurchaseOrders, invoices: renderInvoices, payments: renderPayments, expenses: renderExpenses, packing: renderPacking, delivery: renderDelivery, reports: renderReports, packers: renderPackers, deliverypersons: renderDeliveryPersons, users: renderUsers, setup: renderCompanySetup };
+    const renderers = { dashboard: renderDashboard, parties: renderParties, partyledger: renderPartyLedgerLayout, inventorysetup: renderInventorySetup, categories: renderCategories, uom: renderUOM, inventory: renderInventory, catalog: renderCatalog, salesorders: renderSalesOrders, purchaseorders: renderPurchaseOrders, invoices: renderInvoices, payments: renderPayments, expenses: renderExpenses, packing: renderPacking, delivery: renderDelivery, reports: renderReports, packers: renderPackers, deliverypersons: renderDeliveryPersons, users: renderUsers, setup: renderCompanySetup, customerrequests: renderCustomerRequests };
 
     if (renderers[page]) {
         await renderers[page]();
@@ -2220,7 +2222,11 @@ async function renderCategories() {
     container.innerHTML = `
         <div class="section-toolbar">
             <h3 style="font-size:1rem">🏷️ Categories</h3>
-            <button class="btn btn-primary" onclick="openCategoryModal()">+ Add Category</button>
+            <div class="filter-group">
+                <button class="btn btn-outline" onclick="triggerCategorizeExcelImport()">📥 Import</button>
+                <input type="file" id="f-cat-import" accept=".xlsx, .xls" style="display:none" onchange="importCategoriesExcel(event)">
+                <button class="btn btn-primary" onclick="openCategoryModal()">+ Add Category</button>
+            </div>
         </div>
         <div class="card"><div class="card-body">
             <div class="table-wrapper">
@@ -2276,6 +2282,60 @@ async function deleteCategory(id) {
         showToast('Category deleted!', 'warning');
     } catch (err) {
         alert('Error deleting category: ' + err.message);
+    }
+}
+
+function triggerCategorizeExcelImport() {
+    $('f-cat-import').click();
+}
+
+async function importCategoriesExcel(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+        const data = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const workbook = XLSX.read(e.target.result, {type: 'binary'});
+                const firstSheet = workbook.SheetNames[0];
+                const excelRows = XLSX.utils.sheet_to_row_object_array(workbook.Sheets[firstSheet]);
+                resolve(excelRows);
+            };
+            reader.onerror = reject;
+            reader.readAsBinaryString(file);
+        });
+
+        if (!data || data.length === 0) return alert('No data found in the Excel file.');
+        
+        const existingCats = await DB.getAll('categories');
+        let added = 0;
+        let updated = 0;
+
+        for (const row of data) {
+            const name = (row['Category Name'] || row['CategoryName'] || row['Name'] || '').toString().trim();
+            if (!name) continue;
+
+            const subsStr = (row['Sub-Categories'] || row['SubCategories'] || row['Sub Categories'] || '').toString().trim();
+            const subCategories = subsStr ? subsStr.split(',').map(s => s.trim()).filter(s => s) : [];
+
+            const existing = existingCats.find(c => c.name.toLowerCase() === name.toLowerCase());
+            if (existing) {
+                // Merge subcategories (prevent duplicates)
+                const mergedSubs = [...new Set([...(existing.subCategories || []), ...subCategories])];
+                await DB.update('categories', existing.id, { subCategories: mergedSubs });
+                updated++;
+            } else {
+                await DB.insert('categories', { name, subCategories });
+                added++;
+            }
+        }
+
+        e.target.value = ''; // Reset input
+        if ($('inv-setup-content')) await renderInventorySetup(); else await renderCategories();
+        showToast(`Import complete! ${added} added, ${updated} updated.`, 'success');
+
+    } catch (err) {
+        alert('Error parsing Excel: ' + err.message);
     }
 }
 
@@ -10582,7 +10642,11 @@ async function renderUOM() {
     container.innerHTML = `
         <div class="section-toolbar">
             <h3 style="font-size:1rem">📏 Unit of Measurement Master</h3>
-            <button class="btn btn-primary" onclick="openUOMModal()">+ Add UOM</button>
+            <div class="filter-group">
+                <button class="btn btn-outline" onclick="triggerUomExcelImport()">📥 Import</button>
+                <input type="file" id="f-uom-import" accept=".xlsx, .xls" style="display:none" onchange="importUomExcel(event)">
+                <button class="btn btn-primary" onclick="openUOMModal()">+ Add UOM</button>
+            </div>
         </div>
         <div class="card"><div class="card-body">
             <div class="table-wrapper">
@@ -10637,6 +10701,58 @@ async function deleteUOM(id) {
         showToast('UOM deleted!', 'warning');
     } catch (err) {
         alert('Error deleting UOM: ' + err.message);
+    }
+}
+
+function triggerUomExcelImport() {
+    $('f-uom-import').click();
+}
+
+async function importUomExcel(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+        const data = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const workbook = XLSX.read(e.target.result, {type: 'binary'});
+                const firstSheet = workbook.SheetNames[0];
+                const excelRows = XLSX.utils.sheet_to_row_object_array(workbook.Sheets[firstSheet]);
+                resolve(excelRows);
+            };
+            reader.onerror = reject;
+            reader.readAsBinaryString(file);
+        });
+
+        if (!data || data.length === 0) return alert('No data found in the Excel file.');
+        
+        const existingUoms = await DB.getAll('uom');
+        let added = 0;
+        let updated = 0;
+
+        for (const row of data) {
+            const name = (row['Unit Name'] || row['UnitName'] || row['Name'] || '').toString().trim();
+            if (!name) continue;
+
+            const code = (row['Short Code'] || row['ShortCode'] || row['Code'] || name).toString().trim();
+            const description = (row['Description'] || row['Desc'] || '').toString().trim();
+
+            const existing = existingUoms.find(u => u.name.toLowerCase() === name.toLowerCase());
+            if (existing) {
+                await DB.update('uom', existing.id, { code, description });
+                updated++;
+            } else {
+                await DB.insert('uom', { name, code, description });
+                added++;
+            }
+        }
+
+        e.target.value = ''; // Reset input
+        if ($('inv-setup-content')) await renderInventorySetup(); else await renderUOM();
+        showToast(`Import complete! ${added} added, ${updated} updated.`, 'success');
+
+    } catch (err) {
+        alert('Error parsing Excel: ' + err.message);
     }
 }
 
@@ -11116,7 +11232,11 @@ async function renderBrands() {
     el.innerHTML = `
         <div class="section-toolbar">
             <h3 style="font-size:1rem">🏭 Brand Master</h3>
-            <button class="btn btn-primary" onclick="openBrandModal()">+ Add Brand</button>
+            <div class="filter-group">
+                <button class="btn btn-outline" onclick="triggerBrandExcelImport()">📥 Import</button>
+                <input type="file" id="f-brand-import" accept=".xlsx, .xls" style="display:none" onchange="importBrandsExcel(event)">
+                <button class="btn btn-primary" onclick="openBrandModal()">+ Add Brand</button>
+            </div>
         </div>
         <div class="card"><div class="card-body">
             <div class="table-wrapper">
@@ -11166,6 +11286,57 @@ async function deleteBrand(id) {
         showToast('Brand deleted!', 'warning');
     } catch (err) {
         alert('Error deleting brand: ' + err.message);
+    }
+}
+
+function triggerBrandExcelImport() {
+    $('f-brand-import').click();
+}
+
+async function importBrandsExcel(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+        const data = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const workbook = XLSX.read(e.target.result, {type: 'binary'});
+                const firstSheet = workbook.SheetNames[0];
+                const excelRows = XLSX.utils.sheet_to_row_object_array(workbook.Sheets[firstSheet]);
+                resolve(excelRows);
+            };
+            reader.onerror = reject;
+            reader.readAsBinaryString(file);
+        });
+
+        if (!data || data.length === 0) return alert('No data found in the Excel file.');
+        
+        const existingBrands = await DB.getAll('brands');
+        let added = 0;
+        let updated = 0;
+
+        for (const row of data) {
+            const name = (row['Brand Name'] || row['BrandName'] || row['Name'] || '').toString().trim();
+            if (!name) continue;
+
+            const description = (row['Description'] || row['Desc'] || row['Manufacturer'] || '').toString().trim();
+
+            const existing = existingBrands.find(b => b.name.toLowerCase() === name.toLowerCase());
+            if (existing) {
+                await DB.update('brands', existing.id, { description });
+                updated++;
+            } else {
+                await DB.insert('brands', { name, description });
+                added++;
+            }
+        }
+
+        e.target.value = ''; // Reset input
+        await renderInventorySetup();
+        showToast(`Import complete! ${added} added, ${updated} updated.`, 'success');
+
+    } catch (err) {
+        alert('Error parsing Excel: ' + err.message);
     }
 }
 
