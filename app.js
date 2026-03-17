@@ -1646,6 +1646,7 @@ function saveDashboardSettings() {
 let _partyTab = 'all';
 
 async function renderParties() {
+    window._bulkParties = new Set();
     const parties = await DB.getAll('parties');
     const customers = parties.filter(p => p.type === 'Customer');
     const suppliers = parties.filter(p => p.type === 'Supplier');
@@ -1666,9 +1667,16 @@ async function renderParties() {
                 <button class="btn btn-primary" onclick="openPartyModal()">+ Add Party</button>` : ''}
             </div>
         </div>
+        <div id="bulk-bar-par" style="display:none;align-items:center;gap:8px;background:var(--accent);color:#fff;padding:8px 12px;border-radius:8px;margin-bottom:8px;flex-wrap:wrap">
+            <span id="bulk-cnt-par" style="font-weight:700;flex:1">0 selected</span>
+            <button class="btn" onclick="bulkActivateParties()" style="background:#fff;color:#10b981;padding:4px 10px;font-size:0.82rem;font-weight:600">✅ Activate</button>
+            <button class="btn" onclick="bulkDeactivateParties()" style="background:#fff;color:#f59e0b;padding:4px 10px;font-size:0.82rem;font-weight:600">⏸ Deactivate</button>
+            <button class="btn" onclick="bulkDeleteParties()" style="background:#ef4444;color:#fff;padding:4px 10px;font-size:0.82rem;font-weight:600">🗑️ Delete</button>
+            <button class="btn" onclick="clearBulkParties()" style="background:rgba(255,255,255,0.2);color:#fff;padding:4px 10px;font-size:0.82rem">✕ Clear</button>
+        </div>
         <div class="card"><div class="card-body">
             <div class="table-wrapper">
-                <table class="data-table" style="min-width:920px;width:100%"><thead><tr>${ColumnManager.get('parties').filter(c=>c.visible).map(c=>`<th>${c.label}</th>`).join('')}</tr></thead>
+                <table class="data-table" style="min-width:920px;width:100%"><thead><tr><th style="width:36px;text-align:center"><input type="checkbox" id="bulk-all-par" onchange="toggleSelectAllParties(this)" style="width:16px;height:16px;cursor:pointer"></th>${ColumnManager.get('parties').filter(c=>c.visible).map(c=>`<th>${c.label}</th>`).join('')}</tr></thead>
                 <tbody id="party-tbody">${renderPartyRows(shown)}</tbody></table>
             </div>
         </div></div>
@@ -1679,7 +1687,7 @@ function renderPartyRows(parties) {
     const cols = ColumnManager.get('parties').filter(c => c.visible);
     return parties.map(p => {
         const cellMap = {
-            name:    `<td style="color:var(--text-primary);font-weight:600">${escapeHtml(p.name)}${p.blocked ? ' <span class="badge badge-danger" style="font-size:0.7rem;padding:2px 5px">🔒 Blocked</span>' : ''}</td>`,
+            name:    `<td style="color:var(--text-primary);font-weight:600">${escapeHtml(p.name)}${p.blocked ? ' <span class="badge badge-danger" style="font-size:0.7rem;padding:2px 5px">🔒 Blocked</span>' : ''}${p.active === false ? ' <span class="badge badge-danger" style="font-size:0.7rem;padding:2px 5px">Inactive</span>' : ''}</td>`,
             type:    `<td><span class="badge ${p.type === 'Customer' ? 'badge-success' : 'badge-info'}">${p.type}</span></td>`,
             phone:   `<td>${p.phone || '-'}</td>`,
             gstin:   `<td style="font-size:0.82rem">${p.gstin || '-'}</td>`,
@@ -1694,7 +1702,7 @@ function renderPartyRows(parties) {
             paymentTerms: `<td style="font-size:0.82rem">${p.paymentTerms ? `<span class="badge badge-info" style="font-size:0.72rem">${escapeHtml(p.paymentTerms)}</span>` : '<span style="color:var(--text-muted)">-</span>'}</td>`,
             address:      `<td style="font-size:0.82rem;color:var(--text-muted);max-width:220px;white-space:normal">${escapeHtml(p.address || '-')}</td>`,
         };
-        return `<tr data-type="${p.type}">${cols.map(c => cellMap[c.key] || '').join('')}</tr>`;
+        return `<tr data-type="${p.type}"><td style="width:36px;text-align:center"><input type="checkbox" class="bulk-chk-party" data-id="${p.id}" onchange="toggleBulkParty('${p.id}',this)" style="width:16px;height:16px;cursor:pointer" ${window._bulkParties && window._bulkParties.has(p.id) ? 'checked' : ''}></td>${cols.map(c => cellMap[c.key] || '').join('')}</tr>`;
     }).join('');
 }
 async function filterPartyTable() {
@@ -2135,6 +2143,7 @@ function updateNavBadges(inventory) {
 }
 
 async function renderInventory() {
+    window._bulkItems = new Set();
     // Fetch all required data in parallel
     const [items, salesOrders] = await Promise.all([
         DB.getAll('inventory'),
@@ -2195,9 +2204,16 @@ async function renderInventory() {
                 <button class="btn btn-outline" onclick="importStockExcel()">📥 Import Stock</button>` : ''}
             </div>
         </div>
+        <div id="bulk-bar-inv" style="display:none;align-items:center;gap:8px;background:var(--accent);color:#fff;padding:8px 12px;border-radius:8px;margin-bottom:8px;flex-wrap:wrap">
+            <span id="bulk-cnt-inv" style="font-weight:700;flex:1">0 selected</span>
+            <button class="btn" onclick="bulkActivateItems()" style="background:#fff;color:#10b981;padding:4px 10px;font-size:0.82rem;font-weight:600">✅ Activate</button>
+            <button class="btn" onclick="bulkDeactivateItems()" style="background:#fff;color:#f59e0b;padding:4px 10px;font-size:0.82rem;font-weight:600">⏸ Deactivate</button>
+            <button class="btn" onclick="bulkDeleteItems()" style="background:#ef4444;color:#fff;padding:4px 10px;font-size:0.82rem;font-weight:600">🗑️ Delete</button>
+            <button class="btn" onclick="clearBulkItems()" style="background:rgba(255,255,255,0.2);color:#fff;padding:4px 10px;font-size:0.82rem">✕ Clear</button>
+        </div>
         <div class="card"><div class="card-body">
             <div class="table-wrapper">
-                <table class="data-table" id="inv-table" style="min-width:900px"><thead><tr>${ColumnManager.get('inventory').filter(c=>c.visible).map(c=>`<th>${c.label}</th>`).join('')}</tr></thead>
+                <table class="data-table" id="inv-table" style="min-width:900px"><thead><tr><th style="width:36px;text-align:center"><input type="checkbox" id="bulk-all-inv" onchange="toggleSelectAllItems(this)" style="width:16px;height:16px;cursor:pointer"></th>${ColumnManager.get('inventory').filter(c=>c.visible).map(c=>`<th>${c.label}</th>`).join('')}</tr></thead>
                 <tbody id="inv-tbody">${renderInvRows(items, reservedMap, getABCAnalysis(items))}</tbody></table>
             </div>
         </div></div>
@@ -2226,7 +2242,7 @@ function renderInvRows(items, reservedMap = {}, abcMap = {}) {
         const abc = abcMap[i.id] || 'C';
         const abcClass = abc === 'A' ? 'badge-primary' : abc === 'B' ? 'badge-info' : 'badge-outline';
         const cellMap = {
-            name:          `<td><div style="color:var(--text-primary);font-weight:600">${i.name}</div>${i.itemCode ? `<div style="font-size:0.75rem;color:var(--text-muted)">Code: ${i.itemCode}</div>` : ''}</td>`,
+            name:          `<td><div style="color:var(--text-primary);font-weight:600">${i.name}${i.active === false ? ' <span class="badge badge-danger" style="font-size:0.7rem;padding:2px 5px">Inactive</span>' : ''}</div>${i.itemCode ? `<div style="font-size:0.75rem;color:var(--text-muted)">Code: ${i.itemCode}</div>` : ''}</td>`,
             abc:           `<td><span class="badge ${abcClass}" style="width:24px;text-align:center">${abc}</span></td>`,
             warehouse:     `<td style="font-size:0.85rem;color:var(--text-muted)">${i.warehouse || 'Main Warehouse'}</td>`,
             hsn:           `<td>${i.hsn || '-'}</td>`,
@@ -2240,7 +2256,7 @@ function renderInvRows(items, reservedMap = {}, abcMap = {}) {
             value:         `<td>${currency(i.stock * i.purchasePrice)}</td>`,
             actions:       `<td><div class="action-btns">${canEdit() ? `<button class="btn-icon" onclick="openStockAdjustmentModal('${i.id}')" title="Adjust Stock">🔧</button>` : ''}<button class="btn-icon" onclick="viewItemLedger('${i.id}')" title="View Ledger">📜</button>${canEdit() ? `<button class="btn-icon" onclick="openItemModal('${i.id}')" title="Edit">✏️</button><button class="btn-icon" onclick="deleteItem('${i.id}')" title="Delete">🗑️</button>` : ''}</div></td>`,
         };
-        return `<tr>${cols.map(c => cellMap[c.key] || '').join('')}</tr>`;
+        return `<tr><td style="width:36px;text-align:center"><input type="checkbox" class="bulk-chk-item" data-id="${i.id}" onchange="toggleBulkItem('${i.id}',this)" style="width:16px;height:16px;cursor:pointer" ${window._bulkItems && window._bulkItems.has(i.id) ? 'checked' : ''}></td>${cols.map(c => cellMap[c.key] || '').join('')}</tr>`;
     }).join('');
 }
 function filterInvTable() {
@@ -2620,12 +2636,163 @@ async function saveItem(id) {
         alert('Error saving item: ' + err.message);
     }
 }
+// ─── Bulk Management ──────────────────────────────────────────────────────────
+window._bulkItems   = new Set();
+window._bulkParties = new Set();
+
+function toggleBulkItem(id, chk) {
+    if (chk.checked) window._bulkItems.add(id); else window._bulkItems.delete(id);
+    updateBulkItemBar();
+}
+function toggleSelectAllItems(chk) {
+    document.querySelectorAll('.bulk-chk-item').forEach(el => {
+        el.checked = chk.checked;
+        if (chk.checked) window._bulkItems.add(el.dataset.id);
+        else window._bulkItems.delete(el.dataset.id);
+    });
+    updateBulkItemBar();
+}
+function updateBulkItemBar() {
+    const bar = document.getElementById('bulk-bar-inv');
+    const cnt = document.getElementById('bulk-cnt-inv');
+    if (!bar) return;
+    const n = window._bulkItems.size;
+    bar.style.display = n > 0 ? 'flex' : 'none';
+    if (cnt) cnt.textContent = n + ' selected';
+}
+function clearBulkItems() {
+    window._bulkItems.clear();
+    document.querySelectorAll('.bulk-chk-item').forEach(el => el.checked = false);
+    const a = document.getElementById('bulk-all-inv'); if (a) a.checked = false;
+    updateBulkItemBar();
+}
+async function bulkActivateItems() {
+    if (!window._bulkItems.size) return;
+    const inv = await DB.getAll('inventory');
+    for (const id of window._bulkItems) {
+        const item = inv.find(x => x.id === id);
+        if (item) await DB.update('inventory', id, { ...item, active: true });
+    }
+    showToast(window._bulkItems.size + ' items activated', 'success');
+    window._bulkItems.clear();
+    renderInventory();
+}
+async function bulkDeactivateItems() {
+    if (!window._bulkItems.size) return;
+    const inv = await DB.getAll('inventory');
+    for (const id of window._bulkItems) {
+        const item = inv.find(x => x.id === id);
+        if (item) await DB.update('inventory', id, { ...item, active: false });
+    }
+    showToast(window._bulkItems.size + ' items deactivated', 'success');
+    window._bulkItems.clear();
+    renderInventory();
+}
+async function bulkDeleteItems() {
+    if (!window._bulkItems.size) return;
+    const [invoices, orders, stockLedger] = await Promise.all([
+        DB.getAll('invoices'), DB.getAll('salesorders'), DB.getAll('stock_ledger')
+    ]);
+    const blocked = [], toDelete = [];
+    for (const id of window._bulkItems) {
+        const hasInv = invoices.some(x => (x.items||[]).some(li => String(li.itemId) === String(id)));
+        const hasOrd = orders.some(x => (x.items||[]).some(li => String(li.itemId) === String(id)));
+        const hasLed = stockLedger.some(x => String(x.itemId) === String(id));
+        if (hasInv || hasOrd || hasLed) blocked.push(id); else toDelete.push(id);
+    }
+    if (blocked.length) showToast(blocked.length + ' item(s) skipped — have transactions. Use Deactivate instead.', 'error');
+    if (!toDelete.length) return;
+    if (!confirm('Delete ' + toDelete.length + ' item(s)? Cannot be undone.')) return;
+    for (const id of toDelete) await DB.delete('inventory', id);
+    showToast(toDelete.length + ' items deleted', 'success');
+    window._bulkItems.clear();
+    renderInventory();
+}
+
+function toggleBulkParty(id, chk) {
+    if (chk.checked) window._bulkParties.add(id); else window._bulkParties.delete(id);
+    updateBulkPartyBar();
+}
+function toggleSelectAllParties(chk) {
+    document.querySelectorAll('.bulk-chk-party').forEach(el => {
+        el.checked = chk.checked;
+        if (chk.checked) window._bulkParties.add(el.dataset.id);
+        else window._bulkParties.delete(el.dataset.id);
+    });
+    updateBulkPartyBar();
+}
+function updateBulkPartyBar() {
+    const bar = document.getElementById('bulk-bar-par');
+    const cnt = document.getElementById('bulk-cnt-par');
+    if (!bar) return;
+    const n = window._bulkParties.size;
+    bar.style.display = n > 0 ? 'flex' : 'none';
+    if (cnt) cnt.textContent = n + ' selected';
+}
+function clearBulkParties() {
+    window._bulkParties.clear();
+    document.querySelectorAll('.bulk-chk-party').forEach(el => el.checked = false);
+    const a = document.getElementById('bulk-all-par'); if (a) a.checked = false;
+    updateBulkPartyBar();
+}
+async function bulkActivateParties() {
+    if (!window._bulkParties.size) return;
+    const parties = await DB.getAll('parties');
+    for (const id of window._bulkParties) {
+        const p = parties.find(x => x.id === id);
+        if (p) await DB.update('parties', id, { ...p, active: true });
+    }
+    showToast(window._bulkParties.size + ' parties activated', 'success');
+    window._bulkParties.clear();
+    renderParties();
+}
+async function bulkDeactivateParties() {
+    if (!window._bulkParties.size) return;
+    const parties = await DB.getAll('parties');
+    for (const id of window._bulkParties) {
+        const p = parties.find(x => x.id === id);
+        if (p) await DB.update('parties', id, { ...p, active: false });
+    }
+    showToast(window._bulkParties.size + ' parties deactivated', 'success');
+    window._bulkParties.clear();
+    renderParties();
+}
+async function bulkDeleteParties() {
+    if (!window._bulkParties.size) return;
+    const [orders, invoices, payments] = await Promise.all([
+        DB.getAll('salesorders'), DB.getAll('invoices'), DB.getAll('payments')
+    ]);
+    const blocked = [], toDelete = [];
+    for (const id of window._bulkParties) {
+        const sid = String(id);
+        const hasTx = orders.some(x => String(x.partyId) === sid) ||
+                      invoices.some(x => String(x.partyId) === sid) ||
+                      payments.some(x => String(x.partyId) === sid);
+        if (hasTx) blocked.push(id); else toDelete.push(id);
+    }
+    if (blocked.length) showToast(blocked.length + ' party(ies) skipped — have transactions. Use Deactivate instead.', 'error');
+    if (!toDelete.length) return;
+    if (!confirm('Delete ' + toDelete.length + ' party(ies)? Cannot be undone.')) return;
+    for (const id of toDelete) await DB.delete('parties', id);
+    showToast(toDelete.length + ' parties deleted', 'success');
+    window._bulkParties.clear();
+    renderParties();
+}
+
 async function deleteItem(id) {
-    if (!confirm('Delete item?')) return;
+    const [invoices, orders, stockLedger] = await Promise.all([
+        DB.getAll('invoices'), DB.getAll('salesorders'), DB.getAll('stock_ledger')
+    ]);
+    const sid = String(id);
+    const hasInv = invoices.some(x => (x.items||[]).some(li => String(li.itemId) === sid));
+    const hasOrd = orders.some(x => (x.items||[]).some(li => String(li.itemId) === sid));
+    const hasLed = stockLedger.some(x => String(x.itemId) === sid);
+    if (hasInv || hasOrd || hasLed) return alert('Cannot delete — this item has transactions. Use Deactivate instead.');
+    if (!confirm('Delete item? This cannot be undone.')) return;
     try {
         await DB.delete('inventory', id);
         await renderInventory();
-        showToast('Item deleted successfully', 'success');
+        showToast('Item deleted', 'success');
     } catch (err) {
         alert('Error deleting item: ' + err.message);
     }
