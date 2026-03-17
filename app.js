@@ -4522,8 +4522,22 @@ async function openInvoiceModal(type) {
         </div>
         
         <div id="inv-lines-list"></div>
-        <div class="form-group"><label>GST %</label><input type="number" id="f-inv-gst" value="0" onchange="updateInvoiceTotal()"></div>
-        <div style="text-align:right;font-size:1.1rem;font-weight:700;color:var(--accent)" id="inv-total-display">Total: ₹0.00</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:8px">
+            <div class="form-group" style="min-width:100px">
+                <label>GST %</label>
+                <input type="number" id="f-inv-gst" value="0" min="0" max="100" step="0.1" onchange="updateInvoiceTotal()">
+            </div>
+            <div class="form-group" style="min-width:100px">
+                <label>Round Off ₹</label>
+                <input type="number" id="f-inv-roundoff" value="0" step="0.01" placeholder="0.00"
+                    oninput="updateInvoiceTotal()"
+                    title="Enter +/- amount to round the total (e.g. -0.67 or +0.33)">
+            </div>
+            <div class="form-group" style="align-self:flex-end">
+                <button class="btn btn-outline btn-sm" onclick="autoRoundOff()" title="Auto-round to nearest ₹1">⟳ Auto</button>
+            </div>
+        </div>
+        <div id="inv-total-display" style="text-align:right;font-size:1rem;color:var(--text-secondary);font-weight:600;margin-top:4px">Total: ₹0.00</div>
         
         <div id="inv-advance-section" style="margin-top:10px"></div>
     `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveInvoice()">＋ Save & New</button><button class="btn btn-primary" onclick="saveInvoice()">💾 Save Invoice</button>`);
@@ -4785,9 +4799,27 @@ function renderInvoiceLines() {
     updateInvoiceTotal();
 }
 function updateInvoiceTotal() {
-    const sub = invoiceItems.reduce((s, li) => s + li.amount, 0);
-    const gst = +((($('f-inv-gst')) || {}).value || 0), total = sub + (sub * gst / 100);
-    const el = $('inv-total-display'); if (el) el.textContent = `Total: ${currency(total)} ${gst ? `(incl. ${gst}% GST)` : ''}`;
+    const sub      = invoiceItems.reduce((s, li) => s + li.amount, 0);
+    const gst      = +(($('f-inv-gst')      || {}).value || 0);
+    const roundoff = +(($('f-inv-roundoff') || {}).value || 0);
+    const afterGst = sub + (sub * gst / 100);
+    const total    = afterGst + roundoff;
+    const el = $('inv-total-display'); if (!el) return;
+    el.innerHTML = `
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;font-size:0.85rem">
+            <span style="color:var(--text-muted)">Subtotal: <b>${currency(sub)}</b>${gst ? ` + GST ${gst}%: <b>${currency(sub*gst/100)}</b>` : ''}</span>
+            ${roundoff ? `<span style="color:var(--text-muted)">Round Off: <b style="color:${roundoff<0?'#ef4444':'#10b981'}">${roundoff>0?'+':''}${currency(roundoff)}</b></span>` : ''}
+            <span style="font-size:1.15rem;font-weight:800;color:var(--accent)">Total: ${currency(total)}</span>
+        </div>`;
+}
+function autoRoundOff() {
+    const sub      = invoiceItems.reduce((s, li) => s + li.amount, 0);
+    const gst      = +(($('f-inv-gst') || {}).value || 0);
+    const afterGst = sub + (sub * gst / 100);
+    const rounded  = Math.round(afterGst);
+    const diff     = +(rounded - afterGst).toFixed(2);
+    const el = $('f-inv-roundoff'); if (el) el.value = diff;
+    updateInvoiceTotal();
 }
 async function saveInvoice() {
     if (!beginSave()) return;
@@ -4829,7 +4861,10 @@ async function saveInvoice() {
     const invoices = await DB.getAll('invoices');
     if (invoices.find(i => i.invoiceNo === invNo)) return alert('Invoice number ' + invNo + ' already exists!');
 
-    const sub = invoiceItems.reduce((s, li) => s + li.amount, 0), gst = +($('f-inv-gst').value || 0), total = sub + (sub * gst / 100);
+    const sub = invoiceItems.reduce((s, li) => s + li.amount, 0);
+    const gst = +($('f-inv-gst').value || 0);
+    const roundoff = +(($('f-inv-roundoff')||{}).value || 0);
+    const total = sub + (sub * gst / 100) + roundoff;
     const type = $('f-inv-type').value;
     const vyaparInvNo = type === 'sale' ? ($('f-vyapar-inv-no') ? $('f-vyapar-inv-no').value.trim() : '') : '';
     if (type === 'sale' && !vyaparInvNo) return alert('Vyapar Invoice No. is mandatory for sale invoices.');
@@ -4894,7 +4929,7 @@ async function saveInvoice() {
             if (fo) fromOrderNo = fo.orderNo;
         }
         const dueDateVal = $('f-inv-due-date') ? $('f-inv-due-date').value : '';
-        const invData = { invoiceNo: invNo, date: $('f-inv-date').value, dueDate: dueDateVal || null, type, partyId, partyName, items: [...invoiceItems], subtotal: sub, gst, total, status: fromOrderId ? 'from-packing' : 'created', createdBy: currentUser.name, ...(vyaparInvNo ? { vyaparInvoiceNo: vyaparInvNo } : {}), ...(fromOrderNo ? { fromOrder: fromOrderNo } : {}) };
+        const invData = { invoiceNo: invNo, date: $('f-inv-date').value, dueDate: dueDateVal || null, type, partyId, partyName, items: [...invoiceItems], subtotal: sub, gst, roundOff: roundoff, total, status: fromOrderId ? 'from-packing' : 'created', createdBy: currentUser.name, ...(vyaparInvNo ? { vyaparInvoiceNo: vyaparInvNo } : {}), ...(fromOrderNo ? { fromOrder: fromOrderNo } : {}) };
         await DB.insert('invoices', invData);
         if (type === 'sale' && vyaparInvNo) incrementVyaparNo();
         if (fromOrderId) await DB.update('salesorders', fromOrderId, { invoiceNo: invNo });
