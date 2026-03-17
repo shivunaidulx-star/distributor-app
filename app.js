@@ -12717,9 +12717,15 @@ async function toggleStaffStatus(id, currentStatus) {
 
 // ---- ATTENDANCE ----
 async function renderAttendance() {
-    const selDate = window._attDate || today();
+    const selDate  = window._attDate  || today();
+    const selFrom  = window._attFrom  || today();
+    const selTo    = window._attTo    || today();
+    const rangeMode = window._attRangeMode || false;
     const selMonth = selDate.substring(0, 7);
+
     const { data: staff } = await supabaseClient.from('staff').select('*').eq('status', 'active').order('name');
+
+    // Single-day data
     const { data: attRecs } = await supabaseClient.from('attendance').select('*').eq('date', selDate);
     const attMap = {}; (attRecs||[]).forEach(r => attMap[r.staff_id] = r);
 
@@ -12740,31 +12746,66 @@ async function renderAttendance() {
         { s: 'Holiday',    label: 'H',    color: '#64748b', bg: 'rgba(100,116,139,0.15)' },
     ];
 
-    pageContent.innerHTML = `
-    <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-bottom:16px">
+    // ── Header toolbar ──
+    const singleToolbar = `
         <input type="date" value="${selDate}" onchange="window._attDate=this.value;renderAttendance()" class="form-control" style="width:160px">
         <button class="btn btn-outline btn-sm" onclick="window._attDate='${today()}';renderAttendance()">Today</button>
         <button class="btn btn-outline btn-sm" onclick="markAllAttendance('Present','${selDate}')">✅ All Present</button>
-        <button class="btn btn-outline btn-sm" onclick="markAllAttendance('Holiday','${selDate}')">🏖️ Mark Holiday</button>
-        <span style="margin-left:auto;font-size:0.82rem;color:var(--text-muted)">${fmtDate(selDate)}</span>
+        <button class="btn btn-outline btn-sm" onclick="markAllAttendance('Holiday','${selDate}')">🏖️ Holiday</button>`;
+
+    const rangeToolbar = `
+        <label style="font-size:0.82rem;color:var(--text-muted);margin:0">From</label>
+        <input type="date" id="att-from" value="${selFrom}" class="form-control" style="width:150px">
+        <label style="font-size:0.82rem;color:var(--text-muted);margin:0">To</label>
+        <input type="date" id="att-to" value="${selTo}" class="form-control" style="width:150px">
+        <button class="btn btn-primary btn-sm" onclick="openRangeAttModal()">Mark Range…</button>`;
+
+    pageContent.innerHTML = `
+    <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:16px">
+        <div style="display:flex;align-items:center;gap:6px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:3px">
+            <button class="btn btn-sm ${!rangeMode?'btn-primary':'btn-outline'}" style="border-radius:6px" onclick="window._attRangeMode=false;renderAttendance()">Single Day</button>
+            <button class="btn btn-sm ${rangeMode?'btn-primary':'btn-outline'}" style="border-radius:6px" onclick="window._attRangeMode=true;renderAttendance()">Date Range</button>
+        </div>
+        ${rangeMode ? rangeToolbar : singleToolbar}
     </div>
 
     ${!(staff&&staff.length) ? '<div class="empty-state"><p>No active staff. <a href="#" onclick="navigateTo(\'staffmaster\')" style="color:var(--accent)">Add staff first</a></p></div>' : `
+
+    ${rangeMode ? `
+    <div class="card" style="margin-bottom:20px;background:rgba(99,102,241,0.06);border:1px solid rgba(99,102,241,0.2)">
+        <div class="card-body" style="padding:14px 18px">
+            <p style="margin:0;font-size:0.88rem;color:var(--text-muted)">
+                <b>Date Range Mode:</b> Select From / To dates above, then click <b>Mark Range…</b> to choose a status and apply it to all staff (or individual staff) across every day in the range. Existing records are overwritten.
+            </p>
+        </div>
+    </div>` : ''}
+
     <div class="card" style="margin-bottom:20px"><div class="card-body">
     <div class="table-wrapper"><table class="data-table">
-        <thead><tr><th>Staff</th><th>Mark Attendance</th><th style="text-align:center">This Month (${selMonth})</th></tr></thead>
+        <thead><tr><th>Staff</th><th>${rangeMode ? 'Bulk Range Action' : 'Mark Attendance'}</th><th style="text-align:center">This Month (${selMonth})</th></tr></thead>
         <tbody>
         ${staff.map(s => {
             const cur = attMap[s.id];
             const mo = monthMap[s.id] || { P:0, A:0, HD:0, PL:0, H:0 };
-            const btns = STATUS_BTNS.map(b => {
-                const active = cur && cur.status === b.s;
-                return `<button onclick="markAttendance('${s.id}','${escapeHtml(s.name)}','${selDate}','${b.s}')" style="padding:5px 10px;border-radius:20px;font-size:0.78rem;font-weight:700;cursor:pointer;border:2px solid ${b.color};color:${active?'#fff':b.color};background:${active?b.color:b.bg};transition:all 0.15s">${b.label}</button>`;
-            }).join('');
             const monthSummary = `<span style="font-size:0.8rem;color:var(--text-muted)">P:<b style="color:#22c55e">${mo.P}</b> A:<b style="color:#ef4444">${mo.A}</b> ½:<b style="color:#f59e0b">${mo.HD}</b> PL:<b style="color:#6366f1">${mo.PL}</b></span>`;
+
+            let actionCell;
+            if (rangeMode) {
+                actionCell = `<div style="display:flex;flex-wrap:wrap;gap:6px">
+                    ${STATUS_BTNS.map(b => `<button onclick="markStaffRange('${s.id}','${escapeHtml(s.name)}','${b.s}')" style="padding:5px 10px;border-radius:20px;font-size:0.78rem;font-weight:700;cursor:pointer;border:2px solid ${b.color};color:${b.color};background:${b.bg};transition:all 0.15s">${b.label}</button>`).join('')}
+                </div>`;
+            } else {
+                actionCell = `<div style="display:flex;flex-wrap:wrap;gap:6px">
+                    ${STATUS_BTNS.map(b => {
+                        const active = cur && cur.status === b.s;
+                        return `<button onclick="markAttendance('${s.id}','${escapeHtml(s.name)}','${selDate}','${b.s}')" style="padding:5px 10px;border-radius:20px;font-size:0.78rem;font-weight:700;cursor:pointer;border:2px solid ${b.color};color:${active?'#fff':b.color};background:${active?b.color:b.bg};transition:all 0.15s">${b.label}</button>`;
+                    }).join('')}
+                </div>`;
+            }
+
             return `<tr>
                 <td><div style="font-weight:600">${escapeHtml(s.name)}</div><div style="font-size:0.75rem;color:var(--text-muted)">${s.role||'Staff'}</div></td>
-                <td><div style="display:flex;flex-wrap:wrap;gap:6px">${btns}</div></td>
+                <td>${actionCell}</td>
                 <td style="text-align:center">${monthSummary}</td>
             </tr>`;
         }).join('')}
@@ -12776,6 +12817,98 @@ async function renderAttendance() {
     <div class="card"><div class="card-body" style="overflow-x:auto">
         ${renderMonthCalendar(staff, monthRecs||[], selMonth)}
     </div></div>`}`;
+}
+
+// ── Range mode helpers ──
+function _getRangeDates() {
+    const fromEl = document.getElementById('att-from');
+    const toEl   = document.getElementById('att-to');
+    const from = fromEl ? fromEl.value : (window._attFrom || today());
+    const to   = toEl   ? toEl.value   : (window._attTo   || today());
+    if (from > to) { showToast('From date must be before To date', 'error'); return null; }
+    window._attFrom = from; window._attTo = to;
+    const dates = [];
+    let cur = new Date(from);
+    const end = new Date(to);
+    while (cur <= end) {
+        dates.push(cur.toISOString().split('T')[0]);
+        cur.setDate(cur.getDate() + 1);
+    }
+    return dates;
+}
+
+function openRangeAttModal() {
+    const dates = _getRangeDates();
+    if (!dates) return;
+    openModal('Mark Attendance — Date Range',
+        `<p style="margin:0 0 14px;color:var(--text-muted);font-size:0.88rem">
+            Applying to <b>${dates.length} day(s)</b>: ${dates[0]} → ${dates[dates.length-1]}
+        </p>
+        <div class="form-group">
+            <label>Status to apply to ALL staff</label>
+            <select id="rng-status" class="form-control">
+                <option value="Present">Present</option>
+                <option value="Absent">Absent</option>
+                <option value="Half Day">Half Day</option>
+                <option value="Paid Leave">Paid Leave</option>
+                <option value="Holiday">Holiday</option>
+            </select>
+        </div>
+        <p style="font-size:0.8rem;color:var(--text-muted);margin:8px 0 0">Use individual staff row buttons to apply different statuses per staff.</p>`,
+        `<button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+         <button class="btn btn-primary" onclick="confirmRangeAttendance()">Apply to All Staff</button>`
+    );
+}
+
+async function confirmRangeAttendance() {
+    const dates = _getRangeDates();
+    if (!dates) return;
+    const status = $('rng-status').value;
+    closeModal();
+    await _applyRangeAttendance(null, null, dates, status);
+    showToast(`Marked ${status} for all staff across ${dates.length} day(s)`, 'success');
+    renderAttendance();
+}
+
+async function markStaffRange(staffId, staffName, status) {
+    const dates = _getRangeDates();
+    if (!dates) return;
+    if (!confirm(`Mark ${staffName} as "${status}" for ${dates.length} day(s)?\n${dates[0]} → ${dates[dates.length-1]}`)) return;
+    await _applyRangeAttendance(staffId, staffName, dates, status);
+    showToast(`${staffName} marked as ${status} for ${dates.length} day(s)`, 'success');
+    renderAttendance();
+}
+
+async function _applyRangeAttendance(staffId, staffName, dates, status) {
+    // Load staff list if applying to all
+    let targets = [];
+    if (staffId) {
+        targets = [{ id: staffId, name: staffName }];
+    } else {
+        const { data: allStaff } = await supabaseClient.from('staff').select('id,name').eq('status', 'active');
+        targets = allStaff || [];
+    }
+
+    // Load existing records for the range to detect upsert vs insert
+    const from = dates[0], to = dates[dates.length-1];
+    const staffIds = targets.map(s => s.id);
+    const { data: existing } = await supabaseClient.from('attendance').select('id,staff_id,date')
+        .in('staff_id', staffIds).gte('date', from).lte('date', to);
+    const exMap = {};
+    (existing||[]).forEach(r => { exMap[r.staff_id + '_' + r.date] = r.id; });
+
+    const ops = [];
+    for (const s of targets) {
+        for (const date of dates) {
+            const key = s.id + '_' + date;
+            if (exMap[key]) {
+                ops.push(supabaseClient.from('attendance').update({ status, marked_by: currentUser.name }).eq('id', exMap[key]));
+            } else {
+                ops.push(supabaseClient.from('attendance').insert({ id: 'att_'+Date.now()+'_'+s.id.slice(-4)+Math.random().toString(36).slice(2,5), staff_id: s.id, staff_name: s.name, date, status, marked_by: currentUser.name }));
+            }
+        }
+    }
+    await Promise.all(ops);
 }
 
 function renderMonthCalendar(staff, records, month) {
