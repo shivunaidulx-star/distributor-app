@@ -7534,9 +7534,45 @@ async function printDeliveryRouteSheet() {
     });
 
     const sections = Object.entries(byPerson).sort(([a],[b])=>a.localeCompare(b)).map(([person, dlist]) => {
-        // Sort: GPS stops by distance first, no-GPS stops at end
-        const withGps    = dlist.filter(d => d._hasGps).sort((a,b) => (a._distKm||0) - (b._distKm||0));
+        // Separate stops into those with GPS and those without
+        let unrouted = dlist.filter(d => d._hasGps);
         const withoutGps = dlist.filter(d => !d._hasGps);
+        
+        const withGps = [];
+        let currentLat = warehouseLat;
+        let currentLng = warehouseLng;
+
+        // Nearest Neighbor algorithm
+        while (unrouted.length > 0) {
+            let nearestIdx = -1;
+            let minDistance = Infinity;
+
+            for (let i = 0; i < unrouted.length; i++) {
+                const stop = unrouted[i];
+                // If warehouse GPS is missing but stops have GPS, we can't do the first leg properly.
+                // We'll just calculate relative distances assuming the first stop is origin.
+                if (!hasWarehouseGps && withGps.length === 0) {
+                    nearestIdx = i; // Just pick the first one if we have no starting point
+                    minDistance = 0;
+                    break;
+                }
+
+                const dist = calcDistanceKm(currentLat, currentLng, +stop._party.lat, +stop._party.lng);
+                if (dist < minDistance) {
+                    minDistance = dist;
+                    nearestIdx = i;
+                }
+            }
+
+            const nearestStop = unrouted[nearestIdx];
+            nearestStop._legDistance = minDistance; // Store distance from previous point
+            withGps.push(nearestStop);
+            unrouted.splice(nearestIdx, 1);
+
+            currentLat = +nearestStop._party.lat;
+            currentLng = +nearestStop._party.lng;
+        }
+
         const sorted = [...withGps, ...withoutGps];
 
         let seq = 0;
@@ -7544,7 +7580,7 @@ async function printDeliveryRouteSheet() {
             seq++;
             const p = d._party;
             const gpsInfo = d._hasGps
-                ? `<span style="color:#34a853;font-size:0.78rem">📍 ${p.address||p.city||''} ${d._distKm !== null ? `(${d._distKm.toFixed(1)} km)` : ''}</span>`
+                ? `<span style="color:#34a853;font-size:0.78rem">📍 ${p.address||p.city||''} ${d._legDistance !== undefined && d._legDistance !== null ? `(Leg: ${d._legDistance.toFixed(1)} km)` : ''}</span>`
                 : `<span style="color:#f59e0b;font-size:0.78rem">⚠️ No GPS — Manual seq: <input type="number" value="${seq}" style="width:40px;border:1px solid #ddd;border-radius:3px;padding:1px 3px;text-align:center" onchange="this.closest('tr').querySelector('.seq-num').textContent=this.value"></span>`;
             const phone = p ? (p.phone || '-') : '-';
             return `<tr>
@@ -7560,9 +7596,10 @@ async function printDeliveryRouteSheet() {
 
         const total = dlist.reduce((s,d)=>s+(d.total||0),0);
         const gpsCount = withGps.length, noGpsCount = withoutGps.length;
+        const totalDistance = withGps.reduce((s,d)=>s+(d._legDistance||0),0);
         const gpsNote = hasWarehouseGps
-            ? `<span style="font-size:0.78rem;color:#34a853">📍 ${gpsCount} GPS-sorted stop(s)</span>${noGpsCount ? ` &nbsp; <span style="font-size:0.78rem;color:#f59e0b">⚠️ ${noGpsCount} stop(s) without GPS — set manual order</span>` : ''}`
-            : `<span style="font-size:0.78rem;color:#f59e0b">⚠️ Warehouse GPS not set — add in Company Setup for auto-sorting</span>`;
+            ? `<span style="font-size:0.78rem;color:#34a853">📍 ${gpsCount} GPS stops (Route: ${totalDistance.toFixed(1)} km)</span>${noGpsCount ? ` &nbsp; <span style="font-size:0.78rem;color:#f59e0b">⚠️ ${noGpsCount} without GPS</span>` : ''}`
+            : `<span style="font-size:0.78rem;color:#f59e0b">⚠️ Warehouse GPS missing — Route distances unoptimised</span>`;
 
         return `<div style="margin-bottom:32px;page-break-inside:avoid">
         <div style="border-bottom:2px solid #333;padding-bottom:6px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:4px">
