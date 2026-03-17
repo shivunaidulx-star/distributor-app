@@ -1214,6 +1214,38 @@ function applyDashboardFilter() {
     renderDashboard();
 }
 
+async function renderCustReqWidget() {
+    const { data: regs } = await supabaseClient.from('customer_registrations').select('*').order('submitted_at', { ascending: false }).limit(20);
+    const pending = (regs||[]).filter(r => r.status === 'pending');
+    const recent  = (regs||[]).slice(0, 5);
+    return `
+    <div class="card" style="margin-top:12px">
+        <div class="card-header" style="display:flex;align-items:center;justify-content:space-between">
+            <h3 style="margin:0">🧑‍💼 Customer Portal Requests</h3>
+            <div style="display:flex;align-items:center;gap:10px">
+                ${pending.length ? `<span class="badge badge-danger" style="font-size:0.82rem">${pending.length} Pending</span>` : '<span style="font-size:0.78rem;color:var(--text-muted)">No pending</span>'}
+                <button class="btn btn-outline btn-sm" onclick="navigateTo('customerrequests')">View All</button>
+            </div>
+        </div>
+        <div class="card-body" style="padding:6px 10px">
+        ${!regs || !regs.length ? '<p style="color:var(--text-muted);font-size:0.85rem;padding:8px">No registration requests yet.</p>' : `
+        <div class="table-wrapper"><table class="data-table">
+            <thead><tr><th>Business</th><th>Phone</th><th>City</th><th>Date</th><th>Status</th><th></th></tr></thead>
+            <tbody>
+            ${recent.map(r => `<tr>
+                <td style="font-weight:600">${r.business_name||''}</td>
+                <td>${r.phone||''}</td>
+                <td style="color:var(--text-muted)">${r.city||'-'}</td>
+                <td style="font-size:0.8rem;color:var(--text-muted)">${new Date(r.submitted_at||Date.now()).toLocaleDateString('en-IN')}</td>
+                <td><span class="badge ${r.status==='pending'?'badge-warning':r.status==='approved'?'badge-success':'badge-danger'}">${r.status}</span></td>
+                <td>${r.status==='pending' ? `<button class="btn btn-primary btn-sm" onclick="navigateTo('customerrequests')">Review</button>` : ''}</td>
+            </tr>`).join('')}
+            </tbody>
+        </table></div>`}
+        </div>
+    </div>`;
+}
+
 function renderPartyNavWidget(parties, limit = 6) {
     const located = parties.filter(p => p.lat && p.lng);
     if (!located.length) return '';
@@ -1499,7 +1531,7 @@ async function renderDashboard() {
             <tbody>${invoices.slice(-5).reverse().map(i=>`<tr><td>${fmtDate(i.date)}</td><td style="font-weight:600">${i.invoiceNo}</td><td>${i.partyName}</td><td><span class="badge ${i.type==='sale'?'badge-success':'badge-info'}">${i.type}</span></td><td class="${i.type==='sale'?'amount-green':'amount-red'}">${currency(i.total)}</td></tr>`).join('')||'<tr><td colspan="5"><div class="empty-state"><p>No invoices yet</p></div></td></tr>'}</tbody></table>
         </div>
     </div></div>
-    ${renderPartyNavWidget(parties)}
+    ${await renderCustReqWidget()}
     `;
 
     // Render chart after DOM is ready
@@ -4244,7 +4276,20 @@ async function editSalesOrder(id) {
     soItems = orig.items.map(li => {
         const item = inventory.find(x => x.id === li.itemId);
         const latestListed = item ? item.salePrice : li.listedPrice || li.price;
-        return { itemId: li.itemId, name: li.name, qty: li.qty, price: li.price, listedPrice: latestListed, amount: li.qty * li.price, unit: li.unit || (item ? item.unit : 'Pcs') };
+        const discountAmt = li.discountAmt || 0;
+        const discountPct = li.discountPct || 0;
+        return { 
+            itemId: li.itemId, 
+            name: li.name, 
+            qty: li.qty, 
+            price: li.price, 
+            listedPrice: latestListed, 
+            discountAmt, 
+            discountPct, 
+            amount: +( (li.qty * li.price) - discountAmt ).toFixed(2), 
+            unit: li.unit || (item ? item.unit : 'Pcs'), 
+            purchasePrice: li.purchasePrice || (item ? item.purchasePrice : 0)
+        };
     });
 
     const parties = await DB.getAll('parties');
@@ -4317,7 +4362,20 @@ async function duplicateSalesOrder(id) {
     soItems = orig.items.map(li => {
         const item = inventory.find(x => x.id === li.itemId);
         const latestPrice = item ? item.salePrice : li.price;
-        return { itemId: li.itemId, name: li.name, qty: li.qty, price: latestPrice, listedPrice: latestPrice, amount: li.qty * latestPrice, unit: li.unit || (item ? item.unit : 'Pcs') };
+        const discountAmt = li.discountAmt || 0;
+        const discountPct = li.discountPct || 0;
+        return { 
+            itemId: li.itemId, 
+            name: li.name, 
+            qty: li.qty, 
+            price: latestPrice, 
+            listedPrice: latestPrice, 
+            discountAmt, 
+            discountPct, 
+            amount: +( (li.qty * latestPrice) - discountAmt ).toFixed(2), 
+            unit: li.unit || (item ? item.unit : 'Pcs'),
+            purchasePrice: li.purchasePrice || (item ? item.purchasePrice : 0)
+        };
     });
 
     const customers = parties.filter(p => p.type === 'Customer');
@@ -12725,7 +12783,8 @@ async function openApproveCustModal(regId) {
             </div>
         </div>
     </div>`,
-    [{ label: 'Confirm Approve', cls: 'btn-primary', action: () => confirmApproveCust(regId, document.getElementById('ap-party').value) }]);
+    `<button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-primary" onclick="confirmApproveCust('${regId}', document.getElementById('ap-party').value)">Confirm Approve</button>`);
 }
 
 async function confirmApproveCust(regId, existingPartyId) {
