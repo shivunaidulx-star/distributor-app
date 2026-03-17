@@ -1185,6 +1185,36 @@ function applyDashboardFilter() {
     renderDashboard();
 }
 
+function renderPartyNavWidget(parties, limit = 6) {
+    const located = parties.filter(p => p.lat && p.lng);
+    if (!located.length) return '';
+    return `
+        <div class="card" style="margin-top:12px">
+            <div class="card-header" style="display:flex;align-items:center;justify-content:space-between">
+                <h3 style="margin:0">🗺️ Navigate to Party</h3>
+                <span style="font-size:0.78rem;color:var(--text-muted)">${located.length} with location</span>
+            </div>
+            <div class="card-body" style="padding:6px 10px">
+                <input placeholder="Search party..." oninput="filterNavWidget(this.value)" style="width:100%;margin-bottom:8px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:0.85rem;background:var(--surface)">
+                <div id="nav-widget-list">
+                    ${located.slice(0, limit).map(p => `
+                    <div class="nav-party-row" data-name="${escapeHtml(p.name.toLowerCase())}">
+                        <div style="flex:1;min-width:0">
+                            <div style="font-weight:600;font-size:0.88rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(p.name)}</div>
+                            <div style="font-size:0.75rem;color:var(--text-muted)">${escapeHtml(p.city || p.address || '')}</div>
+                        </div>
+                        <a href="https://www.google.com/maps?q=${p.lat},${p.lng}" target="_blank" class="btn btn-outline btn-sm" style="flex-shrink:0;padding:4px 10px;font-size:0.8rem;border-color:#3b82f6;color:#3b82f6">🗺️ Go</a>
+                    </div>`).join('')}
+                    ${located.length > limit ? `<div style="text-align:center;padding:6px;font-size:0.8rem;color:var(--text-muted)">+ ${located.length - limit} more — go to <span style="color:var(--accent);cursor:pointer" onclick="navigateTo('parties')">Parties</span></div>` : ''}
+                </div>
+            </div>
+        </div>`;
+}
+function filterNavWidget(q) {
+    const rows = document.querySelectorAll('#nav-widget-list .nav-party-row');
+    const s = q.toLowerCase();
+    rows.forEach(r => r.style.display = (!s || r.dataset.name.includes(s)) ? '' : 'none');
+}
 async function renderDashboard() {
     const role = currentUser.role;
     // Batch fetch data from Supabase
@@ -1223,7 +1253,8 @@ async function renderDashboard() {
                         return `<tr><td>${fmtDate(o.date)}</td><td>${o.orderNo}</td><td>${o.partyName}</td><td><span class="badge ${stMap[stText]||'badge-warning'}" style="text-transform:capitalize">${stText}</span></td><td class="amount-green">${currency(o.total)}</td></tr>`;
                     }).join('') || '<tr><td colspan="5"><div class="empty-state"><span class="empty-icon">📝</span><p>No orders yet</p><p class="empty-subtitle">Create your first sales order to get started</p></div></td></tr>'}</tbody></table>
                 </div>
-            </div></div>`; return;
+            </div></div>
+            ${renderPartyNavWidget(parties)}`; return;
     }
 
     // ── DELIVERY DASHBOARD ──
@@ -1249,7 +1280,8 @@ async function renderDashboard() {
                     <table class="data-table"><thead><tr><th>Order #</th><th>Party</th><th>Invoice</th><th>Status</th></tr></thead>
                     <tbody>${dispatched.slice(-5).reverse().map(d => `<tr><td style="font-weight:600">${d.orderNo}</td><td>${d.partyName}</td><td><span class="badge badge-info">${d.invoiceNo || '-'}</span></td><td><span class="badge badge-info">${d.status}</span></td></tr>`).join('') || '<tr><td colspan="4"><div class="empty-state"><span class="empty-icon">🚚</span><p>No active dispatches</p><p class="empty-subtitle">All deliveries are complete</p></div></td></tr>'}</tbody></table>
                 </div>
-            </div></div>`; return;
+            </div></div>
+            ${renderPartyNavWidget(parties)}`; return;
     }
 
     // ── PACKING DASHBOARD ──
@@ -1281,7 +1313,8 @@ async function renderDashboard() {
                     <table class="data-table"><thead><tr><th>Order #</th><th>Party</th><th>Items</th><th>Total</th></tr></thead>
                     <tbody>${unassigned.slice(0, 5).map(o => `<tr><td style="font-weight:600">${o.orderNo}</td><td>${o.partyName}</td><td>${o.items.length}</td><td class="amount-green">${currency(o.total)}</td></tr>`).join('')}</tbody></table>
                 </div>
-            </div></div>` : (!myAssigned.length ? '<div class="card"><div class="card-body"><div class="empty-state"><span class="empty-icon">✅</span><p>All caught up!</p><p class="empty-subtitle">No orders waiting to be packed.</p></div></div></div>' : '')}`; return;
+            </div></div>` : (!myAssigned.length ? '<div class="card"><div class="card-body"><div class="empty-state"><span class="empty-icon">✅</span><p>All caught up!</p><p class="empty-subtitle">No orders waiting to be packed.</p></div></div></div>' : '')}
+            ${renderPartyNavWidget(parties)}`; return;
     }
 
     // ── ADMIN / MANAGER DASHBOARD ──
@@ -1435,6 +1468,7 @@ async function renderDashboard() {
             <tbody>${invoices.slice(-5).reverse().map(i=>`<tr><td>${fmtDate(i.date)}</td><td style="font-weight:600">${i.invoiceNo}</td><td>${i.partyName}</td><td><span class="badge ${i.type==='sale'?'badge-success':'badge-info'}">${i.type}</span></td><td class="${i.type==='sale'?'amount-green':'amount-red'}">${currency(i.total)}</td></tr>`).join('')||'<tr><td colspan="5"><div class="empty-state"><p>No invoices yet</p></div></td></tr>'}</tbody></table>
         </div>
     </div></div>
+    ${renderPartyNavWidget(parties)}
     `;
 
     // Render chart after DOM is ready

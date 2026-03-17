@@ -2269,6 +2269,14 @@ body {
     0%,100% { opacity: 1; transform: scale(1); }
     50%      { opacity: 0.4; transform: scale(1.4); }
 }
+.nav-party-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 4px;
+    border-bottom: 1px solid var(--border);
+}
+.nav-party-row:last-child { border-bottom: none; }
 .dash-alert {
     padding: 10px 16px;
     border-radius: var(--radius-sm);
