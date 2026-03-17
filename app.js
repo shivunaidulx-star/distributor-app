@@ -914,7 +914,9 @@ function initSearchDropdown(inputId, items, onSelect) {
 
 // Helper to build item list for search dropdown
 function buildItemSearchList(inventoryItems) {
-    return inventoryItems.map(i => {
+    // Filter out deactivated items from all lookups
+    const activeItems = inventoryItems.filter(i => i.active !== false);
+    return activeItems.map(i => {
         const avail = getAvailableStock(i).available;
         return {
             id: i.id,
@@ -939,7 +941,9 @@ function buildItemSearchList(inventoryItems) {
 
 // Helper to build party list for search dropdown
 function buildPartySearchList(parties) {
-    return parties.map(p => ({
+    // Filter out blocked/deactivated parties from lookups
+    const activeParties = parties.filter(p => p.active !== false && !p.blocked);
+    return activeParties.map(p => ({
         id: p.id,
         label: p.name,
         value: p.name,
@@ -1740,8 +1744,8 @@ async function renderParties() {
         </div>
         <div id="bulk-bar-par" style="display:none;align-items:center;gap:8px;background:var(--accent);color:#fff;padding:8px 12px;border-radius:8px;margin-bottom:8px;flex-wrap:wrap">
             <span id="bulk-cnt-par" style="font-weight:700;flex:1">0 selected</span>
-            <button class="btn" onclick="bulkActivateParties()" style="background:#fff;color:#10b981;padding:4px 10px;font-size:0.82rem;font-weight:600">✅ Activate</button>
-            <button class="btn" onclick="bulkDeactivateParties()" style="background:#fff;color:#f59e0b;padding:4px 10px;font-size:0.82rem;font-weight:600">⏸ Deactivate</button>
+            <button class="btn" onclick="bulkActivateParties()" style="background:#fff;color:#10b981;padding:4px 10px;font-size:0.82rem;font-weight:600">✅ Active</button>
+            <button class="btn" onclick="bulkBlockParties()" style="background:#fff;color:#ef4444;padding:4px 10px;font-size:0.82rem;font-weight:600">🚫 Block</button>
             <button class="btn" onclick="bulkDeleteParties()" style="background:#ef4444;color:#fff;padding:4px 10px;font-size:0.82rem;font-weight:600">🗑️ Delete</button>
             <button class="btn" onclick="clearBulkParties()" style="background:rgba(255,255,255,0.2);color:#fff;padding:4px 10px;font-size:0.82rem">✕ Clear</button>
         </div>
@@ -3005,20 +3009,21 @@ async function bulkActivateParties() {
     const parties = await DB.getAll('parties');
     for (const id of window._bulkParties) {
         const p = parties.find(x => x.id === id);
-        if (p) await DB.update('parties', id, { ...p, active: true });
+        if (p) await DB.update('parties', id, { ...p, active: true, blocked: false });
     }
     showToast(window._bulkParties.size + ' parties activated', 'success');
     window._bulkParties.clear();
     renderParties();
 }
-async function bulkDeactivateParties() {
+async function bulkBlockParties() {
     if (!window._bulkParties.size) return;
+    if (!confirm('Block ' + window._bulkParties.size + ' party(ies)? They will be restricted from new transactions.')) return;
     const parties = await DB.getAll('parties');
     for (const id of window._bulkParties) {
         const p = parties.find(x => x.id === id);
-        if (p) await DB.update('parties', id, { ...p, active: false });
+        if (p) await DB.update('parties', id, { ...p, active: false, blocked: true });
     }
-    showToast(window._bulkParties.size + ' parties deactivated', 'success');
+    showToast(window._bulkParties.size + ' parties blocked 🚫', 'warning');
     window._bulkParties.clear();
     renderParties();
 }
@@ -3035,7 +3040,7 @@ async function bulkDeleteParties() {
                       payments.some(x => String(x.partyId) === sid);
         if (hasTx) blocked.push(id); else toDelete.push(id);
     }
-    if (blocked.length) showToast(blocked.length + ' party(ies) skipped — have transactions. Use Deactivate instead.', 'error');
+    if (blocked.length) showToast(blocked.length + ' party(ies) skipped — have transactions. Use Block instead.', 'error');
     if (!toDelete.length) return;
     if (!confirm('Delete ' + toDelete.length + ' party(ies)? Cannot be undone.')) return;
     for (const id of toDelete) await DB.delete('parties', id);
@@ -10498,7 +10503,10 @@ async function renderPartyLedgerLayout() {
                 <button class="btn-icon" onclick="navigateTo('parties')" title="Back to Parties">⬅️</button>
                 📜 Ledger: ${party.name} <span class="badge ${party.type === 'Customer' ? 'badge-success' : 'badge-info'}" style="font-size:0.7rem">${party.type}</span>
             </h3>
-            <button class="btn btn-outline btn-sm" onclick="exportPartyLedger('${partyId}')">📥 Export Excel</button>
+            <div class="filter-group">
+                <button class="btn btn-outline btn-sm" onclick="showPaymentHistory('${partyId}')">💳 Payment History</button>
+                <button class="btn btn-outline btn-sm" onclick="exportPartyLedger('${partyId}')">📥 Export Excel</button>
+            </div>
         </div>
         <div class="card" style="margin-bottom:15px">
             <div class="card-body" style="display:flex;justify-content:space-between;align-items:center">
@@ -10599,6 +10607,64 @@ async function renderPartyLedgerLayout() {
             </div>
         </div>
     `;
+}
+
+// --- Payment History Modal ---
+async function showPaymentHistory(partyId) {
+    const payments = await DB.getAll('payments');
+    const invoices = await DB.getAll('invoices');
+    const partyPayments = payments.filter(p => String(p.partyId) === String(partyId))
+        .sort((a, b) => new Date(a.date || a.created_at) - new Date(b.date || b.created_at));
+
+    if (!partyPayments.length) {
+        openModal('Payment History', '<div class="empty-state"><span class="empty-icon">💳</span><p>No payment records found for this party.</p></div>');
+        return;
+    }
+
+    // Build the rows: each payment with its date, ref, type, and linked amount
+    let totalLinked = 0;
+    const rows = partyPayments.map(p => {
+        const dt = p.date ? new Date(p.date).toLocaleDateString('en-IN', {day:'2-digit', month:'2-digit', year:'numeric'}) : '-';
+        const refNo = p.payNo || p.id || '-';
+        const txType = p.type === 'out' ? 'Payment-Out' : 'Payment-In';
+        const amt = p.amount || 0;
+        totalLinked += amt;
+
+        // Find linked invoices
+        let linkedInfo = '';
+        if (p.invoiceNo && p.invoiceNo !== 'Advance' && p.invoiceNo !== 'Multi') {
+            linkedInfo = p.invoiceNo;
+        } else if (p.allocations) {
+            linkedInfo = Object.keys(p.allocations).join(', ');
+        } else {
+            linkedInfo = 'Advance';
+        }
+
+        return `<tr>
+            <td style="font-size:0.85rem">${dt}</td>
+            <td style="font-size:0.85rem;font-weight:600">${refNo}</td>
+            <td><span class="badge ${p.type === 'out' ? 'badge-warning' : 'badge-success'}" style="font-size:0.75rem">${txType}</span></td>
+            <td style="font-size:0.85rem;color:var(--text-muted)">${linkedInfo}</td>
+            <td style="text-align:right;font-weight:600;font-size:0.9rem">${currency(amt)}</td>
+        </tr>`;
+    }).join('');
+
+    openModal('Payment History', `
+        <div class="table-wrapper" style="max-height:500px;overflow-y:auto">
+            <table class="data-table">
+                <thead style="position:sticky;top:0;background:var(--bg-body);z-index:5">
+                    <tr><th>Transaction Date</th><th>Ref No</th><th>Transaction Type</th><th>Linked Invoice</th><th style="text-align:right">Amount</th></tr>
+                </thead>
+                <tbody>${rows}</tbody>
+                <tfoot>
+                    <tr style="border-top:2px solid var(--border);font-weight:700">
+                        <td colspan="4" style="text-align:right;font-size:0.9rem">Total:</td>
+                        <td style="text-align:right;font-size:1.05rem;color:var(--primary)">${currency(totalLinked)}</td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    `);
 }
 
 function exportPartyLedger(partyId) {
@@ -10881,10 +10947,12 @@ async function importUomExcel(e) {
 let catalogCart = [];
 
 async function renderCatalog() {
-    const [items, categories] = await Promise.all([
+    const [allItems, categories] = await Promise.all([
         DB.getAll('inventory'),
         DB.getAll('categories')
     ]);
+    // Only show active items in catalog
+    const items = allItems.filter(i => i.active !== false);
     const catNames = [...new Set(items.map(i => i.category).filter(Boolean))];
 
     pageContent.innerHTML = `
