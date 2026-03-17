@@ -2501,6 +2501,23 @@ body {
         overflow-x: auto;
         padding-bottom: 8px; /* Room for scrollbar */
     }
+    
+    .stat-card {
+        padding: 12px 14px;
+    }
+    
+    .stat-card .stat-icon {
+        font-size: 1.5rem;
+        margin-bottom: 4px;
+    }
+    
+    .stat-card .stat-value {
+        font-size: 1.25rem;
+    }
+    
+    .stat-card .stat-label {
+        font-size: 0.7rem;
+    }
 }
 
 @keyframes fadeOutScrollHint {

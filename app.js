@@ -951,6 +951,8 @@ function buildPartySearchList(parties) {
 // --- Navigation ---
 async function navigateTo(page) {
     if (!currentUser) return showLoginScreen();
+    // Clear balance filter when navigating away from parties
+    if (page !== 'parties') window._partyBalanceFilter = null;
     currentPage = page;
     document.querySelectorAll('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.page === page));
     // Sync bottom nav active state (only for tabs that exist in bottom nav)
@@ -1390,12 +1392,12 @@ async function renderDashboard() {
 
     <!-- Receivable / Payable -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
-        <div class="dash-kpi-card dash-kpi-green" onclick="navigateTo('parties')" style="cursor:pointer">
+        <div class="dash-kpi-card dash-kpi-green" onclick="window._partyBalanceFilter='receivable';navigateTo('parties')" style="cursor:pointer">
             <div class="dash-kpi-label">Receivable</div>
             <div class="dash-kpi-amount dash-count" data-val="${totalReceivable}">${currency(totalReceivable)}</div>
             <div class="dash-kpi-badge dash-kpi-badge-green">${drParties.length} parties</div>
         </div>
-        <div class="dash-kpi-card dash-kpi-red" onclick="navigateTo('parties')" style="cursor:pointer">
+        <div class="dash-kpi-card dash-kpi-red" onclick="window._partyBalanceFilter='payable';navigateTo('parties')" style="cursor:pointer">
             <div class="dash-kpi-label">Payable</div>
             <div class="dash-kpi-amount dash-count" data-val="${totalPayable}">${currency(totalPayable)}</div>
             <div class="dash-kpi-badge dash-kpi-badge-red">${crParties.length} parties</div>
@@ -1705,13 +1707,25 @@ async function renderParties() {
     const parties = await DB.getAll('parties');
     const customers = parties.filter(p => p.type === 'Customer');
     const suppliers = parties.filter(p => p.type === 'Supplier');
-    const shown = _partyTab === 'customer' ? customers : _partyTab === 'supplier' ? suppliers : parties;
+    let shown = _partyTab === 'customer' ? customers : _partyTab === 'supplier' ? suppliers : parties;
+
+    // Apply balance filter if coming from dashboard receivable/payable card
+    const balFilter = window._partyBalanceFilter;
+    if (balFilter === 'receivable') shown = shown.filter(p => (p.balance || 0) < 0);
+    else if (balFilter === 'payable') shown = shown.filter(p => (p.balance || 0) > 0);
+
+    const balFilterBadge = balFilter ? `
+        <div style="display:flex;align-items:center;gap:8px;padding:8px 14px;background:${balFilter==='receivable'?'#d1fae5':'#fee2e2'};border-radius:8px;margin-bottom:10px;font-size:0.85rem;font-weight:600;color:${balFilter==='receivable'?'#065f46':'#991b1b'}">
+            ${balFilter==='receivable'?'🟢 Showing: Parties with Receivable Balance':'🔴 Showing: Parties with Payable Balance'}
+            <button onclick="window._partyBalanceFilter=null;renderParties()" style="margin-left:auto;background:none;border:none;cursor:pointer;font-size:1rem;padding:0;color:inherit">✕ Clear</button>
+        </div>` : '';
 
     pageContent.innerHTML = `
+        ${balFilterBadge}
         <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
-            <button class="catalog-pill ${_partyTab==='all'?'active':''}" onclick="_partyTab='all';renderParties()">👥 All Parties (${parties.length})</button>
-            <button class="catalog-pill ${_partyTab==='customer'?'active':''}" onclick="_partyTab='customer';renderParties()">🛍️ Customers (${customers.length})</button>
-            <button class="catalog-pill ${_partyTab==='supplier'?'active':''}" onclick="_partyTab='supplier';renderParties()">🏭 Suppliers (${suppliers.length})</button>
+            <button class="catalog-pill ${_partyTab==='all'?'active':''}" onclick="_partyTab='all';window._partyBalanceFilter=null;renderParties()">👥 All Parties (${parties.length})</button>
+            <button class="catalog-pill ${_partyTab==='customer'?'active':''}" onclick="_partyTab='customer';window._partyBalanceFilter=null;renderParties()">🛍️ Customers (${customers.length})</button>
+            <button class="catalog-pill ${_partyTab==='supplier'?'active':''}" onclick="_partyTab='supplier';window._partyBalanceFilter=null;renderParties()">🏭 Suppliers (${suppliers.length})</button>
         </div>
         <div class="section-toolbar">
             <input class="search-box" id="party-search" placeholder="Search parties..." oninput="filterPartyTable()">
@@ -3909,7 +3923,8 @@ function addSOLine() {
     const price = customPrice !== '' ? +customPrice : unitListedPrice;
 
     // Add the new line with listedPrice for comparison
-    soItems.push({ itemId, name: itemObj.name, qty, price, listedPrice: unitListedPrice, amount: qty * price, unit, primaryQty });
+    const roundedPrice = +price.toFixed(2);
+    soItems.push({ itemId, name: itemObj.name, qty, price: roundedPrice, listedPrice: +unitListedPrice.toFixed(2), amount: +(qty * roundedPrice).toFixed(2), unit, primaryQty });
 
     // Retroactively update existing lines for the same item if the price tier changed
     soItems.forEach(li => {
@@ -3922,7 +3937,7 @@ function addSOLine() {
             // If the price was NOT manually overridden, update it to new volume tier
             if (Math.abs(li.price - li.listedPrice) < 0.001) {
                 li.price = +(lineUnitListedPrice.toFixed(2));
-                li.amount = li.qty * li.price;
+                li.amount = +(li.qty * li.price).toFixed(2);
             }
             li.listedPrice = +(lineUnitListedPrice.toFixed(2));
         }
@@ -3968,7 +3983,7 @@ function renderSOLines() {
                 <input type="number" value="${li.qty}" min="1" style="width:55px;padding:3px;border-radius:4px;border:1px solid var(--border);text-align:center;font-size:0.85rem" onchange="updateSOLine(${i},'qty',this.value);renderSOLines()">
                 <span style="font-size:0.75rem;color:var(--text-muted);width:25px">${li.unit || 'Pcs'}</span>
             </div>
-            <div style="width:100px;text-align:right">${edited ? `<div style="font-size:0.65rem;text-decoration:line-through;color:var(--text-muted)">${currency(li.listedPrice)}</div>` : ''}<input type="number" value="${li.price}" min="0" step="0.01" style="width:80px;padding:3px;border-radius:4px;border:1px solid ${edited ? 'var(--warning)' : 'var(--border)'};text-align:right;font-size:0.85rem;${edited ? 'color:var(--warning);font-weight:600' : ''}" onchange="updateSOLine(${i},'price',this.value);renderSOLines()"></div>
+            <div style="width:100px;text-align:right">${edited ? `<div style="font-size:0.65rem;text-decoration:line-through;color:var(--text-muted)">${currency(li.listedPrice)}</div>` : ''}<input type="number" value="${(+li.price).toFixed(2)}" min="0" step="0.01" style="width:80px;padding:3px;border-radius:4px;border:1px solid ${edited ? 'var(--warning)' : 'var(--border)'};text-align:right;font-size:0.85rem;${edited ? 'color:var(--warning);font-weight:600' : ''}" onchange="updateSOLine(${i},'price',this.value);renderSOLines()"></div>
             <span style="width:80px;text-align:right;font-weight:600;font-size:0.85rem">${currency(li.amount)}</span>
             <button class="btn-icon" onclick="removeSOLine(${i})" style="flex-shrink:0">✕</button></div>`;
     }).join('');
@@ -5343,87 +5358,15 @@ async function saveInvoice() {
             }
         }
 
-        // Build all DB operations — run in parallel, NO per-op refresh
-        const ops = [];
-        const nowStock = {}; // track running stock for ledger entries
-
-        for (const li of invoiceItems) {
-            const item = inventory.find(x => x.id === li.itemId);
-            if (!item) continue;
-            const qtyChange = type === 'sale' ? -li.qty : li.qty;
-            const newStock = (item.stock || 0) + qtyChange;
-            nowStock[item.id] = newStock;
-            const itemUpdate = { stock: newStock };
-            if (type === 'sale' && item.batches && item.batches.length) {
-                const { updatedBatches, priceSync } = deductBatchQtyFifo(item, li.qty);
-                if (updatedBatches) { itemUpdate.batches = updatedBatches; Object.assign(itemUpdate, priceSync); }
-            }
-            ops.push(DB.rawUpdate('inventory', item.id, itemUpdate));
-            ops.push(DB.rawInsert('stock_ledger', {
-                date: today(), itemId: item.id, itemName: item.name,
-                entryType: type === 'sale' ? 'Sale' : 'Purchase', qty: qtyChange,
-                runningStock: newStock, documentNo: invNo,
-                reason: type === 'sale' ? 'Sale Invoice' : 'Purchase Invoice',
-                createdBy: currentUser.name
-            }));
-        }
-
-        // Party balance + ledger
-        const party = parties.find(p => p.id === partyId);
-        let newBal = party ? party.balance || 0 : 0;
-        if (party) {
-            const balChange = type === 'sale' ? total : -total;
-            newBal = (party.balance || 0) + balChange;
-            ops.push(DB.rawUpdate('parties', party.id, { balance: newBal }));
-            ops.push(DB.rawInsert('party_ledger', {
-                date: today(), partyId: party.id, partyName: party.name,
-                type: type === 'sale' ? 'Sale Invoice' : 'Purchase Invoice',
-                amount: balChange, balance: newBal, docNo: invNo,
-                notes: type === 'sale' ? 'Sale' : 'Purchase', createdBy: currentUser.name
-            }));
-        }
-
-        // Resolve fromOrder
-        const fromOrderId = ($('f-inv-from-order') || {}).value || '';
-        let fromOrderNo = '';
-        if (fromOrderId) {
-            const allOrders2 = DB.get('db_salesorders');
-            const fo = allOrders2.find(x => x.id === fromOrderId);
-            if (fo) fromOrderNo = fo.orderNo;
-        }
-
-        // Invoice insert
-        const dueDateVal = $('f-inv-due-date') ? $('f-inv-due-date').value : '';
-        const invData = { invoiceNo: invNo, date: $('f-inv-date').value, dueDate: dueDateVal || null, type, partyId, partyName, items: [...invoiceItems], subtotal: sub, gst, roundOff: roundoff, total, status: fromOrderId ? 'from-packing' : 'created', createdBy: currentUser.name, ...(vyaparInvNo ? { vyaparInvoiceNo: vyaparInvNo } : {}), ...(fromOrderNo ? { fromOrder: fromOrderNo } : {}) };
-        ops.push(DB.rawInsert('invoices', invData));
-        if (fromOrderId) ops.push(DB.rawUpdate('salesorders', fromOrderId, { invoiceNo: invNo }));
-
-        // Advance allocations
-        const advInputs = [...document.querySelectorAll('.inv-apply-adv-input')].filter(inp => +inp.value > 0);
-        if (advInputs.length) {
-            const payments = DB.get('db_payments');
-            for (const inp of advInputs) {
-                const pay = payments.find(p => p.id === inp.dataset.pay);
-                if (pay) {
-                    const allocs = { ...(pay.allocations || {}), [invNo]: (pay.allocations?.[invNo] || 0) + +inp.value };
-                    ops.push(DB.rawUpdate('payments', pay.id, { allocations: allocs }));
-                }
-            }
-        }
-
-        // Execute all in parallel — single network round
-        await Promise.all(ops);
-        // Refresh only the tables that changed (not all 14)
-        await DB.refreshTables(['invoices', 'inventory', 'parties', 'payments', 'sales_orders']);
-
-        if (type === 'sale' && vyaparInvNo) incrementVyaparNo();
-
-        const andNew = window._saveAndNew; window._saveAndNew = false;
         const savedType = invType;
         closeModal();
-        await renderInvoices();
+        if (fromOrderId) {
+            await renderPacking();
+        } else {
+            await renderInvoices();
+        }
         showToast(`Invoice ${invNo} saved!`, 'success');
-        if (andNew) openInvoiceModal(savedType);
+        if (andNew && !fromOrderId) openInvoiceModal(savedType);
     } catch (err) {
         window._saveAndNew = false;
         endSave();
@@ -6788,16 +6731,23 @@ function renderPacking() {
                 </tbody></table>
             </div>
         </div></div>` : ''}
-        ${packedNoInvoice.length ? `<h3 style="margin-bottom:14px;font-size:1rem">📦 Packed — Awaiting Invoice</h3>
+        ${packedNoInvoice.length ? `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+            <h3 style="font-size:1rem;margin:0">📦 Packed — Awaiting Invoice</h3>
+            ${isAdmin ? `<button class="btn btn-primary btn-sm" onclick="bulkGenerateInvoicesFromPacked()">🧾 Bulk Generate Invoices</button>` : ''}
+        </div>
         <div class="card" style="margin-bottom:24px"><div class="card-body">
             <div class="table-wrapper">
-                <table class="data-table"><thead><tr><th>Order #</th><th>Party</th><th>Packer</th><th>Time</th><th>Packages</th><th>Total</th><th>Actions</th></tr></thead>
+                <table class="data-table"><thead><tr>
+                    ${isAdmin ? '<th style="width:40px"><input type="checkbox" id="chk-all-packed" onchange="toggleAllPacked(this)"></th>' : ''}
+                    <th>Order #</th><th>Party</th><th>Packer</th><th>Time</th><th>Packages</th><th>Total</th><th>Actions</th>
+                </tr></thead>
                 <tbody>${packedNoInvoice.map(o => `<tr>
+                    ${isAdmin ? `<td><input type="checkbox" class="chk-packed-order" value="${o.id}"></td>` : ''}
                     <td style="font-weight:600">${o.orderNo}</td><td>${o.partyName}</td><td>${o.packedBy || '-'}</td>
                     <td style="font-size:0.8rem">${o.packingDurationMins !== undefined ? o.packingDurationMins + ' min' : '-'}</td>
                     <td style="font-size:0.8rem">${o.boxCount ? o.boxCount + ' Boxes<br><span style="color:var(--text-muted);font-size:0.75rem">' + (o.packageNumbers || []).join() + '</span>' : '-'}</td>
                     <td class="amount-green">${currency(o.packedTotal || o.total)}</td>
-                    <td>${isAdmin ? `<button class="btn btn-primary btn-sm" onclick="generateInvoiceFromPacked('${o.id}')">🧾 Generate Invoice</button>` : '<span class="badge badge-warning">Awaiting Admin</span>'}</td>
+                    <td>${isAdmin ? `<button class="btn btn-outline btn-sm" onclick="generateInvoiceFromPacked('${o.id}')">🧾 Generate</button>` : '<span class="badge badge-warning">Awaiting Admin</span>'}</td>
                 </tr>`).join('')}</tbody></table>
             </div>
         </div></div>` : ''}
@@ -7539,6 +7489,104 @@ async function generateInvoiceFromPacked(orderId) {
         if (party) loadAvailableAdvances(party.id);
     } catch (err) {
         alert('Error: ' + err.message);
+    }
+}
+
+function toggleAllPacked(chk) {
+    const rowChks = document.querySelectorAll('.chk-packed-order');
+    rowChks.forEach(c => c.checked = chk.checked);
+}
+
+async function bulkGenerateInvoicesFromPacked() {
+    const selectedBoxes = document.querySelectorAll('.chk-packed-order:checked');
+    if (!selectedBoxes.length) return alert('Select at least one packed order to generate invoices.');
+    if (!confirm(`Generate invoices for ${selectedBoxes.length} order(s)?`)) return;
+
+    try {
+        const [orders, parties, inventory, currentInvoices] = await Promise.all([
+            DB.getAll('salesorders'), DB.getAll('parties'), DB.getAll('inventory'), DB.getAll('invoices')
+        ]);
+        
+        let successCount = 0;
+        let skipCount = 0;
+        let startInvNumber = parseInt((await nextNumber('INV-')).split('-')[1]);
+        let startVyaparNumber = parseInt((buildVyaparInvoiceNo()).split('-').pop()) || 1;
+        const autoPrefix = buildVyaparInvoiceNo().substring(0, buildVyaparInvoiceNo().lastIndexOf('-') + 1) || 'PT-NS-';
+
+        for (const box of selectedBoxes) {
+            const orderId = box.value;
+            const o = orders.find(x => x.id === orderId);
+            
+            if (!o || !o.packed || o.invoiceNo) { skipCount++; continue; }
+
+            const packedItems = o.packedItems && o.packedItems.length ? o.packedItems : o.items;
+            const party = parties.find(p => String(p.id) === String(o.partyId));
+            
+            // Stock checks
+            let hasStock = true;
+            for (const li of packedItems) {
+                const item = inventory.find(x => x.id === li.itemId);
+                const qty = li.packedQty !== undefined ? li.packedQty : li.qty;
+                if (!item || (item.stock || 0) < qty && !DB.getObj('db_company').allowNegativeStock) {
+                    hasStock = false; break;
+                }
+            }
+            if (!hasStock) { skipCount++; continue; } // Skip orders with insufficient stock
+
+            // Prepare Invoice Data
+            const invNo = 'INV-' + startInvNumber;
+            const vyaparNo = autoPrefix + startVyaparNumber;
+
+            const invoiceItems = packedItems.map(li => {
+                const qty = li.packedQty !== undefined ? li.packedQty : li.qty;
+                const price = li.price || li.salePrice || 0;
+                return { itemId: li.itemId, name: li.name, qty, price, listedPrice: price, amount: qty * price, unit: li.uom || li.unit || 'Pcs', primaryQty: qty };
+            });
+
+            const sub = invoiceItems.reduce((s, li) => s + li.amount, 0);
+            const roundoff = +(Math.round(sub) - sub).toFixed(2);
+            const total = sub + roundoff;
+
+            // Build Ops
+            const ops = [];
+            for (const li of invoiceItems) {
+                const item = inventory.find(x => x.id === li.itemId);
+                const newStock = (item.stock || 0) - li.qty;
+                const itemUpdate = { stock: newStock };
+                if (item.batches && item.batches.length) {
+                    const { updatedBatches, priceSync } = deductBatchQtyFifo(item, li.qty);
+                    if (updatedBatches) { itemUpdate.batches = updatedBatches; Object.assign(itemUpdate, priceSync); }
+                }
+                ops.push(DB.rawUpdate('inventory', item.id, itemUpdate));
+                ops.push(DB.rawInsert('stock_ledger', { date: today(), itemId: item.id, itemName: item.name, entryType: 'Sale', qty: -li.qty, runningStock: newStock, documentNo: invNo, reason: 'Sale Invoice', createdBy: currentUser.name }));
+            }
+
+            if (party) {
+                const newBal = (party.balance || 0) + total;
+                ops.push(DB.rawUpdate('parties', party.id, { balance: newBal }));
+                ops.push(DB.rawInsert('party_ledger', { date: today(), partyId: party.id, partyName: party.name, type: 'Sale Invoice', amount: total, balance: newBal, docNo: invNo, notes: 'Sale', createdBy: currentUser.name }));
+            }
+
+            const invData = { invoiceNo: invNo, date: today(), dueDate: null, type: 'sale', partyId: o.partyId, partyName: o.partyName, items: invoiceItems, subtotal: sub, gst: 0, roundOff: roundoff, total, status: 'from-packing', createdBy: currentUser.name, vyaparInvoiceNo: vyaparNo, fromOrder: o.orderNo };
+            ops.push(DB.rawInsert('invoices', invData));
+            ops.push(DB.rawUpdate('salesorders', o.id, { invoiceNo: invNo }));
+
+            await Promise.all(ops);
+            
+            incrementVyaparNo();
+            incrementInvNo();
+            
+            startInvNumber++;
+            startVyaparNumber++;
+            successCount++;
+        }
+
+        await DB.refreshTables(['invoices', 'inventory', 'parties', 'sales_orders']);
+        renderPacking();
+        showToast(`Bulk Check complete: ${successCount} generated, ${skipCount} skipped (missing stock/already invoiced).`, 'success');
+        
+    } catch (err) {
+        alert('Bulk Error: ' + err.message);
     }
 }
 
