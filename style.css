@@ -1755,7 +1755,7 @@ body {
 
     /* Make all data tables scroll horizontally — columns stay natural width, no overlap */
     .data-table { min-width: 650px; font-size: 0.82rem; }
-    .data-table td, .data-table th { white-space: nowrap; }
+    .data-table td, .data-table th, .data-table td * { white-space: nowrap !important; }
     /* Name column no longer wraps to ensure horizontal overflow */
 
     /* Topbar */
