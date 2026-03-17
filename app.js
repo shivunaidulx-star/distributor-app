@@ -988,7 +988,7 @@ const BOTTOM_NAV_TABS = {
 // ── All available quick actions ──
 const ALL_QUICK_ACTIONS = [
     { key:'new-sale',       icon:'🧾', label:'New Sale',     fn:"openInvoiceModal('sale')" },
-    { key:'payment-in',     icon:'💰', label:'Payment In',   fn:"openPaymentModal()" },
+    { key:'payment-in',     icon:'💰', label:'Record Payment', fn:"openPaymentModal()" },
     { key:'catalog',        icon:'🛍️', label:'Catalog',      fn:"navigateTo('catalog')" },
     { key:'salesorders',    icon:'📝', label:'Orders',       fn:"navigateTo('salesorders')" },
     { key:'parties',        icon:'👥', label:'Parties',      fn:"navigateTo('parties')" },
