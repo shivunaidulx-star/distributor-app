@@ -978,9 +978,9 @@ const MORE_ITEMS = [
 ];
 
 const BOTTOM_NAV_TABS = {
-    Admin:    [{ page:'dashboard', icon:'📊', label:'Home' }, { page:'catalog',      icon:'🛍️', label:'Catalog'  }, { page:'salesorders', icon:'📝', label:'Orders'   }, { page:'invoices', icon:'🧾', label:'Invoices' }, { page:'payments', icon:'💰', label:'Payments' }],
-    Manager:  [{ page:'dashboard', icon:'📊', label:'Home' }, { page:'catalog',      icon:'🛍️', label:'Catalog'  }, { page:'salesorders', icon:'📝', label:'Orders'   }, { page:'invoices', icon:'🧾', label:'Invoices' }, { page:'payments', icon:'💰', label:'Payments' }],
-    Salesman: [{ page:'dashboard', icon:'📊', label:'Home' }, { page:'catalog',      icon:'🛍️', label:'Catalog'  }, { page:'salesorders', icon:'📝', label:'Orders'   }, { page:'parties',  icon:'👥', label:'Parties'  }, { page:'payments', icon:'💰', label:'Payments' }],
+    Admin:    [{ page:'dashboard', icon:'📊', label:'Home' }, { page:'catalog',      icon:'🛍️', label:'Catalog'  }, { page:'salesorders', icon:'📝', label:'Orders'   }, { page:'invoices', icon:'🧾', label:'Invoices' }, { fn:'openPaymentModal()', icon:'💰', label:'Record' }],
+    Manager:  [{ page:'dashboard', icon:'📊', label:'Home' }, { page:'catalog',      icon:'🛍️', label:'Catalog'  }, { page:'salesorders', icon:'📝', label:'Orders'   }, { page:'invoices', icon:'🧾', label:'Invoices' }, { fn:'openPaymentModal()', icon:'💰', label:'Record' }],
+    Salesman: [{ page:'dashboard', icon:'📊', label:'Home' }, { page:'catalog',      icon:'🛍️', label:'Catalog'  }, { page:'salesorders', icon:'📝', label:'Orders'   }, { page:'parties',  icon:'👥', label:'Parties'  }, { fn:'openPaymentModal()', icon:'💰', label:'Record' }],
     Packing:  [{ page:'dashboard', icon:'📊', label:'Home' }, { page:'packing',      icon:'📋', label:'Packing'  }],
     Delivery: [{ page:'dashboard', icon:'📊', label:'Home' }, { page:'delivery',     icon:'🚚', label:'Delivery' }],
 };
@@ -1047,8 +1047,9 @@ function showBottomNav() {
     bn.innerHTML = '';
     tabs.forEach(function(t) {
         const a = document.createElement('a');
-        a.className = 'bn-item' + (currentPage === t.page ? ' active' : '');
-        a.setAttribute('data-page', t.page);
+        a.className = 'bn-item' + (t.page && currentPage === t.page ? ' active' : '');
+        if (t.fn) a.setAttribute('data-fn', t.fn);
+        else a.setAttribute('data-page', t.page);
         a.href = '#';
         const iconSpan = document.createElement('span');
         iconSpan.className = 'bn-icon';
@@ -1085,6 +1086,9 @@ function showBottomNav() {
         if (!item) return;
         if (item.id === 'bn-more-btn') {
             toggleMoreSheet();
+        } else if (item.dataset.fn) {
+            // eslint-disable-next-line no-new-func
+            (new Function(item.dataset.fn))();
         } else if (item.dataset.page) {
             navigateTo(item.dataset.page);
         }
