@@ -4841,10 +4841,17 @@ async function renderInvoices() {
 async function getInvoicePaidAmount(invNo) {
     const payments = await DB.getAll('payments');
     return payments.reduce((sum, p) => {
-        // Legacy or direct link
-        if (p.invoiceNo === invNo) return sum + (p.amount || 0);
         // Multi-invoice allocation link
-        if (p.allocations && p.allocations[invNo]) return sum + (+p.allocations[invNo]);
+        if (p.allocations && p.allocations[invNo]) {
+            // If the payment has a discount, we should proportionally attribute it or 
+            // handle it if the allocation was meant to be the "total reduction".
+            // In our system, the allocation value *is* the total reduction (Amt + Disc) for that invoice.
+            return sum + (+p.allocations[invNo]);
+        }
+        // Legacy or direct link (single invoice)
+        if (p.invoiceNo === invNo) {
+            return sum + (p.amount || 0) + (p.discount || 0);
+        }
         return sum;
     }, 0);
 }
@@ -6639,16 +6646,33 @@ async function openReceivePaymentForInvoice(invoiceId) {
     const isSale = inv.type === 'sale';
 
     openModal(isSale ? 'Receive Payment' : 'Make Payment', `
-        <div style="font-size:0.9rem;margin-bottom:15px;padding:10px;background:var(--bg-body);border-radius:6px;border:1px solid var(--border)">
-            <strong>${isSale ? 'Customer' : 'Supplier'}:</strong> ${inv.partyName} <br>
-            <strong>Invoice #:</strong> <span class="badge badge-info">${inv.invoiceNo}</span> <br>
-            <strong>Total Amount:</strong> ${currency(inv.total)} <br>
-            <strong>Due Amount:</strong> <span style="font-weight:700;color:var(--danger)">${currency(due)}</span>
+        <div style="font-size:0.9rem;margin-bottom:15px;padding:12px;background:var(--bg-body);border-radius:10px;border:1px solid var(--border)">
+            <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+                <span style="color:var(--text-muted)">${isSale ? 'Customer' : 'Supplier'}</span>
+                <span style="font-weight:600">${escapeHtml(inv.partyName)}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+                <span style="color:var(--text-muted)">Invoice #</span>
+                <span class="badge badge-info">${inv.invoiceNo}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;border-top:1px dashed var(--border);margin-top:8px;padding-top:8px">
+                <span style="font-weight:700">Due Amount</span>
+                <span style="font-weight:800;color:var(--danger)">${currency(due)}</span>
+            </div>
         </div>
+        
         <div class="form-row">
-            <div class="form-group"><label>Date *</label><input type="date" id="f-pay-date" value="${today()}"></div>
-            <div class="form-group"><label>Amount ₹ *</label><input type="number" step="0.01" id="f-pay-amount" value="${due.toFixed(2)}" max="${due}"></div>
+            <div class="form-group"><label>Amount Received ₹ *</label><input type="number" step="0.01" id="f-pay-amount" value="${due.toFixed(2)}" oninput="onDirectPayAmountChange()"></div>
+            <div class="form-group"><label>Discount ₹</label><input type="number" step="0.01" id="f-pay-discount" value="0.00" oninput="onDirectPayAmountChange()"></div>
         </div>
+
+        <div style="margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;padding:10px;background:rgba(16,185,129,0.05);border-radius:8px">
+            <span style="font-size:0.9rem;font-weight:700;color:var(--text-muted)">Total Reduction:</span>
+            <span style="font-size:1.1rem;font-weight:800;color:var(--success)" id="direct-pay-total-display">${currency(due)}</span>
+        </div>
+
+        <div class="form-group"><label>Date *</label><input type="date" id="f-pay-date" value="${today()}"></div>
+
         <div class="form-row">
             <div class="form-group"><label>Mode</label><select id="f-pay-mode"><option>Cash</option><option>UPI</option><option>Bank Transfer</option><option>Cheque</option></select></div>
             <div class="form-group"><label>Note</label><input id="f-pay-note" placeholder="Optional note"></div>
@@ -6659,14 +6683,24 @@ async function openReceivePaymentForInvoice(invoiceId) {
             <button class="btn btn-primary" onclick="saveDirectPayment()">Save Payment</button>
         </div>
     `);
+
+    window.onDirectPayAmountChange = function() {
+        const amt = +($('f-pay-amount').value) || 0;
+        const disc = +($('f-pay-discount').value) || 0;
+        $('direct-pay-total-display').textContent = currency(amt + disc);
+    };
 }
 
 async function saveDirectPayment() {
     const invId = $('f-pay-inv-id').value;
     const invoices = await DB.getAll('invoices');
     const inv = invoices.find(i => i.id === invId);
+    if (!inv) return alert('Invoice not found');
+    
     const amt = +$('f-pay-amount').value;
+    const disc = +($('f-pay-discount')?.value) || 0;
     if (!amt || amt <= 0) return alert('Enter a valid amount');
+    const totalReduction = amt + disc;
 
     const isSale = inv.type === 'sale';
     const payType = isSale ? 'in' : 'out';
@@ -6679,20 +6713,33 @@ async function saveDirectPayment() {
         partyId: inv.partyId,
         partyName: inv.partyName,
         amount: amt,
+        discount: disc,
+        totalReduction: totalReduction,
         mode: $('f-pay-mode').value,
         note: $('f-pay-note').value.trim(),
         invoiceNo: inv.invoiceNo,
-        createdBy: currentUser.name
+        createdBy: currentUser.name,
+        collectedBy: currentUser.name
     };
 
     try {
         await DB.insert('payments', payData);
         incrementPayNo();
 
+        // Automatic Expense Entry for Discount
+        if (disc > 0 && payType === 'in') {
+            await DB.insert('expenses', {
+                date: $('f-pay-date').value,
+                category: 'Payment Discount',
+                amount: disc,
+                description: `Payment Discount for ${inv.partyName} (${payRefNo})`
+            });
+        }
+
         const parties = await DB.getAll('parties');
         const party = parties.find(p => p.id === inv.partyId);
         if (party) {
-            const balChange = payType === 'in' ? -amt : amt;
+            const balChange = payType === 'in' ? -totalReduction : totalReduction;
             const newBal = (party.balance || 0) + balChange;
             await DB.update('parties', party.id, { balance: newBal });
             await addPartyLedgerEntry(party.id, party.name, payType === 'in' ? 'Payment In' : 'Payment Out', balChange, payRefNo, payData.note || 'Payment Received');
@@ -6824,7 +6871,7 @@ async function deletePayment(id) {
     }
 }
 
-window.editPayment = async function (id) {
+async function openEditPaymentModal(id) {
     const payments = await DB.getAll('payments');
     const pay = payments.find(p => p.id === id);
     if (!pay) return alert('Payment not found');
@@ -6834,6 +6881,7 @@ window.editPayment = async function (id) {
 
     let rows = '';
     for (const i of invoices) {
+        // allocation already attributed to this instance — we attribute the FULL reduction (Amt+Disc)
         let alreadyAllocatedHere = (pay.allocations && pay.allocations[i.invoiceNo]) ? pay.allocations[i.invoiceNo] : 0;
         let totalPaidBefore = (await getInvoicePaidAmount(i.invoiceNo)) - alreadyAllocatedHere;
         let remaining = i.total - totalPaidBefore;
@@ -6842,51 +6890,79 @@ window.editPayment = async function (id) {
         rows += `
             <tr>
                 <td>${i.invoiceNo}</td>
-                <td>${fmtDate(i.date)}</td>
                 <td style="color:var(--danger)">${currency(remaining)}</td>
-                <td><input type="number" step="0.01" max="${remaining.toFixed(2)}" class="form-control pay-alloc-input" data-inv="${i.invoiceNo}" value="${alreadyAllocatedHere > 0 ? alreadyAllocatedHere : ''}" placeholder="Amount" style="padding:4px;width:100px" oninput="calcTotalAllocation()"></td>
+                <td><input type="number" step="0.01" max="${remaining.toFixed(2)}" class="form-control pay-alloc-input" data-inv="${i.invoiceNo}" value="${alreadyAllocatedHere > 0 ? alreadyAllocatedHere : ''}" placeholder="0.00" style="padding:4px;width:100px;text-align:right" oninput="updateEditAllocTotal()"></td>
             </tr>
         `;
     }
 
     let invSecHtml = rows ? `
         <div style="margin-top:15px;margin-bottom:15px">
-            <label>Allocate Payment to Invoices <span style="font-size:0.75rem;color:var(--text-muted)">(Optional)</span></label>
-            <div style="max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:6px">
+            <label style="font-size:0.8rem;font-weight:700;color:var(--text-muted)">ALLOCATION BY INVOICE</label>
+            <div style="max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;margin-top:5px">
                 <table class="data-table" style="margin:0;font-size:0.85rem">
-                    <thead style="background:var(--bg-input)"><tr><th>Invoice #</th><th>Date</th><th>Due Amount</th><th>Allocate ₹</th></tr></thead>
+                    <thead style="background:var(--bg-input)"><tr><th>Invoice #</th><th>Due</th><th>Allocate ₹</th></tr></thead>
                     <tbody>${rows}</tbody>
                 </table>
             </div>
-            <div style="text-align:right;margin-top:8px;font-size:0.85rem">Total Allocated: <strong id="lbl-total-alloc">₹0.00</strong></div>
+            <div style="text-align:right;margin-top:8px;font-size:0.85rem;font-weight:700">Allocated: <span id="lbl-edit-alloc-total" style="color:var(--success)">₹0.00</span></div>
         </div>
-    ` : `<div style="margin:10px 0;font-size:0.85rem;color:var(--text-muted)">No pending invoices found for this party.</div>`;
+    ` : `<div style="margin:10px 0;font-size:0.85rem;color:var(--text-muted)">No pending invoices for this party.</div>`;
 
-    openModal('Edit Posted Payment', `
+    openModal('Edit Payment', `
         <div class="form-row">
             <div class="form-group"><label>Date</label><input type="date" id="f-pay-date" value="${pay.date}"></div>
             <div class="form-group"><label>Type</label>
-                <select id="f-pay-type" disabled><option value="in" ${pay.type === 'in' ? 'selected' : ''}>Payment In (Received)</option><option value="out" ${pay.type === 'out' ? 'selected' : ''}>Payment Out (Paid)</option></select>
+                <select id="f-pay-type" disabled><option value="in" ${pay.type === 'in' ? 'selected' : ''}>Payment In</option><option value="out" ${pay.type === 'out' ? 'selected' : ''}>Payment Out</option></select>
             </div>
         </div>
-        <div class="form-group"><label>Party</label>
-            <select id="f-pay-party" disabled><option value="${pay.partyId}">${escapeHtml(pay.partyName)}</option></select>
+        <div class="form-group"><label style="font-size:0.85rem;font-weight:700">${pay.type === 'in' ? 'Customer' : 'Supplier'}</label>
+            <input value="${escapeHtml(pay.partyName)}" disabled style="background:var(--bg-input);font-weight:600">
         </div>
-        <div id="pay-invoice-section">${invSecHtml}</div>
+        
         <div class="form-row">
-            <div class="form-group"><label>Amount ₹ *</label><input type="number" id="f-pay-amount" min="0" value="${pay.amount}"></div>
+            <div class="form-group"><label>Amount ₹</label><input type="number" id="f-pay-amount" min="0" value="${pay.amount}" oninput="onEditPayAmountChange()"></div>
+            <div class="form-group"><label>Discount ₹</label><input type="number" id="f-pay-discount" min="0" value="${pay.discount || 0}" oninput="onEditPayAmountChange()"></div>
+        </div>
+        
+        <div style="margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;padding:10px;background:rgba(59,130,246,0.05);border-radius:8px">
+            <span style="font-size:0.9rem;font-weight:700;color:var(--text-muted)">Balance Reduction:</span>
+            <span style="font-size:1.1rem;font-weight:800;color:var(--primary)" id="edit-pay-total-display">${currency((pay.amount||0) + (pay.discount||0))}</span>
+        </div>
+
+        <div id="pay-edit-invoice-section">${invSecHtml}</div>
+
+        <div class="form-row">
             <div class="form-group"><label>Mode</label>
                 <select id="f-pay-mode"><option ${pay.mode === 'Cash' ? 'selected' : ''}>Cash</option><option ${pay.mode === 'UPI' ? 'selected' : ''}>UPI</option><option ${pay.mode === 'Bank Transfer' ? 'selected' : ''}>Bank Transfer</option><option ${pay.mode === 'Cheque' ? 'selected' : ''}>Cheque</option></select>
             </div>
+            <div class="form-group"><label>Collected By</label><input id="f-pay-collected-by" value="${pay.collectedBy || ''}"></div>
         </div>
         <div class="form-group"><label>Note</label><input id="f-pay-note" placeholder="Optional note" value="${escapeHtml(pay.note || '')}"></div>
         <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="saveEditedPayment('${pay.id}')">Save Changes</button></div>
     `);
-    setTimeout(() => window.calcTotalAllocation(), 100);
-};
+
+    window.onEditPayAmountChange = function() {
+        const amt = +($('f-pay-amount').value) || 0;
+        const disc = +($('f-pay-discount').value) || 0;
+        $('edit-pay-total-display').textContent = currency(amt + disc);
+    };
+
+    window.updateEditAllocTotal = function() {
+        let tot = 0;
+        document.querySelectorAll('.pay-alloc-input').forEach(inp => tot += (+inp.value || 0));
+        const lbl = $('lbl-edit-alloc-total');
+        if (lbl) lbl.textContent = currency(tot);
+    };
+
+    setTimeout(() => window.updateEditAllocTotal(), 100);
+}
 
 window.saveEditedPayment = async function (id) {
-    const amt = +$('f-pay-amount').value; if (!amt || amt <= 0) return alert('Enter valid amount');
+    const amt = +$('f-pay-amount').value;
+    const disc = +($('f-pay-discount')?.value) || 0;
+    if (!amt || amt <= 0) return alert('Enter valid amount');
+    const totalReduction = amt + disc;
 
     let allocations = {};
     let totalAlloc = 0;
@@ -6894,7 +6970,7 @@ window.saveEditedPayment = async function (id) {
         const val = +inp.value;
         if (val > 0) { allocations[inp.dataset.inv] = val; totalAlloc += val; }
     });
-    if (totalAlloc > amt + 0.01) return alert('Allocation exceeds payment amount.');
+    if (totalAlloc > totalReduction + 0.01) return alert('Allocation exceeds total reduction (Amount + Discount).');
 
     const invNo = Object.keys(allocations).length === 1 ? Object.keys(allocations)[0] : (Object.keys(allocations).length > 1 ? 'Multi' : '');
 
@@ -6903,35 +6979,66 @@ window.saveEditedPayment = async function (id) {
         const oldPay = payments.find(p => p.id === id);
         if (!oldPay) return alert('Payment not found');
 
-        // Reverse old ledger entry/balance
+        const oldAmount = oldPay.amount || 0;
+        const oldDiscount = oldPay.discount || 0;
+        const oldTotalReduction = oldPay.totalReduction || (oldAmount + oldDiscount);
+
+        // Update party balance
         const parties = await DB.getAll('parties');
         const party = parties.find(p => p.id === oldPay.partyId);
         if (party) {
-            const revBalChange = oldPay.type === 'in' ? oldPay.amount : -oldPay.amount;
+            // Revert old reduction: if it was "in", we add it back to balance.
+            const revBalChange = oldPay.type === 'in' ? oldTotalReduction : -oldTotalReduction;
             const tempBal = (party.balance || 0) + revBalChange;
-            await DB.update('parties', party.id, { balance: tempBal });
-            await addPartyLedgerEntry(party.id, party.name, 'Payment Edited (Rev)', revBalChange, oldPay.id, 'Reversal for edit');
-
-            // Apply new ledger entry/balance
-            const newBalChange = oldPay.type === 'in' ? -amt : amt;
+            
+            // Apply new reduction
+            const newBalChange = oldPay.type === 'in' ? -totalReduction : totalReduction;
             const finalBal = tempBal + newBalChange;
+            
             await DB.update('parties', party.id, { balance: finalBal });
-            await addPartyLedgerEntry(party.id, party.name, oldPay.type === 'in' ? 'Payment In' : 'Payment Out', newBalChange, id, $('f-pay-mode').value);
+            await addPartyLedgerEntry(party.id, party.name, oldPay.type === 'in' ? 'Payment Edited' : 'Payment Out Edited', newBalChange, id, `Mode: ${$('f-pay-mode').value}`);
+        }
+
+        // Manage Expense Entry for Discount
+        if (oldPay.type === 'in') {
+            const expenses = await DB.getAll('expenses');
+            const payRefNo = oldPay.payNo || oldPay.id.substring(0,8);
+            const discExp = expenses.find(e => e.category === 'Payment Discount' && e.description && e.description.includes(`(${payRefNo})`));
+
+            if (disc > 0) {
+                const expData = {
+                    date: $('f-pay-date').value,
+                    category: 'Payment Discount',
+                    amount: disc,
+                    description: `Payment Discount for ${oldPay.partyName} (${payRefNo})`
+                };
+                if (discExp) {
+                    await DB.update('expenses', discExp.id, expData);
+                } else {
+                    await DB.insert('expenses', expData);
+                }
+            } else if (discExp) {
+                // Discount removed
+                await DB.delete('expenses', discExp.id);
+            }
         }
 
         // Update payment record
         await DB.update('payments', id, {
             date: $('f-pay-date').value,
             amount: amt,
+            discount: disc,
+            totalReduction: totalReduction,
             mode: $('f-pay-mode').value,
             note: $('f-pay-note').value.trim(),
+            collectedBy: $('f-pay-collected-by')?.value || oldPay.collectedBy,
             invoiceNo: invNo,
             allocations: Object.keys(allocations).length > 0 ? allocations : null
         });
 
         closeModal();
         await renderPayments();
-        showToast('Payment updated!', 'success');
+        showToast('Payment updated successfully!', 'success');
     } catch (err) {
         alert('Error: ' + err.message);
     }
@@ -12829,7 +12936,11 @@ async function renderHRPayroll() {
             <td style="text-align:right;font-weight:800;color:var(--accent);font-size:1rem"><span id="net-${r.s.id}">${currency(r.net)}</span></td>
             <td><span class="badge ${r.paid?'badge-success':'badge-warning'}">${r.paid?'Paid':'Pending'}</span></td>
             <td><div class="action-btns" style="gap:4px">
-                ${!r.paid ? `<button class="btn btn-primary btn-sm" onclick="markSalaryPaid('${r.s.id}','${escapeHtml(r.s.name)}','${selMonth}',${r.s.monthly_salary||0},${workingDays},${r.daysEff},${r.earned})">Mark Paid</button>` : `<button class="btn btn-outline btn-sm" onclick="viewPaySlip('${r.s.id}','${selMonth}')">Pay Slip</button>`}
+                ${!r.paid
+                    ? `<button class="btn btn-primary btn-sm" onclick="markSalaryPaid('${r.s.id}','${escapeHtml(r.s.name)}','${selMonth}',${r.s.monthly_salary||0},${workingDays},${r.daysEff},${r.earned})">Mark Paid</button>`
+                    : `<button class="btn btn-outline btn-sm" onclick="viewPaySlip('${r.s.id}','${selMonth}')">📄 Pay Slip</button>
+                       <button class="btn btn-warning btn-sm" onclick="resetSalaryPaid('${r.s.id}','${escapeHtml(r.s.name)}','${selMonth}')">↩ Recalc</button>`
+                }
                 <button class="btn btn-outline btn-sm" onclick="openStaffAdvance('${r.s.id}','${escapeHtml(r.s.name)}')">+Advance</button>
             </div></td>
         </tr>`).join('') : '<tr><td colspan="11"><div class="empty-state"><p>No active staff</p></div></td></tr>'}
@@ -12979,6 +13090,43 @@ async function markSalaryPaid(staffId, staffName, month, monthlySalary, workingD
 
     await Promise.all(ops);
     showToast(`Salary paid for ${staffName}! Net: ${currency(net)}${carryForward > 0 ? ' | Adv carry-forward: ' + currency(carryForward) : ''}`, 'success');
+    renderHRPayroll();
+}
+
+async function resetSalaryPaid(staffId, staffName, month) {
+    if (!confirm(`Reset salary for ${staffName} (${month}) back to Pending?\n\nThis will:\n• Mark salary as Unpaid\n• Reverse advance deductions for this month\n• Allow you to re-enter deduction amount and recalculate`)) return;
+
+    // Load salary record to know how much was deducted
+    const { data: sr } = await supabaseClient
+        .from('salary_records').select('*')
+        .eq('staff_id', staffId).eq('month', month).single();
+    if (!sr) return alert('Salary record not found');
+
+    // Load all advances for this staff oldest-first
+    const { data: allAdvs } = await supabaseClient
+        .from('salary_advances').select('*')
+        .eq('staff_id', staffId)
+        .order('date', { ascending: true });
+
+    // Reverse FIFO: subtract the deducted amount back from advances (newest first among those that were deducted)
+    let toReverse = +(sr.advances || 0);
+    const ops = [];
+    const deductedAdvs = [...(allAdvs || [])].filter(a => (a.deducted || 0) > 0).reverse(); // newest first for reversal
+    for (const adv of deductedAdvs) {
+        if (toReverse <= 0) break;
+        const reverseNow = +Math.min(adv.deducted || 0, toReverse).toFixed(2);
+        toReverse = +(toReverse - reverseNow).toFixed(2);
+        const newDeducted = +Math.max(0, (adv.deducted || 0) - reverseNow).toFixed(2);
+        ops.push(supabaseClient.from('salary_advances').update({ deducted: newDeducted }).eq('id', adv.id));
+    }
+
+    // Mark salary record as unpaid (keep record for audit, just reset status)
+    ops.push(supabaseClient.from('salary_records').update({
+        status: 'unpaid', paid_date: null, paid_by: null, advances: 0, net_payable: sr.earned_salary
+    }).eq('id', sr.id));
+
+    await Promise.all(ops);
+    showToast(`Salary reset to Pending for ${staffName}. Advance deductions reversed.`, 'success');
     renderHRPayroll();
 }
 
