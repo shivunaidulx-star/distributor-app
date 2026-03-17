@@ -189,6 +189,8 @@ table { border-collapse: collapse; width: 100%; }
 
 .btn-danger { background: var(--danger); color: #fff; }
 .btn-danger:hover { opacity: 0.9; }
+.btn-warning { background: #f59e0b; color: #fff; }
+.btn-warning:hover { opacity: 0.9; }
 
 .btn-outline {
     background: #ffffff;
