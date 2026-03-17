@@ -12108,6 +12108,31 @@ function cpRenderAuth() {
 async function cpInitAuth(forRegister, regData) {
     const phone = (document.getElementById('cp-phone') ? document.getElementById('cp-phone').value : (regData && regData.phone) || '').trim();
     if (!phone || phone.length < 10) { alert('Please enter a valid phone number'); return; }
+
+    if (!forRegister) {
+        // Check for duplicate: already logged in elsewhere or phone not registered
+        await DB.refreshTables(['parties']);
+        const parties = DB.get('db_parties') || [];
+        const approved = parties.find(p => p.portalPhone === phone && p.portalEnabled);
+        if (!approved) {
+            // Check if pending registration exists
+            const { data: regs } = await supabaseClient.from('customer_registrations')
+                .select('status').eq('phone', phone).order('submitted_at', { ascending: false }).limit(1);
+            const reg = regs && regs[0];
+            if (reg && reg.status === 'pending') {
+                alert('Your registration is pending admin approval.\nYou will be notified once approved.');
+                return;
+            }
+            if (reg && reg.status === 'rejected') {
+                alert('Your registration was rejected.\nPlease contact the distributor for help.');
+                return;
+            }
+            alert('This mobile number is not registered.\nPlease register first.');
+            cpRenderRegister();
+            return;
+        }
+    }
+
     await cpSendOTP(phone, forRegister, regData);
 }
 
@@ -12255,6 +12280,26 @@ async function cpRegSubmit() {
     if (!phone || phone.length < 10) { alert('Valid phone required'); return; }
     if (!biz) { alert('Business name required'); return; }
     if (!contact) { alert('Contact person required'); return; }
+
+    // Check if phone already has an approved portal account
+    await DB.refreshTables(['parties']);
+    const parties = DB.get('db_parties') || [];
+    const existing = parties.find(p => p.portalPhone === phone && p.portalEnabled);
+    if (existing) {
+        alert('This mobile number is already registered and approved.\nPlease use Login instead.');
+        cpRenderAuth();
+        return;
+    }
+
+    // Check for pending / rejected registration
+    const { data: prevRegs } = await supabaseClient.from('customer_registrations')
+        .select('status').eq('phone', phone).order('submitted_at', { ascending: false }).limit(1);
+    const prev = prevRegs && prevRegs[0];
+    if (prev && prev.status === 'pending') {
+        alert('A registration request for this number is already pending.\nPlease wait for admin approval.');
+        return;
+    }
+
     const regData = {
         phone, businessName: biz, contactName: contact,
         address: document.getElementById('cp-reg-addr').value.trim(),
