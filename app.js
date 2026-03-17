@@ -5866,63 +5866,114 @@ async function onPayPartyChange() {
         .filter(i => i.type === invType && i.partyId === partyId && i.status !== 'cancelled')
         .sort((a, b) => new Date(a.date) - new Date(b.date));
 
-    let rows = '';
+    const pending = [];
     for (const i of invoices) {
         const paid = await getInvoicePaidAmount(i.invoiceNo);
-        const remaining = i.total - paid;
+        const remaining = +(i.total - paid).toFixed(2);
         if (remaining <= 0.01) continue;
-        rows += `
-            <tr>
-                <td>${i.invoiceNo}</td>
-                <td>${fmtDate(i.date)}</td>
-                <td style="color:var(--danger)">${currency(remaining)}</td>
-                <td><input type="number" step="0.01" max="${remaining.toFixed(2)}" class="form-control pay-alloc-input" data-inv="${i.invoiceNo}" placeholder="Amount" style="padding:4px;width:100px" oninput="calcTotalAllocation()"></td>
-            </tr>
-        `;
+        pending.push({ invoiceNo: i.invoiceNo, date: i.date, total: i.total, remaining });
     }
 
-    if (rows) {
-        invSec.innerHTML = `
-            <div style="font-size:0.72rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px">INVOICES</div>
-            <div style="margin-bottom:0">
-                <label>Allocate Payment to Invoices <span style="font-size:0.75rem;color:var(--text-muted)">(Optional)</span></label>
-                <div style="max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:6px">
-                    <table class="data-table" style="margin:0;font-size:0.85rem">
-                        <thead style="background:var(--bg-input)"><tr><th>Invoice #</th><th>Date</th><th>Due Amount</th><th>Allocate ₹</th></tr></thead>
-                        <tbody>${rows}</tbody>
-                    </table>
-                </div>
-                <div style="text-align:right;margin-top:8px;font-size:0.85rem">Total Allocated: <strong id="lbl-total-alloc">₹0.00</strong></div>
-            </div>
-        `;
-    } else {
+    if (!pending.length) {
         invSec.innerHTML = `
             <div style="font-size:0.72rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px">INVOICES</div>
             <div style="font-size:0.85rem;color:var(--text-muted)">No pending invoices. Payment will be saved as Advance.</div>`;
+        return;
     }
+
+    const cards = pending.map(inv => `
+        <div class="pay-alloc-card" id="pac-${inv.invoiceNo.replace(/[^a-z0-9]/gi,'_')}">
+            <input type="checkbox" class="pay-alloc-chk" data-inv="${inv.invoiceNo}" data-max="${inv.remaining}"
+                checked style="width:20px;height:20px;accent-color:var(--primary);flex-shrink:0;cursor:pointer;margin-top:2px"
+                onchange="togglePayAllocInv()">
+            <div style="flex:1;min-width:0">
+                <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+                    <span style="font-weight:700;font-size:0.92rem;color:var(--text-primary)">${inv.invoiceNo}</span>
+                    <span style="font-size:0.8rem;color:var(--text-muted)">${fmtDate(inv.date)}</span>
+                </div>
+                <div style="display:flex;justify-content:space-between;align-items:flex-end">
+                    <div>
+                        <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:2px">Due Amount</div>
+                        <div style="font-weight:700;color:var(--danger);font-size:0.95rem">${currency(inv.remaining)}</div>
+                    </div>
+                    <div style="text-align:right">
+                        <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:2px">Allocate ₹</div>
+                        <input type="number" step="0.01" min="0" max="${inv.remaining}"
+                            class="pay-alloc-input" data-inv="${inv.invoiceNo}"
+                            style="width:110px;text-align:right;font-weight:700;font-size:0.95rem;border:none;border-bottom:2px solid var(--primary);background:transparent;padding:2px 4px;outline:none;color:var(--text-primary)"
+                            placeholder="0.00" oninput="updatePayAllocSummary()">
+                    </div>
+                </div>
+            </div>
+        </div>`).join('');
+
+    invSec.innerHTML = `
+        <div style="font-size:0.72rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px">INVOICES</div>
+        <div style="font-size:0.82rem;color:var(--text-muted);margin-bottom:10px">
+            Allocate Payment to Invoices <span style="color:var(--accent)">(Optional)</span> — uncheck to skip an invoice
+        </div>
+        <div id="pay-alloc-cards">${cards}</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 4px;margin-top:6px;border-top:1px solid var(--border)">
+            <span style="font-size:0.85rem;color:var(--text-muted)">Total Allocated: <strong id="lbl-total-alloc" style="color:var(--success)">₹0.00</strong></span>
+            <span id="lbl-unused-alloc" style="font-size:0.82rem;font-weight:600"></span>
+        </div>`;
+
+    // Auto-allocate based on current payment amount
+    autoAllocPayment();
 }
 
 window.onPayAmountChange = function () {
-    let totalAmt = +$('f-pay-amount').value || 0;
+    autoAllocPayment();
+    if (typeof updatePaymentQR === 'function') updatePaymentQR();
+};
 
-    document.querySelectorAll('.pay-alloc-input').forEach(inp => {
-        if (totalAmt <= 0.01) {
-            inp.value = '';
-            return;
-        }
+// FIFO allocation across checked invoices only
+window.autoAllocPayment = function () {
+    let remaining = +($('f-pay-amount')?.value) || 0;
 
-        let maxAllowed = +inp.max;
-        if (totalAmt >= maxAllowed) {
-            inp.value = maxAllowed.toFixed(2);
-            totalAmt -= maxAllowed;
+    // Zero out unchecked invoices first
+    document.querySelectorAll('.pay-alloc-chk:not(:checked)').forEach(chk => {
+        const inp = document.querySelector(`.pay-alloc-input[data-inv="${chk.dataset.inv}"]`);
+        if (inp) inp.value = '';
+    });
+
+    // FIFO distribute across checked invoices (DOM order = oldest first)
+    document.querySelectorAll('.pay-alloc-chk:checked').forEach(chk => {
+        const inp = document.querySelector(`.pay-alloc-input[data-inv="${chk.dataset.inv}"]`);
+        if (!inp) return;
+        const max = +chk.dataset.max;
+        if (remaining >= max) {
+            inp.value = max.toFixed(2);
+            remaining -= max;
+        } else if (remaining > 0) {
+            inp.value = remaining.toFixed(2);
+            remaining = 0;
         } else {
-            inp.value = totalAmt.toFixed(2);
-            totalAmt = 0;
+            inp.value = '';
         }
     });
 
+    updatePayAllocSummary();
+};
+
+window.togglePayAllocInv = function () {
+    autoAllocPayment();
+};
+
+window.updatePayAllocSummary = function () {
+    let allocated = 0;
+    document.querySelectorAll('.pay-alloc-input').forEach(inp => allocated += (+inp.value || 0));
+    const totalAmt = +($('f-pay-amount')?.value) || 0;
+    const unused = +(totalAmt - allocated).toFixed(2);
+
+    const lblAlloc  = document.getElementById('lbl-total-alloc');
+    const lblUnused = document.getElementById('lbl-unused-alloc');
+    if (lblAlloc)  lblAlloc.textContent  = currency(allocated);
+    if (lblUnused) {
+        lblUnused.textContent  = unused > 0.01 ? `Unused: ${currency(unused)}` : allocated > 0 ? '✅ Fully allocated' : '';
+        lblUnused.style.color  = unused > 0.01 ? 'var(--warning)' : 'var(--success)';
+    }
     calcTotalAllocation();
-    if (typeof updatePaymentQR === 'function') updatePaymentQR();
 };
 
 window.updatePaymentQR = function () {

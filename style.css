@@ -2272,6 +2272,21 @@ body {
     0%,100% { opacity: 1; transform: scale(1); }
     50%      { opacity: 0.4; transform: scale(1.4); }
 }
+.pay-alloc-card {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 10px;
+    border: 1.5px solid var(--border);
+    border-radius: 10px;
+    margin-bottom: 8px;
+    background: var(--surface);
+    transition: border-color 0.15s, background 0.15s;
+}
+.pay-alloc-card:has(.pay-alloc-chk:checked) {
+    border-color: var(--primary);
+    background: rgba(249,115,22,0.04);
+}
 .nav-party-row {
     display: flex;
     align-items: center;
