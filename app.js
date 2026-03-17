@@ -978,12 +978,66 @@ const MORE_ITEMS = [
 ];
 
 const BOTTOM_NAV_TABS = {
-    Admin:    [{ page:'dashboard',   icon:'📊', label:'Home' }, { page:'salesorders', icon:'📝', label:'Orders' }, { page:'invoices', icon:'🧾', label:'Invoices' }, { page:'payments', icon:'💰', label:'Payments' }],
-    Manager:  [{ page:'dashboard',   icon:'📊', label:'Home' }, { page:'salesorders', icon:'📝', label:'Orders' }, { page:'invoices', icon:'🧾', label:'Invoices' }, { page:'payments', icon:'💰', label:'Payments' }],
-    Salesman: [{ page:'dashboard',   icon:'📊', label:'Home' }, { page:'salesorders', icon:'📝', label:'Orders' }, { page:'parties',  icon:'👥', label:'Parties'  }, { page:'payments', icon:'💰', label:'Payments' }],
-    Packing:  [{ page:'dashboard',   icon:'📊', label:'Home' }, { page:'packing',     icon:'📋', label:'Packing' }],
-    Delivery: [{ page:'dashboard',   icon:'📊', label:'Home' }, { page:'delivery',    icon:'🚚', label:'Delivery' }],
+    Admin:    [{ page:'dashboard', icon:'📊', label:'Home' }, { page:'catalog',      icon:'🛍️', label:'Catalog'  }, { page:'salesorders', icon:'📝', label:'Orders'   }, { page:'invoices', icon:'🧾', label:'Invoices' }, { page:'payments', icon:'💰', label:'Payments' }],
+    Manager:  [{ page:'dashboard', icon:'📊', label:'Home' }, { page:'catalog',      icon:'🛍️', label:'Catalog'  }, { page:'salesorders', icon:'📝', label:'Orders'   }, { page:'invoices', icon:'🧾', label:'Invoices' }, { page:'payments', icon:'💰', label:'Payments' }],
+    Salesman: [{ page:'dashboard', icon:'📊', label:'Home' }, { page:'catalog',      icon:'🛍️', label:'Catalog'  }, { page:'salesorders', icon:'📝', label:'Orders'   }, { page:'parties',  icon:'👥', label:'Parties'  }, { page:'payments', icon:'💰', label:'Payments' }],
+    Packing:  [{ page:'dashboard', icon:'📊', label:'Home' }, { page:'packing',      icon:'📋', label:'Packing'  }],
+    Delivery: [{ page:'dashboard', icon:'📊', label:'Home' }, { page:'delivery',     icon:'🚚', label:'Delivery' }],
 };
+
+// ── All available quick actions ──
+const ALL_QUICK_ACTIONS = [
+    { key:'new-sale',       icon:'🧾', label:'New Sale',     fn:"openInvoiceModal('sale')" },
+    { key:'payment-in',     icon:'💰', label:'Payment In',   fn:"openPaymentModal()" },
+    { key:'catalog',        icon:'🛍️', label:'Catalog',      fn:"navigateTo('catalog')" },
+    { key:'salesorders',    icon:'📝', label:'Orders',       fn:"navigateTo('salesorders')" },
+    { key:'parties',        icon:'👥', label:'Parties',      fn:"navigateTo('parties')" },
+    { key:'inventory',      icon:'📦', label:'Inventory',    fn:"navigateTo('inventory')" },
+    { key:'invoices',       icon:'🧾', label:'Invoices',     fn:"navigateTo('invoices')" },
+    { key:'payments',       icon:'💳', label:'Payments',     fn:"navigateTo('payments')" },
+    { key:'delivery',       icon:'🚚', label:'Delivery',     fn:"navigateTo('delivery')" },
+    { key:'expenses',       icon:'💸', label:'Expenses',     fn:"navigateTo('expenses')" },
+    { key:'reports',        icon:'📈', label:'Reports',      fn:"navigateTo('reports')" },
+    { key:'packing',        icon:'📋', label:'Packing',      fn:"navigateTo('packing')" },
+    { key:'purchaseorders', icon:'🛒', label:'Purchase',     fn:"navigateTo('purchaseorders')" },
+    { key:'new-party',      icon:'➕', label:'New Party',    fn:"openPartyModal()" },
+];
+const DEFAULT_QUICK_ACTIONS = {
+    Admin:    ['new-sale','payment-in','catalog','salesorders','parties','inventory','delivery','reports'],
+    Manager:  ['new-sale','payment-in','catalog','salesorders','parties','payments'],
+    Salesman: ['catalog','payment-in','salesorders','parties'],
+    Packing:  ['packing','salesorders'],
+    Delivery: ['delivery','salesorders'],
+};
+function getQuickActionKeys(role) {
+    const saved = DB.ls.getObj('qa_prefs_' + role);
+    return Array.isArray(saved) && saved.length ? saved : (DEFAULT_QUICK_ACTIONS[role] || DEFAULT_QUICK_ACTIONS['Admin']);
+}
+function saveQuickActionPrefs(role, keys) {
+    localStorage.setItem('qa_prefs_' + role, JSON.stringify(keys));
+    renderDashboard();
+    closeModal();
+    showToast('Quick actions saved!', 'success');
+}
+function openEditQuickActions() {
+    const role = currentUser?.role || 'Admin';
+    const current = getQuickActionKeys(role);
+    const rows = ALL_QUICK_ACTIONS.map(a =>
+        `<label style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border);cursor:pointer">
+            <input type="checkbox" id="qa-chk-${a.key}" ${current.includes(a.key)?'checked':''} style="width:18px;height:18px;accent-color:var(--primary)">
+            <span style="font-size:1.1rem">${a.icon}</span>
+            <span style="font-weight:600">${a.label}</span>
+        </label>`).join('');
+    openModal(`✏️ Edit Quick Actions (${role})`,
+        `<p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:12px">Select which shortcuts appear on your dashboard.</p>${rows}`,
+        `<button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+         <button class="btn btn-primary" onclick="
+            const keys=[];
+            document.querySelectorAll('[id^=qa-chk-]:checked').forEach(el=>keys.push(el.id.replace('qa-chk-','')));
+            if(!keys.length){showToast('Select at least one action','error');return;}
+            saveQuickActionPrefs('${role}',keys)
+         ">Save</button>`);
+}
 function showBottomNav() {
     const bn = $('bottom-nav');
     if (!bn) return;
@@ -1348,13 +1402,15 @@ async function renderDashboard() {
     </div>
 
     <!-- Quick Actions -->
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <span style="font-weight:700;font-size:0.9rem;color:var(--text-secondary);letter-spacing:0.04em;text-transform:uppercase">Quick Actions</span>
+        <button class="btn-icon" onclick="openEditQuickActions()" title="Edit Quick Actions" style="font-size:1rem;padding:4px 8px">✏️</button>
+    </div>
     <div class="quick-actions" style="margin-bottom:18px">
-        <button class="quick-action-btn" onclick="navigateTo('salesorders')"><span class="qa-icon">📝</span><span class="qa-label">Orders</span></button>
-        <button class="quick-action-btn" onclick="navigateTo('invoices')"><span class="qa-icon">🧾</span><span class="qa-label">Invoices</span></button>
-        <button class="quick-action-btn" onclick="navigateTo('parties')"><span class="qa-icon">👥</span><span class="qa-label">Parties</span></button>
-        <button class="quick-action-btn" onclick="navigateTo('inventory')"><span class="qa-icon">📦</span><span class="qa-label">Inventory</span></button>
-        <button class="quick-action-btn" onclick="navigateTo('payments')"><span class="qa-icon">💰</span><span class="qa-label">Payments</span></button>
-        <button class="quick-action-btn" onclick="navigateTo('delivery')"><span class="qa-icon">🚚</span><span class="qa-label">Delivery</span></button>
+        ${getQuickActionKeys(currentUser?.role||'Admin').map(key=>{
+            const a = ALL_QUICK_ACTIONS.find(x=>x.key===key);
+            return a ? `<button class="quick-action-btn" onclick="${a.fn}"><span class="qa-icon">${a.icon}</span><span class="qa-label">${a.label}</span></button>` : '';
+        }).join('')}
     </div>
 
     <!-- Slow / Non-Moving Items -->
