@@ -2722,10 +2722,11 @@ async function bulkDeleteItems() {
         DB.getAll('invoices'), DB.getAll('salesorders'), DB.getAll('stock_ledger')
     ]);
     const blocked = [], toDelete = [];
+    const matchItem = (li, id) => String(li.itemId || li.item_id || '') === String(id);
     for (const id of window._bulkItems) {
-        const hasInv = invoices.some(x => (x.items||[]).some(li => String(li.itemId) === String(id)));
-        const hasOrd = orders.some(x => (x.items||[]).some(li => String(li.itemId) === String(id)));
-        const hasLed = stockLedger.some(x => String(x.itemId) === String(id));
+        const hasInv = invoices.some(x => (x.items||[]).some(li => matchItem(li, id)));
+        const hasOrd = orders.some(x => (x.items||[]).some(li => matchItem(li, id)));
+        const hasLed = stockLedger.some(x => String(x.itemId || x.item_id || '') === String(id));
         if (hasInv || hasOrd || hasLed) blocked.push(id); else toDelete.push(id);
     }
     if (blocked.length) showToast(blocked.length + ' item(s) skipped — have transactions. Use Deactivate instead.', 'error');
@@ -2812,9 +2813,11 @@ async function deleteItem(id) {
         DB.getAll('invoices'), DB.getAll('salesorders'), DB.getAll('stock_ledger')
     ]);
     const sid = String(id);
-    const hasInv = invoices.some(x => (x.items||[]).some(li => String(li.itemId) === sid));
-    const hasOrd = orders.some(x => (x.items||[]).some(li => String(li.itemId) === sid));
-    const hasLed = stockLedger.some(x => String(x.itemId) === sid);
+    // JSONB items array uses snake_case item_id; top-level stock_ledger uses camelCase itemId
+    const matchItem = li => String(li.itemId || li.item_id || '') === sid;
+    const hasInv = invoices.some(x => (x.items||[]).some(matchItem));
+    const hasOrd = orders.some(x => (x.items||[]).some(matchItem));
+    const hasLed = stockLedger.some(x => String(x.itemId || x.item_id || '') === sid);
     if (hasInv || hasOrd || hasLed) return alert('Cannot delete — this item has transactions. Use Deactivate instead.');
     if (!confirm('Delete item? This cannot be undone.')) return;
     try {
