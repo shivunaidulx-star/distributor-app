@@ -4819,55 +4819,44 @@ function updateInvoiceTotal() {
     const sub      = invoiceItems.reduce((s, li) => s + li.amount, 0);
     const gst      = +(($('f-inv-gst')      || {}).value || 0);
     const roundoff = +(($('f-inv-roundoff') || {}).value || 0);
+    // Prices are GST-inclusive; total = subtotal + roundoff (no additional GST added)
+    const total    = sub + roundoff;
     const el = $('inv-total-display'); if (!el) return;
 
-    // Check if any items have per-item GST rates
+    // Build GST breakdown from per-item rates first, then fall back to global rate
     const hasItemGst = invoiceItems.some(li => li.gstRate > 0);
+    let taxableAmt, totalTax, rateLines;
     if (hasItemGst) {
-        // Per-item GST breakdown
-        const totalTaxable = invoiceItems.reduce((s, li) => s + (li.baseAmount || li.amount), 0);
-        const totalTax     = invoiceItems.reduce((s, li) => s + (li.taxAmount  || 0), 0);
-        // Group by GST rate
+        taxableAmt = invoiceItems.reduce((s, li) => s + (li.baseAmount || li.amount), 0);
+        totalTax   = invoiceItems.reduce((s, li) => s + (li.taxAmount  || 0), 0);
         const rateMap = {};
         invoiceItems.forEach(li => {
-            if (li.gstRate > 0) {
-                rateMap[li.gstRate] = (rateMap[li.gstRate] || 0) + (li.taxAmount || 0);
-            }
+            if (li.gstRate > 0) rateMap[li.gstRate] = (rateMap[li.gstRate] || 0) + (li.taxAmount || 0);
         });
-        const rateLines = Object.entries(rateMap).sort((a,b)=>+a[0]-+b[0])
+        rateLines = Object.entries(rateMap).sort((a,b)=>+a[0]-+b[0])
             .map(([r, amt]) => `<span style="color:var(--text-muted)">GST ${r}%: <b>${currency(amt)}</b></span>`).join('');
-        const afterGst = sub + (gst ? sub * gst / 100 : 0);
-        const total    = afterGst + roundoff;
-        el.innerHTML = `
-            <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;font-size:0.82rem">
-                <span style="color:var(--text-muted)">Taxable: <b>${currency(totalTaxable)}</b></span>
-                ${rateLines}
-                ${totalTax ? `<span style="color:var(--text-muted)">Total GST: <b>${currency(totalTax)}</b></span>` : ''}
-                ${gst ? `<span style="color:var(--text-muted)">Extra GST ${gst}%: <b>${currency(sub*gst/100)}</b></span>` : ''}
-                <span style="color:var(--text-muted);border-top:1px dashed var(--border);padding-top:3px;margin-top:2px">Subtotal: <b>${currency(sub)}</b></span>
-                ${roundoff ? `<span style="color:var(--text-muted)">Round Off: <b style="color:${roundoff<0?'#ef4444':'#10b981'}">${roundoff>0?'+':''}${currency(roundoff)}</b></span>` : ''}
-                <span style="font-size:1.15rem;font-weight:800;color:var(--accent)">Total: ${currency(total)}</span>
-            </div>`;
-    } else {
-        // Global GST only (no per-item rates)
-        const afterGst = sub + (sub * gst / 100);
-        const total    = afterGst + roundoff;
-        el.innerHTML = `
-            <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;font-size:0.85rem">
-                <span style="color:var(--text-muted)">Subtotal: <b>${currency(sub)}</b>${gst ? ` + GST ${gst}%: <b>${currency(sub*gst/100)}</b>` : ''}</span>
-                ${roundoff ? `<span style="color:var(--text-muted)">Round Off: <b style="color:${roundoff<0?'#ef4444':'#10b981'}">${roundoff>0?'+':''}${currency(roundoff)}</b></span>` : ''}
-                <span style="font-size:1.15rem;font-weight:800;color:var(--accent)">Total: ${currency(total)}</span>
-            </div>`;
+    } else if (gst > 0) {
+        // Global GST% — price is inclusive, so back-calculate
+        taxableAmt = +(sub / (1 + gst / 100)).toFixed(2);
+        totalTax   = +(sub - taxableAmt).toFixed(2);
+        rateLines  = `<span style="color:var(--text-muted)">GST ${gst}%: <b>${currency(totalTax)}</b></span>`;
     }
+
+    el.innerHTML = `
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;font-size:0.82rem">
+            ${taxableAmt !== undefined ? `<span style="color:var(--text-muted)">Taxable: <b>${currency(taxableAmt)}</b></span>` : ''}
+            ${rateLines || ''}
+            ${totalTax  ? `<span style="color:var(--text-muted)">Total GST: <b>${currency(totalTax)}</b></span>` : ''}
+            <span style="color:var(--text-muted);${(taxableAmt !== undefined)?'border-top:1px dashed var(--border);padding-top:3px;margin-top:2px':''}">Subtotal: <b>${currency(sub)}</b></span>
+            ${roundoff ? `<span style="color:var(--text-muted)">Round Off: <b style="color:${roundoff<0?'#ef4444':'#10b981'}">${roundoff>0?'+':''}${currency(roundoff)}</b></span>` : ''}
+            <span style="font-size:1.15rem;font-weight:800;color:var(--accent)">Total: ${currency(total)}</span>
+        </div>`;
 }
 function autoRoundOff() {
+    // Prices are GST-inclusive; round off on subtotal directly
     const sub  = invoiceItems.reduce((s, li) => s + li.amount, 0);
-    const gst  = +(($('f-inv-gst') || {}).value || 0);
-    // GST is already included in item prices; global gst% is an extra charge
-    const afterGst = sub + (sub * gst / 100);
-    const rounded  = Math.round(afterGst);
-    const diff     = +(rounded - afterGst).toFixed(2);
-    const el = $('f-inv-roundoff'); if (el) el.value = diff;
+    const diff = +(Math.round(sub) - sub).toFixed(2);
+    const el   = $('f-inv-roundoff'); if (el) el.value = diff;
     updateInvoiceTotal();
 }
 async function saveInvoice() {
@@ -4911,18 +4900,17 @@ async function saveInvoice() {
     const invoices = await DB.getAll('invoices');
     if (invoices.find(i => i.invoiceNo === invNo)) return alert('Invoice number ' + invNo + ' already exists!');
 
-    const sub = invoiceItems.reduce((s, li) => s + li.amount, 0);
-    const gst = +($('f-inv-gst').value || 0);
+    const sub  = invoiceItems.reduce((s, li) => s + li.amount, 0);
+    const gst  = +($('f-inv-gst').value || 0);
     const type = $('f-inv-type').value;
-    const afterGst = sub + (sub * gst / 100);
-    // Auto round-off for sales; manual/optional for purchases
+    // Prices are GST-inclusive; total = subtotal + roundoff only
     let roundoff = +(($('f-inv-roundoff')||{}).value || 0);
     if (type === 'sale' && roundoff === 0) {
-        roundoff = +(Math.round(afterGst) - afterGst).toFixed(2);
+        roundoff = +(Math.round(sub) - sub).toFixed(2);
         const roEl = $('f-inv-roundoff'); if (roEl) roEl.value = roundoff;
         updateInvoiceTotal();
     }
-    const total = afterGst + roundoff;
+    const total = sub + roundoff;
     const vyaparInvNo = type === 'sale' ? ($('f-vyapar-inv-no') ? $('f-vyapar-inv-no').value.trim() : '') : '';
     if (type === 'sale' && !vyaparInvNo) return alert('Vyapar Invoice No. is mandatory for sale invoices.');
 
