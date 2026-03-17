@@ -1754,10 +1754,9 @@ body {
     .card-body.padded { padding: 20px; }
 
     /* Make all data tables scroll horizontally — columns stay natural width, no overlap */
-    .data-table { min-width: 600px; font-size: 0.82rem; }
+    .data-table { min-width: 650px; font-size: 0.82rem; }
     .data-table td, .data-table th { white-space: nowrap; }
-    /* Name column can wrap a little */
-    .data-table td:first-child { white-space: normal; min-width: 100px; max-width: 160px; }
+    /* Name column no longer wraps to ensure horizontal overflow */
 
     /* Topbar */
     .topbar { padding: 0 14px; height: 56px; }

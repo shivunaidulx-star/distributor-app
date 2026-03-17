@@ -19,7 +19,8 @@
       "Bash(gh --version)",
       "Bash(git config:*)",
       "Bash(curl -s -o /dev/null -w \"%{http_code}\" \"https://shivunaidulx-star.github.io/distributor-app/\")",
-      "Bash(curl -sI \"https://shivunaidulx-star.github.io/distributor-app/\")"
+      "Bash(curl -sI \"https://shivunaidulx-star.github.io/distributor-app/\")",
+      "Bash(awk 'NR>=1698 && NR<=1730' \"c:/Users/Admin/.gemini/antigravity/scratch/distributor-app/app.js\")"
     ]
   }
 }
