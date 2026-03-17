@@ -1155,12 +1155,14 @@ async function renderDashboard() {
                 <button class="quick-action-btn" onclick="navigateTo('inventory')"><span class="qa-icon">📦</span><span class="qa-label">Inventory</span></button>
             </div>
             <div class="card"><div class="card-header"><h3>My Recent Orders</h3></div><div class="card-body">
-                <table class="data-table"><thead><tr><th>Date</th><th>Order #</th><th>Party</th><th>Status</th><th>Total</th></tr></thead>
-                <tbody>${mySO.slice(-5).reverse().map(o => {
-                    const stMap = { pending: 'badge-warning', approved: 'badge-success', rejected: 'badge-danger' };
-                    const stText = o.status || 'pending';
-                    return `<tr><td>${fmtDate(o.date)}</td><td>${o.orderNo}</td><td>${o.partyName}</td><td><span class="badge ${stMap[stText]||'badge-warning'}" style="text-transform:capitalize">${stText}</span></td><td class="amount-green">${currency(o.total)}</td></tr>`;
-                }).join('') || '<tr><td colspan="5"><div class="empty-state"><span class="empty-icon">📝</span><p>No orders yet</p><p class="empty-subtitle">Create your first sales order to get started</p></div></td></tr>'}</tbody></table>
+                <div class="table-wrapper">
+                    <table class="data-table"><thead><tr><th>Date</th><th>Order #</th><th>Party</th><th>Status</th><th>Total</th></tr></thead>
+                    <tbody>${mySO.slice(-5).reverse().map(o => {
+                        const stMap = { pending: 'badge-warning', approved: 'badge-success', rejected: 'badge-danger' };
+                        const stText = o.status || 'pending';
+                        return `<tr><td>${fmtDate(o.date)}</td><td>${o.orderNo}</td><td>${o.partyName}</td><td><span class="badge ${stMap[stText]||'badge-warning'}" style="text-transform:capitalize">${stText}</span></td><td class="amount-green">${currency(o.total)}</td></tr>`;
+                    }).join('') || '<tr><td colspan="5"><div class="empty-state"><span class="empty-icon">📝</span><p>No orders yet</p><p class="empty-subtitle">Create your first sales order to get started</p></div></td></tr>'}</tbody></table>
+                </div>
             </div></div>`; return;
     }
 
@@ -1183,8 +1185,10 @@ async function renderDashboard() {
                 <button class="quick-action-btn" onclick="navigateTo('deliverypersons')"><span class="qa-icon">🧑‍✈️</span><span class="qa-label">Del. Persons</span></button>
             </div>
             <div class="card"><div class="card-header"><h3>My Active Dispatches</h3></div><div class="card-body">
-                <table class="data-table"><thead><tr><th>Order #</th><th>Party</th><th>Invoice</th><th>Status</th></tr></thead>
-                <tbody>${dispatched.slice(-5).reverse().map(d => `<tr><td style="font-weight:600">${d.orderNo}</td><td>${d.partyName}</td><td><span class="badge badge-info">${d.invoiceNo || '-'}</span></td><td><span class="badge badge-info">${d.status}</span></td></tr>`).join('') || '<tr><td colspan="4"><div class="empty-state"><span class="empty-icon">🚚</span><p>No active dispatches</p><p class="empty-subtitle">All deliveries are complete</p></div></td></tr>'}</tbody></table>
+                <div class="table-wrapper">
+                    <table class="data-table"><thead><tr><th>Order #</th><th>Party</th><th>Invoice</th><th>Status</th></tr></thead>
+                    <tbody>${dispatched.slice(-5).reverse().map(d => `<tr><td style="font-weight:600">${d.orderNo}</td><td>${d.partyName}</td><td><span class="badge badge-info">${d.invoiceNo || '-'}</span></td><td><span class="badge badge-info">${d.status}</span></td></tr>`).join('') || '<tr><td colspan="4"><div class="empty-state"><span class="empty-icon">🚚</span><p>No active dispatches</p><p class="empty-subtitle">All deliveries are complete</p></div></td></tr>'}</tbody></table>
+                </div>
             </div></div>`; return;
     }
 
@@ -1207,12 +1211,16 @@ async function renderDashboard() {
                 <button class="quick-action-btn" onclick="navigateTo('packing')"><span class="qa-icon">📋</span><span class="qa-label">Packing Queue</span></button>
             </div>
             ${myAssigned.length ? `<div class="card" style="margin-bottom:12px"><div class="card-header"><h3>Assigned to Me</h3></div><div class="card-body">
-                <table class="data-table"><thead><tr><th>Order #</th><th>Party</th><th>Items</th><th>Total</th></tr></thead>
-                <tbody>${myAssigned.slice(0, 5).map(o => `<tr><td style="font-weight:600">${o.orderNo}</td><td>${o.partyName}</td><td>${o.items.length}</td><td class="amount-green">${currency(o.total)}</td></tr>`).join('')}</tbody></table>
+                <div class="table-wrapper">
+                    <table class="data-table"><thead><tr><th>Order #</th><th>Party</th><th>Items</th><th>Total</th></tr></thead>
+                    <tbody>${myAssigned.slice(0, 5).map(o => `<tr><td style="font-weight:600">${o.orderNo}</td><td>${o.partyName}</td><td>${o.items.length}</td><td class="amount-green">${currency(o.total)}</td></tr>`).join('')}</tbody></table>
+                </div>
             </div></div>` : ''}
             ${unassigned.length ? `<div class="card"><div class="card-header"><h3>Unassigned Orders</h3></div><div class="card-body">
-                <table class="data-table"><thead><tr><th>Order #</th><th>Party</th><th>Items</th><th>Total</th></tr></thead>
-                <tbody>${unassigned.slice(0, 5).map(o => `<tr><td style="font-weight:600">${o.orderNo}</td><td>${o.partyName}</td><td>${o.items.length}</td><td class="amount-green">${currency(o.total)}</td></tr>`).join('')}</tbody></table>
+                <div class="table-wrapper">
+                    <table class="data-table"><thead><tr><th>Order #</th><th>Party</th><th>Items</th><th>Total</th></tr></thead>
+                    <tbody>${unassigned.slice(0, 5).map(o => `<tr><td style="font-weight:600">${o.orderNo}</td><td>${o.partyName}</td><td>${o.items.length}</td><td class="amount-green">${currency(o.total)}</td></tr>`).join('')}</tbody></table>
+                </div>
             </div></div>` : (!myAssigned.length ? '<div class="card"><div class="card-body"><div class="empty-state"><span class="empty-icon">✅</span><p>All caught up!</p><p class="empty-subtitle">No orders waiting to be packed.</p></div></div></div>' : '')}`; return;
     }
 
@@ -1268,26 +1276,16 @@ async function renderDashboard() {
     ${undeliveredCount ? `<div class="dash-alert dash-alert-red" onclick="navigateTo('delivery')" style="cursor:pointer">↩️ <strong>${undeliveredCount} Undelivered / Returned</strong> need attention &nbsp;<span style="color:var(--accent)">→ Handle</span></div>` : ''}
 
     <!-- Receivable / Payable -->
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
-        <div class="dash-fin-card" onclick="navigateTo('parties')" style="cursor:pointer" ${tileHover}>
-            <div style="display:flex;justify-content:space-between;align-items:flex-start">
-                <div>
-                    <div style="font-size:0.82rem;color:var(--text-muted);margin-bottom:6px">Total Receivable</div>
-                    <div style="font-size:1.5rem;font-weight:700;color:var(--text-primary)">${currency(totalReceivable)}</div>
-                    <div style="font-size:0.8rem;color:var(--text-muted);margin-top:4px">From <strong>${drParties.length}</strong> Parties</div>
-                </div>
-                <div style="width:42px;height:42px;border-radius:50%;background:rgba(16,185,129,0.12);display:flex;align-items:center;justify-content:center;font-size:1.2rem;color:#10b981">↓</div>
-            </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+        <div class="dash-kpi-card dash-kpi-green" onclick="navigateTo('parties')" style="cursor:pointer">
+            <div class="dash-kpi-label">Receivable</div>
+            <div class="dash-kpi-amount dash-count" data-val="${totalReceivable}">${currency(totalReceivable)}</div>
+            <div class="dash-kpi-badge dash-kpi-badge-green">${drParties.length} parties</div>
         </div>
-        <div class="dash-fin-card" onclick="navigateTo('parties')" style="cursor:pointer" ${tileHover}>
-            <div style="display:flex;justify-content:space-between;align-items:flex-start">
-                <div>
-                    <div style="font-size:0.82rem;color:var(--text-muted);margin-bottom:6px">Total Payable</div>
-                    <div style="font-size:1.5rem;font-weight:700;color:var(--text-primary)">${currency(totalPayable)}</div>
-                    <div style="font-size:0.8rem;color:var(--text-muted);margin-top:4px">From <strong>${crParties.length}</strong> Parties</div>
-                </div>
-                <div style="width:42px;height:42px;border-radius:50%;background:rgba(239,68,68,0.12);display:flex;align-items:center;justify-content:center;font-size:1.2rem;color:#ef4444">↑</div>
-            </div>
+        <div class="dash-kpi-card dash-kpi-red" onclick="navigateTo('parties')" style="cursor:pointer">
+            <div class="dash-kpi-label">Payable</div>
+            <div class="dash-kpi-amount dash-count" data-val="${totalPayable}">${currency(totalPayable)}</div>
+            <div class="dash-kpi-badge dash-kpi-badge-red">${crParties.length} parties</div>
         </div>
     </div>
 
@@ -1312,22 +1310,26 @@ async function renderDashboard() {
     </div>
 
     <!-- This Month Quick Stats -->
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:14px">
-        <div class="dash-mini-tile" onclick="navigateTo('payments')" style="cursor:pointer" ${tileHover}>
-            <div style="font-size:0.75rem;color:var(--text-muted)">Collected (Month)</div>
-            <div style="font-size:1.1rem;font-weight:700;color:#10b981">${currency(tmPayIn)}</div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px">
+        <div class="dash-pulse-tile" onclick="navigateTo('payments')" style="--tile-color:#10b981;animation-delay:0.05s">
+            <div class="dash-pulse-icon">💰</div>
+            <div class="dash-pulse-val dash-count" data-val="${tmPayIn}" style="color:#10b981">${currency(tmPayIn)}</div>
+            <div class="dash-pulse-lbl">Collected</div>
         </div>
-        <div class="dash-mini-tile" onclick="navigateTo('expenses')" style="cursor:pointer" ${tileHover}>
-            <div style="font-size:0.75rem;color:var(--text-muted)">Expenses (Month)</div>
-            <div style="font-size:1.1rem;font-weight:700;color:#ef4444">${currency(tmExp)}</div>
+        <div class="dash-pulse-tile" onclick="navigateTo('expenses')" style="--tile-color:#ef4444;animation-delay:0.1s">
+            <div class="dash-pulse-icon">💸</div>
+            <div class="dash-pulse-val dash-count" data-val="${tmExp}" style="color:#ef4444">${currency(tmExp)}</div>
+            <div class="dash-pulse-lbl">Expenses</div>
         </div>
-        <div class="dash-mini-tile ${lowStock ? 'dash-mini-alert' : ''}" onclick="navigateTo('inventory')" style="cursor:pointer" ${tileHover}>
-            <div style="font-size:0.75rem;color:var(--text-muted)">Low Stock Items</div>
-            <div style="font-size:1.1rem;font-weight:700;color:${lowStock ? '#ef4444' : 'var(--text-primary)'}">${lowStock}</div>
+        <div class="dash-pulse-tile${lowStock ? ' dash-pulse-alert' : ''}" onclick="navigateTo('inventory')" style="--tile-color:${lowStock?'#ef4444':'var(--text-primary)'};animation-delay:0.15s">
+            <div class="dash-pulse-icon">📦</div>
+            <div class="dash-pulse-val" style="color:${lowStock?'#ef4444':'var(--text-primary)'}">${lowStock}</div>
+            <div class="dash-pulse-lbl">Low Stock</div>
         </div>
-        <div class="dash-mini-tile ${pendingCheques ? 'dash-mini-alert' : ''}" onclick="navigateTo('reports');setTimeout(()=>showReport('chequeregister'),200)" style="cursor:pointer" ${tileHover}>
-            <div style="font-size:0.75rem;color:var(--text-muted)">Pending Cheques</div>
-            <div style="font-size:1.1rem;font-weight:700;color:${pendingCheques ? '#f59e0b' : 'var(--text-primary)'}">${pendingCheques}</div>
+        <div class="dash-pulse-tile${pendingCheques ? ' dash-pulse-alert' : ''}" onclick="navigateTo('reports');setTimeout(()=>showReport('chequeregister'),200)" style="--tile-color:${pendingCheques?'#f59e0b':'var(--text-primary)'};animation-delay:0.2s">
+            <div class="dash-pulse-icon">🏦</div>
+            <div class="dash-pulse-val" style="color:${pendingCheques?'#f59e0b':'var(--text-primary)'}">${pendingCheques}</div>
+            <div class="dash-pulse-lbl">Cheques</div>
         </div>
     </div>
 
@@ -1365,14 +1367,33 @@ async function renderDashboard() {
     </div></div>` : ''}
 
     <!-- Recent Invoices -->
-    <div class="card"><div class="card-header"><h3>Recent Invoices</h3></div><div class="card-body" style="overflow-x:auto">
-        <table class="data-table"><thead><tr><th>Date</th><th>Invoice #</th><th>Party</th><th>Type</th><th>Amount</th></tr></thead>
-        <tbody>${invoices.slice(-5).reverse().map(i=>`<tr><td>${fmtDate(i.date)}</td><td style="font-weight:600">${i.invoiceNo}</td><td>${i.partyName}</td><td><span class="badge ${i.type==='sale'?'badge-success':'badge-info'}">${i.type}</span></td><td class="${i.type==='sale'?'amount-green':'amount-red'}">${currency(i.total)}</td></tr>`).join('')||'<tr><td colspan="5"><div class="empty-state"><p>No invoices yet</p></div></td></tr>'}</tbody></table>
+    <div class="card"><div class="card-header"><h3>Recent Invoices</h3></div><div class="card-body">
+        <div class="table-wrapper">
+            <table class="data-table"><thead><tr><th>Date</th><th>Invoice #</th><th>Party</th><th>Type</th><th>Amount</th></tr></thead>
+            <tbody>${invoices.slice(-5).reverse().map(i=>`<tr><td>${fmtDate(i.date)}</td><td style="font-weight:600">${i.invoiceNo}</td><td>${i.partyName}</td><td><span class="badge ${i.type==='sale'?'badge-success':'badge-info'}">${i.type}</span></td><td class="${i.type==='sale'?'amount-green':'amount-red'}">${currency(i.total)}</td></tr>`).join('')||'<tr><td colspan="5"><div class="empty-state"><p>No invoices yet</p></div></td></tr>'}</tbody></table>
+        </div>
     </div></div>
     `;
 
     // Render chart after DOM is ready
     renderDashChart();
+    // Animate counters
+    requestAnimationFrame(() => {
+        document.querySelectorAll('.dash-count[data-val]').forEach(el => {
+            const target = parseFloat(el.dataset.val) || 0;
+            if (target === 0) return;
+            const isAmount = el.classList.contains('dash-kpi-amount') || el.classList.contains('dash-pulse-val');
+            const dur = 700, start = Date.now();
+            const tick = () => {
+                const p = Math.min((Date.now() - start) / dur, 1);
+                const eased = 1 - Math.pow(1 - p, 3);
+                const cur = target * eased;
+                el.textContent = isAmount ? currency(cur) : Math.round(cur);
+                if (p < 1) requestAnimationFrame(tick);
+            };
+            tick();
+        });
+    });
 }
 
 // ── ADMIN DASHBOARD CHART HELPERS ──
@@ -1584,10 +1605,10 @@ async function renderParties() {
                 <button class="btn btn-primary" onclick="openPartyModal()">+ Add Party</button>` : ''}
             </div>
         </div>
-        <div class="card"><div class="card-body" style="padding:0">
-            <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;width:100%">
-            <table class="data-table" style="min-width:920px;width:100%"><thead><tr>${ColumnManager.get('parties').filter(c=>c.visible).map(c=>`<th>${c.label}</th>`).join('')}</tr></thead>
-            <tbody id="party-tbody">${renderPartyRows(shown)}</tbody></table>
+        <div class="card"><div class="card-body">
+            <div class="table-wrapper">
+                <table class="data-table" style="min-width:920px;width:100%"><thead><tr>${ColumnManager.get('parties').filter(c=>c.visible).map(c=>`<th>${c.label}</th>`).join('')}</tr></thead>
+                <tbody id="party-tbody">${renderPartyRows(shown)}</tbody></table>
             </div>
         </div></div>
         <input type="file" id="party-file-input" accept=".csv,.txt,.xlsx,.xls" style="display:none" onchange="processPartyImport(event)">`;
@@ -1950,12 +1971,14 @@ async function renderCategories() {
             <button class="btn btn-primary" onclick="openCategoryModal()">+ Add Category</button>
         </div>
         <div class="card"><div class="card-body">
-            <table class="data-table"><thead><tr><th>Category Name</th><th>Sub-Categories</th><th>Actions</th></tr></thead>
-            <tbody>${cats.length ? cats.map(c => `<tr>
-                <td style="font-weight:600">${c.name}</td>
-                <td>${(c.subCategories || []).join(', ') || '-'}</td>
-                <td><div class="action-btns"><button class="btn-icon" onclick="openCategoryModal('${c.id}')" title="Edit">✏️</button><button class="btn-icon" onclick="deleteCategory('${c.id}')" title="Delete">🗑️</button></div></td>
-            </tr>`).join('') : '<tr><td colspan="3"><div class="empty-state"><span class="empty-icon">🏷️</span><p>No categories defined</p><p class="empty-subtitle">Add your first category above</p></div></td></tr>'}</tbody></table>
+            <div class="table-wrapper">
+                <table class="data-table"><thead><tr><th>Category Name</th><th>Sub-Categories</th><th>Actions</th></tr></thead>
+                <tbody>${cats.length ? cats.map(c => `<tr>
+                    <td style="font-weight:600">${c.name}</td>
+                    <td>${(c.subCategories || []).join(', ') || '-'}</td>
+                    <td><div class="action-btns"><button class="btn-icon" onclick="openCategoryModal('${c.id}')" title="Edit">✏️</button><button class="btn-icon" onclick="deleteCategory('${c.id}')" title="Delete">🗑️</button></div></td>
+                </tr>`).join('') : '<tr><td colspan="3"><div class="empty-state"><span class="empty-icon">🏷️</span><p>No categories defined</p><p class="empty-subtitle">Add your first category above</p></div></td></tr>'}</tbody></table>
+            </div>
         </div></div>`;
 }
 
@@ -2062,7 +2085,6 @@ async function renderInventory() {
     const totalValue = items.reduce((s, i) => s + (i.stock * i.purchasePrice), 0);
     const lowStock = items.filter(i => i.stock <= (i.lowStockAlert || 5)).length;
     const totalStock = items.reduce((s, i) => s + i.stock, 0);
-
     // Pre-calculate reserved stock to avoid O(N^2) in the loop if we can
     const reservedMap = {};
     salesOrders.forEach(o => {
@@ -2072,6 +2094,9 @@ async function renderInventory() {
             });
         }
     });
+
+    // Expose reservedMap globally so filterInvTable can use it during search
+    window._inventoryReservedMap = reservedMap;
 
     pageContent.innerHTML = `
         <div class="stats-grid-sm" style="margin-bottom:14px">
@@ -2093,9 +2118,11 @@ async function renderInventory() {
                 <button class="btn btn-outline" onclick="importStockExcel()">📥 Import Stock</button>` : ''}
             </div>
         </div>
-        <div class="card"><div class="card-body" style="overflow-x:auto">
-            <table class="data-table" id="inv-table" style="min-width:600px"><thead><tr>${ColumnManager.get('inventory').filter(c=>c.visible).map(c=>`<th>${c.label}</th>`).join('')}</tr></thead>
-            <tbody id="inv-tbody">${renderInvRows(items, reservedMap, getABCAnalysis(items))}</tbody></table>
+        <div class="card"><div class="card-body">
+            <div class="table-wrapper">
+                <table class="data-table" id="inv-table" style="min-width:900px"><thead><tr>${ColumnManager.get('inventory').filter(c=>c.visible).map(c=>`<th>${c.label}</th>`).join('')}</tr></thead>
+                <tbody id="inv-tbody">${renderInvRows(items, reservedMap, getABCAnalysis(items))}</tbody></table>
+            </div>
         </div></div>
         <input type="file" id="stock-file-input" accept=".csv,.txt,.xlsx,.xls" style="display:none" onchange="processStockImport(event)">
         <input type="file" id="item-file-input" accept=".csv,.txt,.xlsx,.xls" style="display:none" onchange="processItemImport(event)">`;
@@ -2131,7 +2158,7 @@ function filterInvTable() {
     const s = $('inv-search').value.toLowerCase();
     let items = DB.get('db_inventory');
     if (s) items = items.filter(i => i.name.toLowerCase().includes(s) || (i.hsn || '').toLowerCase().includes(s));
-    $('inv-tbody').innerHTML = renderInvRows(items, {}, getABCAnalysis(items));
+    $('inv-tbody').innerHTML = renderInvRows(items, window._inventoryReservedMap || {}, getABCAnalysis(items));
 }
 let currentItemTiers = [];
 let currentItemBatches = [];
@@ -3010,8 +3037,10 @@ async function renderSalesOrders() {
             </div>
         </div>
         <div class="card"><div class="card-body">
-            <table class="data-table"><thead><tr>${isApprover ? `<th style="width:36px"><input type="checkbox" id="so-select-all" title="Select all pending" onchange="soToggleAll(this.checked)"></th>` : '<th style="width:36px"></th>'}${ColumnManager.get('salesorders').filter(c=>c.visible).map(c=>`<th>${c.label}</th>`).join('')}</tr></thead>
-            <tbody id="so-tbody">${renderSORows(orders, isApprover)}</tbody></table>
+            <div class="table-wrapper">
+                <table class="data-table"><thead><tr>${isApprover ? `<th style="width:36px"><input type="checkbox" id="so-select-all" title="Select all pending" onchange="soToggleAll(this.checked)"></th>` : '<th style="width:36px"></th>'}${ColumnManager.get('salesorders').filter(c=>c.visible).map(c=>`<th>${c.label}</th>`).join('')}</tr></thead>
+                <tbody id="so-tbody">${renderSORows(orders, isApprover)}</tbody></table>
+            </div>
         </div></div>`;
 }
 function getOrderDisplayStatusSync(o) {
@@ -4185,8 +4214,10 @@ async function renderInvoices() {
             </div>
         </div>
         <div class="card"><div class="card-body">
-            <table class="data-table"><thead><tr>${ColumnManager.get('invoices').filter(c=>c.visible).map(c=>`<th>${c.label}</th>`).join('')}</tr></thead>
-            <tbody id="invoice-tbody">${renderInvoiceRows(visibleInvoices)}</tbody></table>
+            <div class="table-wrapper">
+                <table class="data-table"><thead><tr>${ColumnManager.get('invoices').filter(c=>c.visible).map(c=>`<th>${c.label}</th>`).join('')}</tr></thead>
+                <tbody id="invoice-tbody">${renderInvoiceRows(visibleInvoices)}</tbody></table>
+            </div>
         </div></div>`;
 }
 async function getInvoicePaidAmount(invNo) {
@@ -5082,8 +5113,10 @@ async function renderPayments() {
             </div>` : `<button class="btn btn-primary" onclick="openPaymentModal()" style="width:100%">+ Record Payment</button>`}
         </div>
         <div class="card" style="margin-top:12px"><div class="card-body">
-            <table class="data-table"><thead><tr>${ColumnManager.get('payments').filter(c=>c.visible).map(c=>`<th>${c.label}</th>`).join('')}</tr></thead>
-            <tbody id="pay-tbody">${renderPayRows(visiblePayments)}</tbody></table>
+            <div class="table-wrapper">
+                <table class="data-table"><thead><tr>${ColumnManager.get('payments').filter(c=>c.visible).map(c=>`<th>${c.label}</th>`).join('')}</tr></thead>
+                <tbody id="pay-tbody">${renderPayRows(visiblePayments)}</tbody></table>
+            </div>
         </div></div>`;
 }
 function buildPayInvoiceCell(p) {
@@ -6056,56 +6089,62 @@ function renderPacking() {
         <h3 style="margin-bottom:14px;font-size:1rem">🔶 Orders Ready for Packing</h3>
         <div class="section-toolbar" style="margin-bottom:8px"><div class="filter-group"><button class="btn btn-outline" onclick="openColumnPersonalizer('packing','renderPacking')" style="border-color:var(--accent);color:var(--accent)">⚙️ Columns</button></div></div>
         <div class="card" style="margin-bottom:24px"><div class="card-body">
-            <table class="data-table"><thead><tr>${ColumnManager.get('packing').filter(c=>c.visible).map(c=>`<th>${c.label}</th>`).join('')}</tr></thead>
-            <tbody>${readyToPackRows.length ? readyToPackRows.map(o => {
-    const packCols = ColumnManager.get('packing').filter(c => c.visible);
-    const cellMap = {
-        orderNo:    `<td style="font-weight:600">${o.orderNo}</td>`,
-        date:       `<td>${fmtDate(o.date)}</td>`,
-        party:      `<td>${escapeHtml(o.partyName)}</td>`,
-        items:      `<td>${o.items.length}</td>`,
-        total:      `<td class="amount-green">${currency(o.total)}</td>`,
-        assignedTo: `<td>${o.assignedPacker ? `<span class="badge badge-info">${o.assignedPacker}</span>` : '<span class="badge badge-warning">Unassigned</span>'}</td>`,
-        actions:    `<td><div class="action-btns">
-            ${!o.assignedPacker && isAdmin ? `<button class="btn btn-outline btn-sm" onclick="openAssignPackerModal('${o.id}')">👤 Assign</button>` : ''}
-            ${!o.assignedPacker && !isAdmin ? `<button class="btn btn-outline btn-sm" onclick="selfAssign('${o.id}')">✋ Self Assign</button>` : ''}
-            ${o.assignedPacker === currentUser.name || isAdmin ? `<button class="btn btn-primary btn-sm" onclick="startPacking('${o.id}')">▶️ Start Packing</button>` : ''}
-        </div></td>`,
-    };
-    return `<tr>${packCols.map(c => cellMap[c.key] || '').join('')}</tr>`;
-}).join('') : '<tr><td colspan="7" class="empty-state"><p>No orders waiting</p></td></tr>'}</tbody></table>
+            <div class="table-wrapper">
+                <table class="data-table"><thead><tr>${ColumnManager.get('packing').filter(c=>c.visible).map(c=>`<th>${c.label}</th>`).join('')}</tr></thead>
+                <tbody>${readyToPackRows.length ? readyToPackRows.map(o => {
+                    const packCols = ColumnManager.get('packing').filter(c => c.visible);
+                    const cellMap = {
+                        orderNo:    `<td style="font-weight:600">${o.orderNo}</td>`,
+                        date:       `<td>${fmtDate(o.date)}</td>`,
+                        party:      `<td>${escapeHtml(o.partyName)}</td>`,
+                        items:      `<td>${o.items.length}</td>`,
+                        total:      `<td class="amount-green">${currency(o.total)}</td>`,
+                        assignedTo: `<td>${o.assignedPacker ? `<span class="badge badge-info">${o.assignedPacker}</span>` : '<span class="badge badge-warning">Unassigned</span>'}</td>`,
+                        actions:    `<td><div class="action-btns">
+                            ${!o.assignedPacker && isAdmin ? `<button class="btn btn-outline btn-sm" onclick="openAssignPackerModal('${o.id}')">👤 Assign</button>` : ''}
+                            ${!o.assignedPacker && !isAdmin ? `<button class="btn btn-outline btn-sm" onclick="selfAssign('${o.id}')">✋ Self Assign</button>` : ''}
+                            ${o.assignedPacker === currentUser.name || isAdmin ? `<button class="btn btn-primary btn-sm" onclick="startPacking('${o.id}')">▶️ Start Packing</button>` : ''}
+                        </div></td>`,
+                    };
+                    return `<tr>${packCols.map(c => cellMap[c.key] || '').join('')}</tr>`;
+                }).join('') : '<tr><td colspan="7" class="empty-state"><p>No orders waiting</p></td></tr>'}</tbody></table>
+            </div>
         </div></div>
         ${cannotCompleteOrders.length ? `<h3 style="margin-bottom:14px;font-size:1rem">❌ Cannot Complete — Needs Admin Review</h3>
         <div class="card" style="margin-bottom:24px;border:1px solid rgba(239,68,68,0.3)"><div class="card-body">
-            <table class="data-table"><thead><tr><th>Order #</th><th>Party</th><th>Flagged By</th><th>Reason</th><th>Notes</th><th>Line Status</th>${isAdmin ? '<th>Actions</th>' : ''}</tr></thead>
-            <tbody>${cannotCompleteOrders.map(o => {
-        const lines = o.cannotCompleteLines || o.items.map(li => ({ ...li, pickedQty: 0, picked: false }));
-        const linesSummary = lines.map((li, i) => `<div style="font-size:0.78rem;padding:2px 0">${i + 1}. ${li.name}: <strong style="color:${li.picked ? 'var(--success)' : 'var(--danger)'}">${li.pickedQty}/${li.qty}</strong> ${li.picked ? '✅' : '🔴'}</div>`).join('');
-        return `<tr>
-                    <td style="font-weight:600">${o.orderNo}</td>
-                    <td>${o.partyName}</td>
-                    <td><span class="badge badge-info">${o.cannotCompleteBy || '-'}</span></td>
-                    <td><span class="badge badge-danger">${o.cannotCompleteReason || '-'}</span></td>
-                    <td style="font-size:0.82rem;color:var(--text-secondary)">${o.cannotCompleteNotes || '-'}</td>
-                    <td style="max-width:200px">${linesSummary}</td>
-                    ${isAdmin ? `<td><div class="action-btns">
-                        <button class="btn btn-outline btn-sm" onclick="clearCannotComplete('${o.id}')">🔄 Retry</button>
-                        <button class="btn btn-danger btn-sm" onclick="cancelOrderFromPacking('${o.id}')">❌ Cancel Order</button>
-                    </div></td>` : ''}
-                </tr>`;
-    }).join('')}
-            </tbody></table>
+            <div class="table-wrapper">
+                <table class="data-table"><thead><tr><th>Order #</th><th>Party</th><th>Flagged By</th><th>Reason</th><th>Notes</th><th>Line Status</th>${isAdmin ? '<th>Actions</th>' : ''}</tr></thead>
+                <tbody>${cannotCompleteOrders.map(o => {
+            const lines = o.cannotCompleteLines || o.items.map(li => ({ ...li, pickedQty: 0, picked: false }));
+            const linesSummary = lines.map((li, i) => `<div style="font-size:0.78rem;padding:2px 0">${i + 1}. ${li.name}: <strong style="color:${li.picked ? 'var(--success)' : 'var(--danger)'}">${li.pickedQty}/${li.qty}</strong> ${li.picked ? '✅' : '🔴'}</div>`).join('');
+            return `<tr>
+                        <td style="font-weight:600">${o.orderNo}</td>
+                        <td>${o.partyName}</td>
+                        <td><span class="badge badge-info">${o.cannotCompleteBy || '-'}</span></td>
+                        <td><span class="badge badge-danger">${o.cannotCompleteReason || '-'}</span></td>
+                        <td style="font-size:0.82rem;color:var(--text-secondary)">${o.cannotCompleteNotes || '-'}</td>
+                        <td style="max-width:200px">${linesSummary}</td>
+                        ${isAdmin ? `<td><div class="action-btns">
+                            <button class="btn btn-outline btn-sm" onclick="clearCannotComplete('${o.id}')">🔄 Retry</button>
+                            <button class="btn btn-danger btn-sm" onclick="cancelOrderFromPacking('${o.id}')">❌ Cancel Order</button>
+                        </div></td>` : ''}
+                    </tr>`;
+        }).join('')}
+                </tbody></table>
+            </div>
         </div></div>` : ''}
         ${packedNoInvoice.length ? `<h3 style="margin-bottom:14px;font-size:1rem">📦 Packed — Awaiting Invoice</h3>
         <div class="card" style="margin-bottom:24px"><div class="card-body">
-            <table class="data-table"><thead><tr><th>Order #</th><th>Party</th><th>Packer</th><th>Time</th><th>Packages</th><th>Total</th><th>Actions</th></tr></thead>
-            <tbody>${packedNoInvoice.map(o => `<tr>
-                <td style="font-weight:600">${o.orderNo}</td><td>${o.partyName}</td><td>${o.packedBy || '-'}</td>
-                <td style="font-size:0.8rem">${o.packingDurationMins !== undefined ? o.packingDurationMins + ' min' : '-'}</td>
-                <td style="font-size:0.8rem">${o.boxCount ? o.boxCount + ' Boxes<br><span style="color:var(--text-muted);font-size:0.75rem">' + (o.packageNumbers || []).join() + '</span>' : '-'}</td>
-                <td class="amount-green">${currency(o.packedTotal || o.total)}</td>
-                <td>${isAdmin ? `<button class="btn btn-primary btn-sm" onclick="generateInvoiceFromPacked('${o.id}')">🧾 Generate Invoice</button>` : '<span class="badge badge-warning">Awaiting Admin</span>'}</td>
-            </tr>`).join('')}</tbody></table>
+            <div class="table-wrapper">
+                <table class="data-table"><thead><tr><th>Order #</th><th>Party</th><th>Packer</th><th>Time</th><th>Packages</th><th>Total</th><th>Actions</th></tr></thead>
+                <tbody>${packedNoInvoice.map(o => `<tr>
+                    <td style="font-weight:600">${o.orderNo}</td><td>${o.partyName}</td><td>${o.packedBy || '-'}</td>
+                    <td style="font-size:0.8rem">${o.packingDurationMins !== undefined ? o.packingDurationMins + ' min' : '-'}</td>
+                    <td style="font-size:0.8rem">${o.boxCount ? o.boxCount + ' Boxes<br><span style="color:var(--text-muted);font-size:0.75rem">' + (o.packageNumbers || []).join() + '</span>' : '-'}</td>
+                    <td class="amount-green">${currency(o.packedTotal || o.total)}</td>
+                    <td>${isAdmin ? `<button class="btn btn-primary btn-sm" onclick="generateInvoiceFromPacked('${o.id}')">🧾 Generate Invoice</button>` : '<span class="badge badge-warning">Awaiting Admin</span>'}</td>
+                </tr>`).join('')}</tbody></table>
+            </div>
         </div></div>` : ''}
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:14px">
             <h3 style="font-size:1rem;margin:0">📋 Packed History</h3>
@@ -6115,13 +6154,15 @@ function renderPacking() {
             </div>
         </div>
         <div class="card"><div class="card-body">
-            <table class="data-table"><thead><tr><th>Order #</th><th>Party</th><th>Packer</th><th>Time</th><th>Packages</th><th>Invoice</th><th>Total</th></tr></thead>
-            <tbody>${filteredHistory.length ? filteredHistory.map(o => `<tr>
-                <td style="font-weight:600">${o.orderNo}</td><td>${o.partyName}</td><td>${o.packedBy || '-'}</td>
-                <td style="font-size:0.8rem">${o.packingDurationMins !== undefined ? o.packingDurationMins + ' min' : '-'}</td>
-                <td style="font-size:0.8rem">${(o.packageNumbers||[]).length ? (o.packageNumbers||[]).length + ' pkg<br><span style="color:var(--text-muted);font-size:0.75rem">' + (o.packageNumbers||[]).join(', ') + '</span>' : '-'}</td>
-                <td><span class="badge badge-success">${o.invoiceNo || '-'}</span></td><td class="amount-green">${currency(o.total)}</td>
-            </tr>`).join('') : '<tr><td colspan="7" class="empty-state"><p>No packed history for selected range</p></td></tr>'}</tbody></table>
+            <div class="table-wrapper">
+                <table class="data-table"><thead><tr><th>Order #</th><th>Party</th><th>Packer</th><th>Time</th><th>Packages</th><th>Invoice</th><th>Total</th></tr></thead>
+                <tbody>${filteredHistory.length ? filteredHistory.map(o => `<tr>
+                    <td style="font-weight:600">${o.orderNo}</td><td>${o.partyName}</td><td>${o.packedBy || '-'}</td>
+                    <td style="font-size:0.8rem">${o.packingDurationMins !== undefined ? o.packingDurationMins + ' min' : '-'}</td>
+                    <td style="font-size:0.8rem">${(o.packageNumbers||[]).length ? (o.packageNumbers||[]).length + ' pkg<br><span style="color:var(--text-muted);font-size:0.75rem">' + (o.packageNumbers||[]).join(', ') + '</span>' : '-'}</td>
+                    <td><span class="badge badge-success">${o.invoiceNo || '-'}</span></td><td class="amount-green">${currency(o.total)}</td>
+                </tr>`).join('') : '<tr><td colspan="7" class="empty-state"><p>No packed history for selected range</p></td></tr>'}</tbody></table>
+            </div>
         </div></div>`;
 }
 
@@ -6877,11 +6918,13 @@ async function renderDelivery() {
         </div>
         ${(readyToDispatch.length && canEdit()) ? `<h3 style="margin-bottom:14px;font-size:1rem">📦 Ready to Dispatch</h3>
         <div class="card" style="margin-bottom:24px"><div class="card-body">
-            <table class="data-table"><thead><tr><th>Order #</th><th>Invoice</th><th>Party</th><th>Total</th><th>Action</th></tr></thead>
-            <tbody>${readyToDispatch.map(o => `<tr>
-                <td style="font-weight:600">${o.orderNo}</td><td><span class="badge badge-success">${o.invoiceNo || '-'}</span></td><td>${o.partyName}</td><td class="amount-green">${currency(o.total)}</td>
-                <td><button class="btn btn-primary btn-sm" onclick="openDispatchModalUnified('${o.id}','${o.source}')">🚚 Dispatch</button></td>
-            </tr>`).join('')}</tbody></table>
+            <div class="table-wrapper">
+                <table class="data-table"><thead><tr><th>Order #</th><th>Invoice</th><th>Party</th><th>Total</th><th>Action</th></tr></thead>
+                <tbody>${readyToDispatch.map(o => `<tr>
+                    <td style="font-weight:600">${o.orderNo}</td><td><span class="badge badge-success">${o.invoiceNo || '-'}</span></td><td>${o.partyName}</td><td class="amount-green">${currency(o.total)}</td>
+                    <td><button class="btn btn-primary btn-sm" onclick="openDispatchModalUnified('${o.id}','${o.source}')">🚚 Dispatch</button></td>
+                </tr>`).join('')}</tbody></table>
+            </div>
         </div></div>` : ''}
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
             <h3 style="font-size:1rem;margin:0">🚚 All Deliveries</h3>
@@ -6891,8 +6934,10 @@ async function renderDelivery() {
             <div class="filter-group"><button class="btn btn-outline" onclick="openColumnPersonalizer('delivery','renderDelivery')" style="border-color:var(--accent);color:var(--accent)">⚙️ Columns</button><select id="del-status-filter" onchange="filterDelTable()"><option value="">All Statuses</option><option value="Dispatched">In Transit</option><option value="Delivered">Delivered</option><option value="Undelivered">Undelivered</option><option value="Returned">Returned</option><option value="Cancelled">Cancelled</option></select></div>
         </div>
         <div class="card"><div class="card-body">
-            <table class="data-table"><thead><tr>${ColumnManager.get('delivery').filter(c=>c.visible).map(c=>`<th>${c.label}</th>`).join('')}</tr></thead>
-            <tbody id="del-tbody">${renderDelRows(dels, allParties)}</tbody></table>
+            <div class="table-wrapper">
+                <table class="data-table"><thead><tr>${ColumnManager.get('delivery').filter(c=>c.visible).map(c=>`<th>${c.label}</th>`).join('')}</tr></thead>
+                <tbody id="del-tbody">${renderDelRows(dels, allParties)}</tbody></table>
+            </div>
         </div></div>`;
 }
 function renderDelRows(dels, parties) {
@@ -7986,11 +8031,15 @@ function renderPurchaseRpt() {
         <div class="stat-card blue"><div class="stat-icon">🛒</div><div class="stat-value">${inv.length}</div><div class="stat-label">Invoices</div></div>
         <div class="stat-card red"><div class="stat-icon">💸</div><div class="stat-value">${currency(total)}</div><div class="stat-label">Total Purchases</div></div>
     </div>
-    <div class="card"><div class="card-body"><table class="data-table" id="tbl-purchases">
-        <thead><tr><th>Date</th><th>Invoice</th><th>Supplier</th><th>Created By</th><th style="text-align:right">Amount</th></tr></thead>
-        <tbody>${inv.map(i=>`<tr><td>${fmtDate(i.date)}</td><td style="font-weight:600">${i.invoiceNo}</td><td>${escapeHtml(i.partyName)}</td><td>${i.createdBy||'-'}</td><td class="amount-red" style="text-align:right">${currency(i.total)}</td></tr>`).join('')||'<tr><td colspan="5" class="empty-state"><p>No purchases found</p></td></tr>'}
-        <tr style="font-weight:700;background:rgba(0,180,216,0.1)"><td colspan="4" style="text-align:right">Total</td><td class="amount-red" style="text-align:right">${currency(total)}</td></tr>
-        </tbody></table></div></div>`;
+    <div class="card"><div class="card-body">
+        <div class="table-wrapper">
+            <table class="data-table" id="tbl-purchases">
+            <thead><tr><th>Date</th><th>Invoice</th><th>Supplier</th><th>Created By</th><th style="text-align:right">Amount</th></tr></thead>
+            <tbody>${inv.map(i=>`<tr><td>${fmtDate(i.date)}</td><td style="font-weight:600">${i.invoiceNo}</td><td>${escapeHtml(i.partyName)}</td><td>${i.createdBy||'-'}</td><td class="amount-red" style="text-align:right">${currency(i.total)}</td></tr>`).join('')||'<tr><td colspan="5" class="empty-state"><p>No purchases found</p></td></tr>'}
+            <tr style="font-weight:700;background:rgba(0,180,216,0.1)"><td colspan="4" style="text-align:right">Total</td><td class="amount-red" style="text-align:right">${currency(total)}</td></tr>
+            </tbody></table>
+        </div>
+    </div></div>`;
 }
 
 function renderPnlRpt() {
@@ -8056,11 +8105,15 @@ function renderInvPnlRpt() {
         <div class="stat-card red"><div class="stat-icon">📦</div><div class="stat-value">${currency(totalCost)}</div><div class="stat-label">Cost</div></div>
         <div class="stat-card blue"><div class="stat-icon">📊</div><div class="stat-value">${currency(totalProfit)}</div><div class="stat-label">Profit (${totalMargin}%)</div></div>
     </div>
-    <div class="card"><div class="card-body" style="overflow-x:auto"><table class="data-table" id="tbl-invpnl" style="min-width:700px">
-        <thead><tr><th>Date</th><th>Invoice</th><th>Party</th><th>Salesman</th><th style="text-align:right">Revenue</th><th style="text-align:right">Cost</th><th style="text-align:right">Profit</th><th style="text-align:right">Margin</th></tr></thead>
-        <tbody>${rows||'<tr><td colspan="8" class="empty-state"><p>No invoices found</p></td></tr>'}
-        <tr style="font-weight:700;background:rgba(0,212,170,0.1)"><td colspan="4" style="text-align:right">Total</td><td class="amount-green" style="text-align:right">${currency(totalRev)}</td><td class="amount-red" style="text-align:right">${currency(totalCost)}</td><td class="${totalProfit>=0?'amount-green':'amount-red'}" style="text-align:right">${currency(totalProfit)}</td><td style="text-align:right;font-weight:600">${totalMargin}%</td></tr>
-        </tbody></table></div></div>`;
+    <div class="card"><div class="card-body">
+        <div class="table-wrapper">
+            <table class="data-table" id="tbl-invpnl">
+            <thead><tr><th>Date</th><th>Invoice</th><th>Party</th><th>Salesman</th><th style="text-align:right">Revenue</th><th style="text-align:right">Cost</th><th style="text-align:right">Profit</th><th style="text-align:right">Margin</th></tr></thead>
+            <tbody>${rows||'<tr><td colspan="8" class="empty-state"><p>No invoices found</p></td></tr>'}
+            <tr style="font-weight:700;background:rgba(0,212,170,0.1)"><td colspan="4" style="text-align:right">Total</td><td class="amount-green" style="text-align:right">${currency(totalRev)}</td><td class="amount-red" style="text-align:right">${currency(totalCost)}</td><td class="${totalProfit>=0?'amount-green':'amount-red'}" style="text-align:right">${currency(totalProfit)}</td><td style="text-align:right;font-weight:600">${totalMargin}%</td></tr>
+            </tbody></table>
+        </div>
+    </div></div>`;
 }
 
 function renderStockRpt() {
@@ -8084,11 +8137,15 @@ function renderStockRpt() {
         <div class="stat-card amber"><div class="stat-icon">⚠️</div><div class="stat-value">${lowCount}</div><div class="stat-label">Low Stock</div></div>
         <div class="stat-card red"><div class="stat-icon">🚫</div><div class="stat-value">${outCount}</div><div class="stat-label">Out of Stock</div></div>
     </div>
-    <div class="card"><div class="card-body"><table class="data-table" id="tbl-stock">
-        <thead><tr><th>Item</th><th>Category</th><th>Unit</th><th style="text-align:right">Stock</th><th style="text-align:right">Purchase Price</th><th style="text-align:right">Stock Value</th></tr></thead>
-        <tbody>${items.map(i=>{const low=i.stock<=(i.lowStockAlert||5);return`<tr><td style="font-weight:600">${escapeHtml(i.name)}</td><td>${i.category||'-'}</td><td>${i.unit||'Pcs'}</td><td style="text-align:right"><span class="badge ${i.stock<=0?'badge-danger':low?'badge-warning':'badge-success'}">${i.stock}</span></td><td style="text-align:right">${currency(i.purchasePrice||0)}</td><td style="text-align:right">${currency(i.stock*(i.purchasePrice||0))}</td></tr>`;}).join('')||'<tr><td colspan="6" class="empty-state"><p>No items found</p></td></tr>'}
-        <tr style="font-weight:700"><td colspan="5" style="text-align:right">Total Value</td><td style="text-align:right">${currency(totalVal)}</td></tr>
-        </tbody></table></div></div>`;
+    <div class="card"><div class="card-body">
+        <div class="table-wrapper">
+            <table class="data-table" id="tbl-stock">
+            <thead><tr><th>Item</th><th>Category</th><th>Unit</th><th style="text-align:right">Stock</th><th style="text-align:right">Purchase Price</th><th style="text-align:right">Stock Value</th></tr></thead>
+            <tbody>${items.map(i=>{const low=i.stock<=(i.lowStockAlert||5);return`<tr><td style="font-weight:600">${escapeHtml(i.name)}</td><td>${i.category||'-'}</td><td>${i.unit||'Pcs'}</td><td style="text-align:right"><span class="badge ${i.stock<=0?'badge-danger':low?'badge-warning':'badge-success'}">${i.stock}</span></td><td style="text-align:right">${currency(i.purchasePrice||0)}</td><td style="text-align:right">${currency(i.stock*(i.purchasePrice||0))}</td></tr>`;}).join('')||'<tr><td colspan="6" class="empty-state"><p>No items found</p></td></tr>'}
+            <tr style="font-weight:700"><td colspan="5" style="text-align:right">Total Value</td><td style="text-align:right">${currency(totalVal)}</td></tr>
+            </tbody></table>
+        </div>
+    </div></div>`;
 }
 
 function renderOutstandingRpt() {
@@ -8175,10 +8232,14 @@ function renderOutstandingRpt() {
         <div class="stat-card red"><div class="stat-icon">💸</div><div class="stat-value">${currency(totalPay)}</div><div class="stat-label">Payable</div></div>
         <div class="stat-card blue"><div class="stat-icon">👥</div><div class="stat-value">${rows.filter(r=>!r.includes('padding-left:24px')).length}</div><div class="stat-label">Parties</div></div>
     </div>
-    <div class="card"><div class="card-body" style="overflow-x:auto"><table class="data-table" id="tbl-outstanding" style="min-width:750px">
-        <thead><tr><th>Party</th><th>Type</th><th>Pending Inv.</th><th>Last Payment</th><th style="text-align:right">Oldest Age</th><th style="text-align:right">Balance</th><th>Status</th></tr></thead>
-        <tbody>${rows.join('')||'<tr><td colspan="7" class="empty-state"><p>No outstanding balance found</p></td></tr>'}
-        </tbody></table></div></div>`;
+    <div class="card"><div class="card-body">
+        <div class="table-wrapper">
+            <table class="data-table" id="tbl-outstanding">
+            <thead><tr><th>Party</th><th>Type</th><th>Pending Inv.</th><th>Last Payment</th><th style="text-align:right">Oldest Age</th><th style="text-align:right">Balance</th><th>Status</th></tr></thead>
+            <tbody>${rows.join('')||'<tr><td colspan="7" class="empty-state"><p>No outstanding balance found</p></td></tr>'}
+            </tbody></table>
+        </div>
+    </div></div>`;
 }
 
 function renderUserOutstandingRpt() {
@@ -8302,15 +8363,17 @@ function renderUserOutstandingRpt() {
             return invs.length > 0;
         }).length}</div><div class="stat-label">Salesmen</div></div>
     </div>
-    <div class="card"><div class="card-body" style="overflow-x:auto">
-        <table class="data-table" id="tbl-user-outstanding" style="min-width:700px">
-            <thead><tr>
-                <th>Invoice #</th><th>Party</th><th style="text-align:center">Date</th>
-                <th style="text-align:right">Age</th><th style="text-align:right">Paid</th>
-                <th style="text-align:right">Due</th>
-            </tr></thead>
-            <tbody>${rows.join('')}</tbody>
-        </table>
+    <div class="card"><div class="card-body">
+        <div class="table-wrapper">
+            <table class="data-table" id="tbl-user-outstanding">
+                <thead><tr>
+                    <th>Invoice #</th><th>Party</th><th style="text-align:center">Date</th>
+                    <th style="text-align:right">Age</th><th style="text-align:right">Paid</th>
+                    <th style="text-align:right">Due</th>
+                </tr></thead>
+                <tbody>${rows.join('')}</tbody>
+            </table>
+        </div>
     </div></div>`;
 }
 
@@ -8336,14 +8399,22 @@ function renderExpenseRpt() {
         <div class="stat-card blue"><div class="stat-icon">📋</div><div class="stat-value">${exps.length}</div><div class="stat-label">Entries</div></div>
         <div class="stat-card amber"><div class="stat-icon">🗂️</div><div class="stat-value">${Object.keys(catMap).length}</div><div class="stat-label">Categories</div></div>
     </div>
-    <div class="card" style="margin-bottom:14px"><div class="card-header"><h4 style="font-size:0.9rem">Category Breakup</h4></div><div class="card-body"><table class="data-table" id="tbl-expenses">
-        <thead><tr><th>Category</th><th style="text-align:right">Amount</th><th style="text-align:right">%</th></tr></thead>
-        <tbody>${catRows||'<tr><td colspan="3" class="empty-state"><p>No expenses</p></td></tr>'}
-        <tr style="font-weight:700"><td style="text-align:right">Total</td><td class="amount-red" style="text-align:right">${currency(total)}</td><td></td></tr>
-        </tbody></table></div></div>
-    <div class="card"><div class="card-header"><h4 style="font-size:0.9rem">Expense Details</h4></div><div class="card-body"><table class="data-table">
-        <thead><tr><th>Date</th><th>Category</th><th>Note</th><th>Added By</th><th style="text-align:right">Amount</th></tr></thead>
-        <tbody>${detailRows||'<tr><td colspan="5" class="empty-state"><p>No expenses</p></td></tr>'}</tbody></table></div></div>`;
+    <div class="card" style="margin-bottom:14px"><div class="card-header"><h4 style="font-size:0.9rem">Category Breakup</h4></div><div class="card-body">
+        <div class="table-wrapper">
+            <table class="data-table" id="tbl-expenses">
+            <thead><tr><th>Category</th><th style="text-align:right">Amount</th><th style="text-align:right">%</th></tr></thead>
+            <tbody>${catRows||'<tr><td colspan="3" class="empty-state"><p>No expenses</p></td></tr>'}
+            <tr style="font-weight:700"><td style="text-align:right">Total</td><td class="amount-red" style="text-align:right">${currency(total)}</td><td></td></tr>
+            </tbody></table>
+        </div>
+    </div></div>
+    <div class="card"><div class="card-header"><h4 style="font-size:0.9rem">Expense Details</h4></div><div class="card-body">
+        <div class="table-wrapper">
+            <table class="data-table">
+            <thead><tr><th>Date</th><th>Category</th><th>Note</th><th>Added By</th><th style="text-align:right">Amount</th></tr></thead>
+            <tbody>${detailRows||'<tr><td colspan="5" class="empty-state"><p>No expenses</p></td></tr>'}</tbody></table>
+        </div>
+    </div></div>`;
 }
 
 function renderChequeRpt() {
@@ -8376,10 +8447,14 @@ function renderChequeRpt() {
         <div class="stat-card green"><div class="stat-icon">✅</div><div class="stat-value">${cleared}</div><div class="stat-label">Cleared</div></div>
         <div class="stat-card blue"><div class="stat-icon">💰</div><div class="stat-value">${currency(totalAmt)}</div><div class="stat-label">Total Amount</div></div>
     </div>
-    <div class="card"><div class="card-body" style="overflow-x:auto"><table class="data-table" id="cheque-reg-table" style="min-width:780px">
-        <thead><tr><th>Voucher #</th><th>Pay Date</th><th>Cheque #</th><th>Party</th><th>Bank</th><th>Deposit Date</th><th style="text-align:right">Amount</th><th>Status</th><th>Action</th></tr></thead>
-        <tbody>${rows||'<tr><td colspan="9"><div class="empty-state"><p>No cheques found</p></div></td></tr>'}</tbody>
-    </table></div></div>`;
+    <div class="card"><div class="card-body">
+        <div class="table-wrapper">
+            <table class="data-table" id="cheque-reg-table">
+            <thead><tr><th>Voucher #</th><th>Pay Date</th><th>Cheque #</th><th>Party</th><th>Bank</th><th>Deposit Date</th><th style="text-align:right">Amount</th><th>Status</th><th>Action</th></tr></thead>
+            <tbody>${rows||'<tr><td colspan="9"><div class="empty-state"><p>No cheques found</p></div></td></tr>'}</tbody>
+            </table>
+        </div>
+    </div></div>`;
 }
 
 async function updateChequeStatus(payId, newStatus) {
@@ -8428,13 +8503,16 @@ function renderSalesmanRpt() {
     const totSales = Object.values(slsMap).reduce((s,d)=>s+d.sales,0);
     const totColl  = Object.values(slsMap).reduce((s,d)=>s+d.collections,0);
     out.innerHTML = `
-    <div class="card"><div class="card-body" style="overflow-x:auto">
-    <table class="data-table" id="tbl-salesman">
-        <thead><tr><th>Salesman</th><th style="text-align:right">Invoices</th><th style="text-align:right">Sales ₹</th><th style="text-align:right">Receipts</th><th style="text-align:right">Collections ₹</th><th style="text-align:right">Collection %</th></tr></thead>
-        <tbody>${rows.join('')||'<tr><td colspan="6" class="empty-state"><p>No data found</p></td></tr>'}
-        <tr style="font-weight:700;background:rgba(0,212,170,0.1)"><td>Total</td><td></td><td class="amount-green" style="text-align:right">${currency(totSales)}</td><td></td><td class="amount-green" style="text-align:right">${currency(totColl)}</td><td></td></tr>
-        </tbody>
-    </table></div></div>`;
+    <div class="card"><div class="card-body">
+        <div class="table-wrapper">
+            <table class="data-table" id="tbl-salesman">
+                <thead><tr><th>Salesman</th><th style="text-align:right">Invoices</th><th style="text-align:right">Sales ₹</th><th style="text-align:right">Receipts</th><th style="text-align:right">Collections ₹</th><th style="text-align:right">Collection %</th></tr></thead>
+                <tbody>${rows.join('')||'<tr><td colspan="6" class="empty-state"><p>No data found</p></td></tr>'}
+                <tr style="font-weight:700;background:rgba(0,212,170,0.1)"><td>Total</td><td></td><td class="amount-green" style="text-align:right">${currency(totSales)}</td><td></td><td class="amount-green" style="text-align:right">${currency(totColl)}</td><td></td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div></div>`;
 }
 
 function renderDayBook() {
@@ -8479,13 +8557,16 @@ function renderDayBook() {
         <div class="stat-card red"><div class="stat-icon">📤</div><div class="stat-value">${currency(totalCr)}</div><div class="stat-label">Total Outflow (Purchases+Exp)</div></div>
         <div class="stat-card blue"><div class="stat-icon">📋</div><div class="stat-value">${txns.length}</div><div class="stat-label">Transactions</div></div>
     </div>
-    <div class="card"><div class="card-body" style="overflow-x:auto">
-    <table class="data-table" id="tbl-daybook" style="min-width:700px">
-        <thead><tr><th>Date</th><th>Type</th><th>Ref #</th><th>Party / Note</th><th style="text-align:right">Inflow ₹</th><th style="text-align:right">Outflow ₹</th><th>By</th></tr></thead>
-        <tbody>${rows||'<tr><td colspan="7" class="empty-state"><p>No transactions found</p></td></tr>'}
-        <tr style="font-weight:700;background:rgba(0,212,170,0.08)"><td colspan="4" style="text-align:right">Totals</td><td class="amount-green" style="text-align:right">${currency(totalDr)}</td><td class="amount-red" style="text-align:right">${currency(totalCr)}</td><td></td></tr>
-        </tbody>
-    </table></div></div>`;
+    <div class="card"><div class="card-body">
+        <div class="table-wrapper">
+            <table class="data-table" id="tbl-daybook">
+                <thead><tr><th>Date</th><th>Type</th><th>Ref #</th><th>Party / Note</th><th style="text-align:right">Inflow ₹</th><th style="text-align:right">Outflow ₹</th><th>By</th></tr></thead>
+                <tbody>${rows||'<tr><td colspan="7" class="empty-state"><p>No transactions found</p></td></tr>'}
+                <tr style="font-weight:700;background:rgba(0,212,170,0.08)"><td colspan="4" style="text-align:right">Totals</td><td class="amount-green" style="text-align:right">${currency(totalDr)}</td><td class="amount-red" style="text-align:right">${currency(totalCr)}</td><td></td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div></div>`;
 }
 
 function renderUserSalesReportUI(el, users, categories) {
@@ -8576,20 +8657,22 @@ async function generateUserSalesReport() {
         <div class="card">
             <div class="card-header"><h3 style="font-size:0.95rem">Item-wise Details ${catSearch ? `(Category: ${catSearch})` : ''}</h3></div>
             <div class="card-body">
-                <table class="data-table" style="font-size:0.85rem">
-                    <thead style="background:var(--bg-input)">
-                        <tr><th>Item</th><th style="text-align:right">Ord Qty</th><th style="text-align:right">Ord Value</th><th style="text-align:right;border-left:2px solid var(--border)">Inv Qty</th><th style="text-align:right">Inv Value</th></tr>
-                    </thead>
-                    <tbody>${itemsArr.map(i => `
-                        <tr>
-                            <td style="font-weight:600">${i.name}</td>
-                            <td style="text-align:right">${i.ordQty}</td>
-                            <td class="amount-blue" style="text-align:right">${currency(i.ordVal)}</td>
-                            <td style="text-align:right;border-left:2px solid var(--border)">${i.invQty}</td>
-                            <td class="amount-green" style="text-align:right">${currency(i.invVal)}</td>
-                        </tr>
-                    `).join('') || '<tr><td colspan="5" class="empty-state">No item data found for this range</td></tr>'}</tbody>
-                </table>
+                <div class="table-wrapper">
+                    <table class="data-table" style="font-size:0.85rem">
+                        <thead style="background:var(--bg-input)">
+                            <tr><th>Item</th><th style="text-align:right">Ord Qty</th><th style="text-align:right">Ord Value</th><th style="text-align:right;border-left:2px solid var(--border)">Inv Qty</th><th style="text-align:right">Inv Value</th></tr>
+                        </thead>
+                        <tbody>${itemsArr.map(i => `
+                            <tr>
+                                <td style="font-weight:600">${i.name}</td>
+                                <td style="text-align:right">${i.ordQty}</td>
+                                <td class="amount-blue" style="text-align:right">${currency(i.ordVal)}</td>
+                                <td style="text-align:right;border-left:2px solid var(--border)">${i.invQty}</td>
+                                <td class="amount-green" style="text-align:right">${currency(i.invVal)}</td>
+                            </tr>
+                        `).join('') || '<tr><td colspan="5" class="empty-state">No item data found for this range</td></tr>'}</tbody>
+                    </table>
+                </div>
             </div>
         </div>
     `;
@@ -8693,11 +8776,13 @@ function renderPackers() {
             <button class="btn btn-primary" onclick="openPackerModal()">+ Add Packer</button>
         </div>
         <div class="card"><div class="card-body">
-            <table class="data-table"><thead><tr><th>Name</th><th>Phone</th><th>Actions</th></tr></thead>
-            <tbody>${packers.length ? packers.map(p => `<tr>
-                <td style="color:var(--text-primary);font-weight:600">${p.name}</td><td>${p.phone || '-'}</td>
-                <td><div class="action-btns"><button class="btn-icon" onclick="openPackerModal('${p.id}')">✏️</button><button class="btn-icon" onclick="deletePacker('${p.id}')">🗑️</button></div></td>
-            </tr>`).join('') : '<tr><td colspan="3"><div class="empty-state"><div class="empty-icon">🧑‍🏭</div><p>No packers added yet</p></div></td></tr>'}</tbody></table>
+            <div class="table-wrapper">
+                <table class="data-table"><thead><tr><th>Name</th><th>Phone</th><th>Actions</th></tr></thead>
+                <tbody>${packers.length ? packers.map(p => `<tr>
+                    <td style="color:var(--text-primary);font-weight:600">${p.name}</td><td>${p.phone || '-'}</td>
+                    <td><div class="action-btns"><button class="btn-icon" onclick="openPackerModal('${p.id}')">✏️</button><button class="btn-icon" onclick="deletePacker('${p.id}')">🗑️</button></div></td>
+                </tr>`).join('') : '<tr><td colspan="3"><div class="empty-state"><div class="empty-icon">🧑‍🏭</div><p>No packers added yet</p></div></td></tr>'}</tbody></table>
+            </div>
         </div></div>`;
 }
 function openPackerModal(id) {
@@ -8735,11 +8820,13 @@ function renderDeliveryPersons() {
             <button class="btn btn-primary" onclick="openDelPersonModal()">+ Add Delivery Person</button>
         </div>
         <div class="card"><div class="card-body">
-            <table class="data-table"><thead><tr><th>Name</th><th>Phone</th><th>Vehicle</th><th>Actions</th></tr></thead>
-            <tbody>${persons.length ? persons.map(p => `<tr>
-                <td style="color:var(--text-primary);font-weight:600">${p.name}</td><td>${p.phone || '-'}</td><td>${p.vehicle || '-'}</td>
-                <td><div class="action-btns"><button class="btn-icon" onclick="openDelPersonModal('${p.id}')">✏️</button><button class="btn-icon" onclick="deleteDelPerson('${p.id}')">🗑️</button></div></td>
-            </tr>`).join('') : '<tr><td colspan="4"><div class="empty-state"><div class="empty-icon">🧑‍✈️</div><p>No delivery persons added yet</p></div></td></tr>'}</tbody></table>
+            <div class="table-wrapper">
+                <table class="data-table"><thead><tr><th>Name</th><th>Phone</th><th>Vehicle</th><th>Actions</th></tr></thead>
+                <tbody>${persons.length ? persons.map(p => `<tr>
+                    <td style="color:var(--text-primary);font-weight:600">${p.name}</td><td>${p.phone || '-'}</td><td>${p.vehicle || '-'}</td>
+                    <td><div class="action-btns"><button class="btn-icon" onclick="openDelPersonModal('${p.id}')">✏️</button><button class="btn-icon" onclick="deleteDelPerson('${p.id}')">🗑️</button></div></td>
+                </tr>`).join('') : '<tr><td colspan="4"><div class="empty-state"><div class="empty-icon">🧑‍✈️</div><p>No delivery persons added yet</p></div></td></tr>'}</tbody></table>
+            </div>
         </div></div>`;
 }
 function openDelPersonModal(id) {
@@ -8779,13 +8866,15 @@ function renderUsers() {
             <button class="btn btn-primary" onclick="openUserModal()">+ Add User</button>
         </div>
         <div class="card"><div class="card-body">
-            <table class="data-table"><thead><tr><th>Name</th><th>Role</th><th>PIN</th><th>Actions</th></tr></thead>
-            <tbody>${users.map(u => `<tr>
-                <td style="color:var(--text-primary);font-weight:600">${u.name}</td>
-                <td><span class="badge ${u.role === 'Admin' ? 'badge-danger' : u.role === 'Manager' ? 'badge-info' : u.role === 'Salesman' ? 'badge-success' : u.role === 'Delivery' ? 'badge-info' : u.role === 'Packing' ? 'badge-warning' : 'badge-info'}">${u.role}</span></td>
-                <td style="color:var(--text-muted)">****</td>
-                <td><div class="action-btns"><button class="btn-icon" onclick="openUserModal('${u.id}')">✏️</button>${users.length > 1 ? `<button class="btn-icon" onclick="deleteUser('${u.id}')">🗑️</button>` : ''}</div></td>
-            </tr>`).join('')}</tbody></table>
+            <div class="table-wrapper">
+                <table class="data-table"><thead><tr><th>Name</th><th>Role</th><th>PIN</th><th>Actions</th></tr></thead>
+                <tbody>${users.map(u => `<tr>
+                    <td style="color:var(--text-primary);font-weight:600">${u.name}</td>
+                    <td><span class="badge ${u.role === 'Admin' ? 'badge-danger' : u.role === 'Manager' ? 'badge-info' : u.role === 'Salesman' ? 'badge-success' : u.role === 'Delivery' ? 'badge-info' : u.role === 'Packing' ? 'badge-warning' : 'badge-info'}">${u.role}</span></td>
+                    <td style="color:var(--text-muted)">****</td>
+                    <td><div class="action-btns"><button class="btn-icon" onclick="openUserModal('${u.id}')">✏️</button>${users.length > 1 ? `<button class="btn-icon" onclick="deleteUser('${u.id}')">🗑️</button>` : ''}</div></td>
+                </tr>`).join('')}</tbody></table>
+            </div>
         </div></div>`;
 }
 function openUserModal(id) {
@@ -8931,26 +9020,28 @@ function renderPayTrend() {
     const fmtAmt = v => v > 0 ? `<span style="color:var(--success);font-weight:600">${v.toLocaleString('en-IN')}</span>` : `<span style="color:var(--text-muted)">-</span>`;
 
     $('pay-trend-output').innerHTML = `
-        <div class="card"><div class="card-body" style="overflow-x:auto">
-            <table class="data-table" id="tbl-pay-trend" style="min-width:${Math.max(600, 180 + dates.length * 100)}px">
-                <thead><tr>
-                    <th style="position:sticky;left:0;background:var(--bg-input);z-index:2;min-width:160px">Customer</th>
-                    ${dates.map(d => `<th style="text-align:right;min-width:90px">${fmtDate(d)}</th>`).join('')}
-                    <th style="text-align:right;background:rgba(249,115,22,0.08);color:var(--primary);min-width:100px">Total</th>
-                </tr></thead>
-                <tbody>
-                    ${customers.map(c => `<tr>
-                        <td style="position:sticky;left:0;background:var(--bg-card);font-weight:600;z-index:1">${escapeHtml(c)}</td>
-                        ${dates.map(d => `<td style="text-align:right">${fmtAmt(pivot[c][d])}</td>`).join('')}
-                        <td style="text-align:right;font-weight:700;color:var(--primary);background:rgba(249,115,22,0.05)">${currency(rowTotals[c])}</td>
-                    </tr>`).join('')}
-                    <tr style="font-weight:800;background:rgba(249,115,22,0.08);border-top:2px solid var(--primary)">
-                        <td style="position:sticky;left:0;background:rgba(249,115,22,0.08);z-index:1;color:var(--primary)">Grand Total</td>
-                        ${dates.map(d => `<td style="text-align:right;color:var(--primary)">${colTotals[d] > 0 ? colTotals[d].toLocaleString('en-IN') : '-'}</td>`).join('')}
-                        <td style="text-align:right;color:var(--primary);font-size:1.05rem">${currency(grandTotal)}</td>
-                    </tr>
-                </tbody>
-            </table>
+        <div class="card"><div class="card-body">
+            <div class="table-wrapper">
+                <table class="data-table" id="tbl-pay-trend" style="min-width:${Math.max(600, 180 + dates.length * 100)}px">
+                    <thead><tr>
+                        <th style="position:sticky;left:0;background:var(--bg-input);z-index:2;min-width:160px">Customer</th>
+                        ${dates.map(d => `<th style="text-align:right;min-width:90px">${fmtDate(d)}</th>`).join('')}
+                        <th style="text-align:right;background:rgba(249,115,22,0.08);color:var(--primary);min-width:100px">Total</th>
+                    </tr></thead>
+                    <tbody>
+                        ${customers.map(c => `<tr>
+                            <td style="position:sticky;left:0;background:var(--bg-card);font-weight:600;z-index:1">${escapeHtml(c)}</td>
+                            ${dates.map(d => `<td style="text-align:right">${fmtAmt(pivot[c][d])}</td>`).join('')}
+                            <td style="text-align:right;font-weight:700;color:var(--primary);background:rgba(249,115,22,0.05)">${currency(rowTotals[c])}</td>
+                        </tr>`).join('')}
+                        <tr style="font-weight:800;background:rgba(249,115,22,0.08);border-top:2px solid var(--primary)">
+                            <td style="position:sticky;left:0;background:rgba(249,115,22,0.08);z-index:1;color:var(--primary)">Grand Total</td>
+                            ${dates.map(d => `<td style="text-align:right;color:var(--primary)">${colTotals[d] > 0 ? colTotals[d].toLocaleString('en-IN') : '-'}</td>`).join('')}
+                            <td style="text-align:right;color:var(--primary);font-size:1.05rem">${currency(grandTotal)}</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
         </div></div>`;
 }
 async function saveVyaparSetup() {
@@ -9055,17 +9146,19 @@ async function renderCompanySetup() {
         <div class="card" style="margin-top:20px"><div class="card-body padded">
             <h3 style="margin-bottom:6px;font-size:1rem">⏱️ Payment Terms Master</h3>
             <p style="font-size:0.82rem;color:var(--text-muted);margin-bottom:14px">Define payment terms used on party accounts. These drive due date and aging calculations automatically.</p>
-            <table class="data-table" style="margin-bottom:12px">
-                <thead><tr><th>Term Name</th><th style="width:110px">Days</th><th style="width:50px"></th></tr></thead>
-                <tbody id="pt-list-body">
-                    ${getPaymentTermsList().map((t,i) => `<tr>
-                        <td><input id="pt-name-${i}" value="${escapeHtml(t.name)}" style="width:100%;border:none;background:transparent;font-size:0.9rem" placeholder="e.g. Net 30"></td>
-                        <td><input id="pt-days-${i}" type="number" value="${t.days}" min="0" style="width:80px;border:none;background:transparent;font-weight:600;text-align:center"></td>
-                        <td><button class="btn-icon" style="color:var(--danger)" onclick="deletePaymentTerm(${i})" title="Delete">🗑️</button></td>
-                    </tr>`).join('')}
-                </tbody>
-            </table>
-            <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <div class="table-wrapper">
+                <table class="data-table" style="margin-bottom:12px">
+                    <thead><tr><th>Term Name</th><th style="width:110px">Days</th><th style="width:50px"></th></tr></thead>
+                    <tbody id="pt-list-body">
+                        ${getPaymentTermsList().map((t,i) => `<tr>
+                            <td><input id="pt-name-${i}" value="${escapeHtml(t.name)}" style="width:100%;border:none;background:transparent;font-size:0.9rem" placeholder="e.g. Net 30"></td>
+                            <td><input id="pt-days-${i}" type="number" value="${t.days}" min="0" style="width:80px;border:none;background:transparent;font-weight:600;text-align:center"></td>
+                            <td><button class="btn-icon" style="color:var(--danger)" onclick="deletePaymentTerm(${i})" title="Delete">🗑️</button></td>
+                        </tr>`).join('')}
+                    </tbody>
+                </table>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
                 <button class="btn btn-outline btn-sm" onclick="addPaymentTermRow()">+ Add Term</button>
                 <button class="btn btn-primary btn-sm" onclick="savePaymentTerms()">Save Terms</button>
             </div>
@@ -9265,7 +9358,10 @@ async function executeSmartReset() {
         for (const t of entryTables) {
             await supabaseClient.from(t).delete().not('id', 'is', null);
         }
+        // Zero out all party balances so receivable/payable resets
+        await supabaseClient.from('parties').update({ balance: 0 }).not('id', 'is', null);
         entryLsKeys.forEach(k => localStorage.removeItem(k));
+        localStorage.removeItem('db_parties'); // force re-fetch so balance shows 0
 
         if (window._resetOption === 'all') {
             for (const m of masterMap) {
@@ -9393,7 +9489,7 @@ async function renderPartyLedgerLayout() {
         <div class="card">
             <div class="card-body" style="padding:0">
                 ${ledger.length ? `
-                <div style="max-height:600px;overflow-y:auto">
+                <div class="table-wrapper" style="max-height:600px;overflow-y:auto">
                     <table class="data-table">
                         <thead style="position:sticky;top:0;background:var(--bg-body);z-index:10;box-shadow:0 1px 2px rgba(0,0,0,0.05)">
                             <tr><th>Date</th><th>Type</th><th>Ref #</th><th>Doc Bal</th><th>Dr/Cr</th><th>Balance</th><th>Reason</th><th>By</th>${canEdit() ? '<th>Actions</th>' : ''}</tr>
@@ -9626,13 +9722,15 @@ async function renderUOM() {
             <button class="btn btn-primary" onclick="openUOMModal()">+ Add UOM</button>
         </div>
         <div class="card"><div class="card-body">
-            <table class="data-table"><thead><tr><th>Unit Name</th><th>Short Code</th><th>Description</th><th>Actions</th></tr></thead>
-            <tbody>${uoms.length ? uoms.map(u => `<tr>
-                <td style="color:var(--text-primary);font-weight:600">${u.name}</td>
-                <td><span class="badge badge-info">${u.code || u.name}</span></td>
-                <td style="font-size:0.85rem;color:var(--text-muted)">${u.description || '-'}</td>
-                <td><div class="action-btns"><button class="btn-icon" onclick="openUOMModal('${u.id}')">✏️</button><button class="btn-icon" onclick="deleteUOM('${u.id}')">🗑️</button></div></td>
-            </tr>`).join('') : '<tr><td colspan="4"><div class="empty-state"><div class="empty-icon">📏</div><p>No UOM entries yet. Add units like Pcs, Kg, Box, Ltr, Pack etc.</p></div></td></tr>'}</tbody></table>
+            <div class="table-wrapper">
+                <table class="data-table"><thead><tr><th>Unit Name</th><th>Short Code</th><th>Description</th><th>Actions</th></tr></thead>
+                <tbody>${uoms.length ? uoms.map(u => `<tr>
+                    <td style="color:var(--text-primary);font-weight:600">${u.name}</td>
+                    <td><span class="badge badge-info">${u.code || u.name}</span></td>
+                    <td style="font-size:0.85rem;color:var(--text-muted)">${u.description || '-'}</td>
+                    <td><div class="action-btns"><button class="btn-icon" onclick="openUOMModal('${u.id}')">✏️</button><button class="btn-icon" onclick="deleteUOM('${u.id}')">🗑️</button></div></td>
+                </tr>`).join('') : '<tr><td colspan="4"><div class="empty-state"><div class="empty-icon">📏</div><p>No UOM entries yet. Add units like Pcs, Kg, Box, Ltr, Pack etc.</p></div></td></tr>'}</tbody></table>
+            </div>
         </div></div>`;
 }
 
@@ -9970,19 +10068,21 @@ async function openCatalogCart() {
     const total = catalogCart.reduce((s, c) => s + c.qty * c.price, 0);
     openModal('🛒 Cart', `
         <div style="max-height:350px;overflow-y:auto">
-            <table class="data-table"><thead><tr><th>Item</th><th>Qty</th><th>Unit</th><th>Price</th><th>Amount</th><th></th></tr></thead>
-            <tbody>${catalogCart.map((c, idx) => `<tr>
-                <td style="font-weight:600">${c.name}</td>
-                <td><div style="display:flex;align-items:center;gap:4px">
-                    <button class="catalog-qty-btn" onclick="updateCartQtyInModal(${idx},-1)">−</button>
-                    <span style="font-weight:700">${c.qty}</span>
-                    <button class="catalog-qty-btn" onclick="updateCartQtyInModal(${idx},1)">+</button>
-                </div></td>
-                <td><span class="catalog-uom-badge">${c.unit}</span></td>
-                <td>₹${c.price}</td>
-                <td class="amount-green" style="font-weight:600">${currency(c.qty * c.price)}</td>
-                <td><button class="btn-icon" onclick="removeFromCartByIdx(${idx})" style="color:var(--danger)">🗑️</button></td>
-            </tr>`).join('')}</tbody></table>
+            <div class="table-wrapper">
+                <table class="data-table"><thead><tr><th>Item</th><th>Qty</th><th>Unit</th><th>Price</th><th>Amount</th><th></th></tr></thead>
+                <tbody>${catalogCart.map((c, idx) => `<tr>
+                    <td style="font-weight:600">${c.name}</td>
+                    <td><div style="display:flex;align-items:center;gap:4px">
+                        <button class="catalog-qty-btn" onclick="updateCartQtyInModal(${idx},-1)">−</button>
+                        <span style="font-weight:700">${c.qty}</span>
+                        <button class="catalog-qty-btn" onclick="updateCartQtyInModal(${idx},1)">+</button>
+                    </div></td>
+                    <td><span class="catalog-uom-badge">${c.unit}</span></td>
+                    <td>₹${c.price}</td>
+                    <td class="amount-green" style="font-weight:600">${currency(c.qty * c.price)}</td>
+                    <td><button class="btn-icon" onclick="removeFromCartByIdx(${idx})" style="color:var(--danger)">🗑️</button></td>
+                </tr>`).join('')}</tbody></table>
+            </div>
         </div>
         <div style="text-align:right;font-size:1.2rem;font-weight:700;color:var(--accent);margin-top:12px">Total: ${currency(total)}</div>
         <div class="modal-actions">
@@ -10156,12 +10256,14 @@ async function renderBrands() {
             <button class="btn btn-primary" onclick="openBrandModal()">+ Add Brand</button>
         </div>
         <div class="card"><div class="card-body">
-            <table class="data-table"><thead><tr><th>Brand Name</th><th>Description</th><th>Actions</th></tr></thead>
-            <tbody>${brands.length ? brands.map(b => `<tr>
-                <td style="color:var(--text-primary);font-weight:600">${b.name}</td>
-                <td style="font-size:0.85rem;color:var(--text-muted)">${b.description || '-'}</td>
-                <td><div class="action-btns"><button class="btn-icon" onclick="openBrandModal('${b.id}')">✏️</button><button class="btn-icon" onclick="deleteBrand('${b.id}')">🗑️</button></div></td>
-            </tr>`).join('') : '<tr><td colspan="3"><div class="empty-state"><div class="empty-icon">🏭</div><p>No brands yet. Add brands to categorize products by manufacturer.</p></div></td></tr>'}</tbody></table>
+            <div class="table-wrapper">
+                <table class="data-table"><thead><tr><th>Brand Name</th><th>Description</th><th>Actions</th></tr></thead>
+                <tbody>${brands.length ? brands.map(b => `<tr>
+                    <td style="color:var(--text-primary);font-weight:600">${b.name}</td>
+                    <td style="font-size:0.85rem;color:var(--text-muted)">${b.description || '-'}</td>
+                    <td><div class="action-btns"><button class="btn-icon" onclick="openBrandModal('${b.id}')">✏️</button><button class="btn-icon" onclick="deleteBrand('${b.id}')">🗑️</button></div></td>
+                </tr>`).join('') : '<tr><td colspan="3"><div class="empty-state"><div class="empty-icon">🏭</div><p>No brands yet. Add brands to categorize products by manufacturer.</p></div></td></tr>'}</tbody></table>
+            </div>
         </div></div>`;
 }
 
