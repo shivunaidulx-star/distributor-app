@@ -4043,8 +4043,12 @@ function updateSOLine(idx, field, value) {
             }
         }
         li.qty = newQty;
+        if (li.discountPct > 0) li.discountAmt = +( (li.qty * li.price) * (li.discountPct / 100) ).toFixed(2);
     }
-    if (field === 'price') { li.price = Math.max(0, +value || 0); }
+    if (field === 'price') { 
+        li.price = Math.max(0, +value || 0); 
+        if (li.discountPct > 0) li.discountAmt = +( (li.qty * li.price) * (li.discountPct / 100) ).toFixed(2);
+    }
     if (field === 'discountPct') {
         li.discountPct = Math.max(0, +value || 0);
         li.discountAmt = +( (li.qty * li.price) * (li.discountPct / 100) ).toFixed(2);
@@ -4215,15 +4219,17 @@ async function viewSalesOrder(id) {
             <strong>Linked Invoice:</strong> ${o.invoiceNo} ${o.packedBy ? `| <strong>Packed By:</strong> ${o.packedBy}` : ''}
         </div>` : ''}
 
-        <table class="data-table"><thead><tr><th>SL</th><th>Item</th><th>Qty</th><th>Listed</th><th>Rate</th><th>Amount</th></tr></thead>
+        <table class="data-table"><thead><tr><th>SL</th><th>Item</th><th>Qty</th><th>Listed</th><th>Rate</th><th>Dis%</th><th>Dis₹</th><th>Amount</th></tr></thead>
         <tbody>${o.items.map((l, idx) => {
         const edited = l.listedPrice !== undefined && l.price !== l.listedPrice;
         return `<tr${edited ? ' style="background:rgba(245,158,11,0.06)"' : ''}><td>${idx + 1}</td><td>${l.name}</td><td>${l.qty} <span style="font-size:0.75rem;color:var(--text-muted)">${l.unit || 'Pcs'}</span>${l.packedQty !== undefined && l.packedQty !== l.qty ? ` <span style="color:var(--danger);font-size:0.8rem">(Packed: ${l.packedQty})</span>` : ''}</td>
             <td style="font-size:0.82rem;color:var(--text-muted)">${l.listedPrice !== undefined ? currency(l.listedPrice) : '-'}</td>
             <td>${edited ? `<span style="color:var(--warning);font-weight:600">${currency(l.price)}</span>` : currency(l.price)}</td>
+            <td style="font-size:0.8rem">${l.discountPct || 0}%</td>
+            <td style="font-size:0.8rem">${currency(l.discountAmt || 0)}</td>
             <td>${currency(l.amount)}</td></tr>`;
     }).join('')}
-        <tr style="font-weight:700"><td colspan="5" style="text-align:right;color:var(--accent)">Total</td><td style="color:var(--accent)">${currency(o.total)}</td></tr></tbody></table>
+        <tr style="font-weight:700"><td colspan="7" style="text-align:right;color:var(--accent)">Total</td><td style="color:var(--accent)">${currency(o.total)}</td></tr></tbody></table>
         ${o.notes ? `<div style="margin-top:12px;padding:10px;background:var(--bg-input);border-radius:var(--radius-sm);font-size:0.85rem"><strong>Notes:</strong> ${o.notes}</div>` : ''}
         ${o.status === 'pending' && isA ? `<div class="modal-actions">
             <button class="btn btn-danger" onclick="rejectSalesOrder('${o.id}')">❌ Reject</button>
@@ -5365,8 +5371,12 @@ function updateInvoiceLine(idx, field, value) {
             }
         }
         li.qty = newQty;
+        if (li.discountPct > 0) li.discountAmt = +( (li.qty * li.price) * (li.discountPct / 100) ).toFixed(2);
     }
-    if (field === 'price') { li.price = Math.max(0, +value || 0); }
+    if (field === 'price') { 
+        li.price = Math.max(0, +value || 0); 
+        if (li.discountPct > 0) li.discountAmt = +( (li.qty * li.price) * (li.discountPct / 100) ).toFixed(2);
+    }
     if (field === 'discountPct') {
         li.discountPct = Math.max(0, +value || 0);
         li.discountAmt = +( (li.qty * li.price) * (li.discountPct / 100) ).toFixed(2);
@@ -7343,7 +7353,7 @@ function openPackModal(orderId) {
         </div>
         <h4 style="margin-bottom:10px;font-size:0.9rem">Items — Adjust Picked Qty & UOM</h4>
         <div style="border:1px solid var(--border);border-radius:var(--radius-sm);overflow-x:auto;margin-bottom:14px">
-            <table class="data-table" style="margin:0;min-width:640px"><thead><tr><th style="width:32px">SL</th><th style="width:64px">Photo</th><th>Item</th><th>Order</th><th>Stock</th><th>Pack Qty</th><th>MRP Batch</th><th>UOM</th><th>Picked</th><th>St.</th></tr></thead>
+            <table class="data-table" style="margin:0;min-width:640px"><thead><tr><th style="width:32px">SL</th><th style="width:64px">Photo</th><th>Item</th><th>Order</th><th>Stock</th><th>Pack Qty</th><th>MRP Batch</th><th>UOM</th><th>Dis%</th><th>Dis₹</th><th>Picked</th><th>St.</th></tr></thead>
             <tbody>${o.items.map((li, idx) => {
         const item = inv.find(x => x.id === li.itemId);
         let displayStock = 0;
@@ -7397,9 +7407,13 @@ function openPackModal(orderId) {
                     <td><input type="number" id="pack-qty-${idx}" value="${li.qty}" min="0" oninput="packLineChanged(${idx}, '${li.itemId}', ${o.items.length})" onchange="packLineChanged(${idx}, '${li.itemId}', ${o.items.length})" style="width:65px;padding:4px;border-radius:4px;border:1px solid var(--border);text-align:center"></td>
                     <td>${mrpSelectorHtml}</td>
                     <td><select id="pack-uom-${idx}" onchange="packLineChanged(${idx}, '${li.itemId}', ${o.items.length})" style="padding:4px;border-radius:4px;border:1px solid var(--border)">${uomOptions}</select></td>
+                    <td style="font-size:0.75rem;text-align:center">${li.discountPct || 0}%</td>
+                    <td style="font-size:0.75rem;text-align:center">${currency(li.discountAmt || 0)}</td>
                     <td style="text-align:center"><input type="checkbox" id="pack-picked-${idx}" onchange="checkAllPicked(${o.items.length})" style="width:18px;height:18px;cursor:pointer"></td>
                     <td style="text-align:center"><span id="pack-status-${idx}" title="Not Picked">🔴</span></td>
                     <input type="hidden" id="pack-price-${idx}" value="${li.price}">
+                    <input type="hidden" id="pack-discount-pct-${idx}" value="${li.discountPct || 0}">
+                    <input type="hidden" id="pack-discount-amt-${idx}" value="${li.discountAmt || 0}">
                 </tr>`;
     }).join('')}</tbody></table>
         </div>
@@ -7670,13 +7684,22 @@ function completePacking(orderId) {
 
     const packedItems = o.items.map((li, idx) => {
         const qtyInput = $('pack-qty-' + idx);
-        const uomSel = $('pack-uom-' + idx);
+        const uomSelInput = $('pack-uom-' + idx);
         const priceInput = $('pack-price-' + idx);
+        const dPctInput = $(`pack-discount-pct-${idx}`);
+        const dAmtInput = $(`pack-discount-amt-${idx}`);
+
         const packedQty = Math.max(0, qtyInput ? +qtyInput.value : li.qty);
-        const selectedUom = uomSel ? uomSel.value : (li.uom || 'Pcs');
+        const selectedUom = uomSelInput ? uomSelInput.value : (li.uom || 'Pcs');
         const price = priceInput ? parseFloat(priceInput.value) : li.price;
-        const factor = uomSel && uomSel.options.length ? parseFloat(uomSel.options[uomSel.selectedIndex].dataset.factor) : 1;
-        return { ...li, packedQty, selectedUom, uom: selectedUom, price, amount: packedQty * price, factor };
+        const discountPct = dPctInput ? parseFloat(dPctInput.value) || 0 : (li.discountPct || 0);
+        const discountAmt = dAmtInput ? parseFloat(dAmtInput.value) || 0 : (li.discountAmt || 0);
+        
+        const factor = uomSelInput && uomSelInput.options.length ? parseFloat(uomSelInput.options[uomSelInput.selectedIndex].dataset.factor) : 1;
+        // Total amount for the line = (Qty * Price) - Discount
+        const amount = +( (packedQty * price) - discountAmt ).toFixed(2);
+
+        return { ...li, packedQty, selectedUom, uom: selectedUom, price, discountPct, discountAmt, amount, factor };
     }).filter(li => li.packedQty > 0);
 
     if (!packedItems.length) return alert('At least one item must have a packed quantity > 0');
@@ -7883,13 +7906,17 @@ async function generateInvoiceFromPacked(orderId) {
         invoiceItems = packedItems.map(li => {
             const qty = li.packedQty !== undefined ? li.packedQty : li.qty;
             const price = li.price || li.salePrice || 0;
+            const discountAmt = li.discountAmt || 0;
+            const discountPct = li.discountPct || 0;
             return {
                 itemId: li.itemId,
                 name: li.name,
                 qty,
                 price,
                 listedPrice: price,
-                amount: qty * price,
+                discountAmt,
+                discountPct,
+                amount: +( (qty * price) - discountAmt ).toFixed(2),
                 unit: li.uom || li.unit || 'Pcs',
                 primaryQty: qty
             };
@@ -8083,7 +8110,20 @@ async function confirmBulkInvoices() {
             const invoiceItems = packedItems.map(li => {
                 const qty = li.packedQty !== undefined ? li.packedQty : li.qty;
                 const price = li.price || li.salePrice || 0;
-                return { itemId: li.itemId, name: li.name, qty, price, listedPrice: price, amount: qty * price, unit: li.uom || li.unit || 'Pcs', primaryQty: qty };
+                const discountAmt = li.discountAmt || 0;
+                const discountPct = li.discountPct || 0;
+                return { 
+                    itemId: li.itemId, 
+                    name: li.name, 
+                    qty, 
+                    price, 
+                    listedPrice: price, 
+                    discountAmt,
+                    discountPct,
+                    amount: +( (qty * price) - discountAmt ).toFixed(2), 
+                    unit: li.uom || li.unit || 'Pcs', 
+                    primaryQty: qty 
+                };
             });
 
             const sub = invoiceItems.reduce((s, li) => s + li.amount, 0);
@@ -10651,6 +10691,19 @@ async function renderCompanySetup() {
             <button class="btn btn-primary" style="margin-top:14px" onclick="saveInventorySettings()">Save Inventory Settings</button>
         </div></div>
         <div class="card" style="margin-top:20px"><div class="card-body padded">
+            <h3 style="margin-bottom:10px;font-size:1rem">📲 Fast2SMS — OTP Settings</h3>
+            <p style="font-size:0.82rem;color:var(--text-muted);margin-bottom:14px">Automatically sends OTP to customers on the Customer Portal. Get API key from fast2sms.com → Dev → API.</p>
+            <div class="form-group">
+                <label>Fast2SMS API Key</label>
+                <div style="display:flex;gap:8px">
+                    <input type="password" id="f-f2s-key" value="${co.fast2smsKey || ''}" placeholder="Paste your Fast2SMS API key here" style="flex:1">
+                    <button class="btn btn-outline btn-sm" type="button" onclick="const el=document.getElementById('f-f2s-key');el.type=el.type==='password'?'text':'password'">👁</button>
+                </div>
+            </div>
+            <button class="btn btn-primary" onclick="saveF2SKey()">Save SMS Key</button>
+            ${co.fast2smsKey ? ' <span style="margin-left:12px;font-size:0.82rem;color:var(--success)">✅ OTP will be sent via SMS automatically</span>' : ' <span style="margin-left:12px;font-size:0.82rem;color:var(--text-muted)">No key set — OTP shown on screen only</span>'}
+        </div></div>
+        <div class="card" style="margin-top:20px"><div class="card-body padded">
             <h3 style="margin-bottom:10px;font-size:1rem">🔧 Admin Tools</h3>
             <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:14px">Scan all items for stock vs ledger discrepancies and auto-create correction entries to reconcile.</p>
             <button class="btn btn-outline" onclick="healStockLedger()">🩺 Heal Stock Ledger</button>
@@ -10689,6 +10742,16 @@ function captureWarehouseGps() {
         showToast('Warehouse location captured! Click Save Changes.', 'success');
     }, err => alert('Could not get location: ' + err.message), { enableHighAccuracy: true });
 }
+async function saveF2SKey() {
+    const key = ($('f-f2s-key') || {}).value || '';
+    if (!key.trim()) { showToast('Please enter your Fast2SMS API key', 'error'); return; }
+    const co = DB.ls.getObj('db_company') || {};
+    co.fast2smsKey = key.trim();
+    await DB.saveSettings('db_company', co);
+    showToast('Fast2SMS key saved! OTP will now be sent via SMS.', 'success');
+    renderCompanySetup();
+}
+
 async function saveInventorySettings() {
     const co = DB.getObj('db_company');
     co.allowNegativeStock = !!($('f-allow-neg-stock') && $('f-allow-neg-stock').checked);
@@ -11772,6 +11835,8 @@ async function createOrderFromCatalog() {
             qty: qty,
             price: +unitPrice.toFixed(2),
             listedPrice: +unitPrice.toFixed(2),
+            discountAmt: 0,
+            discountPct: 0,
             amount: +(qty * unitPrice).toFixed(2),
             unit: unit,
             primaryQty: primaryQty
@@ -12140,6 +12205,8 @@ async function cpInitAuth(forRegister, regData) {
 async function cpSendOTP(phone, forRegister, regData) {
     const otp = String(Math.floor(100000 + Math.random() * 900000));
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+
+    // Save OTP to Supabase
     const { error } = await supabaseClient.from('customer_otps').upsert(
         { phone, otp, expires_at: expiresAt, purpose: forRegister ? 'register' : 'login' },
         { onConflict: 'phone' }
@@ -12149,22 +12216,51 @@ async function cpSendOTP(phone, forRegister, regData) {
         console.error('cpSendOTP error:', error);
         return;
     }
+
+    // Try Fast2SMS if key is configured
+    const co = DB.ls.getObj('db_company') || {};
+    const f2sKey = co.fast2smsKey || '';
+    let smsSent = false;
+    if (f2sKey) {
+        try {
+            const url = `https://www.fast2sms.com/dev/bulkV2?authorization=${encodeURIComponent(f2sKey)}&variables_values=${otp}&route=otp&numbers=${encodeURIComponent(phone)}`;
+            const res = await fetch(url);
+            const json = await res.json();
+            if (json.return === true) {
+                smsSent = true;
+                showToast(`OTP sent to ${phone} via SMS`, 'success');
+            } else {
+                console.warn('Fast2SMS error:', json);
+                showToast('SMS failed: ' + (json.message || 'Unknown error') + '. OTP shown on screen.', 'error', 6000);
+            }
+        } catch(e) {
+            console.warn('Fast2SMS fetch failed:', e);
+            showToast('SMS could not be sent. OTP shown on screen.', 'error', 5000);
+        }
+    }
+
     console.log(`OTP for ${phone}: ${otp}`);
-    cpRenderOTP(phone, otp, forRegister, regData);
+    cpRenderOTP(phone, otp, forRegister, regData, smsSent);
 }
 
-function cpRenderOTP(phone, otpHint, forRegister, regData) {
+function cpRenderOTP(phone, otpHint, forRegister, regData, smsSent) {
     const regDataJson = JSON.stringify(regData || null).replace(/"/g, '&quot;');
     const regDataStr  = regData ? JSON.stringify(regData).replace(/"/g, "'") : 'null';
+    const otpBox = smsSent
+        ? `<div style="background:rgba(34,197,94,0.1);border:2px solid rgba(34,197,94,0.4);border-radius:12px;padding:14px;text-align:center;margin-bottom:18px">
+               <div style="font-size:0.8rem;color:#22c55e;font-weight:600;margin-bottom:4px">✅ OTP sent to ${phone} via SMS</div>
+               <div style="font-size:0.75rem;color:var(--text-muted)">Ask customer to check their messages</div>
+           </div>`
+        : `<div style="background:rgba(99,102,241,0.1);border:2px dashed rgba(99,102,241,0.4);border-radius:12px;padding:14px;text-align:center;margin-bottom:18px">
+               <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:6px">📲 Share this OTP with customer on WhatsApp</div>
+               <div style="font-size:2rem;font-weight:800;letter-spacing:8px;color:var(--accent)">${otpHint}</div>
+           </div>`;
     cpShell(`
     <div class="cp-card" style="margin-top:32px">
         <h2 style="margin:0 0 4px;font-size:1.3rem">Enter OTP</h2>
         <p style="color:var(--text-muted);font-size:0.85rem;margin:0 0 4px">OTP for <strong>${phone}</strong></p>
         <p style="color:var(--text-muted);font-size:0.78rem;margin:0 0 14px">Valid for 10 minutes</p>
-        <div style="background:rgba(99,102,241,0.1);border:2px dashed rgba(99,102,241,0.4);border-radius:12px;padding:14px;text-align:center;margin-bottom:18px">
-            <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:6px">Share this OTP with customer on WhatsApp</div>
-            <div style="font-size:2rem;font-weight:800;letter-spacing:8px;color:var(--accent)">${otpHint}</div>
-        </div>
+        ${otpBox}
         <div class="cp-otp-row" id="cp-otp-row">
             ${[0,1,2,3,4,5].map(i => `<input class="cp-otp-box" maxlength="1" type="text" inputmode="numeric" pattern="[0-9]" id="cp-otp-${i}" oninput="cpOTPInput(this,${i})" onkeydown="cpOTPKey(this,${i},event)">`).join('')}
         </div>
