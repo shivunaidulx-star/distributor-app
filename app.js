@@ -7693,45 +7693,107 @@ function toggleAllPacked(chk) {
 }
 
 async function bulkGenerateInvoicesFromPacked() {
-    const selectedBoxes = document.querySelectorAll('.chk-packed-order:checked');
+    const selectedBoxes = [...document.querySelectorAll('.chk-packed-order:checked')];
     if (!selectedBoxes.length) return alert('Select at least one packed order to generate invoices.');
-    if (!confirm(`Generate invoices for ${selectedBoxes.length} order(s)?`)) return;
 
     try {
-        const [orders, parties, inventory, currentInvoices] = await Promise.all([
-            DB.getAll('salesorders'), DB.getAll('parties'), DB.getAll('inventory'), DB.getAll('invoices')
+        const [orders, parties, inventory] = await Promise.all([
+            DB.getAll('salesorders'), DB.getAll('parties'), DB.getAll('inventory')
         ]);
-        
-        let successCount = 0;
-        let skipCount = 0;
+
         let startInvNumber = parseInt((await nextNumber('INV-')).split('-')[1]);
         let startVyaparNumber = parseInt((buildVyaparInvoiceNo()).split('-').pop()) || 1;
         const autoPrefix = buildVyaparInvoiceNo().substring(0, buildVyaparInvoiceNo().lastIndexOf('-') + 1) || 'PT-NS-';
 
+        // Build preview list — skip already invoiced / no stock
+        const rows = [];
+        let skipCount = 0;
         for (const box of selectedBoxes) {
             const orderId = box.value;
             const o = orders.find(x => x.id === orderId);
-            
             if (!o || !o.packed || o.invoiceNo) { skipCount++; continue; }
 
             const packedItems = o.packedItems && o.packedItems.length ? o.packedItems : o.items;
-            const party = parties.find(p => String(p.id) === String(o.partyId));
-            
-            // Stock checks
             let hasStock = true;
             for (const li of packedItems) {
                 const item = inventory.find(x => x.id === li.itemId);
                 const qty = li.packedQty !== undefined ? li.packedQty : li.qty;
-                if (!item || (item.stock || 0) < qty && !DB.getObj('db_company').allowNegativeStock) {
-                    hasStock = false; break;
-                }
+                if (!item || ((item.stock || 0) < qty && !DB.getObj('db_company').allowNegativeStock)) { hasStock = false; break; }
             }
-            if (!hasStock) { skipCount++; continue; } // Skip orders with insufficient stock
+            if (!hasStock) { skipCount++; continue; }
 
-            // Prepare Invoice Data
-            const invNo = 'INV-' + startInvNumber;
+            const invNo = 'INV-' + String(startInvNumber).padStart(4, '0');
             const vyaparNo = autoPrefix + startVyaparNumber;
+            const sub = packedItems.reduce((s, li) => { const q = li.packedQty !== undefined ? li.packedQty : li.qty; return s + q * (li.price || li.salePrice || 0); }, 0);
+            rows.push({ orderId, orderNo: o.orderNo, partyId: o.partyId, partyName: o.partyName, invNo, vyaparNo, sub });
+            startInvNumber++;
+            startVyaparNumber++;
+        }
 
+        if (!rows.length) return alert('No eligible orders found (check stock or already invoiced).');
+
+        const skipNote = skipCount ? `<p style="color:#ef4444;font-size:0.8rem;margin-bottom:10px">⚠️ ${skipCount} order(s) skipped (already invoiced or insufficient stock).</p>` : '';
+
+        openModal('Verify Bulk Invoices', `
+        ${skipNote}
+        <p style="font-size:0.83rem;color:var(--text-muted);margin-bottom:12px">
+            Review below. Edit <strong>Vyapar No</strong> if needed, then click <strong>Confirm & Generate</strong>.
+        </p>
+        <div style="overflow-x:auto;max-height:55vh;overflow-y:auto">
+        <table class="data-table" style="font-size:0.82rem;min-width:480px">
+            <thead><tr>
+                <th>#</th><th>Order</th><th>Party</th>
+                <th>Invoice No</th><th>Vyapar No</th><th style="text-align:right">Amount</th>
+            </tr></thead>
+            <tbody>
+            ${rows.map((r, i) => `<tr>
+                <td style="color:var(--text-muted)">${i+1}</td>
+                <td><strong>${r.orderNo}</strong></td>
+                <td style="font-size:0.78rem">${r.partyName}</td>
+                <td><span style="font-weight:700;color:var(--accent)">${r.invNo}</span></td>
+                <td><input id="bv-vyapar-${i}" class="form-control" value="${r.vyaparNo}" style="padding:4px 8px;font-size:0.82rem;min-width:110px"></td>
+                <td style="text-align:right;font-weight:600">${currency(r.sub)}</td>
+            </tr>`).join('')}
+            </tbody>
+        </table>
+        </div>
+        <input type="hidden" id="bv-rows-json" value="${encodeURIComponent(JSON.stringify(rows))}">
+        <div class="modal-actions" style="margin-top:16px">
+            <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="confirmBulkInvoices()">✅ Confirm & Generate (${rows.length})</button>
+        </div>`);
+
+    } catch (err) {
+        alert('Bulk Error: ' + err.message);
+    }
+}
+
+async function confirmBulkInvoices() {
+    const rowsEl = document.getElementById('bv-rows-json');
+    if (!rowsEl) return;
+    const rows = JSON.parse(decodeURIComponent(rowsEl.value));
+
+    // Read edited Vyapar numbers from inputs
+    rows.forEach((r, i) => {
+        const inp = document.getElementById('bv-vyapar-' + i);
+        if (inp) r.vyaparNo = inp.value.trim() || r.vyaparNo;
+    });
+
+    closeModal();
+    showToast('Generating invoices…', 'info');
+
+    try {
+        const [orders, parties, inventory] = await Promise.all([
+            DB.getAll('salesorders'), DB.getAll('parties'), DB.getAll('inventory')
+        ]);
+
+        let successCount = 0;
+        for (const r of rows) {
+            const o = orders.find(x => x.id === r.orderId);
+            if (!o) continue;
+
+            const packedItems = o.packedItems && o.packedItems.length ? o.packedItems : o.items;
+            const party = parties.find(p => String(p.id) === String(o.partyId));
             const invoiceItems = packedItems.map(li => {
                 const qty = li.packedQty !== undefined ? li.packedQty : li.qty;
                 const price = li.price || li.salePrice || 0;
@@ -7742,10 +7804,10 @@ async function bulkGenerateInvoicesFromPacked() {
             const roundoff = +(Math.round(sub) - sub).toFixed(2);
             const total = sub + roundoff;
 
-            // Build Ops
             const ops = [];
             for (const li of invoiceItems) {
                 const item = inventory.find(x => x.id === li.itemId);
+                if (!item) continue;
                 const newStock = (item.stock || 0) - li.qty;
                 const itemUpdate = { stock: newStock };
                 if (item.batches && item.batches.length) {
@@ -7753,31 +7815,29 @@ async function bulkGenerateInvoicesFromPacked() {
                     if (updatedBatches) { itemUpdate.batches = updatedBatches; Object.assign(itemUpdate, priceSync); }
                 }
                 ops.push(DB.rawUpdate('inventory', item.id, itemUpdate));
-                ops.push(DB.rawInsert('stock_ledger', { date: today(), itemId: item.id, itemName: item.name, entryType: 'Sale', qty: -li.qty, runningStock: newStock, documentNo: invNo, reason: 'Sale Invoice', createdBy: currentUser.name }));
+                ops.push(DB.rawInsert('stock_ledger', { date: today(), itemId: item.id, itemName: item.name, entryType: 'Sale', qty: -li.qty, runningStock: newStock, documentNo: r.invNo, reason: 'Sale Invoice', createdBy: currentUser.name }));
             }
 
             if (party) {
                 const newBal = (party.balance || 0) + total;
                 ops.push(DB.rawUpdate('parties', party.id, { balance: newBal }));
-                ops.push(DB.rawInsert('party_ledger', { date: today(), partyId: party.id, partyName: party.name, type: 'Sale Invoice', amount: total, balance: newBal, docNo: invNo, notes: 'Sale', createdBy: currentUser.name }));
+                ops.push(DB.rawInsert('party_ledger', { date: today(), partyId: party.id, partyName: party.name, type: 'Sale Invoice', amount: total, balance: newBal, docNo: r.invNo, notes: 'Sale', createdBy: currentUser.name }));
+                // Update local cache so next order in loop sees updated balance
+                party.balance = newBal;
             }
 
-            const invData = { invoiceNo: invNo, date: today(), dueDate: null, type: 'sale', partyId: o.partyId, partyName: o.partyName, items: invoiceItems, subtotal: sub, gst: 0, roundOff: roundoff, total, status: 'from-packing', createdBy: currentUser.name, vyaparInvoiceNo: vyaparNo, fromOrder: o.orderNo };
+            const invData = { invoiceNo: r.invNo, date: today(), dueDate: null, type: 'sale', partyId: o.partyId, partyName: o.partyName, items: invoiceItems, subtotal: sub, gst: 0, roundOff: roundoff, total, status: 'from-packing', createdBy: currentUser.name, vyaparInvoiceNo: r.vyaparNo, fromOrder: o.orderNo };
             ops.push(DB.rawInsert('invoices', invData));
-            ops.push(DB.rawUpdate('salesorders', o.id, { invoiceNo: invNo }));
+            ops.push(DB.rawUpdate('salesorders', o.id, { invoiceNo: r.invNo }));
 
             await Promise.all(ops);
-            
             incrementVyaparNo();
-            startInvNumber++;
-            startVyaparNumber++;
             successCount++;
         }
 
         await DB.refreshTables(['invoices', 'inventory', 'parties', 'sales_orders']);
         renderPacking();
-        showToast(`Bulk Check complete: ${successCount} generated, ${skipCount} skipped (missing stock/already invoiced).`, 'success');
-        
+        showToast(`✅ ${successCount} invoice(s) generated successfully!`, 'success');
     } catch (err) {
         alert('Bulk Error: ' + err.message);
     }
