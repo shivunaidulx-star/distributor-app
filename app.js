@@ -5867,10 +5867,47 @@ function printPaymentReceipt() {
 
 function _initPayPartyDropdown(parties, filterType) {
     const filtered = filterType ? parties.filter(p => p.type === filterType) : parties;
-    initSearchDropdown('f-pay-party', buildPartySearchList(filtered), (party) => {
-        if ($('f-pay-party-id')) $('f-pay-party-id').value = party.id || '';
-        onPayPartyChange();
-    });
+
+    // Sort parties by GPS proximity to user's current location
+    const sortAndInit = (sortedParties) => {
+        initSearchDropdown('f-pay-party', buildPartySearchList(sortedParties), (party) => {
+            if ($('f-pay-party-id')) $('f-pay-party-id').value = party.id || '';
+            onPayPartyChange();
+        });
+    };
+
+    // Try to get user's live location for proximity sorting
+    if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+            (pos) => {
+                const userLat = pos.coords.latitude;
+                const userLng = pos.coords.longitude;
+                const haversine = (lat1, lon1, lat2, lon2) => {
+                    const R = 6371; // km
+                    const dLat = (lat2 - lat1) * Math.PI / 180;
+                    const dLon = (lon2 - lon1) * Math.PI / 180;
+                    const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
+                    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+                };
+                const withDist = filtered.map(p => {
+                    const lat = parseFloat(p.gpsLat || p.latitude || 0);
+                    const lng = parseFloat(p.gpsLng || p.longitude || 0);
+                    const dist = (lat && lng) ? haversine(userLat, userLng, lat, lng) : 99999;
+                    return { ...p, _dist: dist };
+                });
+                withDist.sort((a, b) => a._dist - b._dist);
+                sortAndInit(withDist);
+            },
+            () => {
+                // GPS denied/unavailable — fallback to alphabetical
+                const sorted = [...filtered].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+                sortAndInit(sorted);
+            },
+            { timeout: 5000, enableHighAccuracy: false }
+        );
+    } else {
+        sortAndInit(filtered);
+    }
 }
 async function openPaymentModal(prefillPartyId) {
     // Hide FAB — full-page form has its own footer buttons
@@ -5971,7 +6008,11 @@ async function openPaymentModal(prefillPartyId) {
         </div>
     `;
 
-    // Init party search dropdown
+    // Scroll to top of page so user sees the form from the beginning
+    window.scrollTo({ top: 0, behavior: 'instant' });
+    if (pageContent) pageContent.scrollTop = 0;
+
+    // Init party search dropdown (sorted by GPS proximity)
     _initPayPartyDropdown(parties, 'Customer');
 
     // Pre-fill party if provided (e.g. from invoice "Receive Payment" button)
@@ -11391,15 +11432,21 @@ function cpRestoreSession() {
         const saved = localStorage.getItem('cp_session');
         if (!saved) return false;
         cpSession = JSON.parse(saved);
-        if (!cpSession || !cpSession.phone) { cpSession = null; return false; }
+        // Validate session has required fields — clear stale/invalid sessions
+        if (!cpSession || !cpSession.phone || !cpSession.partyId) {
+            cpSession = null;
+            localStorage.removeItem('cp_session');
+            return false;
+        }
         // Show portal immediately
         const root = document.getElementById('cp-root');
+        if (!root) { cpSession = null; localStorage.removeItem('cp_session'); return false; }
         root.style.display = 'block';
         document.getElementById('login-screen') && (document.getElementById('login-screen').classList.add('hidden'));
         document.getElementById('app') && (document.getElementById('app').classList.add('hidden'));
-        DB.refresh().then(() => cpRenderHome());
+        DB.refresh().then(() => cpRenderHome()).catch(() => { cpLogout(); location.reload(); });
         return true;
-    } catch(e) { return false; }
+    } catch(e) { localStorage.removeItem('cp_session'); return false; }
 }
 
 function showCustomerPortal() {
