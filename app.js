@@ -5950,10 +5950,21 @@ function printPaymentReceipt() {
 
 function _initPayPartyDropdown(parties, filterType) {
     const filtered = filterType ? parties.filter(p => p.type === filterType) : parties;
+    
+    // For payments, we MUST allow blocked parties so they can clear dues.
+    // We cannot use the default buildPartySearchList because it hides blocked parties.
+    const customPartySearchList = (pts) => pts.map(p => ({
+        id: p.id,
+        label: p.name + (p.blocked ? ' (Blocked)' : ''),
+        value: p.name,
+        code: '',
+        stockText: p.phone || '',
+        searchText: (p.name + ' ' + (p.phone || ''))
+    }));
 
     // Sort parties by GPS proximity to user's current location
     const sortAndInit = (sortedParties) => {
-        initSearchDropdown('f-pay-party', buildPartySearchList(sortedParties), (party) => {
+        initSearchDropdown('f-pay-party', customPartySearchList(sortedParties), (party) => {
             if ($('f-pay-party-id')) $('f-pay-party-id').value = party.id || '';
             onPayPartyChange();
         });
@@ -11042,7 +11053,8 @@ async function filterCatalog() {
     const subCat = activeSubPill ? activeSubPill.dataset.subcat || '' : '';
     const activeMovPill = document.querySelector('#catalog-movement-pills .catalog-pill.active');
     const movement = activeMovPill ? activeMovPill.dataset.movement || '' : '';
-    let items = await DB.getAll('inventory');
+    const allItems = await DB.getAll('inventory');
+    let items = allItems.filter(i => i.active !== false); // Hide deactivated
     if (cat) items = items.filter(i => i.category === cat);
     if (subCat) items = items.filter(i => (i.subCategory || '') === subCat);
     if (s) items = items.filter(i => i.name.toLowerCase().includes(s) || (i.itemCode || '').toLowerCase().includes(s) || (i.category || '').toLowerCase().includes(s) || (i.subCategory || '').toLowerCase().includes(s));
