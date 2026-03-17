@@ -122,6 +122,19 @@ const DB = {
         await this.refresh();
     },
 
+    // ── Raw operations — NO auto-refresh (batch multiple then call DB.refresh() once) ──
+    async rawUpdate(table, id, row) {
+        const actualTable = table.replace('salesorders', 'sales_orders').replace('purchaseorders', 'purchase_orders');
+        const { error } = await supabaseClient.from(actualTable).update(this._clean(this._toSnake(row))).eq('id', id);
+        if (error) { console.error(`rawUpdate ${actualTable}:`, error.message); throw error; }
+    },
+    async rawInsert(table, row) {
+        const actualTable = table.replace('salesorders', 'sales_orders').replace('purchaseorders', 'purchase_orders');
+        const { data, error } = await supabaseClient.from(actualTable).insert(this._clean(this._toSnake(row))).select();
+        if (error) { console.error(`rawInsert ${actualTable}:`, error.message); throw error; }
+        return this._toCamel(data[0]);
+    },
+
     // ── Settings: persisted in Supabase `settings` table AND localStorage ──
     async saveSettings(key, data) {
         this.ls.set(key, data); // always update local immediately
@@ -990,10 +1003,11 @@ const ALL_QUICK_ACTIONS = [
     { key:'packing',        icon:'📋', label:'Packing',      fn:"navigateTo('packing')" },
     { key:'purchaseorders', icon:'🛒', label:'Purchase',     fn:"navigateTo('purchaseorders')" },
     { key:'new-party',      icon:'➕', label:'New Party',    fn:"openPartyModal()" },
+    { key:'update-party-gps',icon:'📍',label:'Update GPS',   fn:"openPartyGpsModal()" },
 ];
 const DEFAULT_QUICK_ACTIONS = {
-    Admin:    ['new-sale','payment-in','catalog','salesorders','parties','inventory','delivery','reports'],
-    Manager:  ['new-sale','payment-in','catalog','salesorders','parties','payments'],
+    Admin:    ['new-sale','payment-in','catalog','salesorders','parties','inventory','delivery','reports','update-party-gps'],
+    Manager:  ['new-sale','payment-in','catalog','salesorders','parties','payments','update-party-gps'],
     Salesman: ['catalog','payment-in','salesorders','parties'],
     Packing:  ['packing','salesorders'],
     Delivery: ['delivery','salesorders'],
@@ -1231,6 +1245,7 @@ async function renderDashboard() {
                 <button class="quick-action-btn" onclick="navigateTo('salesorders')"><span class="qa-icon">📝</span><span class="qa-label">New Order</span></button>
                 <button class="quick-action-btn" onclick="navigateTo('parties')"><span class="qa-icon">👥</span><span class="qa-label">Parties</span></button>
                 <button class="quick-action-btn" onclick="navigateTo('inventory')"><span class="qa-icon">📦</span><span class="qa-label">Inventory</span></button>
+                <button class="quick-action-btn" onclick="openPartyGpsModal()"><span class="qa-icon">📍</span><span class="qa-label">Update GPS</span></button>
             </div>
             <div class="card"><div class="card-header"><h3>My Recent Orders</h3></div><div class="card-body">
                 <div class="table-wrapper">
@@ -1262,6 +1277,7 @@ async function renderDashboard() {
             <div class="quick-actions">
                 <button class="quick-action-btn" onclick="navigateTo('delivery')"><span class="qa-icon">🚚</span><span class="qa-label">My Deliveries</span></button>
                 <button class="quick-action-btn" onclick="navigateTo('deliverypersons')"><span class="qa-icon">🧑‍✈️</span><span class="qa-label">Del. Persons</span></button>
+                <button class="quick-action-btn" onclick="openPartyGpsModal()"><span class="qa-icon">📍</span><span class="qa-label">Update GPS</span></button>
             </div>
             <div class="card"><div class="card-header"><h3>My Active Dispatches</h3></div><div class="card-body">
                 <div class="table-wrapper">
@@ -5159,57 +5175,70 @@ async function saveInvoice() {
     if (type === 'sale' && !vyaparInvNo) return alert('Vyapar Invoice No. is mandatory for sale invoices.');
 
     try {
+        // Fetch inventory once (already have parties from above)
+        const inventory = await DB.getAll('inventory');
+        const co2 = DB.getObj('db_company');
+
+        // Stock checks (parallel availability)
         if (type === 'sale') {
-            const inventory = await DB.getAll('inventory');
             const shortItems = [];
-            for (const li of invoiceItems) {
+            await Promise.all(invoiceItems.map(async li => {
                 const item = inventory.find(x => x.id === li.itemId);
                 if (item) {
                     const avail = (await getAvailableStock(item)).available;
                     if (avail < li.qty) shortItems.push(`${li.name} (need ${li.qty}, available ${avail})`);
                 }
-            }
-            if (shortItems.length) return alert('Insufficient stock:\n' + shortItems.join('\n'));
-        }
-
-        // Update inventory and ledgers
-        const inventory = await DB.getAll('inventory');
-        // Negative stock guard
-        const co2 = DB.getObj('db_company');
-        if (type === 'sale' && !co2.allowNegativeStock) {
-            for (const li of invoiceItems) {
-                const item = inventory.find(x => x.id === li.itemId);
-                if (item && (item.stock || 0) < li.qty) {
-                    return alert(`Insufficient stock for "${li.name}".\nAvailable: ${item.stock || 0}, Required: ${li.qty}\n\nTo allow negative stock, enable it in Settings → Inventory Settings.`);
+            }));
+            if (shortItems.length) { endSave(); return alert('Insufficient stock:\n' + shortItems.join('\n')); }
+            if (!co2.allowNegativeStock) {
+                for (const li of invoiceItems) {
+                    const item = inventory.find(x => x.id === li.itemId);
+                    if (item && (item.stock || 0) < li.qty) { endSave(); return alert(`Insufficient stock for "${li.name}".\nAvailable: ${item.stock || 0}, Required: ${li.qty}`); }
                 }
             }
         }
+
+        // Build all DB operations — run in parallel, NO per-op refresh
+        const ops = [];
+        const nowStock = {}; // track running stock for ledger entries
+
         for (const li of invoiceItems) {
             const item = inventory.find(x => x.id === li.itemId);
-            if (item) {
-                const qtyChange = type === 'sale' ? -li.qty : li.qty;
-                const newStock = (item.stock || 0) + qtyChange;
-                const itemUpdate = { stock: newStock };
-                if (type === 'sale' && item.batches && item.batches.length) {
-                    // FIFO: deduct from oldest batch first, then re-sync sale price/MRP
-                    const { updatedBatches, priceSync } = deductBatchQtyFifo(item, li.qty);
-                    if (updatedBatches) { itemUpdate.batches = updatedBatches; Object.assign(itemUpdate, priceSync); }
-                }
-                await DB.update('inventory', item.id, itemUpdate);
-                await addLedgerEntry(item.id, item.name, type === 'sale' ? 'Sale' : 'Purchase', qtyChange, invNo, type === 'sale' ? 'Sale Invoice' : 'Purchase Invoice');
+            if (!item) continue;
+            const qtyChange = type === 'sale' ? -li.qty : li.qty;
+            const newStock = (item.stock || 0) + qtyChange;
+            nowStock[item.id] = newStock;
+            const itemUpdate = { stock: newStock };
+            if (type === 'sale' && item.batches && item.batches.length) {
+                const { updatedBatches, priceSync } = deductBatchQtyFifo(item, li.qty);
+                if (updatedBatches) { itemUpdate.batches = updatedBatches; Object.assign(itemUpdate, priceSync); }
             }
+            ops.push(DB.rawUpdate('inventory', item.id, itemUpdate));
+            ops.push(DB.rawInsert('stock_ledger', {
+                date: today(), itemId: item.id, itemName: item.name,
+                entryType: type === 'sale' ? 'Sale' : 'Purchase', qty: qtyChange,
+                runningStock: newStock, documentNo: invNo,
+                reason: type === 'sale' ? 'Sale Invoice' : 'Purchase Invoice',
+                createdBy: currentUser.name
+            }));
         }
 
-        // Update party balance and ledger
+        // Party balance + ledger
         const party = parties.find(p => p.id === partyId);
+        let newBal = party ? party.balance || 0 : 0;
         if (party) {
             const balChange = type === 'sale' ? total : -total;
-            const newBal = (party.balance || 0) + balChange;
-            await DB.update('parties', party.id, { balance: newBal });
-            await addPartyLedgerEntry(party.id, party.name, type === 'sale' ? 'Sale Invoice' : 'Purchase Invoice', balChange, invNo, type === 'sale' ? 'Sale' : 'Purchase');
+            newBal = (party.balance || 0) + balChange;
+            ops.push(DB.rawUpdate('parties', party.id, { balance: newBal }));
+            ops.push(DB.rawInsert('party_ledger', {
+                date: today(), partyId: party.id, partyName: party.name,
+                type: type === 'sale' ? 'Sale Invoice' : 'Purchase Invoice',
+                amount: balChange, balance: newBal, docNo: invNo,
+                notes: type === 'sale' ? 'Sale' : 'Purchase', createdBy: currentUser.name
+            }));
         }
 
-        // Save invoice
+        // Resolve fromOrder
         const fromOrderId = ($('f-inv-from-order') || {}).value || '';
         let fromOrderNo = '';
         if (fromOrderId) {
@@ -5217,25 +5246,32 @@ async function saveInvoice() {
             const fo = allOrders2.find(x => x.id === fromOrderId);
             if (fo) fromOrderNo = fo.orderNo;
         }
+
+        // Invoice insert
         const dueDateVal = $('f-inv-due-date') ? $('f-inv-due-date').value : '';
         const invData = { invoiceNo: invNo, date: $('f-inv-date').value, dueDate: dueDateVal || null, type, partyId, partyName, items: [...invoiceItems], subtotal: sub, gst, roundOff: roundoff, total, status: fromOrderId ? 'from-packing' : 'created', createdBy: currentUser.name, ...(vyaparInvNo ? { vyaparInvoiceNo: vyaparInvNo } : {}), ...(fromOrderNo ? { fromOrder: fromOrderNo } : {}) };
-        await DB.insert('invoices', invData);
-        if (type === 'sale' && vyaparInvNo) incrementVyaparNo();
-        if (fromOrderId) await DB.update('salesorders', fromOrderId, { invoiceNo: invNo });
+        ops.push(DB.rawInsert('invoices', invData));
+        if (fromOrderId) ops.push(DB.rawUpdate('salesorders', fromOrderId, { invoiceNo: invNo }));
 
-        // Process advances
-        const payments = await DB.getAll('payments');
-        for (const inp of document.querySelectorAll('.inv-apply-adv-input')) {
-            const val = +inp.value;
-            if (val > 0) {
+        // Advance allocations
+        const advInputs = [...document.querySelectorAll('.inv-apply-adv-input')].filter(inp => +inp.value > 0);
+        if (advInputs.length) {
+            const payments = await DB.getAll('payments');
+            for (const inp of advInputs) {
                 const pay = payments.find(p => p.id === inp.dataset.pay);
                 if (pay) {
-                    const allocs = pay.allocations || {};
-                    allocs[invNo] = (allocs[invNo] || 0) + val;
-                    await DB.update('payments', pay.id, { allocations: allocs });
+                    const allocs = { ...(pay.allocations || {}), [invNo]: (pay.allocations?.[invNo] || 0) + +inp.value };
+                    ops.push(DB.rawUpdate('payments', pay.id, { allocations: allocs }));
                 }
             }
         }
+
+        // Execute all in parallel — single network round
+        await Promise.all(ops);
+        // ONE refresh to sync cache
+        await DB.refresh();
+
+        if (type === 'sale' && vyaparInvNo) incrementVyaparNo();
 
         const andNew = window._saveAndNew; window._saveAndNew = false;
         const savedType = invType;
@@ -5245,6 +5281,7 @@ async function saveInvoice() {
         if (andNew) openInvoiceModal(savedType);
     } catch (err) {
         window._saveAndNew = false;
+        endSave();
         alert('Error saving invoice: ' + err.message);
     }
 }
