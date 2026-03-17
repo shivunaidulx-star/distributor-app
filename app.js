@@ -7750,6 +7750,7 @@ function exportTableToExcel(tableId, filename) {
 function renderReports() {
     pageContent.innerHTML = `
         <div class="report-grid">
+            <div class="report-card" onclick="showReport('payment-report')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(16,185,129,0.12),rgba(249,115,22,0.08))"><div class="report-icon">💰</div></div><div class="report-text"><h4>Payment Report</h4><p>Pay In / Pay Out with filters</p></div></div>
             <div class="report-card" onclick="showReport('sales')"><div class="report-icon-wrap"><div class="report-icon">💹</div></div><div class="report-text"><h4>Sales Report</h4><p>Sales invoices summary</p></div></div>
             <div class="report-card" onclick="showReport('purchases')"><div class="report-icon-wrap"><div class="report-icon">🛒</div></div><div class="report-text"><h4>Purchase Report</h4><p>Purchase invoices summary</p></div></div>
             <div class="report-card" onclick="showReport('usersales')"><div class="report-icon-wrap"><div class="report-icon">👤</div></div><div class="report-text"><h4>User Sales</h4><p>Detailed salesman performance</p></div></div>
@@ -8074,9 +8075,119 @@ async function showReport(type) {
         renderPayTrend();
         return;
     }
+
+    if (type === 'payment-report') {
+        const monthStart = today().substring(0, 8) + '01';
+        const collectors = users.filter(u => ['Admin','Manager','Salesman'].includes(u.role));
+        window._rPayAll = payments;
+        el.innerHTML = `
+        <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
+            <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end">
+                <div class="form-group"><label>From Date</label><input type="date" id="r-pay-from" value="${monthStart}" onchange="renderPaymentRpt()"></div>
+                <div class="form-group"><label>To Date</label><input type="date" id="r-pay-to" value="${today()}" onchange="renderPaymentRpt()"></div>
+                <div class="form-group"><label>Type</label>
+                    <select id="r-pay-type" onchange="renderPaymentRpt()">
+                        <option value="">Pay In + Pay Out</option>
+                        <option value="in">Pay In Only</option>
+                        <option value="out">Pay Out Only</option>
+                    </select>
+                </div>
+                <div class="form-group"><label>Mode</label>
+                    <select id="r-pay-mode" onchange="renderPaymentRpt()">
+                        <option value="">All Modes</option>
+                        <option>Cash</option><option>UPI</option>
+                        <option>Bank Transfer</option><option>Cheque</option>
+                    </select>
+                </div>
+                <div class="form-group"><label>Party</label>
+                    <input id="r-pay-party" placeholder="All parties..." oninput="renderPaymentRpt()" style="width:150px">
+                </div>
+                <div class="form-group"><label>Collected By</label>
+                    <select id="r-pay-user" onchange="renderPaymentRpt()">
+                        <option value="">All</option>
+                        ${collectors.map(u=>`<option>${escapeHtml(u.name)}</option>`).join('')}
+                    </select>
+                </div>
+                <div class="form-group" style="align-self:flex-end">
+                    <button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-pay-rpt','PaymentReport_${today()}')">📥 Export</button>
+                </div>
+            </div>
+        </div></div>
+        <!-- Summary chips -->
+        <div id="r-pay-summary" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px"></div>
+        <div id="r-pay-out"></div>`;
+        renderPaymentRpt();
+        return;
+    }
 }
 
 // ── REPORT RENDER HELPERS ──
+function renderPaymentRpt() {
+    const from   = ($('r-pay-from')||{}).value||'';
+    const to     = ($('r-pay-to')||{}).value||'';
+    const type   = ($('r-pay-type')||{}).value||'';
+    const mode   = ($('r-pay-mode')||{}).value||'';
+    const party  = (($('r-pay-party')||{}).value||'').toLowerCase();
+    const user   = ($('r-pay-user')||{}).value||'';
+    const out    = $('r-pay-out');     if (!out) return;
+    const sumEl  = $('r-pay-summary');
+
+    let rows = (window._rPayAll||[]).slice();
+    if (from)  rows = rows.filter(p => p.date >= from);
+    if (to)    rows = rows.filter(p => p.date <= to);
+    if (type)  rows = rows.filter(p => p.type === type);
+    if (mode)  rows = rows.filter(p => (p.mode||'') === mode);
+    if (party) rows = rows.filter(p => (p.partyName||'').toLowerCase().includes(party));
+    if (user)  rows = rows.filter(p => (p.collectedBy||p.createdBy||'') === user);
+    rows.sort((a,b) => (b.date||'').localeCompare(a.date||''));
+
+    const totalIn  = rows.filter(p=>p.type==='in').reduce((s,p)=>s+p.amount,0);
+    const totalOut = rows.filter(p=>p.type==='out').reduce((s,p)=>s+p.amount,0);
+    const net      = totalIn - totalOut;
+
+    if (sumEl) sumEl.innerHTML = `
+        <div class="dash-kpi-card dash-kpi-green" style="flex:1;min-width:130px;padding:10px 14px">
+            <div class="dash-kpi-label">Pay In</div>
+            <div class="dash-kpi-amount">${currency(totalIn)}</div>
+            <div class="dash-kpi-badge dash-kpi-badge-green">${rows.filter(p=>p.type==='in').length} entries</div>
+        </div>
+        <div class="dash-kpi-card dash-kpi-red" style="flex:1;min-width:130px;padding:10px 14px">
+            <div class="dash-kpi-label">Pay Out</div>
+            <div class="dash-kpi-amount">${currency(totalOut)}</div>
+            <div class="dash-kpi-badge dash-kpi-badge-red">${rows.filter(p=>p.type==='out').length} entries</div>
+        </div>
+        <div class="dash-kpi-card" style="flex:1;min-width:130px;padding:10px 14px;border-color:${net>=0?'rgba(16,185,129,0.3)':'rgba(239,68,68,0.3)'}">
+            <div class="dash-kpi-label">Net</div>
+            <div class="dash-kpi-amount" style="color:${net>=0?'#10b981':'#ef4444'}">${currency(Math.abs(net))}</div>
+            <div class="dash-kpi-badge" style="background:${net>=0?'rgba(16,185,129,0.1)':'rgba(239,68,68,0.1)'};color:${net>=0?'#10b981':'#ef4444'}">${net>=0?'Surplus':'Deficit'}</div>
+        </div>`;
+
+    if (!rows.length) { out.innerHTML = '<div class="empty-state"><p>No payments found for selected filters</p></div>'; return; }
+
+    out.innerHTML = `<div class="card"><div class="card-body">
+        <div class="table-wrapper">
+        <table class="data-table" id="tbl-pay-rpt" style="min-width:700px">
+            <thead><tr>
+                <th>Date</th><th>Receipt #</th><th>Party</th>
+                <th>Type</th><th>Mode</th><th>Amount</th>
+                <th>Collected By</th><th>Note</th>
+            </tr></thead>
+            <tbody>
+            ${rows.map(p=>`<tr>
+                <td>${fmtDate(p.date)}</td>
+                <td style="font-weight:600;font-size:0.82rem">${escapeHtml(p.receiptNo||'-')}</td>
+                <td>${escapeHtml(p.partyName||'-')}</td>
+                <td><span class="badge ${p.type==='in'?'badge-success':'badge-danger'}">${p.type==='in'?'Pay In':'Pay Out'}</span></td>
+                <td><span class="badge badge-info">${escapeHtml(p.mode||'-')}</span></td>
+                <td class="${p.type==='in'?'amount-green':'amount-red'}" style="font-weight:700">${currency(p.amount)}</td>
+                <td style="font-size:0.82rem">${escapeHtml(p.collectedBy||p.createdBy||'-')}</td>
+                <td style="font-size:0.8rem;color:var(--text-muted)">${escapeHtml(p.notes||p.note||'-')}</td>
+            </tr>`).join('')}
+            </tbody>
+        </table></div>
+    </div></div>`;
+}
+
 function renderSalesRpt() {
     const from  = ($('r-s-from')||{}).value||'';
     const to    = ($('r-s-to')||{}).value||'';
