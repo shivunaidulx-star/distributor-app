@@ -11379,5 +11379,602 @@ async function saveTaxSetup() {
     }
 }
 
+// ============================================================
+// CUSTOMER PORTAL
+// ============================================================
+
+let cpSession = null; // { phone, partyId, partyName, allowedCategories, paymentTerms, creditLimit, balance }
+let cpCart = {}; // { itemId: qty }
+
+function cpRestoreSession() {
+    try {
+        const saved = localStorage.getItem('cp_session');
+        if (!saved) return false;
+        cpSession = JSON.parse(saved);
+        if (!cpSession || !cpSession.phone) { cpSession = null; return false; }
+        // Show portal immediately
+        const root = document.getElementById('cp-root');
+        root.style.display = 'block';
+        document.getElementById('login-screen') && (document.getElementById('login-screen').classList.add('hidden'));
+        document.getElementById('app') && (document.getElementById('app').classList.add('hidden'));
+        DB.refresh().then(() => cpRenderHome());
+        return true;
+    } catch(e) { return false; }
+}
+
+function showCustomerPortal() {
+    const root = document.getElementById('cp-root');
+    root.style.display = 'block';
+    document.getElementById('login-screen').classList.add('hidden');
+    cpRenderAuth();
+}
+
+function cpExitPortal() {
+    const root = document.getElementById('cp-root');
+    root.style.display = 'none';
+    root.innerHTML = '';
+    document.getElementById('login-screen').classList.remove('hidden');
+}
+
+function cpLogout() {
+    cpSession = null;
+    cpCart = {};
+    localStorage.removeItem('cp_session');
+    cpExitPortal();
+}
+
+function cpSaveSession() {
+    localStorage.setItem('cp_session', JSON.stringify(cpSession));
+}
+
+function cpShell(content, showBack, backFn) {
+    const company = DB.get('db_settings') && DB.get('db_settings').companyName ? DB.get('db_settings').companyName : 'DistroManager';
+    const root = document.getElementById('cp-root');
+    root.innerHTML = `
+    <div class="cp-shell">
+        <div class="cp-header">
+            ${showBack ? `<button class="cp-hbtn" onclick="(${backFn.toString()})()">&#8592;</button>` : `<div style="width:36px"></div>`}
+            <span class="cp-title">${company}</span>
+            ${cpSession ? `<button class="cp-hbtn" onclick="cpLogout()" title="Logout">&#x23FB;</button>` : `<button class="cp-hbtn" onclick="cpExitPortal()">&#x2715;</button>`}
+        </div>
+        <div class="cp-body">${content}</div>
+    </div>`;
+}
+
+// ---- AUTH ----
+function cpRenderAuth() {
+    cpShell(`
+    <div class="cp-card" style="margin-top:32px">
+        <h2 style="margin:0 0 4px;font-size:1.3rem">Customer Login</h2>
+        <p style="color:var(--text-muted);font-size:0.85rem;margin:0 0 20px">Enter your phone number to continue</p>
+        <div class="form-group">
+            <label>Phone Number</label>
+            <input id="cp-phone" type="tel" class="form-control" placeholder="10-digit mobile number" maxlength="15">
+        </div>
+        <button class="btn btn-primary btn-block" onclick="cpInitAuth(false)">Send OTP</button>
+        <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border);text-align:center">
+            <p style="font-size:0.8rem;color:var(--text-muted);margin-bottom:8px">New customer?</p>
+            <button class="btn btn-outline btn-block" onclick="cpRenderRegister()">Register Your Business</button>
+        </div>
+    </div>`, false, null);
+}
+
+async function cpInitAuth(forRegister, regData) {
+    const phone = (document.getElementById('cp-phone') ? document.getElementById('cp-phone').value : (regData && regData.phone) || '').trim();
+    if (!phone || phone.length < 10) { alert('Please enter a valid phone number'); return; }
+    await cpSendOTP(phone, forRegister, regData);
+}
+
+async function cpSendOTP(phone, forRegister, regData) {
+    const otp = String(Math.floor(100000 + Math.random() * 900000));
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+    try {
+        await supabaseClient.from('customer_otps').upsert({ phone, otp, expires_at: expiresAt, purpose: forRegister ? 'register' : 'login' }, { onConflict: 'phone' });
+        // Show OTP to admin via alert (in real app, send SMS)
+        const company = DB.get('db_settings') && DB.get('db_settings').companyName ? DB.get('db_settings').companyName : 'DistroManager';
+        console.log(`OTP for ${phone}: ${otp}`); // Admin can see in console
+        showToast(`OTP generated. Share ${otp} with customer on WhatsApp.`, 'info', 6000);
+        cpRenderOTP(phone, otp, forRegister, regData);
+    } catch(err) {
+        alert('Error sending OTP: ' + err.message);
+    }
+}
+
+function cpRenderOTP(phone, otpHint, forRegister, regData) {
+    cpShell(`
+    <div class="cp-card" style="margin-top:32px">
+        <h2 style="margin:0 0 4px;font-size:1.3rem">Enter OTP</h2>
+        <p style="color:var(--text-muted);font-size:0.85rem;margin:0 0 4px">OTP sent for <strong>${phone}</strong></p>
+        <p style="color:var(--text-muted);font-size:0.78rem;margin:0 0 20px">Valid for 10 minutes</p>
+        <div class="cp-otp-row" id="cp-otp-row">
+            ${[0,1,2,3,4,5].map(i => `<input class="cp-otp-box" maxlength="1" type="text" inputmode="numeric" pattern="[0-9]" id="cp-otp-${i}" oninput="cpOTPInput(this,${i})" onkeydown="cpOTPKey(this,${i},event)">`).join('')}
+        </div>
+        <input type="hidden" id="cp-otp-phone" value="${phone}">
+        <input type="hidden" id="cp-otp-for-reg" value="${forRegister ? '1' : '0'}">
+        <button class="btn btn-primary btn-block" style="margin-top:20px" onclick="cpVerifyOTP(${JSON.stringify(regData || null).replace(/"/g,'&quot;')})">Verify OTP</button>
+        <button class="btn btn-outline btn-block" style="margin-top:8px" onclick="cpSendOTP('${phone}',${forRegister},${regData ? JSON.stringify(regData).replace(/"/g,"'") : 'null'})">Resend OTP</button>
+    </div>`, true, cpRenderAuth);
+    setTimeout(() => { const el = document.getElementById('cp-otp-0'); if(el) el.focus(); }, 100);
+}
+
+function cpOTPInput(el, idx) {
+    el.value = el.value.replace(/[^0-9]/g,'');
+    if (el.value && idx < 5) {
+        const next = document.getElementById('cp-otp-' + (idx+1));
+        if (next) next.focus();
+    }
+}
+
+function cpOTPKey(el, idx, e) {
+    if (e.key === 'Backspace' && !el.value && idx > 0) {
+        const prev = document.getElementById('cp-otp-' + (idx-1));
+        if (prev) { prev.focus(); prev.value = ''; }
+    }
+}
+
+async function cpVerifyOTP(regData) {
+    const phone = document.getElementById('cp-otp-phone').value;
+    const forReg = document.getElementById('cp-otp-for-reg').value === '1';
+    const entered = [0,1,2,3,4,5].map(i => { const el = document.getElementById('cp-otp-'+i); return el ? el.value : ''; }).join('');
+    if (entered.length < 6) { alert('Please enter all 6 digits'); return; }
+    const { data, error } = await supabaseClient.from('customer_otps').select('*').eq('phone', phone).single();
+    if (error || !data) { alert('OTP not found. Please request again.'); return; }
+    if (data.otp !== entered) { alert('Incorrect OTP. Please try again.'); return; }
+    if (new Date(data.expires_at) < new Date()) { alert('OTP expired. Please request a new one.'); return; }
+    // Delete used OTP
+    await supabaseClient.from('customer_otps').delete().eq('phone', phone);
+    if (forReg && regData) {
+        await cpSaveReg(phone, regData);
+    } else {
+        await cpDoLogin(phone);
+    }
+}
+
+async function cpDoLogin(phone) {
+    await DB.refreshTables(['parties']);
+    const parties = DB.get('db_parties') || [];
+    const party = parties.find(p => p.portalPhone === phone && p.portalEnabled);
+    if (party) {
+        cpSession = {
+            phone, partyId: party.id, partyName: party.name,
+            allowedCategories: party.allowedCategories || [],
+            paymentTerms: party.paymentTerms || 'COD',
+            creditLimit: party.creditLimit || 0,
+            balance: party.balance || 0
+        };
+        cpSaveSession();
+        cpRenderHome();
+        return;
+    }
+    // Check pending registration
+    const { data: regs } = await supabaseClient.from('customer_registrations').select('*').eq('phone', phone).order('submitted_at', { ascending: false }).limit(1);
+    const reg = regs && regs[0];
+    if (reg && reg.status === 'pending') { cpRenderPending(reg); return; }
+    if (reg && reg.status === 'rejected') { cpRenderRejected(reg); return; }
+    // No account
+    cpShell(`
+    <div class="cp-card" style="margin-top:32px;text-align:center">
+        <div style="font-size:3rem;margin-bottom:12px">🔍</div>
+        <h3>No Account Found</h3>
+        <p style="color:var(--text-muted);font-size:0.88rem">No approved account linked to <strong>${phone}</strong>.</p>
+        <button class="btn btn-primary btn-block" style="margin-top:16px" onclick="cpRenderRegister()">Register Now</button>
+        <button class="btn btn-outline btn-block" style="margin-top:8px" onclick="cpRenderAuth()">Try Another Number</button>
+    </div>`, false, null);
+}
+
+// ---- REGISTRATION ----
+function cpRenderRegister() {
+    cpShell(`
+    <div class="cp-card" style="margin-top:16px">
+        <h2 style="margin:0 0 4px;font-size:1.2rem">Business Registration</h2>
+        <p style="color:var(--text-muted);font-size:0.82rem;margin:0 0 16px">Fill in your details to request access</p>
+        <div class="form-group"><label>Phone Number *</label><input id="cp-reg-phone" type="tel" class="form-control" placeholder="10-digit mobile" maxlength="15"></div>
+        <div class="form-group"><label>Business Name *</label><input id="cp-reg-biz" class="form-control" placeholder="Your shop / company name"></div>
+        <div class="form-group"><label>Contact Person *</label><input id="cp-reg-contact" class="form-control" placeholder="Owner / manager name"></div>
+        <div class="form-group"><label>Address</label><input id="cp-reg-addr" class="form-control" placeholder="Full address"></div>
+        <div class="form-group"><label>City</label><input id="cp-reg-city" class="form-control" placeholder="City"></div>
+        <div class="form-group"><label>GSTIN (optional)</label><input id="cp-reg-gstin" class="form-control" placeholder="GST number"></div>
+        <div class="form-group">
+            <label>Location (GPS)</label>
+            <div style="display:flex;gap:8px;align-items:center">
+                <input id="cp-reg-lat" class="form-control" placeholder="Latitude" readonly style="flex:1">
+                <input id="cp-reg-lng" class="form-control" placeholder="Longitude" readonly style="flex:1">
+                <button class="btn btn-outline" style="white-space:nowrap" onclick="cpCaptureGeo()">📍 Get</button>
+            </div>
+        </div>
+        <button class="btn btn-primary btn-block" style="margin-top:8px" onclick="cpRegSubmit()">Submit Registration</button>
+    </div>`, true, cpRenderAuth);
+}
+
+function cpCaptureGeo() {
+    if (!navigator.geolocation) { alert('GPS not supported'); return; }
+    navigator.geolocation.getCurrentPosition(pos => {
+        document.getElementById('cp-reg-lat').value = pos.coords.latitude.toFixed(6);
+        document.getElementById('cp-reg-lng').value = pos.coords.longitude.toFixed(6);
+        showToast('Location captured!', 'success');
+    }, () => alert('Could not get location. Please allow GPS access.'));
+}
+
+async function cpRegSubmit() {
+    const phone = (document.getElementById('cp-reg-phone').value || '').trim();
+    const biz = (document.getElementById('cp-reg-biz').value || '').trim();
+    const contact = (document.getElementById('cp-reg-contact').value || '').trim();
+    if (!phone || phone.length < 10) { alert('Valid phone required'); return; }
+    if (!biz) { alert('Business name required'); return; }
+    if (!contact) { alert('Contact person required'); return; }
+    const regData = {
+        phone, businessName: biz, contactName: contact,
+        address: document.getElementById('cp-reg-addr').value.trim(),
+        city: document.getElementById('cp-reg-city').value.trim(),
+        gstin: document.getElementById('cp-reg-gstin').value.trim(),
+        lat: document.getElementById('cp-reg-lat').value,
+        lng: document.getElementById('cp-reg-lng').value
+    };
+    await cpSendOTP(phone, true, regData);
+}
+
+async function cpSaveReg(phone, d) {
+    const id = 'reg_' + Date.now();
+    const payload = {
+        id, phone, business_name: d.businessName, contact_name: d.contactName,
+        address: d.address, city: d.city, gstin: d.gstin,
+        lat: d.lat, lng: d.lng, status: 'pending'
+    };
+    const { error } = await supabaseClient.from('customer_registrations').insert(payload);
+    if (error) { alert('Error submitting: ' + error.message); return; }
+    showToast('Registration submitted! Admin will review soon.', 'success');
+    cpRenderPending({ business_name: d.businessName, contact_name: d.contactName });
+}
+
+function cpRenderPending(reg) {
+    cpShell(`
+    <div class="cp-card" style="margin-top:48px;text-align:center">
+        <div style="font-size:3.5rem;margin-bottom:16px">⏳</div>
+        <h3 style="margin:0 0 8px">Registration Pending</h3>
+        <p style="color:var(--text-muted);font-size:0.88rem;margin:0 0 4px"><strong>${reg.business_name || ''}</strong></p>
+        <p style="color:var(--text-muted);font-size:0.85rem">Your registration is under review. The admin will approve soon and notify you.</p>
+        <button class="btn btn-outline btn-block" style="margin-top:24px" onclick="cpLogout()">Back to Login</button>
+    </div>`, false, null);
+}
+
+function cpRenderRejected(reg) {
+    cpShell(`
+    <div class="cp-card" style="margin-top:48px;text-align:center">
+        <div style="font-size:3.5rem;margin-bottom:16px">❌</div>
+        <h3 style="margin:0 0 8px">Registration Rejected</h3>
+        ${reg.rejection_reason ? `<p style="color:#ef4444;font-size:0.88rem">Reason: ${reg.rejection_reason}</p>` : ''}
+        <p style="color:var(--text-muted);font-size:0.85rem">Please contact the admin for more information.</p>
+        <button class="btn btn-outline btn-block" style="margin-top:24px" onclick="cpLogout()">Back to Login</button>
+    </div>`, false, null);
+}
+
+// ---- HOME ----
+async function cpRenderHome() {
+    if (!cpSession) { cpRenderAuth(); return; }
+    await DB.refreshTables(['sales_orders', 'inventory', 'categories']);
+    const orders = (DB.get('db_salesorders') || []).filter(o => o.partyId === cpSession.partyId).sort((a,b) => (b.date||'').localeCompare(a.date||'')).slice(0, 20);
+    const bal = cpSession.balance || 0;
+    const balLabel = bal < 0 ? `You are owed ₹${Math.abs(bal).toLocaleString('en-IN')}` : bal > 0 ? `You owe ₹${bal.toLocaleString('en-IN')}` : 'No outstanding balance';
+    const balColor = bal < 0 ? '#22c55e' : bal > 0 ? '#ef4444' : '#6b7280';
+    cpShell(`
+    <div class="cp-balance-card" style="background:linear-gradient(135deg,var(--accent),#f59e0b);color:#fff;border-radius:16px;padding:20px;margin-bottom:20px">
+        <div style="font-size:0.8rem;opacity:0.85;margin-bottom:4px">Welcome</div>
+        <div style="font-size:1.2rem;font-weight:700;margin-bottom:12px">${cpSession.partyName}</div>
+        <div style="font-size:0.78rem;opacity:0.8;margin-bottom:2px">Account Balance</div>
+        <div style="font-size:1.5rem;font-weight:800">${balLabel}</div>
+    </div>
+    <div style="display:flex;gap:12px;margin-bottom:20px">
+        <button class="btn btn-primary" style="flex:1;font-size:0.9rem" onclick="cpRenderCatalog(null,'')">🛍️ Place Order</button>
+        <button class="btn btn-outline" style="flex:1;font-size:0.9rem" onclick="cpRenderCart()">🛒 Cart${Object.keys(cpCart).length ? ' ('+Object.values(cpCart).reduce((a,b)=>a+b,0)+')' : ''}</button>
+    </div>
+    <h4 style="margin:0 0 12px;font-size:0.95rem;color:var(--text-muted)">Recent Orders</h4>
+    ${orders.length ? orders.map(o => `
+    <div class="cp-order-card" onclick="cpViewOrder('${o.id}')">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+            <div>
+                <div style="font-weight:600;font-size:0.92rem">${o.orderNo || o.id}</div>
+                <div style="font-size:0.78rem;color:var(--text-muted)">${o.date || ''} &bull; ${(o.items||[]).length} items</div>
+            </div>
+            <div style="text-align:right">
+                <div style="font-weight:700">₹${(o.total||0).toLocaleString('en-IN')}</div>
+                <span class="status-badge status-${o.status||'pending'}">${o.status||'pending'}</span>
+            </div>
+        </div>
+    </div>`).join('') : '<p style="text-align:center;color:var(--text-muted);padding:24px 0">No orders yet</p>'}
+    `, false, null);
+}
+
+function cpViewOrder(orderId) {
+    const orders = DB.get('db_salesorders') || [];
+    const o = orders.find(x => x.id === orderId);
+    if (!o) return;
+    const items = o.items || [];
+    cpShell(`
+    <div class="cp-card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+            <div>
+                <div style="font-weight:700;font-size:1rem">${o.orderNo || o.id}</div>
+                <div style="font-size:0.8rem;color:var(--text-muted)">${o.date || ''}</div>
+            </div>
+            <span class="status-badge status-${o.status||'pending'}">${o.status||'pending'}</span>
+        </div>
+        <table style="width:100%;border-collapse:collapse;font-size:0.85rem">
+            <thead><tr style="border-bottom:1px solid var(--border)">
+                <th style="text-align:left;padding:6px 4px">Item</th>
+                <th style="text-align:center;padding:6px 4px">Qty</th>
+                <th style="text-align:right;padding:6px 4px">Price</th>
+                <th style="text-align:right;padding:6px 4px">Total</th>
+            </tr></thead>
+            <tbody>${items.map(li => `
+            <tr style="border-bottom:1px solid var(--border)">
+                <td style="padding:6px 4px">${li.itemName||li.name||''}</td>
+                <td style="text-align:center;padding:6px 4px">${li.qty||0} ${li.uom||''}</td>
+                <td style="text-align:right;padding:6px 4px">₹${(+(li.price||0)).toFixed(2)}</td>
+                <td style="text-align:right;padding:6px 4px">₹${(+(li.amount||0)).toFixed(2)}</td>
+            </tr>`).join('')}
+            </tbody>
+            <tfoot><tr>
+                <td colspan="3" style="text-align:right;padding:8px 4px;font-weight:600">Total</td>
+                <td style="text-align:right;padding:8px 4px;font-weight:700">₹${(o.total||0).toLocaleString('en-IN')}</td>
+            </tr></tfoot>
+        </table>
+        ${o.notes ? `<div style="margin-top:12px;padding:10px;background:var(--bg-card);border-radius:8px;font-size:0.85rem;color:var(--text-muted)">${o.notes}</div>` : ''}
+    </div>`, true, cpRenderHome);
+}
+
+// ---- CATALOG ----
+function cpRenderCatalog(filterCat, search) {
+    const inventory = DB.get('db_inventory') || [];
+    const categories = DB.get('db_categories') || [];
+    const allowed = cpSession.allowedCategories || [];
+    // Filter to allowed categories (empty = all allowed)
+    let items = inventory.filter(i => i.isActive !== false);
+    if (allowed.length > 0) items = items.filter(i => allowed.includes(i.category));
+    // Category filter
+    const cats = [...new Set(items.map(i => i.category).filter(Boolean))];
+    if (filterCat) items = items.filter(i => i.category === filterCat);
+    if (search) items = items.filter(i => (i.name||'').toLowerCase().includes(search.toLowerCase()));
+    cpShell(`
+    <div>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
+            <input id="cp-search" class="form-control" placeholder="Search items..." value="${search||''}" oninput="cpRenderCatalog('${filterCat||''}',this.value)" style="flex:1">
+            <button class="btn btn-outline" onclick="cpRenderCart()">🛒 ${Object.values(cpCart).reduce((a,b)=>a+b,0)||''}</button>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px">
+            <button class="cp-cat-pill ${!filterCat?'active':''}" onclick="cpRenderCatalog(null,'${search||''}')">All</button>
+            ${cats.map(c => `<button class="cp-cat-pill ${filterCat===c?'active':''}" onclick="cpRenderCatalog('${c}','${search||''}')">${c}</button>`).join('')}
+        </div>
+        ${items.length ? cpItemListHTML(items) : '<p style="text-align:center;color:var(--text-muted);padding:24px 0">No items found</p>'}
+    </div>`, true, cpRenderHome);
+}
+
+function cpItemListHTML(items) {
+    return items.map(i => {
+        const qty = cpCart[i.id] || 0;
+        const price = i.salePrice || i.mrp || 0;
+        return `<div class="cp-item-row">
+            ${(i.imageUrl||i.photo) ? `<img src="${i.imageUrl||i.photo}" class="cp-item-img">` : `<div class="cp-item-img" style="background:var(--bg-page);display:flex;align-items:center;justify-content:center;font-size:1.4rem">📦</div>`}
+            <div style="flex:1;min-width:0">
+                <div style="font-weight:600;font-size:0.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${i.name}</div>
+                <div style="font-size:0.78rem;color:var(--text-muted)">${i.category||''} ${i.uom ? '| '+i.uom : ''}</div>
+                <div style="font-weight:700;color:var(--accent);font-size:0.95rem">₹${price.toFixed ? price.toFixed(2) : price}</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+                ${qty > 0 ? `
+                <button class="cp-qty-btn" onclick="cpCartUpdate('${i.id}',-1)">-</button>
+                <span style="min-width:24px;text-align:center;font-weight:600">${qty}</span>
+                <button class="cp-qty-btn" onclick="cpCartUpdate('${i.id}',1)">+</button>
+                ` : `<button class="btn btn-primary" style="font-size:0.8rem;padding:6px 14px" onclick="cpCartAdd('${i.id}')">Add</button>`}
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function cpCartAdd(itemId) {
+    cpCart[itemId] = 1;
+    // Re-render the specific item row by refreshing the whole catalog
+    const search = document.getElementById('cp-search') ? document.getElementById('cp-search').value : '';
+    const active = document.querySelector('.cp-cat-pill.active');
+    const cat = active && active.textContent !== 'All' ? active.textContent : null;
+    cpRenderCatalog(cat, search);
+}
+
+function cpCartUpdate(itemId, delta) {
+    cpCart[itemId] = Math.max(0, (cpCart[itemId] || 0) + delta);
+    if (cpCart[itemId] === 0) delete cpCart[itemId];
+    const search = document.getElementById('cp-search') ? document.getElementById('cp-search').value : '';
+    const active = document.querySelector('.cp-cat-pill.active');
+    const cat = active && active.textContent !== 'All' ? active.textContent : null;
+    cpRenderCatalog(cat, search);
+}
+
+function cpRenderCart() {
+    const inventory = DB.get('db_inventory') || [];
+    const cartItems = Object.entries(cpCart).map(([id, qty]) => {
+        const item = inventory.find(i => i.id === id);
+        if (!item) return null;
+        const price = item.salePrice || item.mrp || 0;
+        return { ...item, qty, price, amount: qty * price };
+    }).filter(Boolean);
+    const total = cartItems.reduce((s, i) => s + i.amount, 0);
+    cpShell(`
+    <h3 style="margin:0 0 16px">Your Cart</h3>
+    ${cartItems.length ? `
+    ${cartItems.map(i => `
+    <div class="cp-item-row">
+        <div style="flex:1">
+            <div style="font-weight:600">${i.name}</div>
+            <div style="font-size:0.8rem;color:var(--text-muted)">₹${i.price.toFixed(2)} each</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+            <button class="cp-qty-btn" onclick="cpCartUpdate('${i.id}',-1)">-</button>
+            <span style="min-width:24px;text-align:center;font-weight:600">${i.qty}</span>
+            <button class="cp-qty-btn" onclick="cpCartUpdate('${i.id}',1)">+</button>
+            <span style="min-width:70px;text-align:right;font-weight:700">₹${i.amount.toFixed(2)}</span>
+        </div>
+    </div>`).join('')}
+    <div style="border-top:2px solid var(--border);margin-top:12px;padding-top:12px;display:flex;justify-content:space-between;align-items:center">
+        <span style="font-size:1rem;font-weight:600">Total</span>
+        <span style="font-size:1.2rem;font-weight:800;color:var(--accent)">₹${total.toLocaleString('en-IN', {minimumFractionDigits:2})}</span>
+    </div>
+    <div class="form-group" style="margin-top:16px"><label>Notes / Instructions</label><textarea id="cp-order-notes" class="form-control" rows="2" placeholder="Any special instructions..."></textarea></div>
+    <button class="btn btn-primary btn-block" style="margin-top:8px;font-size:1rem" onclick="cpPlaceOrder()">Place Order</button>
+    ` : `<p style="text-align:center;color:var(--text-muted);padding:40px 0">Your cart is empty</p>`}
+    <button class="btn btn-outline btn-block" style="margin-top:8px" onclick="cpRenderCatalog(null,'')">Continue Shopping</button>
+    `, true, cpRenderHome);
+}
+
+async function cpPlaceOrder() {
+    if (!Object.keys(cpCart).length) { alert('Cart is empty'); return; }
+    const inventory = DB.get('db_inventory') || [];
+    const items = Object.entries(cpCart).map(([id, qty]) => {
+        const item = inventory.find(i => i.id === id);
+        if (!item) return null;
+        const price = +(item.salePrice || item.mrp || 0).toFixed ? +(item.salePrice || item.mrp || 0).toFixed(2) : (item.salePrice || item.mrp || 0);
+        return { itemId: id, itemName: item.name, qty, uom: item.uom||'', price, amount: +(qty * price).toFixed(2) };
+    }).filter(Boolean);
+    const total = items.reduce((s, i) => s + i.amount, 0);
+    const now = new Date();
+    const orderId = 'cp-' + now.getTime();
+    const orderNo = 'CPO-' + Math.random().toString(36).substr(2,8).toUpperCase();
+    const notes = document.getElementById('cp-order-notes') ? document.getElementById('cp-order-notes').value.trim() : '';
+    const payload = {
+        id: orderId, order_no: orderNo,
+        date: now.toISOString().split('T')[0],
+        party_id: cpSession.partyId, party_name: cpSession.partyName,
+        items, total: +total.toFixed(2),
+        status: 'pending', notes,
+        payment_terms: cpSession.paymentTerms,
+        created_by: 'Customer Portal'
+    };
+    const { error } = await supabaseClient.from('sales_orders').insert(payload);
+    if (error) { alert('Error placing order: ' + error.message); return; }
+    cpCart = {};
+    showToast('Order placed successfully!', 'success');
+    await DB.refreshTables(['sales_orders']);
+    cpRenderHome();
+}
+
+// ---- ADMIN: CUSTOMER REQUESTS ----
+async function renderCustomerRequests() {
+    const { data: regs, error } = await supabaseClient.from('customer_registrations').select('*').order('submitted_at', { ascending: false });
+    if (error) { document.getElementById('page-content').innerHTML = '<p>Error loading requests: ' + error.message + '</p>'; return; }
+    const pending = (regs||[]).filter(r => r.status === 'pending');
+    const others = (regs||[]).filter(r => r.status !== 'pending');
+    document.getElementById('page-content').innerHTML = `
+    <div style="padding:16px">
+        <h3 style="margin:0 0 16px">Pending Requests (${pending.length})</h3>
+        ${pending.length ? pending.map(r => cpRegCard(r)).join('') : '<p style="color:var(--text-muted)">No pending requests</p>'}
+        ${others.length ? `<h3 style="margin:20px 0 12px">Processed (${others.length})</h3>${others.map(r => cpRegCard(r)).join('')}` : ''}
+    </div>`;
+}
+
+function cpRegCard(r) {
+    return `<div class="cp-card" style="margin-bottom:12px">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px">
+            <div>
+                <div style="font-weight:700">${r.business_name||''}</div>
+                <div style="font-size:0.82rem;color:var(--text-muted)">${r.contact_name||''} &bull; ${r.phone||''}</div>
+                ${r.city ? `<div style="font-size:0.8rem;color:var(--text-muted)">${r.city}</div>` : ''}
+                ${r.gstin ? `<div style="font-size:0.78rem;color:var(--text-muted)">GSTIN: ${r.gstin}</div>` : ''}
+                ${r.lat && r.lng ? `<div style="font-size:0.78rem"><a href="https://maps.google.com/?q=${r.lat},${r.lng}" target="_blank" style="color:var(--accent)">📍 View on Map</a></div>` : ''}
+                <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">${new Date(r.submitted_at||Date.now()).toLocaleDateString('en-IN')}</div>
+            </div>
+            <div>
+                <span class="status-badge status-${r.status||'pending'}">${r.status||'pending'}</span>
+                ${r.rejection_reason ? `<div style="font-size:0.78rem;color:#ef4444;margin-top:4px">Reason: ${r.rejection_reason}</div>` : ''}
+            </div>
+        </div>
+        ${r.status === 'pending' ? `
+        <div style="display:flex;gap:8px;margin-top:12px">
+            <button class="btn btn-primary" style="flex:1" onclick="openApproveCustModal('${r.id}')">Approve</button>
+            <button class="btn" style="flex:1;background:#ef4444;color:#fff" onclick="rejectCustReg('${r.id}')">Reject</button>
+        </div>` : ''}
+    </div>`;
+}
+
+async function openApproveCustModal(regId) {
+    const { data: regs } = await supabaseClient.from('customer_registrations').select('*').eq('id', regId).single();
+    if (!regs) return;
+    const parties = DB.get('db_parties') || [];
+    const cats = DB.get('db_categories') || [];
+    const matching = parties.filter(p => p.name && regs.business_name && p.name.toLowerCase().includes(regs.business_name.toLowerCase().split(' ')[0]));
+    openModal('Approve Customer', `
+    <div>
+        <p style="font-size:0.88rem;margin-bottom:16px"><strong>${regs.business_name}</strong> — ${regs.phone}</p>
+        <div class="form-group">
+            <label>Link to Existing Party (optional)</label>
+            <select id="ap-party" class="form-control">
+                <option value="">— Create New Party —</option>
+                ${parties.filter(p => p.type === 'customer' || !p.type).map(p => `<option value="${p.id}" ${matching.find(m=>m.id===p.id)?'selected':''}>${p.name}</option>`).join('')}
+            </select>
+        </div>
+        <div class="form-group">
+            <label>Payment Terms</label>
+            <select id="ap-terms" class="form-control">
+                <option value="COD">Cash on Delivery (COD)</option>
+                <option value="Net7">Net 7 Days</option>
+                <option value="Net15">Net 15 Days</option>
+                <option value="Net30">Net 30 Days</option>
+                <option value="Net60">Net 60 Days</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label>Credit Limit (₹)</label>
+            <input id="ap-credit" type="number" class="form-control" value="0" min="0">
+        </div>
+        <div class="form-group">
+            <label>Allowed Categories (leave empty for all)</label>
+            <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px" id="ap-cats">
+                ${cats.map(c => `<label style="display:flex;align-items:center;gap:4px;font-size:0.85rem"><input type="checkbox" value="${c.name||c}"> ${c.name||c}</label>`).join('')}
+            </div>
+        </div>
+    </div>`,
+    [{ label: 'Confirm Approve', cls: 'btn-primary', action: () => confirmApproveCust(regId, document.getElementById('ap-party').value) }]);
+}
+
+async function confirmApproveCust(regId, existingPartyId) {
+    const { data: reg } = await supabaseClient.from('customer_registrations').select('*').eq('id', regId).single();
+    if (!reg) return;
+    const paymentTerms = document.getElementById('ap-terms').value;
+    const creditLimit = +(document.getElementById('ap-credit').value) || 0;
+    const checkedCats = [...document.querySelectorAll('#ap-cats input:checked')].map(el => el.value);
+    let partyId = existingPartyId;
+    if (!partyId) {
+        // Create new party
+        const newParty = {
+            id: 'p_' + Date.now(),
+            name: reg.business_name, type: 'customer',
+            phone: reg.phone, address: reg.address || '', city: reg.city || '',
+            gstin: reg.gstin || '', balance: 0,
+            portal_phone: reg.phone, portal_enabled: true,
+            allowed_categories: checkedCats, payment_terms: paymentTerms, credit_limit: creditLimit
+        };
+        const { error: pe } = await supabaseClient.from('parties').insert(newParty);
+        if (pe) { alert('Error creating party: ' + pe.message); return; }
+        partyId = newParty.id;
+    } else {
+        // Update existing party
+        const { error: pe } = await supabaseClient.from('parties').update({
+            portal_phone: reg.phone, portal_enabled: true,
+            allowed_categories: checkedCats, payment_terms: paymentTerms, credit_limit: creditLimit
+        }).eq('id', partyId);
+        if (pe) { alert('Error updating party: ' + pe.message); return; }
+    }
+    // Update registration status
+    await supabaseClient.from('customer_registrations').update({ status: 'approved', party_id: partyId }).eq('id', regId);
+    closeModal();
+    showToast('Customer approved!', 'success');
+    await DB.refreshTables(['parties']);
+    renderCustomerRequests();
+}
+
+async function rejectCustReg(regId) {
+    const reason = prompt('Reason for rejection (optional):') || '';
+    await supabaseClient.from('customer_registrations').update({ status: 'rejected', rejection_reason: reason }).eq('id', regId);
+    showToast('Registration rejected.', 'info');
+    renderCustomerRequests();
+}
+
 
 

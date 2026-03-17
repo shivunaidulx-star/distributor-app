@@ -15,7 +15,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=18">
+    <link rel="stylesheet" href="style.css?v=19">
 </head>
 <body>
     <!-- Setup Wizard (first launch) -->
@@ -48,9 +48,18 @@
                     <input type="password" id="login-pin" placeholder="Enter 4-digit PIN" maxlength="4">
                 </div>
                 <button id="btn-login" class="btn btn-primary btn-block">Sign In</button>
+                <div style="text-align:center;margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+                    <p style="font-size:0.78rem;color:var(--text-muted);margin-bottom:10px">Are you a customer?</p>
+                    <button onclick="showCustomerPortal()" class="btn btn-outline btn-block" style="border-color:var(--accent);color:var(--accent)">
+                        🛍️ Customer Portal
+                    </button>
+                </div>
             </div>
         </div>
     </div>
+
+    <!-- Customer Portal Root -->
+    <div id="cp-root" style="display:none;position:fixed;inset:0;z-index:9999;background:var(--bg-body);overflow-y:auto"></div>
 
     <!-- Main App -->
     <div id="app" class="app hidden">
@@ -107,6 +116,9 @@
                 </a>
                 <a href="#" class="nav-item" data-page="deliverypersons">
                     <span class="nav-icon">🧑‍✈️</span><span class="nav-label">Delivery Persons</span>
+                </a>
+                <a href="#" class="nav-item" data-page="customerrequests">
+                    <span class="nav-icon">🛍️</span><span class="nav-label">Customer Requests</span>
                 </a>
                 <a href="#" class="nav-item" data-page="users">
                     <span class="nav-icon">🔐</span><span class="nav-label">Users & Roles</span>
@@ -185,7 +197,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-    <script src="app.js?v=54"></script>
+    <script src="app.js?v=56"></script>
     <script>
         // Unregister old service workers to clear stale cache, then register fresh
         if ('serviceWorker' in navigator) {
