@@ -4768,6 +4768,14 @@ async function addInvoiceLine() {
     const lineTax     = +(lineAmount - lineBase).toFixed(2);
     invoiceItems.push({ itemId, name: itemObj.name, qty, price, listedPrice: unitListedPrice, amount: lineAmount, unit, primaryQty, gstRate: itemGstRate, baseAmount: lineBase, taxAmount: lineTax });
 
+    // Sync GST% field from item rates — if all items share one rate, show it; else leave as-is
+    const activeRates = [...new Set(invoiceItems.map(li => li.gstRate || 0).filter(r => r > 0))];
+    const gstFld = $('f-inv-gst');
+    if (gstFld) {
+        if (activeRates.length === 1) gstFld.value = activeRates[0];
+        else if (activeRates.length === 0) gstFld.value = 0;
+    }
+
     // Retroactively update listed prices for same item (volume tier changes)
     if (type === 'sale') {
         invoiceItems.forEach(li => {
@@ -4796,7 +4804,16 @@ async function addInvoiceLine() {
     renderInvoiceLines();
     $('f-inv-item-input').focus();
 }
-function removeInvoiceLine(idx) { invoiceItems.splice(idx, 1); renderInvoiceLines(); }
+function removeInvoiceLine(idx) {
+    invoiceItems.splice(idx, 1);
+    const activeRates = [...new Set(invoiceItems.map(li => li.gstRate || 0).filter(r => r > 0))];
+    const gstFld = $('f-inv-gst');
+    if (gstFld) {
+        if (activeRates.length === 1) gstFld.value = activeRates[0];
+        else if (activeRates.length === 0) gstFld.value = 0;
+    }
+    renderInvoiceLines();
+}
 function renderInvoiceLines() {
     const el = $('inv-lines-list'); if (!el) return;
     el.innerHTML = invoiceItems.map((li, i) => {
