@@ -523,7 +523,7 @@ async function repairCancelledInvoiceOrders() {
 
 // --- Role Permissions ---
 const ROLE_PAGES = {
-    Admin: ['dashboard', 'parties', 'partyledger', 'inventorysetup', 'categories', 'uom', 'inventory', 'catalog', 'salesorders', 'purchaseorders', 'invoices', 'payments', 'expenses', 'packing', 'delivery', 'reports', 'packers', 'deliverypersons', 'users', 'setup'],
+    Admin: ['dashboard', 'parties', 'partyledger', 'inventorysetup', 'categories', 'uom', 'inventory', 'catalog', 'salesorders', 'purchaseorders', 'invoices', 'payments', 'expenses', 'packing', 'delivery', 'reports', 'packers', 'deliverypersons', 'users', 'setup', 'staffmaster', 'attendance', 'hrpayroll'],
     Manager: ['dashboard', 'parties', 'partyledger', 'inventorysetup', 'categories', 'uom', 'inventory', 'catalog', 'salesorders', 'purchaseorders', 'invoices', 'payments', 'expenses', 'packing', 'delivery', 'reports', 'packers', 'deliverypersons'],
     Salesman: ['dashboard', 'parties', 'partyledger', 'inventory', 'catalog', 'salesorders', 'payments'],
     Delivery: ['dashboard', 'delivery'],
@@ -971,13 +971,13 @@ async function navigateTo(page) {
     // Update FAB for this page
     updateFab(page);
 
-    const titles = { dashboard: 'Dashboard', parties: 'Parties', partyledger: 'Party Ledger', inventorysetup: 'Inventory Setup', categories: 'Categories Master', uom: 'UOM Master', inventory: 'Inventory', catalog: 'Item Catalog', salesorders: 'Sales Orders', purchaseorders: 'Purchase Orders', invoices: 'Invoices', payments: 'Payments', expenses: 'Expenses', packing: 'Packing', delivery: 'Delivery', reports: 'Reports', packers: 'Packers Master', deliverypersons: 'Delivery Persons', users: 'Users & Roles', setup: 'Company Setup', customerrequests: 'Customer Requests' };
+    const titles = { dashboard: 'Dashboard', parties: 'Parties', partyledger: 'Party Ledger', inventorysetup: 'Inventory Setup', categories: 'Categories Master', uom: 'UOM Master', inventory: 'Inventory', catalog: 'Item Catalog', salesorders: 'Sales Orders', purchaseorders: 'Purchase Orders', invoices: 'Invoices', payments: 'Payments', expenses: 'Expenses', packing: 'Packing', delivery: 'Delivery', reports: 'Reports', packers: 'Packers Master', deliverypersons: 'Delivery Persons', users: 'Users & Roles', setup: 'Company Setup', customerrequests: 'Customer Requests', staffmaster: 'Staff Master', attendance: 'Attendance', hrpayroll: 'HR & Payroll' };
     pageTitle.textContent = titles[page] || page;
 
     // Show a small loader in the content area
     pageContent.innerHTML = '<div style="display:flex;justify-content:center;align-items:center;height:200px"><div class="loader"></div></div>';
 
-    const renderers = { dashboard: renderDashboard, parties: renderParties, partyledger: renderPartyLedgerLayout, inventorysetup: renderInventorySetup, categories: renderCategories, uom: renderUOM, inventory: renderInventory, catalog: renderCatalog, salesorders: renderSalesOrders, purchaseorders: renderPurchaseOrders, invoices: renderInvoices, payments: renderPayments, expenses: renderExpenses, packing: renderPacking, delivery: renderDelivery, reports: renderReports, packers: renderPackers, deliverypersons: renderDeliveryPersons, users: renderUsers, setup: renderCompanySetup, customerrequests: renderCustomerRequests };
+    const renderers = { dashboard: renderDashboard, parties: renderParties, partyledger: renderPartyLedgerLayout, inventorysetup: renderInventorySetup, categories: renderCategories, uom: renderUOM, inventory: renderInventory, catalog: renderCatalog, salesorders: renderSalesOrders, purchaseorders: renderPurchaseOrders, invoices: renderInvoices, payments: renderPayments, expenses: renderExpenses, packing: renderPacking, delivery: renderDelivery, reports: renderReports, packers: renderPackers, deliverypersons: renderDeliveryPersons, users: renderUsers, setup: renderCompanySetup, customerrequests: renderCustomerRequests, staffmaster: renderStaffMaster, attendance: renderAttendance, hrpayroll: renderHRPayroll };
 
     if (renderers[page]) {
         await renderers[page]();
@@ -1001,6 +1001,9 @@ const MORE_ITEMS = [
     { page: 'deliverypersons', icon: '🧑‍✈️', label: 'Del.Persons' },
     { page: 'users',           icon: '🔐', label: 'Users' },
     { page: 'setup',           icon: '⚙️', label: 'Setup' },
+    { page: 'staffmaster',     icon: '👤', label: 'Staff' },
+    { page: 'attendance',      icon: '📅', label: 'Attendance' },
+    { page: 'hrpayroll',       icon: '💵', label: 'Payroll' },
 ];
 
 const BOTTOM_NAV_TABS = {
@@ -3979,8 +3982,10 @@ function addSOLine() {
 
     // Adjust listed price for alternate UOM
     let unitListedPrice = baseListedPrice;
+    let unitPurchasePrice = +(itemObj.purchasePrice || 0);
     if (unit !== primaryUnit && secUom && unit === secUom && secRatio > 0) {
         unitListedPrice = baseListedPrice / secRatio;
+        unitPurchasePrice = unitPurchasePrice / secRatio;
     }
 
     // Use custom price if entered, otherwise use unit listed price
@@ -3989,7 +3994,13 @@ function addSOLine() {
 
     // Add the new line with listedPrice for comparison
     const roundedPrice = +price.toFixed(2);
-    soItems.push({ itemId, name: itemObj.name, qty, price: roundedPrice, listedPrice: +unitListedPrice.toFixed(2), amount: +(qty * roundedPrice).toFixed(2), unit, primaryQty });
+    soItems.push({ 
+        itemId, name: itemObj.name, qty, price: roundedPrice, 
+        listedPrice: +unitListedPrice.toFixed(2), 
+        purchasePrice: +unitPurchasePrice.toFixed(2),
+        discountAmt: 0, discountPct: 0,
+        amount: +(qty * roundedPrice).toFixed(2), unit, primaryQty 
+    });
 
     // Retroactively update existing lines for the same item if the price tier changed
     soItems.forEach(li => {
@@ -4025,7 +4036,7 @@ function updateSOLine(idx, field, value) {
         const newQty = Math.max(1, +value || 1);
         const item = DB.get('db_inventory').find(x => x.id === li.itemId);
         if (item) {
-            const avail = getAvailableStock(item).available + li.qty; // Add back current line's qty to see total available for this line
+            const avail = getAvailableStock(item).available + li.qty;
             if (newQty > avail) {
                 alert(`Cannot update to ${newQty} ${li.unit || 'Pcs'}. Only ${avail} available.`);
                 return;
@@ -4034,23 +4045,51 @@ function updateSOLine(idx, field, value) {
         li.qty = newQty;
     }
     if (field === 'price') { li.price = Math.max(0, +value || 0); }
-    li.amount = li.qty * li.price;
-    const el2 = $('so-total-display'); if (el2) el2.textContent = `Total: ${currency(soItems.reduce((s, l) => s + l.amount, 0))}`;
+    if (field === 'discountPct') {
+        li.discountPct = Math.max(0, +value || 0);
+        li.discountAmt = +( (li.qty * li.price) * (li.discountPct / 100) ).toFixed(2);
+    }
+    if (field === 'discountAmt') {
+        li.discountAmt = Math.max(0, +value || 0);
+        const lineVal = li.qty * li.price;
+        li.discountPct = lineVal > 0 ? +( (li.discountAmt / lineVal) * 100 ).toFixed(2) : 0;
+    }
+
+    li.amount = +( (li.qty * li.price) - (li.discountAmt || 0) ).toFixed(2);
+    
+    // Price Alert Logic
+    const unitPrice = li.qty > 0 ? li.amount / li.qty : 0;
+    li._priceAlert = (unitPrice < (li.purchasePrice || 0) - 0.01);
+
+    renderSOLines();
 }
 function renderSOLines() {
     const el = $('so-lines-list'); if (!el) return;
     el.innerHTML = soItems.map((li, i) => {
         const edited = li.listedPrice !== undefined && Math.abs(li.price - li.listedPrice) > 0.01;
-        return `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);${edited ? 'background:rgba(245,158,11,0.08);border-left:3px solid var(--warning);padding-left:7px' : ''}">
-            <span style="width:24px;text-align:center;font-size:0.8rem;color:var(--text-muted)">${i + 1}</span>
-            <span style="flex:1;font-size:0.88rem">${li.name}</span>
-            <div style="display:flex;align-items:center;gap:4px">
-                <input type="number" value="${li.qty}" min="1" style="width:55px;padding:3px;border-radius:4px;border:1px solid var(--border);text-align:center;font-size:0.85rem" onchange="updateSOLine(${i},'qty',this.value);renderSOLines()">
-                <span style="font-size:0.75rem;color:var(--text-muted);width:25px">${li.unit || 'Pcs'}</span>
+        const alertStyle = li._priceAlert ? 'background:rgba(239, 68, 68, 0.05); border-left:3px solid var(--danger); padding-left:5px' : (edited ? 'background:rgba(245,158,11,0.05); border-left:3px solid var(--warning); padding-left:5px' : '');
+        
+        return `<div style="display:flex;align-items:center;gap:6px;padding:8px 0;border-bottom:1px solid var(--border);${alertStyle}">
+            <span style="width:20px;text-align:center;font-size:0.75rem;color:var(--text-muted)">${i + 1}</span>
+            <div style="flex:1;min-width:0">
+                <div style="font-size:0.85rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600">${li.name}</div>
+                ${li._priceAlert ? `<div style="font-size:0.65rem;color:var(--danger);font-weight:700">⚠️ Below Cost: ${currency(li.purchasePrice)}</div>` : ''}
             </div>
-            <div style="width:100px;text-align:right">${edited ? `<div style="font-size:0.65rem;text-decoration:line-through;color:var(--text-muted)">${currency(li.listedPrice)}</div>` : ''}<input type="number" value="${(+li.price).toFixed(2)}" min="0" step="0.01" style="width:80px;padding:3px;border-radius:4px;border:1px solid ${edited ? 'var(--warning)' : 'var(--border)'};text-align:right;font-size:0.85rem;${edited ? 'color:var(--warning);font-weight:600' : ''}" onchange="updateSOLine(${i},'price',this.value);renderSOLines()"></div>
-            <span style="width:80px;text-align:right;font-weight:600;font-size:0.85rem">${currency(li.amount)}</span>
-            <button class="btn-icon" onclick="removeSOLine(${i})" style="flex-shrink:0">✕</button></div>`;
+            <div style="display:flex;align-items:center;gap:3px">
+                <input type="number" value="${li.qty}" min="1" style="width:45px;padding:4px 2px;border-radius:4px;border:1px solid var(--border);text-align:center;font-size:0.8rem" onchange="updateSOLine(${i},'qty',this.value)">
+                <span style="font-size:0.7rem;color:var(--text-muted);width:22px">${li.unit || 'Pcs'}</span>
+            </div>
+            <div style="width:75px;text-align:right">
+                ${edited ? `<div style="font-size:0.6rem;text-decoration:line-through;color:var(--text-muted)">${currency(li.listedPrice)}</div>` : ''}
+                <input type="number" value="${(+li.price).toFixed(2)}" min="0" step="0.01" style="width:65px;padding:4px 2px;border-radius:4px;border:1px solid ${edited ? 'var(--warning)' : 'var(--border)'};text-align:right;font-size:0.8rem;${edited?'color:var(--warning);font-weight:600':''}" onchange="updateSOLine(${i},'price',this.value)">
+            </div>
+            <div style="display:flex;flex-direction:column;gap:1px">
+                <input type="number" value="${li.discountPct||0}" min="0" max="100" step="0.01" placeholder="%" style="width:40px;padding:2px;border-radius:4px;border:1px solid var(--border);text-align:center;font-size:0.7rem" onchange="updateSOLine(${i},'discountPct',this.value)">
+                <input type="number" value="${li.discountAmt||0}" min="0" step="0.01" placeholder="₹" style="width:50px;padding:2px;border-radius:4px;border:1px solid var(--border);text-align:center;font-size:0.7rem" onchange="updateSOLine(${i},'discountAmt',this.value)">
+            </div>
+            <span style="width:75px;text-align:right;font-weight:700;font-size:0.85rem;color:${li._priceAlert?'var(--danger)':'inherit'}">${currency(li.amount)}</span>
+            <button class="btn-icon" onclick="removeSOLine(${i})" style="flex-shrink:0;color:var(--danger)">✕</button>
+        </div>`;
     }).join('');
 
     const el2 = $('so-total-display'); if (el2) el2.textContent = `Total: ${currency(soItems.reduce((s, l) => s + l.amount, 0))}`;
@@ -5215,8 +5254,10 @@ async function addInvoiceLine() {
 
     // Adjust listed price for alternate UOM
     let unitListedPrice = listedPrice;
+    let unitPurchasePrice = +(itemObj.purchasePrice || 0);
     if (unit !== primaryUnit && secUom && unit === secUom && secRatio > 0) {
         unitListedPrice = listedPrice / secRatio;
+        unitPurchasePrice = unitPurchasePrice / secRatio;
     }
 
     // Use custom price if entered, otherwise use unit listed price
@@ -5227,7 +5268,14 @@ async function addInvoiceLine() {
     const lineAmount  = qty * price;
     const lineBase    = itemGstRate > 0 ? +(lineAmount / (1 + itemGstRate / 100)).toFixed(2) : lineAmount;
     const lineTax     = +(lineAmount - lineBase).toFixed(2);
-    invoiceItems.push({ itemId, name: itemObj.name, qty, price, listedPrice: unitListedPrice, amount: lineAmount, unit, primaryQty, gstRate: itemGstRate, baseAmount: lineBase, taxAmount: lineTax });
+    invoiceItems.push({ 
+        itemId, name: itemObj.name, qty, price, 
+        listedPrice: +unitListedPrice.toFixed(2), 
+        purchasePrice: +unitPurchasePrice.toFixed(2),
+        discountAmt: 0, discountPct: 0,
+        amount: lineAmount, unit, primaryQty, gstRate: itemGstRate, 
+        baseAmount: lineBase, taxAmount: lineTax 
+    });
 
     // Sync GST% field from item rates — if all items share one rate, show it; else leave as-is
     const activeRates = [...new Set(invoiceItems.map(li => li.gstRate || 0).filter(r => r > 0))];
@@ -5275,17 +5323,75 @@ function removeInvoiceLine(idx) {
     }
     renderInvoiceLines();
 }
+function updateInvoiceLine(idx, field, value) {
+    const li = invoiceItems[idx]; if (!li) return;
+    const type = $('f-inv-type') ? $('f-inv-type').value : 'sale';
+
+    if (field === 'qty') {
+        const newQty = Math.max(1, +value || 1);
+        const item = DB.cache['inventory'].find(x => x.id === li.itemId);
+        if (item && type === 'sale') {
+            const avail = getAvailableStock(item).available + li.qty;
+            if (newQty > avail) {
+                alert(`Cannot update to ${newQty} ${li.unit || 'Pcs'}. Only ${avail} available.`);
+                return;
+            }
+        }
+        li.qty = newQty;
+    }
+    if (field === 'price') { li.price = Math.max(0, +value || 0); }
+    if (field === 'discountPct') {
+        li.discountPct = Math.max(0, +value || 0);
+        li.discountAmt = +( (li.qty * li.price) * (li.discountPct / 100) ).toFixed(2);
+    }
+    if (field === 'discountAmt') {
+        li.discountAmt = Math.max(0, +value || 0);
+        const lineVal = li.qty * li.price;
+        li.discountPct = lineVal > 0 ? +( (li.discountAmt / lineVal) * 100 ).toFixed(2) : 0;
+    }
+
+    li.amount = +( (li.qty * li.price) - (li.discountAmt || 0) ).toFixed(2);
+    
+    // Recalculate GST for the line
+    const gstRate = +(li.gstRate || 0);
+    li.baseAmount = gstRate > 0 ? +(li.amount / (1 + gstRate / 100)).toFixed(2) : li.amount;
+    li.taxAmount = +(li.amount - li.baseAmount).toFixed(2);
+
+    // Price Alert Logic
+    const unitPrice = li.qty > 0 ? li.amount / li.qty : 0;
+    li._priceAlert = (type === 'sale' && unitPrice < (li.purchasePrice || 0) - 0.01);
+
+    renderInvoiceLines();
+}
 function renderInvoiceLines() {
     const el = $('inv-lines-list'); if (!el) return;
+    const invType = ($('f-inv-type')||{}).value;
+
     el.innerHTML = invoiceItems.map((li, i) => {
-        const edited   = li.listedPrice !== undefined && li.price !== li.listedPrice;
+        const edited   = li.listedPrice !== undefined && Math.abs(li.price - li.listedPrice) > 0.01;
         const gstLabel = li.gstRate ? `<span style="font-size:0.7rem;color:var(--text-muted)">Base ${currency(li.baseAmount||li.amount)} + GST ${li.gstRate}%: ${currency(li.taxAmount||0)}</span>` : '';
-        return `<div style="padding:7px 0;border-bottom:1px solid var(--border);${edited?'background:rgba(245,158,11,0.05);border-left:3px solid var(--warning);padding-left:7px':''}">
-            <div style="display:flex;align-items:center;gap:8px">
-                <span style="width:24px;text-align:center;font-size:0.75rem;color:var(--text-muted)">${i+1}</span>
-                <span style="flex:1;font-size:0.88rem;font-weight:600">${li.name}</span>
-                <span style="font-size:0.82rem;color:var(--text-muted)">${li.qty} ${li.unit||'Pcs'} × ${edited?`<s style="color:var(--text-muted);font-size:0.75rem">${currency(li.listedPrice)}</s> <b style="color:var(--warning)">${currency(li.price)}</b>`:currency(li.price)}</span>
-                <span style="font-weight:700;min-width:70px;text-align:right">${currency(li.amount)}</span>
+        const alertStyle = li._priceAlert ? 'background:rgba(239, 68, 68, 0.05); border-left:3px solid var(--danger); padding-left:5px' : (edited ? 'background:rgba(245,158,11,0.05); border-left:3px solid var(--warning); padding-left:5px' : '');
+
+        return `<div style="padding:8px 0;border-bottom:1px solid var(--border);${alertStyle}">
+            <div style="display:flex;align-items:center;gap:6px">
+                <span style="width:20px;text-align:center;font-size:0.75rem;color:var(--text-muted)">${i+1}</span>
+                <div style="flex:1;min-width:0">
+                    <div style="font-size:0.85rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${li.name}</div>
+                    ${li._priceAlert ? `<div style="font-size:0.65rem;color:var(--danger);font-weight:700">⚠️ Below Cost: ${currency(li.purchasePrice)}</div>` : ''}
+                </div>
+                <div style="display:flex;align-items:center;gap:3px">
+                    <input type="number" value="${li.qty}" min="0.001" step="any" style="width:45px;padding:4px 2px;border-radius:4px;border:1px solid var(--border);text-align:center;font-size:0.8rem" onchange="updateInvoiceLine(${i},'qty',this.value)">
+                    <span style="font-size:0.7rem;color:var(--text-muted);width:22px">${li.unit||'Pcs'}</span>
+                </div>
+                <div style="width:75px;text-align:right">
+                    ${edited ? `<div style="font-size:0.6rem;text-decoration:line-through;color:var(--text-muted)">${currency(li.listedPrice)}</div>` : ''}
+                    <input type="number" value="${(+li.price).toFixed(2)}" min="0" step="0.01" style="width:65px;padding:4px 2px;border-radius:4px;border:1px solid ${edited ? 'var(--warning)' : 'var(--border)'};text-align:right;font-size:0.8rem;${edited?'color:var(--warning);font-weight:600':''}" onchange="updateInvoiceLine(${i},'price',this.value)">
+                </div>
+                <div style="display:flex;flex-direction:column;gap:1px">
+                    <input type="number" value="${li.discountPct||0}" min="0" max="100" step="0.01" placeholder="%" title="Discount %" style="width:40px;padding:2px;border-radius:4px;border:1px solid var(--border);text-align:center;font-size:0.7rem" onchange="updateInvoiceLine(${i},'discountPct',this.value)">
+                    <input type="number" value="${li.discountAmt||0}" min="0" step="0.01" placeholder="₹" title="Discount ₹" style="width:50px;padding:2px;border-radius:4px;border:1px solid var(--border);text-align:center;font-size:0.7rem" onchange="updateInvoiceLine(${i},'discountAmt',this.value)">
+                </div>
+                <span style="width:75px;text-align:right;font-weight:700;font-size:0.85rem;color:${li._priceAlert?'var(--danger)':'inherit'}">${currency(li.amount)}</span>
                 <button class="btn-icon" onclick="removeInvoiceLine(${i})" style="flex-shrink:0;color:var(--danger)">✕</button>
             </div>
             ${gstLabel ? `<div style="padding-left:32px;margin-top:2px">${gstLabel}</div>` : ''}
@@ -12334,6 +12440,434 @@ async function rejectCustReg(regId) {
     await supabaseClient.from('customer_registrations').update({ status: 'rejected', rejection_reason: reason }).eq('id', regId);
     showToast('Registration rejected.', 'info');
     renderCustomerRequests();
+}
+
+// ============================================================
+// HR MODULE: STAFF MASTER, ATTENDANCE, PAYROLL
+// ============================================================
+
+// ---- STAFF MASTER ----
+async function renderStaffMaster() {
+    const { data: staff, error } = await supabaseClient.from('staff').select('*').order('name');
+    if (error) { pageContent.innerHTML = `<p style="color:red">Error: ${error.message}</p>`; return; }
+    const isAdmin = currentUser && currentUser.role === 'Admin';
+    pageContent.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <div>
+            <div style="font-size:0.85rem;color:var(--text-muted)">${staff.length} staff member(s)</div>
+        </div>
+        ${isAdmin ? `<button class="btn btn-primary" onclick="openStaffModal()">+ Add Staff</button>` : ''}
+    </div>
+    <div class="card"><div class="card-body">
+    <div class="table-wrapper"><table class="data-table">
+        <thead><tr><th>Name</th><th>Role</th><th>Phone</th><th>Monthly Salary</th><th>Join Date</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody>
+        ${staff.length ? staff.map(s => `<tr style="${s.status==='inactive'?'opacity:0.55':''}">
+            <td style="font-weight:600">${escapeHtml(s.name)}</td>
+            <td><span class="badge badge-info" style="font-size:0.72rem">${s.role||'Staff'}</span></td>
+            <td>${s.phone ? `<a href="tel:${s.phone}" style="color:var(--success)">${s.phone}</a>` : '-'}</td>
+            <td style="font-weight:600">${currency(s.monthly_salary||0)}</td>
+            <td>${s.join_date ? fmtDate(s.join_date) : '-'}</td>
+            <td><span class="badge ${s.status==='active'?'badge-success':'badge-danger'}">${s.status||'active'}</span></td>
+            <td><div class="action-btns">
+                ${isAdmin ? `<button class="btn-icon" onclick="openStaffModal('${s.id}')">✏️</button>
+                <button class="btn-icon" onclick="toggleStaffStatus('${s.id}','${s.status||'active'}')" title="${s.status==='inactive'?'Activate':'Deactivate'}">${s.status==='inactive'?'✅':'🚫'}</button>
+                <button class="btn-icon" onclick="openStaffAdvance('${s.id}','${escapeHtml(s.name)}')" title="Give Advance">💵</button>` : ''}
+            </div></td>
+        </tr>`).join('') : '<tr><td colspan="7"><div class="empty-state"><p>No staff added yet</p></div></td></tr>'}
+        </tbody>
+    </table></div>
+    </div></div>`;
+}
+
+async function openStaffModal(id) {
+    let s = null;
+    if (id) {
+        const { data } = await supabaseClient.from('staff').select('*').eq('id', id).single();
+        s = data;
+    }
+    const ROLES = ['Admin', 'Manager', 'Salesman', 'Packer', 'Delivery', 'Driver', 'Helper', 'Accountant', 'Staff'];
+    openModal(s ? 'Edit Staff' : 'Add Staff', `
+    <div class="form-row">
+        <div class="form-group"><label>Name *</label><input id="f-st-name" class="form-control" value="${s ? escapeHtml(s.name) : ''}"></div>
+        <div class="form-group"><label>Role</label>
+            <select id="f-st-role" class="form-control">${ROLES.map(r=>`<option ${s&&s.role===r?'selected':''}>${r}</option>`).join('')}</select>
+        </div>
+    </div>
+    <div class="form-row">
+        <div class="form-group"><label>Phone</label><input id="f-st-phone" class="form-control" value="${s ? (s.phone||'') : ''}" type="tel"></div>
+        <div class="form-group"><label>Monthly Salary (₹)</label><input id="f-st-salary" class="form-control" type="number" min="0" value="${s ? (s.monthly_salary||0) : ''}"></div>
+    </div>
+    <div class="form-row">
+        <div class="form-group"><label>Join Date</label><input id="f-st-join" class="form-control" type="date" value="${s ? (s.join_date||'') : today()}"></div>
+    </div>
+    <div class="modal-actions">
+        <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveStaff('${id||''}')">Save</button>
+    </div>`);
+}
+
+async function saveStaff(id) {
+    const name = ($('f-st-name').value||'').trim();
+    if (!name) return alert('Name is required');
+    const data = {
+        name, role: $('f-st-role').value,
+        phone: ($('f-st-phone').value||'').trim(),
+        monthly_salary: +$('f-st-salary').value || 0,
+        join_date: $('f-st-join').value || null,
+        status: 'active'
+    };
+    if (id) {
+        const { error } = await supabaseClient.from('staff').update(data).eq('id', id);
+        if (error) return alert('Error: ' + error.message);
+    } else {
+        data.id = 'st_' + Date.now();
+        const { error } = await supabaseClient.from('staff').insert(data);
+        if (error) return alert('Error: ' + error.message);
+    }
+    closeModal(); showToast('Staff saved!', 'success'); renderStaffMaster();
+}
+
+async function toggleStaffStatus(id, currentStatus) {
+    const newStatus = currentStatus === 'inactive' ? 'active' : 'inactive';
+    await supabaseClient.from('staff').update({ status: newStatus }).eq('id', id);
+    showToast(`Staff ${newStatus === 'active' ? 'activated' : 'deactivated'}!`, 'success');
+    renderStaffMaster();
+}
+
+// ---- ATTENDANCE ----
+async function renderAttendance() {
+    const selDate = window._attDate || today();
+    const selMonth = selDate.substring(0, 7);
+    const { data: staff } = await supabaseClient.from('staff').select('*').eq('status', 'active').order('name');
+    const { data: attRecs } = await supabaseClient.from('attendance').select('*').eq('date', selDate);
+    const attMap = {}; (attRecs||[]).forEach(r => attMap[r.staff_id] = r);
+
+    // Monthly summary
+    const { data: monthRecs } = await supabaseClient.from('attendance').select('*').gte('date', selMonth+'-01').lte('date', selMonth+'-31');
+    const monthMap = {};
+    (monthRecs||[]).forEach(r => {
+        if (!monthMap[r.staff_id]) monthMap[r.staff_id] = { P:0, A:0, HD:0, PL:0, H:0 };
+        const k = r.status === 'Present' ? 'P' : r.status === 'Absent' ? 'A' : r.status === 'Half Day' ? 'HD' : r.status === 'Paid Leave' ? 'PL' : 'H';
+        monthMap[r.staff_id][k] = (monthMap[r.staff_id][k]||0) + 1;
+    });
+
+    const STATUS_BTNS = [
+        { s: 'Present',    label: 'P',    color: '#22c55e', bg: 'rgba(34,197,94,0.15)' },
+        { s: 'Absent',     label: 'A',    color: '#ef4444', bg: 'rgba(239,68,68,0.15)' },
+        { s: 'Half Day',   label: '½',    color: '#f59e0b', bg: 'rgba(245,158,11,0.15)' },
+        { s: 'Paid Leave', label: 'PL',   color: '#6366f1', bg: 'rgba(99,102,241,0.15)' },
+        { s: 'Holiday',    label: 'H',    color: '#64748b', bg: 'rgba(100,116,139,0.15)' },
+    ];
+
+    pageContent.innerHTML = `
+    <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-bottom:16px">
+        <input type="date" value="${selDate}" onchange="window._attDate=this.value;renderAttendance()" class="form-control" style="width:160px">
+        <button class="btn btn-outline btn-sm" onclick="window._attDate='${today()}';renderAttendance()">Today</button>
+        <button class="btn btn-outline btn-sm" onclick="markAllAttendance('Present','${selDate}')">✅ All Present</button>
+        <button class="btn btn-outline btn-sm" onclick="markAllAttendance('Holiday','${selDate}')">🏖️ Mark Holiday</button>
+        <span style="margin-left:auto;font-size:0.82rem;color:var(--text-muted)">${fmtDate(selDate)}</span>
+    </div>
+
+    ${!(staff&&staff.length) ? '<div class="empty-state"><p>No active staff. <a href="#" onclick="navigateTo(\'staffmaster\')" style="color:var(--accent)">Add staff first</a></p></div>' : `
+    <div class="card" style="margin-bottom:20px"><div class="card-body">
+    <div class="table-wrapper"><table class="data-table">
+        <thead><tr><th>Staff</th><th>Mark Attendance</th><th style="text-align:center">This Month (${selMonth})</th></tr></thead>
+        <tbody>
+        ${staff.map(s => {
+            const cur = attMap[s.id];
+            const mo = monthMap[s.id] || { P:0, A:0, HD:0, PL:0, H:0 };
+            const btns = STATUS_BTNS.map(b => {
+                const active = cur && cur.status === b.s;
+                return `<button onclick="markAttendance('${s.id}','${escapeHtml(s.name)}','${selDate}','${b.s}')" style="padding:5px 10px;border-radius:20px;font-size:0.78rem;font-weight:700;cursor:pointer;border:2px solid ${b.color};color:${active?'#fff':b.color};background:${active?b.color:b.bg};transition:all 0.15s">${b.label}</button>`;
+            }).join('');
+            const monthSummary = `<span style="font-size:0.8rem;color:var(--text-muted)">P:<b style="color:#22c55e">${mo.P}</b> A:<b style="color:#ef4444">${mo.A}</b> ½:<b style="color:#f59e0b">${mo.HD}</b> PL:<b style="color:#6366f1">${mo.PL}</b></span>`;
+            return `<tr>
+                <td><div style="font-weight:600">${escapeHtml(s.name)}</div><div style="font-size:0.75rem;color:var(--text-muted)">${s.role||'Staff'}</div></td>
+                <td><div style="display:flex;flex-wrap:wrap;gap:6px">${btns}</div></td>
+                <td style="text-align:center">${monthSummary}</td>
+            </tr>`;
+        }).join('')}
+        </tbody>
+    </table></div>
+    </div></div>
+
+    <h4 style="margin-bottom:12px;font-size:0.95rem">Monthly Attendance — ${selMonth}</h4>
+    <div class="card"><div class="card-body" style="overflow-x:auto">
+        ${renderMonthCalendar(staff, monthRecs||[], selMonth)}
+    </div></div>`}`;
+}
+
+function renderMonthCalendar(staff, records, month) {
+    const [y, m] = month.split('-').map(Number);
+    const daysInMonth = new Date(y, m, 0).getDate();
+    const days = Array.from({length: daysInMonth}, (_, i) => i+1);
+    // Map: staffId -> { day -> status }
+    const map = {};
+    records.forEach(r => {
+        const day = parseInt(r.date.split('-')[2]);
+        if (!map[r.staff_id]) map[r.staff_id] = {};
+        map[r.staff_id][day] = r.status;
+    });
+    const STATUS_COLOR = { Present:'#22c55e', Absent:'#ef4444', 'Half Day':'#f59e0b', 'Paid Leave':'#6366f1', Holiday:'#94a3b8' };
+    const STATUS_ABBR  = { Present:'P', Absent:'A', 'Half Day':'½', 'Paid Leave':'PL', Holiday:'H' };
+    if (!staff.length) return '<p style="color:var(--text-muted)">No staff</p>';
+    return `<table style="border-collapse:collapse;font-size:0.72rem;min-width:600px">
+    <thead><tr>
+        <th style="padding:4px 8px;text-align:left;border-bottom:2px solid var(--border)">Staff</th>
+        ${days.map(d => {
+            const dow = new Date(y, m-1, d).getDay();
+            return `<th style="padding:4px 4px;text-align:center;border-bottom:2px solid var(--border);${dow===0?'color:#ef4444':''}">${d}<br><span style="font-size:0.65rem;font-weight:400">${['Su','Mo','Tu','We','Th','Fr','Sa'][dow]}</span></th>`;
+        }).join('')}
+        <th style="padding:4px 8px;border-bottom:2px solid var(--border)">Summary</th>
+    </tr></thead>
+    <tbody>${staff.map(s => {
+        const sm = map[s.id] || {};
+        let p=0,a=0,hd=0,pl=0;
+        days.forEach(d => { const st=sm[d]; if(st==='Present')p++; else if(st==='Absent')a++; else if(st==='Half Day')hd++; else if(st==='Paid Leave')pl++; });
+        const eff = p + hd*0.5 + pl;
+        return `<tr>
+            <td style="padding:4px 8px;font-weight:600;white-space:nowrap;border-bottom:1px solid var(--border)">${escapeHtml(s.name)}</td>
+            ${days.map(d => {
+                const st = sm[d];
+                const col = STATUS_COLOR[st] || 'transparent';
+                const dow = new Date(y, m-1, d).getDay();
+                return `<td style="text-align:center;padding:2px;border-bottom:1px solid var(--border)">
+                    <div style="width:22px;height:22px;border-radius:50%;background:${st?col:'rgba(0,0,0,0.04)'};display:flex;align-items:center;justify-content:center;margin:auto;cursor:pointer;font-size:0.65rem;font-weight:700;color:${st?'#fff':'var(--text-muted)'}" title="${st||'No record'}">${st?STATUS_ABBR[st]:(dow===0?'S':'')}</div>
+                </td>`;
+            }).join('')}
+            <td style="padding:4px 8px;border-bottom:1px solid var(--border);white-space:nowrap;font-size:0.75rem">
+                <b style="color:#22c55e">${p}P</b> <b style="color:#ef4444">${a}A</b> <b style="color:#f59e0b">${hd}½</b>
+                <br><span style="color:var(--accent);font-weight:700">Eff: ${eff.toFixed(1)}</span>
+            </td>
+        </tr>`;
+    }).join('')}</tbody></table>`;
+}
+
+async function markAttendance(staffId, staffName, date, status) {
+    const { data: existing } = await supabaseClient.from('attendance').select('id').eq('staff_id', staffId).eq('date', date).single();
+    if (existing) {
+        await supabaseClient.from('attendance').update({ status, marked_by: currentUser.name }).eq('id', existing.id);
+    } else {
+        await supabaseClient.from('attendance').insert({ id: 'att_'+Date.now()+'_'+staffId.slice(-4), staff_id: staffId, staff_name: staffName, date, status, marked_by: currentUser.name });
+    }
+    renderAttendance();
+}
+
+async function markAllAttendance(status, date) {
+    const { data: staff } = await supabaseClient.from('staff').select('id,name').eq('status', 'active');
+    if (!staff || !staff.length) return;
+    await Promise.all(staff.map(async s => {
+        const { data: ex } = await supabaseClient.from('attendance').select('id').eq('staff_id', s.id).eq('date', date).single();
+        if (ex) return supabaseClient.from('attendance').update({ status, marked_by: currentUser.name }).eq('id', ex.id);
+        return supabaseClient.from('attendance').insert({ id: 'att_'+Date.now()+'_'+s.id.slice(-4)+Math.random().toString(36).slice(2,5), staff_id: s.id, staff_name: s.name, date, status, marked_by: currentUser.name });
+    }));
+    showToast(`All marked as ${status}!`, 'success');
+    renderAttendance();
+}
+
+// ---- PAYROLL ----
+async function renderHRPayroll() {
+    const selMonth = window._payMonth || today().substring(0, 7);
+    const [y, m] = selMonth.split('-').map(Number);
+    const daysInMonth = new Date(y, m, 0).getDate();
+    // Working days = all days minus Sundays
+    const workingDays = Array.from({length: daysInMonth}, (_, i) => i+1).filter(d => new Date(y, m-1, d).getDay() !== 0).length;
+
+    const [staffRes, attRes, advRes, salRes] = await Promise.all([
+        supabaseClient.from('staff').select('*').eq('status', 'active').order('name'),
+        supabaseClient.from('attendance').select('*').gte('date', selMonth+'-01').lte('date', selMonth+'-31'),
+        supabaseClient.from('salary_advances').select('*').eq('month', selMonth),
+        supabaseClient.from('salary_records').select('*').eq('month', selMonth)
+    ]);
+
+    const staff = staffRes.data || [];
+    const attRecs = attRes.data || [];
+    const advRecs = advRes.data || [];
+    const salRecs = salRes.data || [];
+
+    // Build per-staff summary
+    const rows = staff.map(s => {
+        const myAtt = attRecs.filter(r => r.staff_id === s.id);
+        const p  = myAtt.filter(r => r.status === 'Present').length;
+        const hd = myAtt.filter(r => r.status === 'Half Day').length;
+        const pl = myAtt.filter(r => r.status === 'Paid Leave').length;
+        const daysEff = p + hd * 0.5 + pl;
+        const salary = s.monthly_salary || 0;
+        const earned = workingDays > 0 ? +((salary / workingDays) * daysEff).toFixed(2) : 0;
+        const advances = advRecs.filter(r => r.staff_id === s.id).reduce((t, r) => t + (r.amount||0), 0);
+        const net = Math.max(0, earned - advances);
+        const salRec = salRecs.find(r => r.staff_id === s.id);
+        return { s, p, hd, pl, daysEff, earned, advances, net, salRec, paid: salRec && salRec.status === 'paid' };
+    });
+
+    const totalEarned = rows.reduce((t, r) => t + r.earned, 0);
+    const totalNet = rows.reduce((t, r) => t + r.net, 0);
+
+    pageContent.innerHTML = `
+    <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-bottom:16px">
+        <input type="month" value="${selMonth}" onchange="window._payMonth=this.value;renderHRPayroll()" class="form-control" style="width:160px">
+        <span style="font-size:0.82rem;color:var(--text-muted)">Working Days (excl. Sun): <strong>${workingDays}</strong></span>
+        <button class="btn btn-outline btn-sm" onclick="navigateTo('attendance')">📅 Mark Attendance</button>
+        <button class="btn btn-outline btn-sm" onclick="openStaffAdvance()">💵 Give Advance</button>
+    </div>
+
+    <div class="stats-grid" style="margin-bottom:16px">
+        <div class="stat-card blue"><div class="stat-icon">👤</div><div class="stat-value">${staff.length}</div><div class="stat-label">Active Staff</div></div>
+        <div class="stat-card green"><div class="stat-icon">💰</div><div class="stat-value">${currency(totalEarned)}</div><div class="stat-label">Total Earned</div></div>
+        <div class="stat-card amber"><div class="stat-icon">💵</div><div class="stat-value">${currency(advRecs.reduce((t,r)=>t+(r.amount||0),0))}</div><div class="stat-label">Advances Given</div></div>
+        <div class="stat-card red"><div class="stat-icon">🏦</div><div class="stat-value">${currency(totalNet)}</div><div class="stat-label">Net Payable</div></div>
+    </div>
+
+    <div class="card" style="margin-bottom:20px"><div class="card-body">
+    <div style="font-weight:700;margin-bottom:12px">Salary Sheet — ${selMonth}</div>
+    <div class="table-wrapper"><table class="data-table">
+        <thead><tr><th>Staff</th><th>Salary/Mo</th><th style="text-align:center">P</th><th style="text-align:center">½</th><th style="text-align:center">Eff.Days</th><th style="text-align:right">Earned</th><th style="text-align:right">Advances</th><th style="text-align:right">Net Payable</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody>
+        ${rows.length ? rows.map(r => `<tr style="${r.paid?'background:rgba(34,197,94,0.05)':''}">
+            <td style="font-weight:600">${escapeHtml(r.s.name)}<div style="font-size:0.72rem;color:var(--text-muted)">${r.s.role||'Staff'}</div></td>
+            <td>${currency(r.s.monthly_salary||0)}</td>
+            <td style="text-align:center;color:#22c55e;font-weight:600">${r.p}</td>
+            <td style="text-align:center;color:#f59e0b;font-weight:600">${r.hd}</td>
+            <td style="text-align:center;font-weight:700">${r.daysEff.toFixed(1)}</td>
+            <td style="text-align:right;font-weight:600">${currency(r.earned)}</td>
+            <td style="text-align:right;color:#ef4444">${r.advances > 0 ? '- '+currency(r.advances) : '-'}</td>
+            <td style="text-align:right;font-weight:800;color:var(--accent);font-size:1rem">${currency(r.net)}</td>
+            <td><span class="badge ${r.paid?'badge-success':'badge-warning'}">${r.paid?'✅ Paid':'Pending'}</span></td>
+            <td><div class="action-btns" style="gap:4px">
+                ${!r.paid ? `<button class="btn btn-primary btn-sm" onclick="markSalaryPaid('${r.s.id}','${escapeHtml(r.s.name)}','${selMonth}',${r.s.monthly_salary||0},${workingDays},${r.daysEff},${r.earned},${r.advances},${r.net})">Mark Paid</button>` : `<button class="btn btn-outline btn-sm" onclick="viewPaySlip('${r.s.id}','${selMonth}')">Pay Slip</button>`}
+                <button class="btn btn-outline btn-sm" onclick="openStaffAdvance('${r.s.id}','${escapeHtml(r.s.name)}')">+Advance</button>
+            </div></td>
+        </tr>`).join('') : '<tr><td colspan="10"><div class="empty-state"><p>No active staff</p></div></td></tr>'}
+        </tbody>
+    </table></div>
+    </div></div>
+
+    <h4 style="margin-bottom:12px;font-size:0.95rem">Advances — ${selMonth}</h4>
+    <div class="card"><div class="card-body">
+    <div class="table-wrapper"><table class="data-table">
+        <thead><tr><th>Staff</th><th>Date</th><th>Amount</th><th>Notes</th><th>Paid By</th><th>Action</th></tr></thead>
+        <tbody>
+        ${advRecs.length ? advRecs.map(a => `<tr>
+            <td style="font-weight:600">${escapeHtml(a.staff_name||'')}</td>
+            <td>${fmtDate(a.date)}</td>
+            <td style="font-weight:700;color:#ef4444">${currency(a.amount)}</td>
+            <td style="color:var(--text-muted);font-size:0.85rem">${escapeHtml(a.notes||'-')}</td>
+            <td style="font-size:0.82rem">${a.paid_by||'-'}</td>
+            <td><button class="btn-icon" onclick="deleteAdvance('${a.id}')" title="Delete">🗑️</button></td>
+        </tr>`).join('') : '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:20px">No advances this month</td></tr>'}
+        </tbody>
+    </table></div>
+    </div></div>`;
+}
+
+async function openStaffAdvance(staffId, staffName) {
+    const { data: staff } = await supabaseClient.from('staff').select('id,name').eq('status', 'active').order('name');
+    const selMonth = window._payMonth || today().substring(0, 7);
+    openModal('Give Salary Advance', `
+    <div class="form-group">
+        <label>Staff Member *</label>
+        <select id="f-adv-staff" class="form-control">
+            <option value="">— Select —</option>
+            ${(staff||[]).map(s => `<option value="${s.id}" data-name="${escapeHtml(s.name)}" ${staffId&&staffId===s.id?'selected':''}>${escapeHtml(s.name)}</option>`).join('')}
+        </select>
+    </div>
+    <div class="form-row">
+        <div class="form-group"><label>Date</label><input id="f-adv-date" type="date" class="form-control" value="${today()}"></div>
+        <div class="form-group"><label>Amount (₹) *</label><input id="f-adv-amount" type="number" min="1" class="form-control" placeholder="0"></div>
+    </div>
+    <div class="form-group"><label>For Month</label><input id="f-adv-month" type="month" class="form-control" value="${selMonth}"></div>
+    <div class="form-group"><label>Notes</label><input id="f-adv-notes" class="form-control" placeholder="Reason / notes..."></div>
+    <div class="modal-actions">
+        <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveAdvance()">Save Advance</button>
+    </div>`);
+}
+
+async function saveAdvance() {
+    const sel = $('f-adv-staff');
+    const staffId = sel.value;
+    const opt = sel.options[sel.selectedIndex];
+    const staffName = opt ? opt.getAttribute('data-name') : '';
+    if (!staffId) return alert('Select a staff member');
+    const amount = +($('f-adv-amount').value || 0);
+    if (!amount || amount <= 0) return alert('Enter a valid amount');
+    const rec = {
+        id: 'adv_' + Date.now(),
+        staff_id: staffId, staff_name: staffName,
+        date: $('f-adv-date').value,
+        amount, month: $('f-adv-month').value,
+        notes: ($('f-adv-notes').value||'').trim(),
+        paid_by: currentUser.name
+    };
+    const { error } = await supabaseClient.from('salary_advances').insert(rec);
+    if (error) return alert('Error: ' + error.message);
+    closeModal(); showToast('Advance recorded!', 'success');
+    renderHRPayroll();
+}
+
+async function deleteAdvance(id) {
+    if (!confirm('Delete this advance record?')) return;
+    await supabaseClient.from('salary_advances').delete().eq('id', id);
+    showToast('Advance deleted', 'info');
+    renderHRPayroll();
+}
+
+async function markSalaryPaid(staffId, staffName, month, monthlySalary, workingDays, daysEff, earned, advances, net) {
+    if (!confirm(`Mark salary as PAID for ${staffName}?\nNet Payable: ${currency(net)}`)) return;
+    const { data: existing } = await supabaseClient.from('salary_records').select('id').eq('staff_id', staffId).eq('month', month).single();
+    const rec = { staff_id: staffId, staff_name: staffName, month, monthly_salary: monthlySalary, working_days: workingDays, days_present: daysEff, earned_salary: earned, advances, net_payable: net, status: 'paid', paid_date: today(), paid_by: currentUser.name };
+    if (existing) {
+        await supabaseClient.from('salary_records').update(rec).eq('id', existing.id);
+    } else {
+        rec.id = 'sal_' + Date.now() + '_' + staffId.slice(-4);
+        await supabaseClient.from('salary_records').insert(rec);
+    }
+    showToast(`Salary marked as paid for ${staffName}!`, 'success');
+    renderHRPayroll();
+}
+
+async function viewPaySlip(staffId, month) {
+    const [{ data: s }, { data: sr }, { data: advs }] = await Promise.all([
+        supabaseClient.from('staff').select('*').eq('id', staffId).single(),
+        supabaseClient.from('salary_records').select('*').eq('staff_id', staffId).eq('month', month).single(),
+        supabaseClient.from('salary_advances').select('*').eq('staff_id', staffId).eq('month', month)
+    ]);
+    if (!sr) return alert('Salary record not found');
+    const co = DB.getObj('db_company');
+    openModal('Pay Slip', `
+    <div id="payslip-print">
+        <div style="text-align:center;border-bottom:2px solid var(--border);padding-bottom:12px;margin-bottom:16px">
+            <div style="font-size:1.2rem;font-weight:800">${escapeHtml(co.name||'Company')}</div>
+            <div style="font-size:0.8rem;color:var(--text-muted)">${co.address||''}</div>
+            <div style="margin-top:8px;font-size:1rem;font-weight:700;color:var(--accent)">SALARY SLIP — ${month}</div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:0.85rem;margin-bottom:16px">
+            <div><span style="color:var(--text-muted)">Employee:</span> <strong>${escapeHtml(s.name)}</strong></div>
+            <div><span style="color:var(--text-muted)">Role:</span> ${s.role||'Staff'}</div>
+            <div><span style="color:var(--text-muted)">Month:</span> ${month}</div>
+            <div><span style="color:var(--text-muted)">Paid Date:</span> ${fmtDate(sr.paid_date)}</div>
+            <div><span style="color:var(--text-muted)">Phone:</span> ${s.phone||'-'}</div>
+            <div><span style="color:var(--text-muted)">Paid By:</span> ${sr.paid_by||'-'}</div>
+        </div>
+        <table style="width:100%;border-collapse:collapse;font-size:0.85rem;margin-bottom:12px">
+            <tr style="background:var(--bg-page)"><th style="padding:8px;text-align:left;border:1px solid var(--border)">Description</th><th style="padding:8px;text-align:right;border:1px solid var(--border)">Amount</th></tr>
+            <tr><td style="padding:8px;border:1px solid var(--border)">Monthly Salary</td><td style="padding:8px;text-align:right;border:1px solid var(--border)">${currency(sr.monthly_salary)}</td></tr>
+            <tr><td style="padding:8px;border:1px solid var(--border)">Working Days (excl. Sun)</td><td style="padding:8px;text-align:right;border:1px solid var(--border)">${sr.working_days}</td></tr>
+            <tr><td style="padding:8px;border:1px solid var(--border)">Days Present (effective)</td><td style="padding:8px;text-align:right;border:1px solid var(--border)">${(+sr.days_present).toFixed(1)}</td></tr>
+            <tr style="background:rgba(34,197,94,0.07)"><td style="padding:8px;border:1px solid var(--border);font-weight:600">Earned Salary</td><td style="padding:8px;text-align:right;border:1px solid var(--border);font-weight:600">${currency(sr.earned_salary)}</td></tr>
+            ${(advs&&advs.length)?advs.map(a=>`<tr style="color:#ef4444"><td style="padding:8px;border:1px solid var(--border)">Advance (${fmtDate(a.date)})${a.notes?' — '+a.notes:''}</td><td style="padding:8px;text-align:right;border:1px solid var(--border)">- ${currency(a.amount)}</td></tr>`).join(''):''}
+            <tr style="background:var(--accent);color:#fff"><td style="padding:10px;border:1px solid var(--border);font-weight:700;font-size:1rem">NET PAYABLE</td><td style="padding:10px;text-align:right;border:1px solid var(--border);font-weight:800;font-size:1.1rem">${currency(sr.net_payable)}</td></tr>
+        </table>
+        <div style="display:flex;justify-content:space-between;font-size:0.75rem;color:var(--text-muted);margin-top:16px;padding-top:12px;border-top:1px dashed var(--border)">
+            <span>Employee Signature: ___________________</span>
+            <span>Authorized: ___________________</span>
+        </div>
+    </div>
+    <div class="modal-actions" style="margin-top:12px">
+        <button class="btn btn-outline" onclick="closeModal()">Close</button>
+        <button class="btn btn-primary" onclick="window.print()">🖨️ Print</button>
+    </div>`);
 }
 
 
