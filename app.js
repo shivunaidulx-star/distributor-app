@@ -175,7 +175,13 @@ const DB = {
         } catch(e) { console.warn('loadSettings error:', e); }
     },
 
-    id() { return Date.now().toString(36) + Math.random().toString(36).substr(2, 5); }
+    id() { 
+        if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+            var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+            return v.toString(16);
+        });
+    }
 };
 
 // ── Column Personalization Manager ──
@@ -198,6 +204,7 @@ const ColumnManager = {
         ],
         parties: [
             { key: 'name',         label: 'Name',          required: true },
+            { key: 'partyCode',    label: 'Party Code',    visible: true  },
             { key: 'type',         label: 'Type',          visible: true  },
             { key: 'phone',        label: 'Phone',         visible: true  },
             { key: 'city',         label: 'City',          visible: true  },
@@ -1825,8 +1832,10 @@ async function renderParties() {
             <input class="search-box" id="party-search" placeholder="Search parties..." oninput="filterPartyTable()">
             <div class="filter-group">
                 <button class="btn btn-outline" onclick="openColumnPersonalizer('parties','renderParties')" style="border-color:var(--accent);color:var(--accent)">⚙️ Columns</button>
-                ${!isSalesman() ? `<button class="btn btn-outline" onclick="downloadPartyTemplate()">📋 Template</button>
-                <button class="btn btn-outline" onclick="importPartyExcel()">📥 Import Excel</button>
+                ${!isSalesman() ? `<button class="btn btn-outline" onclick="downloadPartyTemplate()">📋 Party Template</button>
+                <button class="btn btn-outline" onclick="importPartyExcel()">📥 Import Parties</button>
+                <button class="btn btn-outline" style="border-color:#f59e0b;color:#f59e0b" onclick="downloadOpeningBalTemplate()">📋 Opening Bal Template</button>
+                <button class="btn btn-outline" style="border-color:#f59e0b;color:#f59e0b" onclick="importOpeningBalExcel()">📥 Import Opening Bal</button>
                 <button class="btn btn-primary" onclick="openPartyModal()">+ Add Party</button>` : ''}
             </div>
         </div>
@@ -1850,7 +1859,8 @@ function renderPartyRows(parties) {
     const cols = ColumnManager.get('parties').filter(c => c.visible);
     return parties.map(p => {
         const cellMap = {
-            name:    `<td style="color:var(--text-primary);font-weight:600">${escapeHtml(p.name)}${p.blocked ? ' <span class="badge badge-danger" style="font-size:0.7rem;padding:2px 5px">🔒 Blocked</span>' : ''}${p.active === false ? ' <span class="badge badge-danger" style="font-size:0.7rem;padding:2px 5px">Inactive</span>' : ''}</td>`,
+            name:      `<td style="color:var(--text-primary);font-weight:600">${escapeHtml(p.name)}${p.blocked ? ' <span class="badge badge-danger" style="font-size:0.7rem;padding:2px 5px">🔒 Blocked</span>' : ''}${p.active === false ? ' <span class="badge badge-danger" style="font-size:0.7rem;padding:2px 5px">Inactive</span>' : ''}</td>`,
+            partyCode: `<td style="font-family:monospace;font-size:0.82rem;color:var(--accent)">${p.partyCode||'-'}</td>`,
             type:    `<td><span class="badge ${p.type === 'Customer' ? 'badge-success' : 'badge-info'}">${p.type}</span></td>`,
             phone:   `<td>${p.phone || '-'}</td>`,
             gstin:   `<td style="font-size:0.82rem">${p.gstin || '-'}</td>`,
@@ -1883,11 +1893,22 @@ async function filterPartyTable() {
     );
     $('party-tbody').innerHTML = renderPartyRows(parties);
 }
+function autoFillPartyCode(name) {
+    const el = document.getElementById('f-party-code');
+    if (!el || el.value) return; // don't overwrite if already filled
+    // Take first 3 letters of each word, max 6 chars, uppercase
+    const code = name.trim().toUpperCase().split(/\s+/).map(w => w.slice(0,3)).join('').slice(0,6).replace(/[^A-Z0-9]/g,'');
+    if (code.length >= 2) el.value = code;
+}
+
 async function openPartyModal(id) {
     const parties = await DB.getAll('parties');
     const p = id ? parties.find(x => x.id === id) : null;
     openModal(p ? 'Edit Party' : 'Add Party', `
-        <div class="form-group"><label>Name *</label><input id="f-party-name" value="${p ? p.name : ''}"></div>
+        <div class="form-group"><label>Name *</label><input id="f-party-name" value="${p ? p.name : ''}" oninput="autoFillPartyCode(this.value)"></div>
+        <div class="form-group"><label>Party Code <span style="font-size:0.78rem;color:var(--text-muted)">(unique short code — used for import deduplication)</span></label>
+            <input id="f-party-code" class="form-control" value="${p ? p.partyCode || '' : ''}" placeholder="e.g. RAJ001" style="text-transform:uppercase;font-family:monospace" oninput="this.value=this.value.toUpperCase().replace(/[^A-Z0-9-]/g,'')">
+        </div>
         <div class="form-row"><div class="form-group"><label>Type</label><select id="f-party-type"><option ${p && p.type === 'Customer' ? 'selected' : ''}>Customer</option><option ${p && p.type === 'Supplier' ? 'selected' : ''}>Supplier</option></select></div>
         <div class="form-group"><label>Phone</label><input id="f-party-phone" value="${p ? p.phone || '' : ''}"></div></div>
         <div class="form-row"><div class="form-group"><label>City</label><input id="f-party-city" value="${p ? p.city || '' : ''}"></div>
@@ -1933,8 +1954,10 @@ async function saveParty(id) {
     if (!name) return alert('Name is required');
     const latVal = $('f-party-lat') ? $('f-party-lat').value.trim() : '';
     const lngVal = $('f-party-lng') ? $('f-party-lng').value.trim() : '';
+    const partyCode = $('f-party-code') ? $('f-party-code').value.trim().toUpperCase() : '';
     const data = {
         name,
+        partyCode: partyCode || null,
         type: $('f-party-type').value,
         phone: $('f-party-phone').value.trim(),
         city: $('f-party-city').value.trim(),
@@ -2181,6 +2204,154 @@ function downloadPartyTemplate() {
     csv += 'Raj Traders,Customer,9876500001,29ABCDE1234F1Z5,MG Road,Bangalore,560001,500,20000,Net15,false\n';
     downloadCSV(csv, 'party_import_template.csv');
     showToast('Party template downloaded!', 'success');
+}
+
+function downloadOpeningBalTemplate() {
+    let csv = 'Party Code *,Party Name *,Party Type (Customer/Supplier),Invoice No *,Invoice Date (YYYY-MM-DD) *,Invoice Amount *,Due Date (YYYY-MM-DD),Notes\n';
+    csv += 'ACME,Acme Corp,Customer,INV-001,2024-01-15,15000,2024-02-14,Outstanding from Jan\n';
+    csv += 'ACME,Acme Corp,Customer,INV-002,2024-02-10,8500,2024-03-11,\n';
+    csv += 'RAJE,Raj Enterprises,Customer,INV-101,2024-03-01,22000,2024-03-31,\n';
+    csv += 'GLOB,Global Supplies,Supplier,PINV-55,2024-02-20,45000,2024-03-20,Purchase outstanding\n';
+    downloadCSV(csv, 'opening_balance_import_template.csv');
+    showToast('Opening balance template downloaded!', 'success');
+}
+
+function importOpeningBalExcel() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.csv';
+    input.onchange = processOpeningBalImport;
+    input.click();
+}
+
+async function processOpeningBalImport(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    const text = await file.text();
+    const lines = text.split(/\r?\n/).filter(l => l.trim());
+    if (lines.length < 2) return alert('File is empty or has no data rows');
+
+    const parties = DB.get('db_parties') || [];
+    const errors = [];
+    const preview = [];
+
+    for (let i = 1; i < lines.length; i++) {
+        const cols = parseCSVLine(lines[i]);
+        const [partyCode, partyName, partyType, invoiceNo, invoiceDate, amountStr, dueDate, notes] = cols;
+        if (!partyCode || !partyName || !invoiceNo || !invoiceDate || !amountStr) {
+            errors.push(`Row ${i+1}: Missing required fields (Party Code, Party Name, Invoice No, Invoice Date, Amount)`);
+            continue;
+        }
+        const amount = parseFloat(amountStr);
+        if (isNaN(amount) || amount <= 0) { errors.push(`Row ${i+1}: Invalid amount "${amountStr}"`); continue; }
+        // Find existing party by partyCode first, then by name
+        const existing = parties.find(p => p.partyCode && p.partyCode.toUpperCase() === partyCode.trim().toUpperCase())
+                      || parties.find(p => p.name.toLowerCase() === partyName.trim().toLowerCase());
+        preview.push({
+            partyCode: partyCode.trim().toUpperCase(),
+            partyName: partyName.trim(),
+            partyType: (partyType||'Customer').trim() || 'Customer',
+            invoiceNo: invoiceNo.trim(),
+            invoiceDate: invoiceDate.trim(),
+            amount,
+            dueDate: dueDate ? dueDate.trim() : '',
+            notes: notes ? notes.trim() : '',
+            existingParty: existing || null,
+            action: existing ? 'update' : 'create'
+        });
+    }
+
+    if (errors.length) {
+        const proceed = confirm(`${errors.length} error(s) found:\n${errors.slice(0,5).join('\n')}\n\nProceed with valid rows?`);
+        if (!proceed) return;
+    }
+    if (!preview.length) return alert('No valid rows to import');
+
+    // Show preview modal
+    openModal('Opening Balance Import Preview', `
+        <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:12px">${preview.length} invoice rows ready to import. Parties marked <span style="color:#22c55e;font-weight:600">CREATE</span> will be created, <span style="color:#3b82f6;font-weight:600">UPDATE</span> will have balance added.</p>
+        <div class="table-wrapper" style="max-height:300px;overflow-y:auto">
+        <table class="data-table" style="font-size:0.8rem">
+            <thead><tr><th>Party Code</th><th>Party Name</th><th>Invoice No</th><th>Date</th><th>Amount</th><th>Action</th></tr></thead>
+            <tbody>${preview.map(r => `<tr>
+                <td style="font-family:monospace;font-weight:600">${r.partyCode}</td>
+                <td>${r.partyName}</td>
+                <td style="font-family:monospace">${r.invoiceNo}</td>
+                <td>${r.invoiceDate}</td>
+                <td style="font-weight:600;color:var(--accent)">${currency(r.amount)}</td>
+                <td><span class="badge ${r.action==='create'?'badge-success':'badge-info'}">${r.action.toUpperCase()}</span></td>
+            </tr>`).join('')}</tbody>
+        </table></div>
+        <input type="hidden" id="ob-rows-json" value='${JSON.stringify(preview).replace(/'/g,"&apos;")}'>`,
+        `<button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+         <button class="btn btn-primary" onclick="confirmOpeningBalImport()">✅ Confirm Import</button>`);
+}
+
+async function confirmOpeningBalImport() {
+    const el = document.getElementById('ob-rows-json');
+    if (!el) return;
+    const rows = JSON.parse(el.value.replace(/&apos;/g,"'"));
+    const parties = DB.get('db_parties') || [];
+    let created = 0, updated = 0, invoices = 0;
+    const partyMap = {}; // partyCode → party id
+
+    // Group by partyCode
+    const byParty = {};
+    for (const r of rows) {
+        if (!byParty[r.partyCode]) byParty[r.partyCode] = { info: r, invoices: [] };
+        byParty[r.partyCode].invoices.push(r);
+    }
+
+    for (const [code, group] of Object.entries(byParty)) {
+        const { info } = group;
+        const totalAmount = group.invoices.reduce((s, r) => s + r.amount, 0);
+        let partyId;
+
+        if (info.existingParty) {
+            // Update existing — add to balance
+            partyId = info.existingParty.id;
+            const newBal = (info.existingParty.balance || 0) + totalAmount;
+            await DB.rawUpdate('parties', partyId, { balance: newBal, partyCode: code });
+            updated++;
+        } else {
+            // Create new party
+            partyId = 'P' + Date.now() + Math.random().toString(36).slice(2,5);
+            await DB.rawInsert('parties', {
+                id: partyId,
+                name: info.partyName,
+                partyCode: code,
+                type: info.partyType,
+                balance: totalAmount,
+                credit_limit: 0,
+                blocked: false
+            });
+            created++;
+        }
+        partyMap[code] = partyId;
+
+        // Create party_ledger entries per invoice
+        for (const r of group.invoices) {
+            const runBal = r.amount; // individual entry amount
+            await DB.rawInsert('party_ledger', {
+                id: 'PL' + Date.now() + Math.random().toString(36).slice(2,6),
+                date: r.invoiceDate,
+                partyId,
+                partyName: info.partyName,
+                type: 'opening_balance',
+                amount: r.amount,
+                balance: runBal,
+                docNo: r.invoiceNo,
+                notes: r.notes || 'Opening balance import',
+                createdBy: currentUser ? currentUser.name : 'Import'
+            });
+            invoices++;
+        }
+    }
+
+    await DB.refreshTables(['parties', 'party_ledger']);
+    closeModal();
+    showToast(`Import done: ${created} parties created, ${updated} updated, ${invoices} invoice entries added`, 'success');
+    await renderParties();
 }
 
 function importPartyExcel() {
