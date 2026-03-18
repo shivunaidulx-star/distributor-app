@@ -223,6 +223,8 @@ ALTER TABLE payments ADD COLUMN IF NOT EXISTS cheque_bank TEXT;
 ALTER TABLE payments ADD COLUMN IF NOT EXISTS cheque_status TEXT DEFAULT 'Pending';
 ALTER TABLE payments ADD COLUMN IF NOT EXISTS cheque_deposit_date DATE;
 ALTER TABLE payments ADD COLUMN IF NOT EXISTS allocations JSONB DEFAULT '{}';
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS discount NUMERIC DEFAULT 0;
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS total_reduction NUMERIC DEFAULT 0;
 
 -- ─────────────────────────────────────────────
 -- 8. EXPENSES
@@ -236,6 +238,7 @@ CREATE TABLE IF NOT EXISTS expenses (
     created_by TEXT
 );
 ALTER TABLE expenses ADD COLUMN IF NOT EXISTS note TEXT;
+ALTER TABLE expenses ADD COLUMN IF NOT EXISTS description TEXT;
 
 -- ─────────────────────────────────────────────
 -- 9. STOCK LEDGER

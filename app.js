@@ -257,12 +257,13 @@ const ColumnManager = {
             { key: 'actions',     label: 'Actions',      required: true },
         ],
         expenses: [
-            { key: 'date',        label: 'Date',        visible: true  },
-            { key: 'category',    label: 'Category',    visible: true  },
-            { key: 'description', label: 'Description', visible: true  },
-            { key: 'amount',      label: 'Amount',      visible: true  },
-            { key: 'addedBy',     label: 'Added By',    visible: false },
-            { key: 'actions',     label: 'Actions',     required: true },
+            { key: 'date',      label: 'Date',       visible: true  },
+            { key: 'category',  label: 'Category',   visible: true  },
+            { key: 'party',     label: 'Party',      visible: true  },
+            { key: 'docNo',     label: 'Doc No',     visible: true  },
+            { key: 'amount',    label: 'Amount',     visible: true  },
+            { key: 'addedBy',   label: 'Added By',   visible: false },
+            { key: 'actions',   label: 'Actions',    required: true },
         ],
         packing: [
             { key: 'orderNo',      label: 'Order #',     required: true },
@@ -4430,16 +4431,6 @@ async function saveSalesOrder() {
             };
             await DB.insert('salesorders', order);
 
-            // Expense Entry for Discount
-            const totalDiscount = soItems.reduce((s, li) => s + (li.discountAmt || 0), 0);
-            if (totalDiscount > 0) {
-                await DB.insert('expenses', {
-                    date: data.date,
-                    category: 'Sales Discount',
-                    amount: +totalDiscount.toFixed(2),
-                    description: `Discount on Sales Order ${order.orderNo} for ${partyName}`
-                });
-            }
             showToast(`Order submitted!`, 'success');
         }
         const andNew = window._saveAndNew; window._saveAndNew = false;
@@ -5888,14 +5879,18 @@ async function saveInvoice() {
             }));
         }
 
-        // Expense Entry for Discount
+        // Expense Entry for Discount (only on posted invoice, not SO)
         const totalDiscount = invoiceItems.reduce((s, li) => s + (li.discountAmt || 0), 0);
         if (totalDiscount > 0 && type === 'sale') {
             ops.push(DB.rawInsert('expenses', {
+                id: DB.id(),
                 date: $('f-inv-date').value,
                 category: 'Sales Discount',
                 amount: +totalDiscount.toFixed(2),
-                description: `Discount on Sales Invoice ${invNo} for ${partyName}`
+                partyId: partyId,
+                partyName: partyName,
+                docNo: invNo,
+                description: `Discount on ${invNo}`
             }));
         }
 
@@ -6887,6 +6882,9 @@ async function savePayment() {
                 date: $('f-pay-date').value,
                 category: 'Payment Discount',
                 amount: disc,
+                partyId: payPartyId,
+                partyName: payPartyName,
+                docNo: payRefNo,
                 description: `Payment Discount for ${payPartyName} (${payRefNo})`
             });
         }
@@ -7034,6 +7032,9 @@ async function saveDirectPayment() {
                 date: $('f-pay-date').value,
                 category: 'Payment Discount',
                 amount: disc,
+                partyId: payPartyId || inv.partyId || '',
+                partyName: inv.partyName || '',
+                docNo: payRefNo,
                 description: `Payment Discount for ${inv.partyName} (${payRefNo})`
             });
         }
@@ -7350,40 +7351,140 @@ window.saveEditedPayment = async function (id) {
 //  EXPENSES
 // =============================================
 function renderExpRows(expenses) {
-    if (!expenses.length) return '<tr><td colspan="6" class="empty-state"><p>No expenses found</p></td></tr>';
+    if (!expenses.length) return '<tr><td colspan="8" class="empty-state"><p>No expenses found</p></td></tr>';
     const cols = ColumnManager.get('expenses').filter(c => c.visible);
+    const isAdm = currentUser && (currentUser.role === 'Admin' || (currentUser.roles || []).includes('Admin'));
+    const parties = DB.get('db_parties') || [];
     return expenses.map(e => {
+        const party = e.partyId ? parties.find(p => p.id === e.partyId) : null;
+        const partyCode = party ? (party.partyCode || '') : '';
+        const partyDisplay = e.partyName
+            ? `<div style="font-weight:600;font-size:0.85rem">${escapeHtml(e.partyName)}</div>${partyCode ? `<div style="font-size:0.75rem;color:var(--text-muted)">${escapeHtml(partyCode)}</div>` : ''}`
+            : `<span style="color:var(--text-muted)">-</span>`;
+        // Doc link — navigate to invoice or payment
+        let docLink = '-';
+        if (e.docNo) {
+            const isPayment = e.docNo.startsWith('PAY-');
+            docLink = `<button class="btn-link" style="font-weight:600;color:var(--accent);background:none;border:none;cursor:pointer;padding:0;font-size:0.85rem" onclick="viewExpenseDoc('${escapeHtml(e.docNo)}','${isPayment?'payment':'invoice'}')">${escapeHtml(e.docNo)}</button>`;
+        }
         const cellMap = {
-            date:        `<td>${fmtDate(e.date)}</td>`,
-            category:    `<td>${escapeHtml(e.category || '')}</td>`,
-            description: `<td>${escapeHtml(e.description || e.note || '')}</td>`,
-            amount:      `<td class="amount-red">${currency(e.amount)}</td>`,
-            addedBy:     `<td style="font-size:0.82rem;color:var(--text-muted)">${escapeHtml(e.createdBy || '-')}</td>`,
-            actions:     `<td><div class="action-btns">${canEdit() ? `<button class="btn-icon" onclick="deleteExpense('${e.id}')">🗑️</button>` : '-'}</div></td>`,
+            date:     `<td style="white-space:nowrap">${fmtDate(e.date)}</td>`,
+            category: `<td><span class="badge ${e.category==='Sales Discount'?'badge-warning':e.category==='Payment Discount'?'badge-info':'badge-success'}" style="font-size:0.75rem">${escapeHtml(e.category || '')}</span></td>`,
+            party:    `<td>${partyDisplay}</td>`,
+            docNo:    `<td>${docLink}</td>`,
+            amount:   `<td class="amount-red" style="font-weight:700">${currency(e.amount)}</td>`,
+            addedBy:  `<td style="font-size:0.82rem;color:var(--text-muted)">${escapeHtml(e.createdBy || '-')}</td>`,
+            actions:  `<td><div class="action-btns">
+                ${isAdm && e.docNo ? `<button class="btn-icon" title="View Document" onclick="viewExpenseDoc('${escapeHtml(e.docNo)}','${e.docNo.startsWith('PAY-')?'payment':'invoice'}')">👁️</button>` : ''}
+                ${!e.docNo && canEdit() ? `<button class="btn-icon" onclick="openEditExpenseModal('${e.id}')">✏️</button>` : ''}
+                ${canEdit() ? `<button class="btn-icon" onclick="deleteExpense('${e.id}')">🗑️</button>` : ''}
+            </div></td>`,
         };
         return `<tr>${cols.map(c => cellMap[c.key] || '').join('')}</tr>`;
     }).join('');
 }
 
+function viewExpenseDoc(docNo, type) {
+    if (type === 'payment') {
+        navigateTo('payments');
+        setTimeout(() => {
+            const search = document.getElementById('pay-search');
+            if (search) { search.value = docNo; search.dispatchEvent(new Event('input')); }
+        }, 600);
+    } else {
+        navigateTo('invoices');
+        setTimeout(() => {
+            const search = document.getElementById('inv-search');
+            if (search) { search.value = docNo; search.dispatchEvent(new Event('input')); }
+        }, 600);
+    }
+}
+
+function openEditExpenseModal(id) {
+    const expenses = DB.get('db_expenses') || [];
+    const e = expenses.find(x => x.id === id);
+    if (!e) return;
+    openModal('Edit Expense', `
+        <div class="form-row">
+            <div class="form-group"><label>Date *</label><input type="date" id="f-exp-date" value="${e.date || today()}"></div>
+            <div class="form-group"><label>Category</label><input id="f-exp-cat" value="${escapeHtml(e.category || '')}" placeholder="e.g. Transport, Office"></div>
+        </div>
+        <div class="form-group"><label>Amount *</label><input type="number" id="f-exp-amt" min="0" step="0.01" value="${e.amount || 0}"></div>
+        <div class="form-group"><label>Description</label><input id="f-exp-desc" value="${escapeHtml(e.description || e.note || '')}" placeholder="Details..."></div>
+    `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="saveEditedExpense('${id}')">💾 Save</button>`);
+}
+
+async function saveEditedExpense(id) {
+    const amt = +$('f-exp-amt').value; if (!amt) return alert('Enter amount');
+    try {
+        await DB.update('expenses', id, {
+            date: $('f-exp-date').value,
+            category: $('f-exp-cat').value,
+            amount: amt,
+            description: $('f-exp-desc').value.trim()
+        });
+        closeModal();
+        await renderExpenses();
+        showToast('Expense updated', 'success');
+    } catch(err) { alert('Error: ' + err.message); }
+}
+
 async function renderExpenses() {
     const expenses = await DB.getAll('expenses');
-    const total = expenses.reduce((s, e) => s + e.amount, 0);
+    window._allExpenses = expenses;
+    const salDisc   = expenses.filter(e => e.category === 'Sales Discount').reduce((s, e) => s + (e.amount || 0), 0);
+    const payDisc   = expenses.filter(e => e.category === 'Payment Discount').reduce((s, e) => s + (e.amount || 0), 0);
+    const total     = expenses.reduce((s, e) => s + (e.amount || 0), 0);
+    // Build category options
+    const cats = [...new Set(expenses.map(e => e.category).filter(Boolean))].sort();
     pageContent.innerHTML = `
-        <div class="stats-grid" style="margin-bottom:18px"><div class="stat-card red"><div class="stat-icon">💸</div><div class="stat-value">${currency(total)}</div><div class="stat-label">Total Expenses</div></div></div>
-        <div class="section-toolbar"><div class="filter-group"><button class="btn btn-outline" onclick="openColumnPersonalizer('expenses','renderExpenses')" style="border-color:var(--accent);color:var(--accent)">⚙️ Columns</button>
-        <input class="search-box" id="exp-search" placeholder="Search..." oninput="filterExpTable()"></div>
-        <button class="btn btn-primary" onclick="openExpenseModal()">+ Add Expense</button></div>
-        <div class="card"><div class="card-body">
-            <table class="data-table"><thead><tr>${ColumnManager.get('expenses').filter(c=>c.visible).map(c=>`<th>${c.label}</th>`).join('')}</tr></thead>
-            <tbody id="exp-tbody">${renderExpRows(expenses)}</tbody></table>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+            <div class="stat-card amber" style="flex:1;min-width:140px;padding:12px 16px"><div style="font-size:0.72rem;font-weight:700;text-transform:uppercase;color:var(--text-muted);margin-bottom:4px">Sales Discount</div><div style="font-size:1.3rem;font-weight:800;color:#f59e0b">${currency(salDisc)}</div></div>
+            <div class="stat-card blue" style="flex:1;min-width:140px;padding:12px 16px"><div style="font-size:0.72rem;font-weight:700;text-transform:uppercase;color:var(--text-muted);margin-bottom:4px">Payment Discount</div><div style="font-size:1.3rem;font-weight:800;color:#3b82f6">${currency(payDisc)}</div></div>
+            <div class="stat-card red" style="flex:1;min-width:140px;padding:12px 16px"><div style="font-size:0.72rem;font-weight:700;text-transform:uppercase;color:var(--text-muted);margin-bottom:4px">Total Expenses</div><div style="font-size:1.3rem;font-weight:800;color:#ef4444">${currency(total)}</div></div>
+        </div>
+        <div class="card" style="margin-bottom:10px"><div class="card-body" style="padding:10px 14px">
+            <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end">
+                <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:0.72rem;font-weight:600;color:var(--text-muted)">FROM</label><input type="date" id="exp-f-from" class="form-control" style="width:130px;padding:5px 8px;font-size:0.82rem" onchange="filterExpTable()"></div>
+                <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:0.72rem;font-weight:600;color:var(--text-muted)">TO</label><input type="date" id="exp-f-to" class="form-control" style="width:130px;padding:5px 8px;font-size:0.82rem" onchange="filterExpTable()"></div>
+                <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:0.72rem;font-weight:600;color:var(--text-muted)">CATEGORY</label><select id="exp-f-cat" class="form-control" style="width:160px;padding:5px 8px;font-size:0.82rem" onchange="filterExpTable()"><option value="">All Categories</option>${cats.map(c=>`<option>${escapeHtml(c)}</option>`).join('')}</select></div>
+                <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:0.72rem;font-weight:600;color:var(--text-muted)">PARTY</label><input type="text" id="exp-f-party" class="form-control" placeholder="Party name..." style="width:150px;padding:5px 8px;font-size:0.82rem" oninput="filterExpTable()"></div>
+                <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:0.72rem;font-weight:600;color:var(--text-muted)">DOC NO</label><input type="text" id="exp-f-doc" class="form-control" placeholder="INV-0001..." style="width:130px;padding:5px 8px;font-size:0.82rem" oninput="filterExpTable()"></div>
+                <button class="btn btn-outline btn-sm" onclick="clearExpFilters()" style="align-self:flex-end">✕ Clear</button>
+                <div style="margin-left:auto;align-self:flex-end;display:flex;gap:8px">
+                    <button class="btn btn-outline" onclick="openColumnPersonalizer('expenses','renderExpenses')" style="border-color:var(--accent);color:var(--accent)">⚙️ Columns</button>
+                    <button class="btn btn-primary" onclick="openExpenseModal()">+ Add Expense</button>
+                </div>
+            </div>
+        </div></div>
+        <div class="card"><div class="card-body" style="padding:0">
+            <div class="table-wrapper"><table class="data-table">
+                <thead><tr>${ColumnManager.get('expenses').filter(c=>c.visible).map(c=>`<th>${c.label}</th>`).join('')}</tr></thead>
+                <tbody id="exp-tbody">${renderExpRows(expenses)}</tbody>
+            </table></div>
         </div></div>`;
 }
 
+function clearExpFilters() {
+    ['exp-f-from','exp-f-to','exp-f-party','exp-f-doc'].forEach(id => { const el = $(id); if (el) el.value = ''; });
+    const cat = $('exp-f-cat'); if (cat) cat.value = '';
+    filterExpTable();
+}
+
 async function filterExpTable() {
-    const s = $('exp-search').value.toLowerCase();
-    let exps = await DB.getAll('expenses');
-    if (s) exps = exps.filter(e => (e.description || '').toLowerCase().includes(s) || (e.category || '').toLowerCase().includes(s));
-    $('exp-tbody').innerHTML = renderExpRows(exps);
+    let exps = window._allExpenses || await DB.getAll('expenses');
+    const from  = ($('exp-f-from') || {}).value || '';
+    const to    = ($('exp-f-to') || {}).value || '';
+    const cat   = (($('exp-f-cat') || {}).value || '').toLowerCase();
+    const party = (($('exp-f-party') || {}).value || '').toLowerCase();
+    const doc   = (($('exp-f-doc') || {}).value || '').toLowerCase();
+    if (from)  exps = exps.filter(e => (e.date || '') >= from);
+    if (to)    exps = exps.filter(e => (e.date || '') <= to);
+    if (cat)   exps = exps.filter(e => (e.category || '').toLowerCase().includes(cat));
+    if (party) exps = exps.filter(e => (e.partyName || '').toLowerCase().includes(party));
+    if (doc)   exps = exps.filter(e => (e.docNo || '').toLowerCase().includes(doc));
+    const tbody = $('exp-tbody');
+    if (tbody) tbody.innerHTML = renderExpRows(exps);
 }
 
 function openExpenseModal() {

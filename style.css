@@ -633,7 +633,8 @@ table { border-collapse: collapse; width: 100%; }
     font-size: 0.88rem;
     border-bottom: 1px solid rgba(0,0,0,0.05);
     color: var(--text-secondary);
-    white-space: nowrap;
+    white-space: normal;
+    word-break: break-word;
 }
 
 .data-table tbody tr {
@@ -642,6 +643,12 @@ table { border-collapse: collapse; width: 100%; }
 
 .data-table tbody tr:hover {
     background: rgba(249, 115, 22, 0.03);
+}
+
+.wrap-text {
+    white-space: normal !important;
+    word-break: break-word !important;
+    overflow-wrap: anywhere !important;
 }
 
 .data-table tbody tr:last-child td {
