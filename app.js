@@ -7388,15 +7388,25 @@ function viewExpenseDoc(docNo, type) {
     if (type === 'payment') {
         navigateTo('payments');
         setTimeout(() => {
+            // Clear date filters so record is visible regardless of month
+            const from = document.getElementById('pay-f-from');
+            const to   = document.getElementById('pay-f-to');
+            if (from) from.value = '2020-01-01';
+            if (to)   to.value   = today();
             const search = document.getElementById('pay-search');
             if (search) { search.value = docNo; search.dispatchEvent(new Event('input')); }
-        }, 600);
+            if (from || to) { const ev = new Event('change'); from && from.dispatchEvent(ev); }
+        }, 700);
     } else {
         navigateTo('invoices');
         setTimeout(() => {
+            const from = document.getElementById('inv-f-from');
+            const to   = document.getElementById('inv-f-to');
+            if (from) from.value = '2020-01-01';
+            if (to)   to.value   = today();
             const search = document.getElementById('inv-search');
             if (search) { search.value = docNo; search.dispatchEvent(new Event('input')); }
-        }, 600);
+        }, 700);
     }
 }
 
