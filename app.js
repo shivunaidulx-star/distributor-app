@@ -525,14 +525,16 @@ async function repairCancelledInvoiceOrders() {
 const ROLE_PAGES = {
     Admin: ['dashboard', 'parties', 'partyledger', 'inventorysetup', 'categories', 'uom', 'inventory', 'catalog', 'salesorders', 'purchaseorders', 'invoices', 'payments', 'expenses', 'packing', 'delivery', 'reports', 'packers', 'deliverypersons', 'users', 'setup', 'staffmaster', 'attendance', 'hrpayroll'],
     Manager: ['dashboard', 'parties', 'partyledger', 'inventorysetup', 'categories', 'uom', 'inventory', 'catalog', 'salesorders', 'purchaseorders', 'invoices', 'payments', 'expenses', 'packing', 'delivery', 'reports', 'packers', 'deliverypersons'],
-    Salesman: ['dashboard', 'parties', 'partyledger', 'inventory', 'catalog', 'salesorders', 'payments'],
+    Salesman: ['dashboard', 'parties', 'inventory', 'catalog', 'salesorders', 'payments'],
     Delivery: ['dashboard', 'delivery'],
     Packing: ['dashboard', 'packing']
 };
 
 function getUserPages(user) {
     const roles = Array.isArray(user.roles) && user.roles.length ? user.roles : [user.role];
-    return [...new Set(roles.flatMap(r => ROLE_PAGES[r] || []))];
+    const basePages = [...new Set(roles.flatMap(r => ROLE_PAGES[r] || []))];
+    const extra = Array.isArray(user.extra_perms) ? user.extra_perms : [];
+    return [...new Set([...basePages, ...extra])];
 }
 
 // --- State ---
@@ -2173,10 +2175,10 @@ async function deleteParty(id) {
 
 // --- Party Excel Import ---
 function downloadPartyTemplate() {
-    let csv = 'Name *,Type (Customer/Supplier) *,Phone,City,GSTIN,Address,Opening Balance\n';
-    csv += 'Acme Corp,Customer,9988776655,Mumbai,27AADCA2230M1Z2,123 Main St,1000\n';
-    csv += 'Global Supplies,Supplier,9876543210,Delhi,,45 Park Ave,0\n';
-    csv += 'Raj Traders,Customer,9876500001,Bangalore,29ABCDE1234F1Z5,MG Road Bangalore,500\n';
+    let csv = 'Name *,Type (Customer/Supplier) *,Phone,GSTIN,Address,City,Post Code,Opening Balance,Credit Limit,Payment Terms (COD/Net7/Net15/Net30/Net60),Blocked (true/false)\n';
+    csv += 'Acme Corp,Customer,9988776655,27AADCA2230M1Z2,123 Main St,Mumbai,400001,1000,50000,Net30,false\n';
+    csv += 'Global Supplies,Supplier,9876543210,,45 Park Ave,Delhi,110001,0,0,COD,false\n';
+    csv += 'Raj Traders,Customer,9876500001,29ABCDE1234F1Z5,MG Road,Bangalore,560001,500,20000,Net15,false\n';
     downloadCSV(csv, 'party_import_template.csv');
     showToast('Party template downloaded!', 'success');
 }
@@ -3393,9 +3395,10 @@ async function exportInventoryExcel() {
 // --- Excel Template Download ---
 function downloadStockTemplate() {
     const dt = today();
-    let csv = 'Item Name *,Date (YYYY-MM-DD),Type (Increase/Decrease) *,Quantity *,Reason\n';
-    csv += `Sample Item,${dt},Increase,10,Physical Count\n`;
-    csv += `Another Item,${dt},Decrease,3,Damaged Goods\n`;
+    let csv = 'Item Name *,Date (YYYY-MM-DD) *,Type (Increase/Decrease) *,Quantity *,Reason,MRP\n';
+    csv += `Premium Soap,${dt},Increase,10,Physical Count,40.00\n`;
+    csv += `Rice 5Kg,${dt},Decrease,3,Damaged Goods,220.00\n`;
+    csv += `Parle-G Biscuit,${dt},Increase,50,New Stock Received,7.00\n`;
     downloadCSV(csv, 'stock_adjustment_template.csv');
     showToast('Stock adjustment template downloaded!', 'success');
 }
@@ -3497,10 +3500,10 @@ function parseCSVLine(line) {
 
 // --- Excel Item Master Import ---
 function downloadItemTemplate() {
-    let csv = 'Item Code,Item Name *,Category *,Sub-Category *,HSN,Primary Unit *,Secondary UOM,Conversion Ratio,Purchase Price,Sale Price *,MRP,Opening Stock,Low Stock Alert,Warehouse\n';
-    csv += 'SKU-001,Premium Soap,FMCG,Personal Care,3401,Pcs,Box,12,25.00,35.00,40.00,100,20,Main Warehouse\n';
-    csv += 'SKU-002,Rice 5Kg,Grocery,Staples,1006,Bag,,,160.00,200.00,220.00,50,10,Main Warehouse\n';
-    csv += 'SKU-003,Parle-G Biscuit,Biscuits,Glucose,,Pcs,Box,24,5.00,6.00,7.00,200,50,Main Warehouse\n';
+    let csv = 'Item Code,Item Name *,Category *,Sub-Category,HSN,Primary Unit *,Secondary UOM,Conversion Ratio,Purchase Price *,Sale Price *,MRP,Opening Stock,Low Stock Alert,Warehouse,Price Tier 1 Qty,Price Tier 1 Price,Price Tier 2 Qty,Price Tier 2 Price\n';
+    csv += 'SKU-001,Premium Soap,FMCG,Personal Care,3401,Pcs,Box,12,25.00,35.00,40.00,100,20,Main Warehouse,50,33.00,100,30.00\n';
+    csv += 'SKU-002,Rice 5Kg,Grocery,Staples,1006,Bag,,,160.00,200.00,220.00,50,10,Main Warehouse,,,\n';
+    csv += 'SKU-003,Parle-G Biscuit,Biscuits,Glucose,,Pcs,Box,24,5.00,6.00,7.00,200,50,Main Warehouse,100,5.50,,\n';
     downloadCSV(csv, 'item_master_template.csv');
     showToast('Item template downloaded!', 'success');
 }
@@ -5665,19 +5668,27 @@ async function saveInvoice() {
 
         // Stock availability checks
         if (type === 'sale') {
-            const shortItems = [];
-            await Promise.all(invoiceItems.map(async li => {
-                const item = inventory.find(x => x.id === li.itemId);
-                if (item) {
-                    const avail = (await getAvailableStock(item)).available;
-                    if (avail < li.qty) shortItems.push(`${li.name} (need ${li.qty}, available ${avail})`);
+            const co2 = DB.getObj('db_company');
+            if (co2 && !co2.allowNegativeStock) {
+                const shortItems = [];
+                await Promise.all(invoiceItems.map(async li => {
+                    const item = inventory.find(x => x.id === li.itemId);
+                    if (item) {
+                        const avail = (await getAvailableStock(item)).available;
+                        if (avail < li.qty) shortItems.push(`${li.name} (need ${li.qty}, available ${avail})`);
+                    }
+                }));
+
+                if (shortItems.length) { 
+                    endSave(); 
+                    return alert('Insufficient stock:\n' + shortItems.join('\n')); 
                 }
-            }));
-            if (shortItems.length) { endSave(); return alert('Insufficient stock:\n' + shortItems.join('\n')); }
-            if (!co2.allowNegativeStock) {
                 for (const li of invoiceItems) {
                     const item = inventory.find(x => x.id === li.itemId);
-                    if (item && (item.stock || 0) < li.qty) { endSave(); return alert(`Insufficient stock for "${li.name}".\nAvailable: ${item.stock || 0}, Required: ${li.qty}`); }
+                    if (item && (item.stock || 0) < li.qty) { 
+                        endSave(); 
+                        return alert(`Insufficient stock for "${li.name}".\nAvailable: ${item.stock || 0}, Required: ${li.qty}`); 
+                    }
                 }
             }
         }
@@ -7510,7 +7521,7 @@ function openPackModal(orderId) {
         return `<tr id="pack-row-${idx}">
                     <td>${idx + 1}</td>
                     ${photoCell}
-                    <td style="font-size:0.88rem;font-weight:600;max-width:140px">${escapeHtml(li.name)}</td>
+                    <td class="wrap-text" style="font-size:0.88rem;font-weight:600;min-width:140px">${escapeHtml(li.name)}</td>
                     <td style="font-weight:600;text-align:center">${li.qty}</td>
                     <td style="text-align:center"><span id="pack-stock-badge-${idx}" class="badge ${displayStock < li.qty ? 'badge-danger' : 'badge-success'}">${displayStock}</span></td>
                     <td><input type="number" id="pack-qty-${idx}" value="${li.qty}" min="0" oninput="packLineChanged(${idx}, '${li.itemId}', ${o.items.length})" onchange="packLineChanged(${idx}, '${li.itemId}', ${o.items.length})" style="width:65px;padding:4px;border-radius:4px;border:1px solid var(--border);text-align:center"></td>
@@ -8142,7 +8153,7 @@ async function bulkGenerateInvoicesFromPacked() {
                 const qty = li.packedQty !== undefined ? li.packedQty : li.qty;
                 if (!item || ((item.stock || 0) < qty && !DB.getObj('db_company').allowNegativeStock)) { hasStock = false; break; }
             }
-            if (!hasStock) { skipCount++; continue; }
+            if (!hasStock && !DB.getObj('db_company').allowNegativeStock) { skipCount++; continue; }
 
             const invNo = 'INV-' + String(startInvNumber).padStart(4, '0');
             const vyaparNo = autoPrefix + startVyaparNumber;
@@ -10554,6 +10565,27 @@ function openUserModal(id) {
                 <button type="button" onclick="const p=$('f-user-pin');p.type=p.type==='password'?'text':'password'" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:1rem">👁</button>
             </div>
         </div>
+        <div class="form-group" id="extra-perms-section">
+            <label>Extra Permissions <span style="font-size:0.78rem;color:var(--text-muted)">(beyond role defaults)</span></label>
+            <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:8px">
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:6px 12px;border:2px solid var(--border);border-radius:20px;font-size:0.85rem;${(u && Array.isArray(u.extra_perms) && u.extra_perms.includes('partyledger'))?'border-color:var(--primary);background:#eff6ff;font-weight:600':''}">
+                    <input type="checkbox" id="perm-partyledger" value="partyledger" ${(u && Array.isArray(u.extra_perms) && u.extra_perms.includes('partyledger'))?'checked':''} onchange="this.parentElement.style.borderColor=this.checked?'var(--primary)':'var(--border)';this.parentElement.style.background=this.checked?'#eff6ff':'';this.parentElement.style.fontWeight=this.checked?'600':'400'">
+                    📒 View Party Ledger
+                </label>
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:6px 12px;border:2px solid var(--border);border-radius:20px;font-size:0.85rem;${(u && Array.isArray(u.extra_perms) && u.extra_perms.includes('reports'))?'border-color:var(--primary);background:#eff6ff;font-weight:600':''}">
+                    <input type="checkbox" id="perm-reports" value="reports" ${(u && Array.isArray(u.extra_perms) && u.extra_perms.includes('reports'))?'checked':''} onchange="this.parentElement.style.borderColor=this.checked?'var(--primary)':'var(--border)';this.parentElement.style.background=this.checked?'#eff6ff':'';this.parentElement.style.fontWeight=this.checked?'600':'400'">
+                    📊 View Reports
+                </label>
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:6px 12px;border:2px solid var(--border);border-radius:20px;font-size:0.85rem;${(u && Array.isArray(u.extra_perms) && u.extra_perms.includes('invoices'))?'border-color:var(--primary);background:#eff6ff;font-weight:600':''}">
+                    <input type="checkbox" id="perm-invoices" value="invoices" ${(u && Array.isArray(u.extra_perms) && u.extra_perms.includes('invoices'))?'checked':''} onchange="this.parentElement.style.borderColor=this.checked?'var(--primary)':'var(--border)';this.parentElement.style.background=this.checked?'#eff6ff':'';this.parentElement.style.fontWeight=this.checked?'600':'400'">
+                    🧾 View Invoices
+                </label>
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:6px 12px;border:2px solid var(--border);border-radius:20px;font-size:0.85rem;${(u && Array.isArray(u.extra_perms) && u.extra_perms.includes('expenses'))?'border-color:var(--primary);background:#eff6ff;font-weight:600':''}">
+                    <input type="checkbox" id="perm-expenses" value="expenses" ${(u && Array.isArray(u.extra_perms) && u.extra_perms.includes('expenses'))?'checked':''} onchange="this.parentElement.style.borderColor=this.checked?'var(--primary)':'var(--border)';this.parentElement.style.background=this.checked?'#eff6ff':'';this.parentElement.style.fontWeight=this.checked?'600':'400'">
+                    💸 View Expenses
+                </label>
+            </div>
+        </div>
         <div class="modal-actions">
             <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
             ${!id ? `<button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveUser('')">＋ Save & New</button>` : ''}
@@ -10565,6 +10597,10 @@ async function saveUser(id) {
     const userId = $('f-user-userid').value.trim().toLowerCase().replace(/\s/g,'');
     const pin = $('f-user-pin').value.trim();
     const selectedRoles = [...document.querySelectorAll('.chk-user-role:checked')].map(c => c.value);
+    const extraPerms = ['partyledger','reports','invoices','expenses'].filter(p => {
+        const el = document.getElementById('perm-' + p);
+        return el && el.checked;
+    });
 
     if (!name) return alert('Name is required');
     if (!userId) return alert('User ID is required');
@@ -10577,7 +10613,7 @@ async function saveUser(id) {
     if (conflict) return alert(`User ID "${userId}" is already taken by ${conflict.name}`);
 
     const primaryRole = selectedRoles[0];
-    const data = { name, userId, role: primaryRole, roles: selectedRoles, pin };
+    const data = { name, userId, role: primaryRole, roles: selectedRoles, pin, extra_perms: extraPerms };
 
     try {
         if (id) {
@@ -12905,7 +12941,10 @@ async function confirmApproveCust(regId, existingPartyId) {
     if (!partyId) {
         // Create new party
         const newParty = {
-            id: 'p_' + Date.now(),
+            id: crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
+            }),
             name: reg.business_name, type: 'customer',
             phone: reg.phone, address: reg.address || '', city: reg.city || '',
             gstin: reg.gstin || '', balance: 0,
