@@ -1867,8 +1867,9 @@ function renderPartyRows(parties) {
             balance: `<td class="${(p.balance||0) < 0 ? 'amount-green' : 'amount-red'}">${currency(Math.abs(p.balance || 0))} ${(p.balance||0) < 0 ? '(Cr)' : '(Dr)'}</td>`,
             actions: `<td><div class="action-btns">
                 <button class="btn-icon" onclick="openDedicatedPartyLedger('${p.id}')" title="View Ledger">📜</button>
+                ${p.phone ? `<a href="tel:${p.phone}" class="btn-icon" title="Call party" style="text-decoration:none">📞</a>` : ''}
                 ${p.lat && p.lng ? `<button class="btn-icon" onclick="openPartyMap('${p.lat}','${p.lng}','${escapeHtml(p.name)}')" title="Navigate to party">🗺️</button>` : ''}
-                ${!isPacker() ? `<button class="btn-icon" onclick="updatePartyLocation('${p.id}')" title="Update Location" style="color:#3b82f6">📍</button>` : ''}
+                ${!isPacker() && !(p.lat && p.lng) ? `<button class="btn-icon" onclick="updatePartyLocation('${p.id}')" title="Update Location" style="color:#3b82f6">📍</button>` : ''}
                 ${canEdit() ? `<button class="btn-icon" onclick="openPartyModal('${p.id}')">✏️</button><button class="btn-icon" onclick="deleteParty('${p.id}')">🗑️</button>` : ''}
             </div></td>`,
             city:         `<td style="font-size:0.85rem">${escapeHtml(p.city || '-')}</td>`,
@@ -11034,29 +11035,32 @@ async function autoAssignPartyCodes() {
     let custCounter = Math.max(maxCust + 1, getNsSetting(key_cust, 'start', 1));
     let suppCounter = Math.max(maxSupp + 1, getNsSetting(key_supp, 'start', 1));
 
-    const ops = [];
-    for (const p of without) {
-        let code;
-        if ((p.type || 'Customer').toLowerCase() === 'supplier') {
-            code = suppPrefix + String(suppCounter).padStart(suppPad, '0');
-            suppCounter++;
-        } else {
-            code = custPrefix + String(custCounter).padStart(custPad, '0');
-            custCounter++;
+    try {
+        // Update one by one (sequential) to catch first error clearly
+        for (const p of without) {
+            let code;
+            if ((p.type || 'Customer').toLowerCase() === 'supplier') {
+                code = suppPrefix + String(suppCounter).padStart(suppPad, '0');
+                suppCounter++;
+            } else {
+                code = custPrefix + String(custCounter).padStart(custPad, '0');
+                custCounter++;
+            }
+            await supabaseClient.from('parties').update({ party_code: code }).eq('id', p.id);
         }
-        ops.push(DB.rawUpdate('parties', p.id, { partyCode: code }));
+
+        // Save updated counters
+        const ns = DB.ls.getObj('db_number_series') || {};
+        ns[key_cust+'_start'] = custCounter;
+        ns[key_supp+'_start'] = suppCounter;
+        await DB.saveSettings('db_number_series', ns);
+
+        await DB.refreshTables(['parties']);
+        showToast(`Done! ${without.length} parties assigned codes.`, 'success');
+        await renderCompanySetup();
+    } catch(e) {
+        alert('Error assigning party codes: ' + e.message + '\n\nMake sure you have run the SQL:\nALTER TABLE parties ADD COLUMN IF NOT EXISTS party_code TEXT;');
     }
-    await Promise.all(ops);
-
-    // Save updated counters
-    const ns = DB.ls.getObj('db_number_series') || {};
-    ns[key_cust+'_start'] = custCounter;
-    ns[key_supp+'_start'] = suppCounter;
-    await DB.saveSettings('db_number_series', ns);
-
-    await DB.refreshTables(['parties']);
-    showToast(`Done! ${without.length} parties assigned codes.`, 'success');
-    await renderCompanySetup();
 }
 
 async function renderCompanySetup() {
