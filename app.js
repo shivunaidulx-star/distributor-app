@@ -530,6 +530,11 @@ const ROLE_PAGES = {
     Packing: ['dashboard', 'packing']
 };
 
+function getUserPages(user) {
+    const roles = Array.isArray(user.roles) && user.roles.length ? user.roles : [user.role];
+    return [...new Set(roles.flatMap(r => ROLE_PAGES[r] || []))];
+}
+
 // --- State ---
 let currentUser = null;
 let currentPage = 'dashboard';
@@ -596,18 +601,20 @@ async function saveSetupStep1() {
 function renderSetupStep2() {
     $('setup-step').innerHTML = `
         <h3 style="margin-bottom:16px;font-size:1rem">Step 2: Create Admin User</h3>
-        <div class="form-group"><label>Admin Name *</label><input id="sw-admin-name" placeholder="Your Name"></div>
-        <div class="form-group"><label>4-digit PIN *</label><input type="password" id="sw-admin-pin" maxlength="4" placeholder="e.g. 1234"></div>
+        <div class="form-group"><label>Admin Name *</label><input id="sw-admin-name" placeholder="Your Full Name"></div>
+        <div class="form-group"><label>User ID * <span style="font-size:0.78rem;color:var(--text-muted)">(used to login — e.g. admin, ram01)</span></label><input id="sw-admin-userid" placeholder="e.g. admin" style="text-transform:lowercase" oninput="this.value=this.value.toLowerCase().replace(/\\s/g,'')"></div>
+        <div class="form-group"><label>PIN * <span style="font-size:0.78rem;color:var(--text-muted)">(4 to 6 digits)</span></label><input type="password" id="sw-admin-pin" maxlength="6" placeholder="e.g. 1234 or 123456" inputmode="numeric"></div>
         <button class="btn btn-primary btn-block" onclick="completeSetup()">Complete Setup ✓</button>`;
 }
 
 async function completeSetup() {
     const name = $('sw-admin-name').value.trim();
+    const userId = ($('sw-admin-userid') ? $('sw-admin-userid').value.trim() : '').toLowerCase().replace(/\s/g,'') || 'admin';
     const pin = $('sw-admin-pin').value.trim();
     if (!name) return alert('Name is required');
-    if (!pin || pin.length !== 4) return alert('PIN must be 4 digits');
+    if (!pin || pin.length < 4 || pin.length > 6 || !/^\d+$/.test(pin)) return alert('PIN must be 4 to 6 digits (numbers only)');
 
-    await DB.insert('users', { name, role: 'Admin', pin });
+    await DB.insert('users', { name, userId, role: 'Admin', roles: ['Admin'], pin });
     setupWizard.classList.add('hidden');
     await showLoginScreen();
 }
@@ -631,29 +638,26 @@ async function showLoginScreen() {
             logoEl.textContent = co.name ? co.name.charAt(0).toUpperCase() : 'D';
         }
     }
-    await populateLoginUsers();
 }
 
-async function populateLoginUsers() {
-    const sel = $('login-user');
-    if (!sel) return;
-    const users = await DB.getAll('users');
-    sel.innerHTML = users.map(u => `<option value="${u.id}">${u.name} (${u.role})</option>`).join('');
-}
+async function populateLoginUsers() { /* replaced by userId text input */ }
 
 async function login() {
-    const uid = $('login-user').value;
-    const pin = $('login-pin').value;
+    const inputId = ($('login-userid') || {value:''}).value.trim();
+    const pin = $('login-pin').value.trim();
+    if (!inputId) return alert('Enter your User ID');
+    if (!pin) return alert('Enter your PIN');
     const users = await DB.getAll('users');
-    const user = users.find(u => u.id === uid);
+    const user = users.find(u => (u.userId && u.userId.toLowerCase() === inputId.toLowerCase()) || u.name.toLowerCase() === inputId.toLowerCase());
 
-    if (!user || user.pin !== pin) return alert('Invalid PIN');
+    if (!user || user.pin !== pin) return alert('Invalid User ID or PIN');
 
     currentUser = user;
     loginScreen.classList.add('hidden');
     appEl.classList.remove('hidden');
     $('sidebar-username').textContent = user.name;
-    $('sidebar-role').textContent = user.role;
+    const displayRoles = Array.isArray(user.roles) && user.roles.length ? user.roles.join(' | ') : (user.role || '');
+    $('sidebar-role').textContent = displayRoles;
     $('sidebar-avatar').textContent = user.name.charAt(0).toUpperCase();
 
     const co = DB.ls.getObj('db_company');
@@ -686,7 +690,7 @@ function logout() {
 
 // --- Sidebar ---
 function buildSidebar() {
-    const pages = ROLE_PAGES[currentUser.role] || [];
+    const pages = getUserPages(currentUser);
     document.querySelectorAll('.sidebar-nav .nav-item').forEach(el => {
         el.style.display = pages.includes(el.dataset.page) ? 'flex' : 'none';
     });
@@ -1131,7 +1135,7 @@ function buildMoreSheet() {
     const grid = $('more-sheet-grid');
     if (!grid) return;
     const role = currentUser?.role || 'Admin';
-    const allowed = (ROLE_PAGES[role] || []);
+    const allowed = getUserPages(currentUser || { role: 'Admin', roles: [] });
     const mainTabPages = (BOTTOM_NAV_TABS[role] || []).map(t => t.page);
     // Only show items in More sheet that are allowed AND not already a main tab
     const moreItems = MORE_ITEMS.filter(it => allowed.includes(it.page) && !mainTabPages.includes(it.page));
@@ -10434,60 +10438,117 @@ async function deleteDelPerson(id) {
 // =============================================
 function renderUsers() {
     const users = DB.cache['users'] || [];
+    const roleBadgeClass = { Admin:'badge-danger', Manager:'badge-info', Salesman:'badge-success', Delivery:'badge-info', Packing:'badge-warning' };
     pageContent.innerHTML = `
         <div class="section-toolbar">
-            <h3 style="font-size:1rem">Users & Roles</h3>
+            <h3 style="font-size:1rem">Users & Access</h3>
             <button class="btn btn-primary" onclick="openUserModal()">+ Add User</button>
         </div>
         <div class="card"><div class="card-body">
             <div class="table-wrapper">
-                <table class="data-table"><thead><tr><th>Name</th><th>Role</th><th>PIN</th><th>Actions</th></tr></thead>
-                <tbody>${users.map(u => `<tr>
-                    <td style="color:var(--text-primary);font-weight:600">${u.name}</td>
-                    <td><span class="badge ${u.role === 'Admin' ? 'badge-danger' : u.role === 'Manager' ? 'badge-info' : u.role === 'Salesman' ? 'badge-success' : u.role === 'Delivery' ? 'badge-info' : u.role === 'Packing' ? 'badge-warning' : 'badge-info'}">${u.role}</span></td>
-                    <td style="color:var(--text-muted)">****</td>
-                    <td><div class="action-btns"><button class="btn-icon" onclick="openUserModal('${u.id}')">✏️</button>${users.length > 1 ? `<button class="btn-icon" onclick="deleteUser('${u.id}')">🗑️</button>` : ''}</div></td>
-                </tr>`).join('')}</tbody></table>
+                <table class="data-table">
+                    <thead><tr><th>Name</th><th>User ID</th><th>Roles</th><th>PIN</th><th>Actions</th></tr></thead>
+                    <tbody>${users.map(u => {
+                        const roles = Array.isArray(u.roles) && u.roles.length ? u.roles : [u.role];
+                        return `<tr>
+                            <td style="font-weight:600">${escapeHtml(u.name)}</td>
+                            <td style="font-family:monospace;color:var(--accent);font-weight:600">${escapeHtml(u.userId || u.name)}</td>
+                            <td>${roles.map(r => `<span class="badge ${roleBadgeClass[r]||'badge-info'}" style="margin-right:4px">${r}</span>`).join('')}</td>
+                            <td style="color:var(--text-muted);letter-spacing:3px">${'•'.repeat((u.pin||'').length)}</td>
+                            <td><div class="action-btns">
+                                <button class="btn-icon" onclick="openUserModal('${u.id}')">✏️</button>
+                                ${users.length > 1 ? `<button class="btn-icon" onclick="deleteUser('${u.id}')">🗑️</button>` : ''}
+                            </div></td>
+                        </tr>`;
+                    }).join('')}</tbody>
+                </table>
             </div>
-        </div></div>`;
+        </div></div>
+        <div class="card" style="margin-top:12px"><div class="card-header"><h3 style="margin:0;font-size:0.9rem">Role Permissions Reference</h3></div>
+        <div class="card-body"><div class="table-wrapper">
+        <table class="data-table" style="font-size:0.82rem">
+            <thead><tr><th>Role</th><th>Access</th></tr></thead>
+            <tbody>
+                ${Object.entries(ROLE_PAGES).map(([role, pages]) => `<tr>
+                    <td><span class="badge ${roleBadgeClass[role]||'badge-info'}">${role}</span></td>
+                    <td style="color:var(--text-muted)">${pages.map(p => p.charAt(0).toUpperCase()+p.slice(1)).join(', ')}</td>
+                </tr>`).join('')}
+            </tbody>
+        </table></div></div></div>`;
 }
 function openUserModal(id) {
     const u = id ? (DB.cache['users'] || []).find(x => x.id === id) : null;
+    const userRoles = u ? (Array.isArray(u.roles) && u.roles.length ? u.roles : [u.role]) : [];
+    const allRoles = ['Admin','Manager','Salesman','Delivery','Packing'];
+    const roleBadgeClass = { Admin:'badge-danger', Manager:'badge-info', Salesman:'badge-success', Delivery:'badge-info', Packing:'badge-warning' };
     openModal(u ? 'Edit User' : 'Add User', `
-        <div class="form-group"><label>Name *</label><input id="f-user-name" value="${u ? u.name : ''}"></div>
-        <div class="form-row"><div class="form-group"><label>Role</label><select id="f-user-role"><option ${u && u.role === 'Admin' ? 'selected' : ''}>Admin</option><option ${u && u.role === 'Manager' ? 'selected' : ''}>Manager</option><option ${u && u.role === 'Salesman' ? 'selected' : ''}>Salesman</option><option ${u && u.role === 'Delivery' ? 'selected' : ''}>Delivery</option><option ${u && u.role === 'Packing' ? 'selected' : ''}>Packing</option></select></div>
-        <div class="form-group"><label>PIN (4 digits) *</label><input type="password" id="f-user-pin" maxlength="4" value="${u ? u.pin : ''}" placeholder="Enter PIN"></div></div>
-        <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-        ${!id ? `<button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveUser('')">＋ Save & New</button>` : ''}
-        <button class="btn btn-primary" onclick="saveUser('${id || ''}')">Save User</button></div>`);
+        <div class="form-group">
+            <label>Full Name *</label>
+            <input id="f-user-name" class="form-control" value="${u ? escapeHtml(u.name) : ''}" placeholder="Employee name">
+        </div>
+        <div class="form-group">
+            <label>User ID * <span style="font-size:0.78rem;color:var(--text-muted)">(for login — no spaces, e.g. ram01)</span></label>
+            <input id="f-user-userid" class="form-control" value="${u ? escapeHtml(u.userId || '') : ''}" placeholder="e.g. ram01" style="text-transform:lowercase;font-family:monospace" oninput="this.value=this.value.toLowerCase().replace(/\\s/g,'')">
+        </div>
+        <div class="form-group">
+            <label>Roles * <span style="font-size:0.78rem;color:var(--text-muted)">(select one or more)</span></label>
+            <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:8px">
+                ${allRoles.map(r => `
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:6px 12px;border:2px solid var(--border);border-radius:20px;font-size:0.85rem;transition:all 0.15s;${userRoles.includes(r)?'border-color:var(--primary);background:var(--primary-light,#eff6ff);font-weight:600':''}">
+                    <input type="checkbox" class="chk-user-role" value="${r}" ${userRoles.includes(r)?'checked':''} onchange="this.parentElement.style.borderColor=this.checked?'var(--primary)':'var(--border)';this.parentElement.style.background=this.checked?'var(--primary-light,#eff6ff)':'';this.parentElement.style.fontWeight=this.checked?'600':'400'">
+                    <span class="badge ${roleBadgeClass[r]}">${r}</span>
+                </label>`).join('')}
+            </div>
+        </div>
+        <div class="form-group">
+            <label>PIN * <span style="font-size:0.78rem;color:var(--text-muted)">(4 to 6 digits)</span></label>
+            <div style="position:relative">
+                <input type="password" id="f-user-pin" class="form-control" maxlength="6" value="${u ? u.pin : ''}" placeholder="Enter 4–6 digit PIN" inputmode="numeric" style="padding-right:40px">
+                <button type="button" onclick="const p=$('f-user-pin');p.type=p.type==='password'?'text':'password'" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:1rem">👁</button>
+            </div>
+        </div>
+        <div class="modal-actions">
+            <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+            ${!id ? `<button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveUser('')">＋ Save & New</button>` : ''}
+            <button class="btn btn-primary" onclick="saveUser('${id || ''}')">Save User</button>
+        </div>`);
 }
 async function saveUser(id) {
-    const name = $('f-user-name').value.trim(), pin = $('f-user-pin').value.trim();
-    if (!name) return alert('Name required'); if (!pin || pin.length !== 4) return alert('PIN must be 4 digits');
-    const role = $('f-user-role').value;
-    const data = { name, role, pin };
+    const name = $('f-user-name').value.trim();
+    const userId = $('f-user-userid').value.trim().toLowerCase().replace(/\s/g,'');
+    const pin = $('f-user-pin').value.trim();
+    const selectedRoles = [...document.querySelectorAll('.chk-user-role:checked')].map(c => c.value);
+
+    if (!name) return alert('Name is required');
+    if (!userId) return alert('User ID is required');
+    if (!selectedRoles.length) return alert('Select at least one role');
+    if (!pin || !/^\d{4,6}$/.test(pin)) return alert('PIN must be 4 to 6 digits (numbers only)');
+
+    // Check userId uniqueness
+    const allUsers = DB.cache['users'] || [];
+    const conflict = allUsers.find(u => u.userId && u.userId.toLowerCase() === userId && u.id !== id);
+    if (conflict) return alert(`User ID "${userId}" is already taken by ${conflict.name}`);
+
+    const primaryRole = selectedRoles[0];
+    const data = { name, userId, role: primaryRole, roles: selectedRoles, pin };
+
     try {
         if (id) {
             await DB.update('users', id, data);
         } else {
             await DB.insert('users', data);
-            // Auto-create matching Packer or Delivery Person record
-            if (role === 'Packing') {
+            // Auto-create Packer or Delivery Person record
+            if (selectedRoles.includes('Packing')) {
                 const packers = await DB.getAll('packers');
-                if (!packers.some(p => p.name === name)) {
-                    await DB.insert('packers', { name });
-                }
-            } else if (role === 'Delivery') {
+                if (!packers.some(p => p.name === name)) await DB.insert('packers', { name });
+            }
+            if (selectedRoles.includes('Delivery')) {
                 const dps = await DB.getAll('delivery_persons');
-                if (!dps.some(p => p.name === name)) {
-                    await DB.insert('delivery_persons', { name });
-                }
+                if (!dps.some(p => p.name === name)) await DB.insert('delivery_persons', { name });
             }
         }
         await DB.refresh(); closeModal(); renderUsers();
-        if (!id && (role === 'Packing' || role === 'Delivery')) {
-            showToast(`User created & added to ${role === 'Packing' ? 'Packers' : 'Delivery Persons'}`, 'success');
-        }
+        showToast('User saved!', 'success');
         if (window._saveAndNew) { window._saveAndNew = false; openUserModal(); }
     } catch (e) { window._saveAndNew = false; alert('Error saving user: ' + e.message); }
 }

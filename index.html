@@ -40,12 +40,12 @@
             </div>
             <div class="login-form">
                 <div class="form-group">
-                    <label for="login-user">Select User</label>
-                    <select id="login-user"></select>
+                    <label for="login-userid">User ID</label>
+                    <input id="login-userid" placeholder="Enter your User ID" autocomplete="username" style="text-transform:lowercase" oninput="this.value=this.value.toLowerCase().replace(/\s/g,'')">
                 </div>
                 <div class="form-group">
                     <label for="login-pin">PIN</label>
-                    <input type="password" id="login-pin" placeholder="Enter 4-digit PIN" maxlength="4">
+                    <input type="password" id="login-pin" placeholder="Enter PIN (4–6 digits)" maxlength="6" inputmode="numeric" autocomplete="current-password">
                 </div>
                 <button id="btn-login" class="btn btn-primary btn-block">Sign In</button>
                 <div style="text-align:center;margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
@@ -206,7 +206,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-    <script src="app.js?v=62"></script>
+    <script src="app.js?v=63"></script>
     <script>
         // Unregister old service workers to clear stale cache, then register fresh
         if ('serviceWorker' in navigator) {
