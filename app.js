@@ -10963,6 +10963,102 @@ function getPaymentTermsList() {
         { name: 'Net 60', days: 60 }
     ];
 }
+function updateNsPreview(key) {
+    const prefix = (document.getElementById('ns-'+key+'-prefix')||{}).value || '';
+    const pad    = parseInt((document.getElementById('ns-'+key+'-pad')||{}).value) || 5;
+    const start  = parseInt((document.getElementById('ns-'+key+'-start')||{}).value) || 1;
+    const el = document.getElementById('ns-'+key+'-preview');
+    if (el) el.textContent = prefix + String(start).padStart(pad,'0');
+}
+
+async function saveNumberSeries() {
+    const keys = ['inv','pur','so','po','cust','supp'];
+    const ns = DB.ls.getObj('db_number_series') || {};
+    for (const k of keys) {
+        const prefix = (document.getElementById('ns-'+k+'-prefix')||{}).value || '';
+        const pad    = parseInt((document.getElementById('ns-'+k+'-pad')||{}).value) || 5;
+        const start  = parseInt((document.getElementById('ns-'+k+'-start')||{}).value) || 1;
+        ns[k+'_prefix'] = prefix;
+        ns[k+'_pad']    = pad;
+        ns[k+'_start']  = start;
+    }
+    await DB.saveSettings('db_number_series', ns);
+    showToast('Number series saved!', 'success');
+}
+
+function getNsSetting(key, field, fallback) {
+    const ns = DB.ls.getObj('db_number_series') || {};
+    return ns[key+'_'+field] !== undefined ? ns[key+'_'+field] : fallback;
+}
+
+async function nextPartyCode(type) {
+    // type: 'Customer' or 'Supplier'
+    const key     = type === 'Supplier' ? 'supp' : 'cust';
+    const prefix  = getNsSetting(key, 'prefix', type === 'Supplier' ? 'SUP-' : 'CUST-');
+    const pad     = getNsSetting(key, 'pad', 5);
+    // Find max existing code number for this prefix
+    const parties = DB.get('db_parties') || [];
+    const nums = parties
+        .filter(p => p.partyCode && p.partyCode.startsWith(prefix))
+        .map(p => { const m = p.partyCode.match(/(\d+)$/); return m ? parseInt(m[1]) : 0; });
+    const maxExisting = nums.length ? Math.max(...nums) : 0;
+    const configStart = getNsSetting(key, 'start', 1);
+    const next = Math.max(maxExisting + 1, configStart);
+    // Update start for next call
+    const ns = DB.ls.getObj('db_number_series') || {};
+    ns[key+'_start'] = next + 1;
+    await DB.saveSettings('db_number_series', ns);
+    return prefix + String(next).padStart(pad, '0');
+}
+
+async function autoAssignPartyCodes() {
+    const parties = await DB.getAll('parties');
+    const without = parties.filter(p => !p.partyCode);
+    if (!without.length) return showToast('All parties already have a code!', 'success');
+    const confirmed = confirm(`${without.length} parties have no code.\n\nCustomers → CUST-00001 format\nSuppliers → SUP-00001 format\n\nProceed?`);
+    if (!confirmed) return;
+
+    const key_cust  = 'cust', key_supp = 'supp';
+    const custPrefix = getNsSetting(key_cust, 'prefix', 'CUST-');
+    const custPad    = getNsSetting(key_cust, 'pad', 5);
+    const suppPrefix = getNsSetting(key_supp, 'prefix', 'SUP-');
+    const suppPad    = getNsSetting(key_supp, 'pad', 5);
+
+    // Find current max numbers
+    const allParties = DB.get('db_parties') || [];
+    const maxCust = allParties.filter(p => p.partyCode && p.partyCode.startsWith(custPrefix))
+        .reduce((m, p) => { const n = p.partyCode.match(/(\d+)$/); return n ? Math.max(m, parseInt(n[1])) : m; }, 0);
+    const maxSupp = allParties.filter(p => p.partyCode && p.partyCode.startsWith(suppPrefix))
+        .reduce((m, p) => { const n = p.partyCode.match(/(\d+)$/); return n ? Math.max(m, parseInt(n[1])) : m; }, 0);
+
+    let custCounter = Math.max(maxCust + 1, getNsSetting(key_cust, 'start', 1));
+    let suppCounter = Math.max(maxSupp + 1, getNsSetting(key_supp, 'start', 1));
+
+    const ops = [];
+    for (const p of without) {
+        let code;
+        if ((p.type || 'Customer').toLowerCase() === 'supplier') {
+            code = suppPrefix + String(suppCounter).padStart(suppPad, '0');
+            suppCounter++;
+        } else {
+            code = custPrefix + String(custCounter).padStart(custPad, '0');
+            custCounter++;
+        }
+        ops.push(DB.rawUpdate('parties', p.id, { partyCode: code }));
+    }
+    await Promise.all(ops);
+
+    // Save updated counters
+    const ns = DB.ls.getObj('db_number_series') || {};
+    ns[key_cust+'_start'] = custCounter;
+    ns[key_supp+'_start'] = suppCounter;
+    await DB.saveSettings('db_number_series', ns);
+
+    await DB.refreshTables(['parties']);
+    showToast(`Done! ${without.length} parties assigned codes.`, 'success');
+    await renderCompanySetup();
+}
+
 async function renderCompanySetup() {
     // Always reload from Supabase so UPI / settings are fresh on any device
     await DB.loadSettings();
@@ -11013,6 +11109,38 @@ async function renderCompanySetup() {
         Next invoice will be: <strong id="vy-setup-preview" style="color:var(--primary)">${escapeHtml(buildVyaparInvoiceNo())}</strong>
     </div>
     <button class="btn btn-primary" onclick="saveVyaparSetup()">Save Vyapar Settings</button>
+</div></div>
+        <div class="card" style="margin-top:20px"><div class="card-body padded">
+    <h3 style="margin-bottom:6px;font-size:1rem">🔢 Number Series Setup</h3>
+    <p style="font-size:0.82rem;color:var(--text-muted);margin-bottom:16px">Configure prefixes and starting numbers for all auto-generated codes.</p>
+    ${(()=>{
+        const ns = DB.ls.getObj('db_number_series') || {};
+        const rows = [
+            { key:'inv',   label:'Sale Invoice',    defPrefix:'INV-',   defStart:1 },
+            { key:'pur',   label:'Purchase Invoice', defPrefix:'PUR-',   defStart:1 },
+            { key:'so',    label:'Sales Order',      defPrefix:'SO-',    defStart:1 },
+            { key:'po',    label:'Purchase Order',   defPrefix:'PO-',    defStart:1 },
+            { key:'cust',  label:'Customer Code',    defPrefix:'CUST-',  defStart:1 },
+            { key:'supp',  label:'Supplier Code',    defPrefix:'SUP-',   defStart:1 },
+        ];
+        return `<div class="table-wrapper"><table class="data-table">
+            <thead><tr><th>Series</th><th>Prefix</th><th>Padding (digits)</th><th>Next No.</th><th>Preview</th></tr></thead>
+            <tbody>${rows.map(r => {
+                const prefix = ns[r.key+'_prefix'] !== undefined ? ns[r.key+'_prefix'] : r.defPrefix;
+                const start  = ns[r.key+'_start']  !== undefined ? ns[r.key+'_start']  : r.defStart;
+                const pad    = ns[r.key+'_pad']    !== undefined ? ns[r.key+'_pad']    : 5;
+                const preview = prefix + String(start).padStart(pad,'0');
+                return `<tr>
+                    <td style="font-weight:600;font-size:0.88rem">${r.label}</td>
+                    <td><input id="ns-${r.key}-prefix" value="${escapeHtml(prefix)}" style="width:90px;font-family:monospace" oninput="updateNsPreview('${r.key}')"></td>
+                    <td><input id="ns-${r.key}-pad" type="number" min="1" max="8" value="${pad}" style="width:60px;text-align:center" oninput="updateNsPreview('${r.key}')"></td>
+                    <td><input id="ns-${r.key}-start" type="number" min="1" value="${start}" style="width:80px;font-weight:700" oninput="updateNsPreview('${r.key}')"></td>
+                    <td><span id="ns-${r.key}-preview" style="font-family:monospace;color:var(--accent);font-weight:700">${escapeHtml(preview)}</span></td>
+                </tr>`;
+            }).join('')}</tbody>
+        </table></div>
+        <button class="btn btn-primary" style="margin-top:14px" onclick="saveNumberSeries()">Save Number Series</button>`;
+    })()}
 </div></div>
         <div class="card" style="margin-top:20px"><div class="card-body padded">
     <h3 style="margin-bottom:16px;font-size:1rem">💳 Payment Reference No. Settings</h3>
@@ -11078,8 +11206,11 @@ async function renderCompanySetup() {
         </div></div>
         <div class="card" style="margin-top:20px"><div class="card-body padded">
             <h3 style="margin-bottom:10px;font-size:1rem">🔧 Admin Tools</h3>
-            <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:14px">Scan all items for stock vs ledger discrepancies and auto-create correction entries to reconcile.</p>
-            <button class="btn btn-outline" onclick="healStockLedger()">🩺 Heal Stock Ledger</button>
+            <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:14px">Maintenance tools for data integrity and bulk operations.</p>
+            <div style="display:flex;gap:10px;flex-wrap:wrap">
+                <button class="btn btn-outline" onclick="healStockLedger()">🩺 Heal Stock Ledger</button>
+                <button class="btn btn-outline" style="border-color:#f59e0b;color:#f59e0b" onclick="autoAssignPartyCodes()">🔄 Auto-assign Party Codes</button>
+            </div>
         </div></div>
         <div class="card" style="margin-top:20px"><div class="card-body padded">
             <h3 style="margin-bottom:10px;font-size:1rem">💾 Data Backup & Restore</h3>
