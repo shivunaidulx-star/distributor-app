@@ -678,6 +678,53 @@ async function login() {
     await navigateTo('dashboard');
 }
 
+function openChangePinModal() {
+    openModal('Change PIN', `
+        <div class="form-group">
+            <label>Current PIN *</label>
+            <div style="position:relative">
+                <input type="password" id="cp-old-pin" class="form-control" maxlength="6" placeholder="Enter current PIN" inputmode="numeric" style="padding-right:40px">
+                <button type="button" onclick="const p=$('cp-old-pin');p.type=p.type==='password'?'text':'password'" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-muted)">👁</button>
+            </div>
+        </div>
+        <div class="form-group">
+            <label>New PIN * <span style="font-size:0.78rem;color:var(--text-muted)">(4 to 6 digits)</span></label>
+            <div style="position:relative">
+                <input type="password" id="cp-new-pin" class="form-control" maxlength="6" placeholder="Enter new PIN" inputmode="numeric" style="padding-right:40px">
+                <button type="button" onclick="const p=$('cp-new-pin');p.type=p.type==='password'?'text':'password'" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-muted)">👁</button>
+            </div>
+        </div>
+        <div class="form-group">
+            <label>Confirm New PIN *</label>
+            <div style="position:relative">
+                <input type="password" id="cp-confirm-pin" class="form-control" maxlength="6" placeholder="Re-enter new PIN" inputmode="numeric" style="padding-right:40px">
+                <button type="button" onclick="const p=$('cp-confirm-pin');p.type=p.type==='password'?'text':'password'" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-muted)">👁</button>
+            </div>
+        </div>
+        <div class="modal-actions">
+            <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="saveChangedPin()">Update PIN</button>
+        </div>`);
+    setTimeout(() => $('cp-old-pin') && $('cp-old-pin').focus(), 100);
+}
+
+async function saveChangedPin() {
+    const oldPin = $('cp-old-pin').value.trim();
+    const newPin = $('cp-new-pin').value.trim();
+    const confirmPin = $('cp-confirm-pin').value.trim();
+    if (!oldPin) return alert('Enter your current PIN');
+    if (oldPin !== currentUser.pin) return alert('Current PIN is incorrect');
+    if (!newPin || !/^\d{4,6}$/.test(newPin)) return alert('New PIN must be 4 to 6 digits (numbers only)');
+    if (newPin !== confirmPin) return alert('New PINs do not match');
+    if (newPin === oldPin) return alert('New PIN must be different from current PIN');
+    try {
+        await DB.update('users', currentUser.id, { pin: newPin });
+        currentUser.pin = newPin;
+        closeModal();
+        showToast('PIN updated successfully!', 'success');
+    } catch(e) { alert('Error updating PIN: ' + e.message); }
+}
+
 function logout() {
     currentUser = null;
     $('login-pin').value = '';
