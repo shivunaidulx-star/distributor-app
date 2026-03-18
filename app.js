@@ -7384,29 +7384,19 @@ function renderExpRows(expenses) {
     }).join('');
 }
 
-function viewExpenseDoc(docNo, type) {
+async function viewExpenseDoc(docNo, type) {
     if (type === 'payment') {
-        navigateTo('payments');
-        setTimeout(() => {
-            // Clear date filters so record is visible regardless of month
-            const from = document.getElementById('pay-f-from');
-            const to   = document.getElementById('pay-f-to');
-            if (from) from.value = '2020-01-01';
-            if (to)   to.value   = today();
-            const search = document.getElementById('pay-search');
-            if (search) { search.value = docNo; search.dispatchEvent(new Event('input')); }
-            if (from || to) { const ev = new Event('change'); from && from.dispatchEvent(ev); }
-        }, 700);
+        // Open payment voucher directly by payNo
+        const payments = DB.get('db_payments') || await DB.getAll('payments');
+        const p = payments.find(x => x.payNo === docNo || x.id === docNo);
+        if (p) { viewPaymentDetails(p.id); return; }
+        showToast('Payment record not found: ' + docNo, 'error');
     } else {
-        navigateTo('invoices');
-        setTimeout(() => {
-            const from = document.getElementById('inv-f-from');
-            const to   = document.getElementById('inv-f-to');
-            if (from) from.value = '2020-01-01';
-            if (to)   to.value   = today();
-            const search = document.getElementById('inv-search');
-            if (search) { search.value = docNo; search.dispatchEvent(new Event('input')); }
-        }, 700);
+        // Open invoice modal directly by invoiceNo
+        const invoices = DB.get('db_invoices') || await DB.getAll('invoices');
+        const inv = invoices.find(x => x.invoiceNo === docNo);
+        if (inv) { viewInvoice(inv.id); return; }
+        showToast('Invoice not found: ' + docNo, 'error');
     }
 }
 
