@@ -12477,20 +12477,26 @@ async function showReservedDetails(itemId) {
 
     const rows = reservedOrders.map(o => {
         const li = o.items.find(x => x.itemId === itemId);
-        return `<tr>
-            <td style="font-weight:600">${o.orderNo}</td>
-            <td>${o.partyName}</td>
-            <td style="font-weight:700;color:var(--primary)">${li ? li.qty : 0} ${li ? li.unit : ''}</td>
-            <td style="font-size:0.8rem">${fmtDate(o.date)}</td>
-            <td style="font-size:0.75rem"><span class="badge ${o.status === 'approved' ? 'badge-success' : 'badge-warning'}">${o.status}</span></td>
+        return `<tr style="font-size:0.85rem">
+            <td style="font-weight:600;width:90px;padding-right:10px">${o.orderNo}</td>
+            <td style="min-width:140px;padding-right:10px">${o.partyName}</td>
+            <td style="font-weight:700;color:var(--primary);width:60px;text-align:center">${li ? li.qty : 0} ${li ? li.unit : ''}</td>
+            <td style="width:90px;text-align:center">${fmtDate(o.date)}</td>
+            <td style="width:80px;text-align:right"><span class="badge ${o.status === 'approved' ? 'badge-success' : 'badge-warning'}" style="white-space:nowrap;display:inline-block">${o.status}</span></td>
         </tr>`;
     }).join('');
 
     openModal(`Reservations for: ${item.name}`, `
         <div style="margin-bottom:12px;font-size:0.9rem;color:var(--text-secondary)">Total Reserved: <strong>${getAvailableStock(item).reserved} ${item.unit || 'Pcs'}</strong></div>
-        <div class="table-wrapper">
-            <table class="data-table">
-                <thead><tr><th>Order #</th><th>Customer</th><th>Qty</th><th>Date</th><th>Status</th></tr></thead>
+        <div class="table-wrapper" style="overflow-x:auto">
+            <table class="data-table" style="min-width:500px">
+                <thead><tr>
+                    <th style="text-align:left;width:90px">Order #</th>
+                    <th style="text-align:left">Customer</th>
+                    <th style="text-align:center;width:60px">Qty</th>
+                    <th style="text-align:center;width:90px">Date</th>
+                    <th style="text-align:right;width:80px">Status</th>
+                </tr></thead>
                 <tbody>${rows}</tbody>
             </table>
         </div>
