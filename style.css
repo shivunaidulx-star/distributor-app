@@ -783,6 +783,41 @@ table { border-collapse: collapse; width: 100%; }
     box-sizing: border-box;
 }
 
+.sub-modal {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: var(--bg-card);
+    z-index: 1000;
+    transform: translateX(100%);
+    transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+    display: flex;
+    flex-direction: column;
+}
+.sub-modal.active {
+    transform: translateX(0);
+}
+.sub-modal-header {
+    background: var(--bg-card);
+    padding: 16px 20px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    z-index: 10;
+}
+.sub-modal-header h3 {
+    margin: 0;
+    font-size: 1.1rem;
+    font-weight: 600;
+    flex: 1;
+}
+.sub-modal-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+    background: var(--bg-app);
+}
+
 .modal-actions {
     display: flex;
     justify-content: flex-end;

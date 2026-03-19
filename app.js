@@ -4243,36 +4243,7 @@ async function openSalesOrderModal() {
         
         <hr style="border-color:var(--border);margin:16px 0"><h4 style="margin-bottom:10px;font-size:0.9rem">Items</h4>
         
-        <div class="form-row" style="margin-bottom:8px">
-            <div class="form-group">
-                <label>Category Filter</label>
-                <select id="f-so-cat-filter" onchange="onSOCatFilterChange()">
-                    <option value="">All Categories</option>
-                    ${categories.map(c => `<option value="${c.name}">${c.name}</option>`).join('')}
-                </select>
-            </div>
-            <div class="form-group">
-                <label>Sub-Category Filter</label>
-                <select id="f-so-subcat-filter" onchange="onSOSubcatFilterChange()">
-                    <option value="">All Sub-Categories</option>
-                </select>
-            </div>
-        </div>
-
-        <div class="inv-item-entry" style="background:var(--bg-input);padding:10px;border-radius:8px;margin-bottom:12px;border:1px solid var(--border)">
-            <div class="form-group" style="margin-bottom:10px">
-                <label style="font-size:0.8rem">Search & Select Item</label>
-                <input id="f-so-item-input" placeholder="Type item name or code..." style="background:#fff">
-            </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
-                <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">Qty</label><input type="number" id="f-so-qty" value="1" min="1" style="background:#fff"></div>
-                <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">UOM</label><select id="f-so-uom" onchange="onSOUomChange()" style="background:#fff"><option value="">--</option></select></div>
-            </div>
-            <div style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end">
-                <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">Price ₹</label><input type="number" id="f-so-price" value="" min="0" step="0.01" placeholder="Listed" style="background:#fff"></div>
-                <button class="btn btn-primary" onclick="addSOLine()" style="height:38px;padding:0 20px">Add</button>
-            </div>
-        </div>
+        <button class="btn btn-outline btn-block" onclick="openSoItemSubModal()" style="margin-bottom:16px;border-style:dashed;color:var(--primary);border-color:var(--primary);height:44px;font-weight:600">＋ Add Item(s)</button>
         
         <div class="table-wrapper"><div id="so-lines-list"></div></div>
         
@@ -4288,7 +4259,44 @@ async function openSalesOrderModal() {
             <div style="text-align:right; font-size:1.15rem; font-weight:800; color:var(--accent)" id="so-total-display">Total: ₹0.00</div>
         </div>
         
-        <div class="form-group" style="margin-top:12px"><label>Notes</label><input id="f-so-notes" placeholder="Instructions..."></div>
+        <div id="so-item-sub-modal" class="sub-modal">
+            <div class="sub-modal-header">
+                <h3>Add Item to Order</h3>
+                <button class="btn-icon" onclick="closeSoItemSubModal()">✕</button>
+            </div>
+            <div class="sub-modal-body">
+                <div class="form-row" style="margin-bottom:8px">
+                    <div class="form-group">
+                        <label>Category Filter</label>
+                        <select id="f-so-cat-filter" onchange="onSOCatFilterChange()">
+                            <option value="">All Categories</option>
+                            ${categories.map(c => `<option value="${c.name}">${c.name}</option>`).join('')}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Sub-Category Filter</label>
+                        <select id="f-so-subcat-filter" onchange="onSOSubcatFilterChange()">
+                            <option value="">All Sub-Categories</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="inv-item-entry" style="background:var(--bg-input);padding:10px;border-radius:8px;margin-bottom:12px;border:1px solid var(--border)">
+                    <div class="form-group" style="margin-bottom:10px">
+                        <label style="font-size:0.8rem">Search & Select Item</label>
+                        <input id="f-so-item-input" placeholder="Type item name or code..." style="background:#fff">
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+                        <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">Qty</label><input type="number" id="f-so-qty" value="1" min="1" style="background:#fff"></div>
+                        <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">UOM</label><select id="f-so-uom" onchange="onSOUomChange()" style="background:#fff"><option value="">--</option></select></div>
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end">
+                        <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">Price ₹</label><input type="number" id="f-so-price" value="" min="0" step="0.01" placeholder="Listed" style="background:#fff"></div>
+                        <button class="btn btn-primary" onclick="addSOLine()" style="height:38px;padding:0 20px">Add</button>
+                    </div>
+                </div>
+                <button class="btn btn-outline btn-block" onclick="closeSoItemSubModal()" style="margin-top:10px">Done Adding</button>
+            </div>
+        </div>
     `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveSalesOrder()">＋ Save & New</button><button class="btn btn-primary" onclick="saveSalesOrder()">✅ Submit Order</button>`);
 
     // Init custom searchable dropdowns
@@ -4527,6 +4535,7 @@ function addSOLine() {
         }
     });
 
+    showToast('Item added to order', 'success');
     $('f-so-price').value = '';
     $('f-so-qty').value = '1';
     $('f-so-item-input').value = '';
@@ -4534,6 +4543,7 @@ function addSOLine() {
     if (uomSel2) uomSel2.innerHTML = '<option value="">--</option>';
 
     renderSOLines();
+    if (window._soItemDropdown) window._soItemDropdown.clear();
     $('f-so-item-input').focus();
 }
 function removeSOLine(i) { soItems.splice(i, 1); renderSOLines(); }
@@ -4629,6 +4639,11 @@ function renderSOLines() {
 
     updateSoTotal();
 }
+function openSoItemSubModal() { const el = $('so-item-sub-modal'); if (el) el.classList.add('active'); }
+function closeSoItemSubModal() { const el = $('so-item-sub-modal'); if (el) el.classList.remove('active'); }
+function openInvItemSubModal() { const el = $('inv-item-sub-modal'); if (el) el.classList.add('active'); }
+function closeInvItemSubModal() { const el = $('inv-item-sub-modal'); if (el) el.classList.remove('active'); }
+
 async function saveSalesOrder() {
     if (!beginSave()) return;
     const pe = $('f-so-party'); if (!pe.value) { endSave(); return alert('Select customer'); } if (!soItems.length) { endSave(); return alert('Add items'); }
@@ -5589,36 +5604,7 @@ async function openInvoiceModal(type = 'sale') {
         
         <hr style="border-color:var(--border);margin:16px 0"><h4 style="margin-bottom:10px;font-size:0.9rem">Items</h4>
         
-        <div class="form-row" style="margin-bottom:8px">
-            <div class="form-group">
-                <label>Category Filter</label>
-                <select id="f-inv-cat-filter" onchange="onInvCatFilterChange()">
-                    <option value="">All Categories</option>
-                    ${categories.map(c => `<option value="${c.name}">${c.name}</option>`).join('')}
-                </select>
-            </div>
-            <div class="form-group">
-                <label>Sub-Category Filter</label>
-                <select id="f-inv-subcat-filter" onchange="onInvSubcatFilterChange()">
-                    <option value="">All Sub-Categories</option>
-                </select>
-            </div>
-        </div>
-
-        <div class="inv-item-entry" style="background:var(--bg-input);padding:10px;border-radius:8px;margin-bottom:12px;border:1px solid var(--border)">
-            <div class="form-group" style="margin-bottom:10px">
-                <label style="font-size:0.8rem">Search & Select Item</label>
-                <input id="f-inv-item-input" placeholder="Type item name or code..." style="background:#fff">
-            </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
-                <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">Qty</label><input type="number" id="f-inv-qty" value="1" min="1" style="background:#fff"></div>
-                <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">UOM</label><select id="f-inv-uom" onchange="onInvUomChange()" style="background:#fff"><option value="">--</option></select></div>
-            </div>
-            <div style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end">
-                <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">Price ₹</label><input type="number" id="f-inv-price" value="" min="0" step="0.01" placeholder="Listed" style="background:#fff"></div>
-                <button class="btn btn-primary" onclick="addInvoiceLine()" style="height:38px;padding:0 20px">Add</button>
-            </div>
-        </div>
+        <button class="btn btn-outline btn-block" onclick="openInvItemSubModal()" style="margin-bottom:16px;border-style:dashed;color:var(--primary);border-color:var(--primary);height:44px;font-weight:600">＋ Add Item(s)</button>
         
         <div class="table-wrapper"><div id="inv-lines-list"></div></div>
         
@@ -5650,6 +5636,44 @@ async function openInvoiceModal(type = 'sale') {
         <div id="inv-total-display" style="text-align:right;font-size:1rem;color:var(--text-secondary);font-weight:600;margin-top:4px">Total: ₹0.00</div>
         
         <div id="inv-advance-section" style="margin-top:10px"></div>
+        <div id="inv-item-sub-modal" class="sub-modal">
+            <div class="sub-modal-header">
+                <h3>Add Item</h3>
+                <button class="btn-icon" onclick="closeInvItemSubModal()">✕</button>
+            </div>
+            <div class="sub-modal-body">
+                <div class="form-row" style="margin-bottom:8px">
+                    <div class="form-group">
+                        <label>Category Filter</label>
+                        <select id="f-inv-cat-filter" onchange="onInvCatFilterChange()">
+                            <option value="">All Categories</option>
+                            ${categories.map(c => `<option value="${c.name}">${c.name}</option>`).join('')}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Sub-Category Filter</label>
+                        <select id="f-inv-subcat-filter" onchange="onInvSubcatFilterChange()">
+                            <option value="">All Sub-Categories</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="inv-item-entry" style="background:var(--bg-input);padding:10px;border-radius:8px;margin-bottom:12px;border:1px solid var(--border)">
+                    <div class="form-group" style="margin-bottom:10px">
+                        <label style="font-size:0.8rem">Search & Select Item</label>
+                        <input id="f-inv-item-input" placeholder="Type item name or code..." style="background:#fff">
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+                        <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">Qty</label><input type="number" id="f-inv-qty" value="1" min="1" style="background:#fff"></div>
+                        <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">UOM</label><select id="f-inv-uom" onchange="onInvUomChange()" style="background:#fff"><option value="">--</option></select></div>
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end">
+                        <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">Price ₹</label><input type="number" id="f-inv-price" value="" min="0" step="0.01" placeholder="Listed" style="background:#fff"></div>
+                        <button class="btn btn-primary" onclick="addInvoiceLine()" style="height:38px;padding:0 20px">Add</button>
+                    </div>
+                </div>
+                <button class="btn btn-outline btn-block" onclick="closeInvItemSubModal()" style="margin-top:10px">Done Adding</button>
+            </div>
+        </div>
     `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveInvoice()">＋ Save & New</button><button class="btn btn-primary" onclick="saveInvoice()">💾 Save Invoice</button>`);
 
     // Init custom searchable dropdowns
@@ -5906,6 +5930,7 @@ async function addInvoiceLine() {
         });
     }
 
+    showToast('Item added to invoice', 'success');
     $('f-inv-price').value = '';
     $('f-inv-qty').value = '1';
     $('f-inv-item-input').value = '';
@@ -5913,6 +5938,7 @@ async function addInvoiceLine() {
     if (uomSel2) uomSel2.innerHTML = '<option value="">--</option>';
 
     renderInvoiceLines();
+    if (window._invItemDropdown) window._invItemDropdown.clear();
     $('f-inv-item-input').focus();
 }
 function removeInvoiceLine(idx) {
@@ -6723,18 +6749,8 @@ function printPaymentReceipt() {
 
 function _initPayPartyDropdown(parties, filterType) {
     let filtered = filterType ? parties.filter(p => p.type === filterType) : parties;
-    
-    if (window.userCoords) {
-        filtered = [...filtered].sort((a,b) => {
-            const distA = calculateDistance(window.userCoords.latitude, window.userCoords.longitude, a.lat||0, a.lng||0);
-            const distB = calculateDistance(window.userCoords.latitude, window.userCoords.longitude, b.lat||0, b.lng||0);
-            if (distA === Infinity && distB === Infinity) return 0;
-            return distA - distB;
-        });
-    }
-    
-    // For payments, we MUST allow blocked parties so they can clear dues.
-    // We cannot use the default buildPartySearchList because it hides blocked parties.
+
+    // Search object list
     const customPartySearchList = (pts) => pts.map(p => ({
         id: p.id,
         label: p.name + (p.blocked ? ' (Blocked)' : ''),
@@ -6744,7 +6760,6 @@ function _initPayPartyDropdown(parties, filterType) {
         searchText: (p.name + ' ' + (p.phone || ''))
     }));
 
-    // Sort parties by GPS proximity to user's current location
     const sortAndInit = (sortedParties) => {
         initSearchDropdown('f-pay-party', customPartySearchList(sortedParties), (party) => {
             if ($('f-pay-party-id')) $('f-pay-party-id').value = party.id || '';
@@ -6752,29 +6767,18 @@ function _initPayPartyDropdown(parties, filterType) {
         });
     };
 
-    // Try to get user's live location for proximity sorting
-    if (navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(
-            (pos) => {
-                window._userCoords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-                const withDist = filtered.map(p => {
-                    const lat = parseFloat(p.gpsLat || p.latitude || 0);
-                    const lng = parseFloat(p.gpsLng || p.longitude || 0);
-                    const dist = (lat && lng) ? haversine(window._userCoords.lat, window._userCoords.lng, lat, lng) : 99999;
-                    return { ...p, _dist: dist };
-                });
-                withDist.sort((a, b) => a._dist - b._dist);
-                sortAndInit(withDist);
-            },
-            () => {
-                // GPS denied/unavailable — fallback to alphabetical
-                const sorted = [...filtered].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-                sortAndInit(sorted);
-            },
-            { timeout: 5000, enableHighAccuracy: false }
-        );
+    if (window._userCoords) {
+        const withDist = filtered.map(p => {
+            const lat = parseFloat(p.lat || 0);
+            const lng = parseFloat(p.lng || 0);
+            const dist = (lat && lng) ? haversine(window._userCoords.lat, window._userCoords.lng, lat, lng) : 99999;
+            return { ...p, _dist: dist };
+        });
+        withDist.sort((a, b) => a._dist - b._dist);
+        sortAndInit(withDist);
     } else {
-        sortAndInit(filtered);
+        const sorted = [...filtered].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+        sortAndInit(sorted);
     }
 }
 async function openPaymentModal(prefillPartyId) {
