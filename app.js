@@ -20,42 +20,43 @@ const DB = {
     },
 
     async refresh() {
-        // Core tables needed for boot/login
-        const coreTables = ['users'];
-        // All other tables
-        const tables = ['parties', 'inventory', 'sales_orders', 'invoices', 'payments', 'expenses', 'party_ledger', 'stock_ledger', 'categories', 'uom', 'packers', 'delivery_persons', 'delivery'];
+        // Core tables needed for Login & Dashboard basic structure
+        const coreTables = ['users', 'categories', 'uom']; 
+        const tables = ['parties', 'inventory', 'sales_orders', 'invoices', 'payments', 'expenses', 'party_ledger', 'stock_ledger', 'packers', 'delivery_persons', 'delivery'];
         
-        // 1. Load settings and core tables FIRST for fast boot
-        const [settings, ...coreResults] = await Promise.all([
-            this.loadSettings(),
-            ...coreTables.map(t => supabaseClient.from(t).select('*'))
-        ]);
-        coreResults.forEach((res, i) => {
-            if (!res.error) this.cache[coreTables[i]] = this._toCamel(res.data || []);
+        // 1. Load settings and core tables FIRST - block the boot sequence for these
+        try {
+            const [settings, ...coreResults] = await Promise.all([
+                this.loadSettings(),
+                ...coreTables.map(t => supabaseClient.from(t).select('*'))
+            ]);
+            coreResults.forEach((res, i) => {
+                if (!res.error) this.cache[coreTables[i]] = this._toCamel(res.data || []);
+            });
+        } catch(e) { console.error('Core Refresh Error:', e); }
+
+        // 2. Start loading secondary tables in the background - DO NOT await here!
+        // This allows the app to show the Login/Dashboard immediately.
+        tables.forEach(t => {
+            supabaseClient.from(t).select('*').then(res => {
+                if (res.error) console.error(`Bg Refresh Error ${t}:`, res.error);
+                else {
+                    const camel = this._toCamel(res.data || []);
+                    this.cache[t] = camel;
+                    this.cache[`db_${t}`] = camel;
+                    // Trigger a UI refresh if we are on a page that needs this data
+                    if (currentPage === t || (t === 'sales_orders' && currentPage === 'salesorders')) {
+                        console.log(`Bg loaded ${t}, refreshing UI...`);
+                        navigateTo(currentPage); 
+                    }
+                }
+            });
         });
 
-        // 2. Load the rest of the tables in background (don't block UI if non-essential)
-        // Note: For now we'll still wait for them to ensure consistent app state, 
-        // but parallelized and separate from core.
-        const otherResults = await Promise.all(tables.map(t => supabaseClient.from(t).select('*')));
-        otherResults.forEach((res, i) => {
-            if (res.error) console.error(`Error caching ${tables[i]}:`, res.error);
-            else this.cache[tables[i]] = this._toCamel(res.data || []);
-        });
-        // Map legacy keys (db_*) for backward compatibility in the app code
+        // Legacy map for what we have so far
         this.cache['db_users'] = this.cache['users'] || [];
-        this.cache['db_parties'] = this.cache['parties'] || [];
-        this.cache['db_inventory'] = this.cache['inventory'] || [];
-        this.cache['db_salesorders'] = this.cache['sales_orders'] || [];
-        this.cache['db_purchaseorders'] = this.cache['purchase_orders'] || [];
-        this.cache['db_invoices'] = this.cache['invoices'] || [];
-        this.cache['db_payments'] = this.cache['payments'] || [];
-        this.cache['db_expenses'] = this.cache['expenses'] || [];
         this.cache['db_categories'] = this.cache['categories'] || [];
         this.cache['db_uom'] = this.cache['uom'] || [];
-        this.cache['db_brands'] = [];
-        this.cache['db_packers'] = this.cache['packers'] || [];
-        this.cache['db_delivery_persons'] = this.cache['delivery_persons'] || [];
     },
 
     // Refresh only specific tables — much faster than full refresh after saves
