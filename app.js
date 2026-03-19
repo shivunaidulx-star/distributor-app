@@ -12268,10 +12268,20 @@ async function renderCatalogCards(items) {
                 </div>
                 <div class="catalog-card-price">₹${i.salePrice} <span style="font-size:0.75rem;color:var(--text-muted)">/ ${i.unit || 'Pcs'}</span></div>
                 ${i.mrp ? `<div style="font-size:0.72rem;color:var(--text-muted)">MRP: <span style="text-decoration:none">₹${i.mrp}</span></div>` : ''}
-                <div class="catalog-card-stock ${isLow ? 'stock-low' : 'stock-ok'}">Available: ${stockData.available} ${i.unit || 'Pcs'}</div>
-                ${stockData.reserved > 0 ? `<div onclick="showReservedDetails('${i.id}')" style="font-size:0.75rem;color:var(--primary);cursor:pointer;margin-top:2px;display:flex;align-items:center;gap:4px">
-                    <span style="font-size:0.8rem">ℹ️</span> <strong>Reserved: ${stockData.reserved} ${i.unit || 'Pcs'}</strong>
-                </div>` : ''}
+                <div style="background:var(--bg-body);padding:8px;border-radius:8px;margin-top:8px;border:1px solid var(--border)">
+                    <div style="display:flex;justify-content:space-between;font-size:0.7rem;color:var(--text-secondary);margin-bottom:2px">
+                        <span>Stock:</span>
+                        <span>${stockData.stock} ${i.unit || 'Pcs'}</span>
+                    </div>
+                    <div onclick="showReservedDetails('${i.id}')" style="display:flex;justify-content:space-between;font-size:0.7rem;color:var(--warning);margin-bottom:4px;cursor:pointer">
+                        <span style="display:flex;align-items:center;gap:2px">ℹ️ Reserved:</span>
+                        <span style="font-weight:600">${stockData.reserved} ${i.unit || 'Pcs'}</span>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;font-size:0.85rem;color:${isLow ? 'var(--danger)' : 'var(--success)'};font-weight:700;border-top:1px dashed var(--border);padding-top:4px">
+                        <span>Available:</span>
+                        <span>${stockData.available} ${i.unit || 'Pcs'}</span>
+                    </div>
+                </div>
             </div>
             <div class="catalog-card-action">
                 ${cartEntries.length ? `<div style="width:100%">
