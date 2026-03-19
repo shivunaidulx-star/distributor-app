@@ -1428,6 +1428,42 @@ function fabAction() {
 }
 
 // --- Helpers ---
+function compressImage(file, { maxWidth = 1024, maxHeight = 1024, quality = 0.75 } = {}) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        reader.onload = e => {
+            const img = new Image();
+            img.src = e.target.result;
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                let width = img.width;
+                let height = img.height;
+
+                if (width > height) {
+                    if (width > maxWidth) {
+                        height *= maxWidth / width;
+                        width = maxWidth;
+                    }
+                } else {
+                    if (height > maxHeight) {
+                        width *= maxHeight / height;
+                        height = maxHeight;
+                    }
+                }
+
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0, width, height);
+                resolve(canvas.toDataURL('image/jpeg', quality));
+            };
+            img.onerror = reject;
+        };
+        reader.onerror = reject;
+    });
+}
+
 function currency(n) { return '₹' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function fmtDate(d) { return d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '-'; }
 function today() { return new Date().toISOString().split('T')[0]; }
@@ -2068,23 +2104,28 @@ async function filterPartyTable() {
     );
     $('party-tbody').innerHTML = renderPartyRows(parties);
 }
-function autoFillPartyCode(name) {
-    const el = document.getElementById('f-party-code');
-    if (!el || el.value) return; // don't overwrite if already filled
-    // Take first 3 letters of each word, max 6 chars, uppercase
-    const code = name.trim().toUpperCase().split(/\s+/).map(w => w.slice(0,3)).join('').slice(0,6).replace(/[^A-Z0-9]/g,'');
-    if (code.length >= 2) el.value = code;
+async function onPartyTypeChange(sel) {
+    if (sel.dataset.isNew === 'true') {
+        const type = sel.value;
+        const code = await nextPartyCode(type);
+        const el = document.getElementById('f-party-code');
+        if (el) el.value = code;
+    }
 }
 
 async function openPartyModal(id) {
     const parties = await DB.getAll('parties');
     const p = id ? parties.find(x => x.id === id) : null;
+    let defaultCode = '';
+    if (!p) {
+        defaultCode = await nextPartyCode('Customer');
+    }
     openModal(p ? 'Edit Party' : 'Add Party', `
-        <div class="form-group"><label>Name *</label><input id="f-party-name" value="${p ? p.name : ''}" oninput="autoFillPartyCode(this.value)"></div>
-        <div class="form-group"><label>Party Code <span style="font-size:0.78rem;color:var(--text-muted)">(unique short code — used for import deduplication)</span></label>
-            <input id="f-party-code" class="form-control" value="${p ? p.partyCode || '' : ''}" placeholder="e.g. RAJ001" style="text-transform:uppercase;font-family:monospace" oninput="this.value=this.value.toUpperCase().replace(/[^A-Z0-9-]/g,'')">
+        <div class="form-group"><label>Name *</label><input id="f-party-name" value="${p ? p.name : ''}"></div>
+        <div class="form-group"><label>Party Code <span style="font-size:0.78rem;color:var(--text-muted)">(auto-generated from number series)</span></label>
+            <input id="f-party-code" class="form-control" value="${p ? p.partyCode || '' : defaultCode}" placeholder="e.g. CUST-00001" style="text-transform:uppercase;font-family:monospace" oninput="this.value=this.value.toUpperCase().replace(/[^A-Z0-9-]/g,'')">
         </div>
-        <div class="form-row"><div class="form-group"><label>Type</label><select id="f-party-type"><option ${p && p.type === 'Customer' ? 'selected' : ''}>Customer</option><option ${p && p.type === 'Supplier' ? 'selected' : ''}>Supplier</option></select></div>
+        <div class="form-row"><div class="form-group"><label>Type</label><select id="f-party-type" data-is-new="${!p}" onchange="onPartyTypeChange(this)"><option ${p && p.type === 'Customer' ? 'selected' : ''}>Customer</option><option ${p && p.type === 'Supplier' ? 'selected' : ''}>Supplier</option></select></div>
         <div class="form-group"><label>Phone</label><input id="f-party-phone" value="${p ? p.phone || '' : ''}"></div></div>
         <div class="form-row"><div class="form-group"><label>City</label><input id="f-party-city" value="${p ? p.city || '' : ''}"></div>
         <div class="form-group"><label>Post Code</label><input id="f-party-postcode" value="${p ? p.postCode || '' : ''}" placeholder="PIN / ZIP"></div></div>
@@ -4182,8 +4223,8 @@ async function filterSOTable() {
 }
 async function openSalesOrderModal() {
     soItems = [];
-    // Trigger geolocation in background
-    ensureGeolocation();
+    // Trigger geolocation and wait for it to ensure proximity sorting works
+    await ensureGeolocation();
     
     const [parties, inv, categories] = await Promise.all([
         DB.getAll('parties'),
@@ -4218,15 +4259,19 @@ async function openSalesOrderModal() {
             </div>
         </div>
 
-        <div class="form-row-3" style="margin-bottom:8px">
-            <div class="form-group">
-                <label>Item</label>
-                <input id="f-so-item-input" placeholder="Type item name or code...">
+        <div class="inv-item-entry" style="background:var(--bg-input);padding:10px;border-radius:8px;margin-bottom:12px;border:1px solid var(--border)">
+            <div class="form-group" style="margin-bottom:10px">
+                <label style="font-size:0.8rem">Search & Select Item</label>
+                <input id="f-so-item-input" placeholder="Type item name or code..." style="background:#fff">
             </div>
-            <div class="form-group"><label>Qty</label><input type="number" id="f-so-qty" value="1" min="1"></div>
-            <div class="form-group"><label>UOM</label><select id="f-so-uom" onchange="onSOUomChange()"><option value="">--</option></select></div>
-            <div class="form-group"><label>Price ₹</label><input type="number" id="f-so-price" value="" min="0" step="0.01" placeholder="Listed"></div>
-            <div class="form-group"><label>&nbsp;</label><button class="btn btn-primary btn-block" onclick="addSOLine()">Add</button></div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+                <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">Qty</label><input type="number" id="f-so-qty" value="1" min="1" style="background:#fff"></div>
+                <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">UOM</label><select id="f-so-uom" onchange="onSOUomChange()" style="background:#fff"><option value="">--</option></select></div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end">
+                <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">Price ₹</label><input type="number" id="f-so-price" value="" min="0" step="0.01" placeholder="Listed" style="background:#fff"></div>
+                <button class="btn btn-primary" onclick="addSOLine()" style="height:38px;padding:0 20px">Add</button>
+            </div>
         </div>
         
         <div class="table-wrapper"><div id="so-lines-list"></div></div>
@@ -4425,7 +4470,8 @@ function addSOLine() {
     const totalPrimaryQty = existingPrimaryQty + primaryQty;
 
     // Check if enough available stock (in primary units)
-    if (totalPrimaryQty > avail) {
+    const co = DB.getObj('db_company') || {};
+    if (totalPrimaryQty > avail && !co.allowNegativeStock) {
         alert(`Cannot add ${qty} ${unit}. Only ${avail} ${primaryUnit} available in stock after existing reservations.`);
         return;
     }
@@ -5515,7 +5561,7 @@ function updateInvDueDate(party) {
 }
 async function openInvoiceModal(type = 'sale') {
     invoiceItems = [];
-    ensureGeolocation();
+    await ensureGeolocation();
     const ptype = type === 'sale' ? 'Customer' : 'Supplier';
     const [parties, inv, categories] = await Promise.all([
         DB.getAll('parties'),
@@ -5559,33 +5605,48 @@ async function openInvoiceModal(type = 'sale') {
             </div>
         </div>
 
-        <div class="form-row-3" style="margin-bottom:8px">
-            <div class="form-group">
-                <label>Item</label>
-                <input id="f-inv-item-input" placeholder="Type item name or code...">
+        <div class="inv-item-entry" style="background:var(--bg-input);padding:10px;border-radius:8px;margin-bottom:12px;border:1px solid var(--border)">
+            <div class="form-group" style="margin-bottom:10px">
+                <label style="font-size:0.8rem">Search & Select Item</label>
+                <input id="f-inv-item-input" placeholder="Type item name or code..." style="background:#fff">
             </div>
-            <div class="form-group"><label>Qty</label><input type="number" id="f-inv-qty" value="1" min="1"></div>
-            <div class="form-group"><label>UOM</label><select id="f-inv-uom" onchange="onInvUomChange()"><option value="">--</option></select></div>
-            <div class="form-group"><label>Price ₹</label><input type="number" id="f-inv-price" value="" min="0" step="0.01" placeholder="Listed"></div>
-            <div class="form-group"><label>&nbsp;</label><button class="btn btn-primary btn-block" onclick="addInvoiceLine()">Add</button></div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+                <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">Qty</label><input type="number" id="f-inv-qty" value="1" min="1" style="background:#fff"></div>
+                <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">UOM</label><select id="f-inv-uom" onchange="onInvUomChange()" style="background:#fff"><option value="">--</option></select></div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end">
+                <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">Price ₹</label><input type="number" id="f-inv-price" value="" min="0" step="0.01" placeholder="Listed" style="background:#fff"></div>
+                <button class="btn btn-primary" onclick="addInvoiceLine()" style="height:38px;padding:0 20px">Add</button>
+            </div>
         </div>
         
         <div class="table-wrapper"><div id="inv-lines-list"></div></div>
-        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:8px">
-            <div class="form-group" style="min-width:100px">
-                <label>GST %</label>
+        
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end;margin-top:12px;background:var(--bg-card);padding:10px;border-radius:6px;border:1px dashed var(--border)">
+            <div class="form-group" style="min-width:70px;margin-bottom:0;flex:1">
+                <label style="font-size:0.75rem">GST %</label>
                 <input type="number" id="f-inv-gst" value="0" min="0" max="100" step="0.1" onchange="updateInvoiceTotal()">
             </div>
-            <div class="form-group" style="min-width:100px">
-                <label>Round Off ₹</label>
-                <input type="number" id="f-inv-roundoff" value="0" step="0.01" placeholder="0.00"
-                    oninput="updateInvoiceTotal()"
-                    title="Enter +/- amount to round the total (e.g. -0.67 or +0.33)">
+            <div class="form-group" style="min-width:70px;margin-bottom:0;flex:1">
+                <label style="font-size:0.75rem">Disc %</label>
+                <input type="number" id="f-inv-disc-pct" value="0" min="0" max="100" step="0.1" onchange="updateInvoiceTotal()">
             </div>
-            <div class="form-group" style="align-self:flex-end">
-                <button class="btn btn-outline btn-sm" onclick="autoRoundOff()" title="Auto-round to nearest ₹1">⟳ Auto</button>
+            <div class="form-group" style="min-width:70px;margin-bottom:0;flex:1">
+                <label style="font-size:0.75rem">Disc ₹</label>
+                <input type="number" id="f-inv-disc-amt" value="0" min="0" step="0.01" placeholder="0.00" onchange="updateInvoiceTotal()">
             </div>
         </div>
+        
+        <div style="display:flex;gap:10px;align-items:end;margin-top:10px;justify-content:space-between">
+            <div class="form-group" style="width:140px;margin-bottom:0">
+                <label style="font-size:0.75rem">Round Off ₹</label>
+                <div style="display:flex;gap:4px">
+                    <input type="number" id="f-inv-roundoff" value="0" step="0.01" placeholder="0.00" oninput="updateInvoiceTotal()">
+                    <button class="btn btn-outline btn-sm" onclick="autoRoundOff()" title="Auto" style="padding:0 8px">⟳</button>
+                </div>
+            </div>
+        </div>
+        
         <div id="inv-total-display" style="text-align:right;font-size:1rem;color:var(--text-secondary);font-weight:600;margin-top:4px">Total: ₹0.00</div>
         
         <div id="inv-advance-section" style="margin-top:10px"></div>
@@ -5772,7 +5833,8 @@ async function addInvoiceLine() {
         const existingPrimaryQty = invoiceItems.filter(li => li.itemId === itemId).reduce((s, li) => s + (li.primaryQty || li.qty), 0);
         const totalPrimaryQty = existingPrimaryQty + primaryQty;
 
-        if (totalPrimaryQty > avail) {
+        const co = DB.getObj('db_company') || {};
+        if (totalPrimaryQty > avail && !co.allowNegativeStock) {
             alert(`Cannot add ${qty} ${unit}. Only ${avail} ${primaryUnit} available in stock after existing reservations.`);
             return;
         }
@@ -6139,7 +6201,8 @@ async function saveInvoice() {
         }
 
         // Expense Entry for Discount (only on posted invoice, not SO)
-        const totalDiscount = invoiceItems.reduce((s, li) => s + (li.discountAmt || 0), 0);
+        const globalDiscountAmt = discAmtGlobal + (discPctGlobal > 0 ? (sub * discPctGlobal / 100) : 0);
+        const totalDiscount = invoiceItems.reduce((s, li) => s + (li.discountAmt || 0), 0) + globalDiscountAmt;
         if (totalDiscount > 0 && type === 'sale') {
             ops.push(DB.rawInsert('expenses', {
                 id: DB.id(),
@@ -6715,7 +6778,7 @@ function _initPayPartyDropdown(parties, filterType) {
     }
 }
 async function openPaymentModal(prefillPartyId) {
-    ensureGeolocation();
+    await ensureGeolocation();
     // Hide FAB — full-page form has its own footer buttons
     const fab = $('app-fab');
     if (fab) fab.classList.add('hidden');
@@ -8058,6 +8121,7 @@ async function executeAssignPacker(orderId) {
 }
 
 function startPacking(orderId) {
+    console.log('Starting packing for order:', orderId);
     openPackModal(orderId);
 }
 
@@ -8065,7 +8129,13 @@ function startPacking(orderId) {
 window._packingStartTimes = window._packingStartTimes || {};
 
 function openPackModal(orderId) {
-    const o = DB.get('db_salesorders').find(x => x.id === orderId); if (!o) return;
+    const orders = DB.get('db_salesorders');
+    const o = orders.find(x => x.id === orderId); 
+    if (!o) {
+        console.error('Order not found for packing:', orderId, 'Orders in cache:', orders.length);
+        showToast('Order not found. Please refresh and try again.', 'error', 5000);
+        return;
+    }
     // Record packing start time the first time this order is opened for packing
     if (!window._packingStartTimes[orderId]) {
         window._packingStartTimes[orderId] = new Date().toISOString();
@@ -8184,15 +8254,14 @@ function packAddItemPhoto(itemId, rowIdx) {
     input.capture = 'environment'; // prefer rear camera on mobile
     input.style.display = 'none';
     document.body.appendChild(input);
-    input.onchange = async function () {
-        const file = input.files[0];
-        document.body.removeChild(input);
-        if (!file) return;
-        if (file.size > 800000) { showToast('Image too large (max 800KB)', 'error'); return; }
-        const reader = new FileReader();
-        reader.onload = async function (e) {
-            const dataUrl = e.target.result;
+        input.onchange = async function () {
+            const file = input.files[0];
+            document.body.removeChild(input);
+            if (!file) return;
+
+            showToast('Processing photo...', 'info');
             try {
+                const dataUrl = await compressImage(file, { maxWidth: 1024, quality: 0.75 });
                 await DB.update('inventory', itemId, { photo: dataUrl });
                 // Replace placeholder cell in packing table in-place
                 const cell = document.getElementById('pack-photo-' + rowIdx);
@@ -8205,12 +8274,11 @@ function packAddItemPhoto(itemId, rowIdx) {
                         onclick="packViewPhoto('${itemId}','${escapeHtml(name)}','')" title="Click to enlarge">`;
                 }
                 showToast('Photo saved!', 'success');
-            } catch(err) {
+            } catch (err) {
+                console.error('Image compression/save error:', err);
                 showToast('Failed to save photo: ' + err.message, 'error');
             }
         };
-        reader.readAsDataURL(file);
-    };
     input.oncancel = () => { document.body.removeChild(input); };
     input.click();
 }
@@ -11773,16 +11841,18 @@ async function healStockLedger() {
 function handleLogoUpload(event) {
     const file = event.target.files[0];
     if (!file) return;
-    if (file.size > 500000) return alert('Logo must be under 500KB');
-    const reader = new FileReader();
-    reader.onload = async function (e) {
+    
+    showToast('Processing logo...', 'info');
+    compressImage(file, { maxWidth: 512, quality: 0.8 }).then(async dataUrl => {
         const co = DB.getObj('db_company');
-        co.logo = e.target.result;
+        co.logo = dataUrl;
         await DB.saveSettings('db_company', co);
         renderCompanySetup();
         showToast('Logo uploaded!', 'success');
-    };
-    reader.readAsDataURL(file);
+    }).catch(err => {
+        console.error('Logo upload error:', err);
+        showToast('Failed to upload logo: ' + err.message, 'error');
+    });
 }
 async function removeCompanyLogo() {
     const co = DB.getObj('db_company');
