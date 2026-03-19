@@ -48,7 +48,8 @@ const DB = {
                     const isCatalog = currentPage === 'catalog';
                     if (currentPage === t || (t === 'sales_orders' && currentPage === 'salesorders') || (isCatalog && (t === 'sales_orders' || t === 'inventory' || t === 'parties'))) {
                         console.log(`Bg loaded ${t}, refreshing UI...`);
-                        navigateTo(currentPage); 
+                        clearTimeout(this._bgNavTimer);
+                        this._bgNavTimer = setTimeout(() => navigateTo(currentPage), 300);
                     }
                     // Run data repair only after both invoices and sales_orders are cached
                     if (t === 'invoices' || t === 'sales_orders') {
@@ -139,7 +140,7 @@ const DB = {
         const actualTable = table.replace('salesorders', 'sales_orders').replace('purchaseorders', 'purchase_orders');
         const { data, error } = await supabaseClient.from(actualTable).insert(this._clean(this._toSnake(row))).select();
         if (error) { console.error(`Error inserting into ${actualTable}:`, error.message, '|', error.details, '| sent:', JSON.stringify(this._toSnake(row))); throw error; }
-        await this.refresh();
+        await this.refreshTables([actualTable]);
         return this._toCamel(data[0]);
     },
 
@@ -147,7 +148,7 @@ const DB = {
         const actualTable = table.replace('salesorders', 'sales_orders').replace('purchaseorders', 'purchase_orders');
         const { data, error } = await supabaseClient.from(actualTable).update(this._clean(this._toSnake(row))).eq('id', id).select();
         if (error) { console.error(`Error updating ${actualTable}:`, error.message, '|', error.details, '| sent:', JSON.stringify(this._toSnake(row))); throw error; }
-        await this.refresh();
+        await this.refreshTables([actualTable]);
         return this._toCamel(data[0]);
     },
 
@@ -155,7 +156,7 @@ const DB = {
         const actualTable = table.replace('salesorders', 'sales_orders').replace('purchaseorders', 'purchase_orders');
         const { error } = await supabaseClient.from(actualTable).delete().eq('id', id);
         if (error) { console.error(`Error deleting from ${actualTable}:`, error); throw error; }
-        await this.refresh();
+        await this.refreshTables([actualTable]);
     },
 
     // ── Raw operations — NO auto-refresh (batch multiple then call DB.refresh() once) ──
@@ -544,14 +545,14 @@ async function repairCancelledInvoiceOrders() {
             if (inv.status === 'cancelled' && inv.fromOrder) {
                 const order = orderMap.get(inv.fromOrder);
                 if (order && order.packed && order.invoiceNo === inv.invoiceNo) {
-                    repairs.push(DB.update('salesorders', order.id, {
+                    repairs.push(DB.rawUpdate('sales_orders', order.id, {
                         packed: false, packedBy: null, packedAt: null, invoiceNo: null,
                         packedItems: null, packedTotal: null, invoiceCancelled: true
                     }));
                 }
             }
         });
-        if (repairs.length) await Promise.all(repairs);
+        if (repairs.length) { await Promise.all(repairs); await DB.refreshTables(['sales_orders']); }
     } catch (e) { console.warn('repairCancelledInvoiceOrders:', e.message); }
 }
 
@@ -10910,13 +10911,13 @@ async function savePacker(id) {
     try {
         if (id) { await DB.update('packers', id, { name, phone: $('f-packer-phone').value.trim() }); }
         else { await DB.insert('packers', { name, phone: $('f-packer-phone').value.trim() }); }
-        await DB.refresh(); closeModal(); renderPackers();
+        closeModal(); renderPackers();
         if (window._saveAndNew) { window._saveAndNew = false; openPackerModal(); }
     } catch (e) { window._saveAndNew = false; alert('Error saving packer: ' + e.message); }
 }
 async function deletePacker(id) {
     if (!confirm('Delete packer?')) return;
-    try { await DB.delete('packers', id); await DB.refresh(); renderPackers(); }
+    try { await DB.delete('packers', id); renderPackers(); }
     catch (e) { alert('Error deleting packer: ' + e.message); }
 }
 
@@ -10956,13 +10957,13 @@ async function saveDelPerson(id) {
     try {
         if (id) { await DB.update('delivery_persons', id, data); }
         else { await DB.insert('delivery_persons', data); }
-        await DB.refresh(); closeModal(); renderDeliveryPersons();
+        closeModal(); renderDeliveryPersons();
         if (window._saveAndNew) { window._saveAndNew = false; openDelPersonModal(); }
     } catch (e) { window._saveAndNew = false; alert('Error saving delivery person: ' + e.message); }
 }
 async function deleteDelPerson(id) {
     if (!confirm('Delete?')) return;
-    try { await DB.delete('delivery_persons', id); await DB.refresh(); renderDeliveryPersons(); }
+    try { await DB.delete('delivery_persons', id); renderDeliveryPersons(); }
     catch (e) { alert('Error deleting: ' + e.message); }
 }
 
@@ -11105,7 +11106,7 @@ async function saveUser(id) {
                 if (!dps.some(p => p.name === name)) await DB.insert('delivery_persons', { name });
             }
         }
-        await DB.refresh(); closeModal(); renderUsers();
+        closeModal(); renderUsers();
         showToast('User saved!', 'success');
         if (window._saveAndNew) { window._saveAndNew = false; openUserModal(); }
     } catch (e) { window._saveAndNew = false; alert('Error saving user: ' + e.message); }
@@ -11113,7 +11114,7 @@ async function saveUser(id) {
 async function deleteUser(id) {
     if (!confirm('Delete user?')) return;
     if (currentUser && currentUser.id === id) return alert('Cannot delete yourself');
-    try { await DB.delete('users', id); await DB.refresh(); renderUsers(); }
+    try { await DB.delete('users', id); renderUsers(); }
     catch (e) { alert('Error deleting user: ' + e.message); }
 }
 

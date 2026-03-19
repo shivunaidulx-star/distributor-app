@@ -229,13 +229,14 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-    <script src="app.js?v=68"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" defer></script>
+    <script src="app.js?v=69"></script>
     <script>
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('sw.js?v=20').then(reg => {
+                navigator.serviceWorker.register('sw.js?v=21').then(reg => {
                     console.log('SW registered');
+                    reg.update(); // Force immediate update check
                     setInterval(() => { reg.update(); }, 60 * 1000 * 30); // 30min
                     reg.onupdatefound = () => {
                         const installingWorker = reg.installing;
