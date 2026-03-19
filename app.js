@@ -7078,7 +7078,7 @@ async function savePayment() {
             const rowDisc = i === 0 ? disc : 0;
             const payData = {
                 ...commonData,
-                id: 'pay_' + Date.now() + '_' + i,
+                id: DB.id(),
                 amount: row.amount,
                 discount: rowDisc,
                 totalReduction: row.amount + rowDisc,
