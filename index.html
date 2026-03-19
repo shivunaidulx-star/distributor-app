@@ -15,7 +15,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=23">
+    <link rel="stylesheet" href="style.css?v=24">
     <style>
         #app-loading {
             position: fixed; inset: 0; background: var(--bg-body, #f8fafc);
@@ -230,12 +230,22 @@
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-    <script src="app.js?v=67"></script>
+    <script src="app.js?v=68"></script>
     <script>
-        // Efficient Service Worker registration
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('sw.js').catch(err => console.warn('SW Register Error:', err));
+                navigator.serviceWorker.register('sw.js?v=20').then(reg => {
+                    console.log('SW registered');
+                    setInterval(() => { reg.update(); }, 60 * 1000 * 30); // 30min
+                    reg.onupdatefound = () => {
+                        const installingWorker = reg.installing;
+                        installingWorker.onstatechange = () => {
+                            if (installingWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                                if(confirm("New version available! Reload now?")) window.location.reload();
+                            }
+                        };
+                    };
+                }).catch(err => console.warn('SW Register Error:', err));
             });
         }
     </script>

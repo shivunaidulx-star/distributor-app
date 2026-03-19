@@ -45,9 +45,16 @@ const DB = {
                     this.cache[t] = camel;
                     this.cache[`db_${t}`] = camel;
                     // Trigger a UI refresh if we are on a page that needs this data
-                    if (currentPage === t || (t === 'sales_orders' && currentPage === 'salesorders')) {
+                    const isCatalog = currentPage === 'catalog';
+                    if (currentPage === t || (t === 'sales_orders' && currentPage === 'salesorders') || (isCatalog && (t === 'sales_orders' || t === 'inventory' || t === 'parties'))) {
                         console.log(`Bg loaded ${t}, refreshing UI...`);
                         navigateTo(currentPage); 
+                    }
+                    // Run data repair only after both invoices and sales_orders are cached
+                    if (t === 'invoices' || t === 'sales_orders') {
+                        if (this.cache['invoices'] && this.cache['sales_orders']) {
+                            repairCancelledInvoiceOrders();
+                        }
                     }
                 }
             });
@@ -810,15 +817,22 @@ window.addEventListener('mousedown', function (e) {
 
 document.addEventListener('DOMContentLoaded', async () => {
     const loadingEl = $('app-loading');
+    
+    // Safety timeout: if app doesn't boot in 10s, try to proceed anyway
+    const bootTimeout = setTimeout(() => {
+        console.warn('Boot timeout reached. Forcing UI reveal.');
+        if (loadingEl) loadingEl.classList.add('hidden');
+    }, 10000);
+
     try {
         // Check for saved customer portal session first
         if (cpRestoreSession()) {
+            clearTimeout(bootTimeout);
             if (loadingEl) loadingEl.classList.add('hidden');
             return;
         }
         
-        await DB.refresh(); // Populate cache immediately
-        await repairCancelledInvoiceOrders();
+        await DB.refresh(); // Populate cache (core only) immediately
         await checkFirstLaunch();
         
         $('btn-login').addEventListener('click', login);
@@ -839,9 +853,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         }, true);
 
         // Success: hide loading
+        clearTimeout(bootTimeout);
         if (loadingEl) loadingEl.classList.add('hidden');
         
     } catch (err) {
+        clearTimeout(bootTimeout);
         console.error('Boot Error:', err);
         const errorUI = $('boot-error-ui');
         if (errorUI) errorUI.classList.remove('hidden');
@@ -4529,6 +4545,10 @@ async function saveSalesOrder() {
         if (window._catalogOrderMode) {
             window._catalogOrderMode = false;
             catalogCart = [];
+            // IMPORTANT: Wait for full sync so catalog shows correct reserved/avail qty
+            try {
+                await Promise.all([DB.getAll('sales_orders'), DB.getAll('inventory')]);
+            } catch(e) { console.warn('Catalog post-save sync error:', e); }
             await renderCatalog();
         } else {
             await renderSalesOrders();
@@ -12169,6 +12189,10 @@ async function renderCatalog() {
     const catNames = [...new Set(items.map(i => i.category).filter(Boolean))];
 
     pageContent.innerHTML = `
+        <div style="margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;gap:10px">
+            <h2 style="font-size:1.2rem;margin:0">📦 Item Catalog</h2>
+            <button class="btn btn-outline btn-sm" onclick="syncCatalogData()">🔄 Sync Data</button>
+        </div>
         <div style="margin-bottom:16px;display:flex;gap:10px">
             <input class="search-box" id="catalog-search" placeholder="🔍 Search products..." oninput="filterCatalog()" style="flex:1;font-size:1rem;padding:12px 16px;border-radius:12px">
             <select id="catalog-sort" class="search-box" style="width:auto;border-radius:12px" onchange="filterCatalog()">
@@ -12195,6 +12219,17 @@ async function renderCatalog() {
         ${catalogCart.length ? renderCatalogCartBar() : ''}`;
 }
 
+async function syncCatalogData() {
+    showToast('Syncing latest stock...', 'info');
+    await Promise.all([
+        DB.getAll('inventory'),
+        DB.getAll('salesorders'),
+        DB.getAll('parties')
+    ]);
+    renderCatalog();
+    showToast('Stock sync complete!', 'success');
+}
+
 async function renderCatalogCards(items) {
     if (!items.length) return '<div class="empty-state" style="padding:40px"><div class="empty-icon">📦</div><p>No products found</p></div>';
     
@@ -12219,7 +12254,10 @@ async function renderCatalogCards(items) {
                 </div>
                 <div class="catalog-card-price">₹${i.salePrice} <span style="font-size:0.75rem;color:var(--text-muted)">/ ${i.unit || 'Pcs'}</span></div>
                 ${i.mrp ? `<div style="font-size:0.72rem;color:var(--text-muted)">MRP: <span style="text-decoration:none">₹${i.mrp}</span></div>` : ''}
-                <div class="catalog-card-stock ${isLow ? 'stock-low' : 'stock-ok'}">Stock: ${stockData.available} ${i.unit || 'Pcs'}</div>
+                <div class="catalog-card-stock ${isLow ? 'stock-low' : 'stock-ok'}">Available: ${stockData.available} ${i.unit || 'Pcs'}</div>
+                ${stockData.reserved > 0 ? `<div onclick="showReservedDetails('${i.id}')" style="font-size:0.75rem;color:var(--primary);cursor:pointer;margin-top:2px;display:flex;align-items:center;gap:4px">
+                    <span style="font-size:0.8rem">ℹ️</span> <strong>Reserved: ${stockData.reserved} ${i.unit || 'Pcs'}</strong>
+                </div>` : ''}
             </div>
             <div class="catalog-card-action">
                 ${cartEntries.length ? `<div style="width:100%">
@@ -12420,6 +12458,44 @@ function updateCartQty(itemId, delta, unit) {
     ci.amount = ci.qty * ci.price;
     if (ci.qty <= 0) catalogCart = catalogCart.filter(c => !(c.itemId === itemId && c.unit === ci.unit));
     refreshCatalogGrid();
+}
+
+async function showReservedDetails(itemId) {
+    const items = await DB.get('db_inventory') || [];
+    const item = items.find(x => x.id === itemId);
+    if (!item) return;
+
+    const orders = await DB.getAll('salesorders');
+    const reservedOrders = orders.filter(o => {
+        if ((o.status === 'pending' || o.status === 'approved') && !o.packed) {
+            return (o.items || []).some(li => li.itemId === itemId);
+        }
+        return false;
+    });
+
+    if (!reservedOrders.length) return alert('No active reservations found for this item.');
+
+    const rows = reservedOrders.map(o => {
+        const li = o.items.find(x => x.itemId === itemId);
+        return `<tr>
+            <td style="font-weight:600">${o.orderNo}</td>
+            <td>${o.partyName}</td>
+            <td style="font-weight:700;color:var(--primary)">${li ? li.qty : 0} ${li ? li.unit : ''}</td>
+            <td style="font-size:0.8rem">${fmtDate(o.date)}</td>
+            <td style="font-size:0.75rem"><span class="badge ${o.status === 'approved' ? 'badge-success' : 'badge-warning'}">${o.status}</span></td>
+        </tr>`;
+    }).join('');
+
+    openModal(`Reservations for: ${item.name}`, `
+        <div style="margin-bottom:12px;font-size:0.9rem;color:var(--text-secondary)">Total Reserved: <strong>${getAvailableStock(item).reserved} ${item.unit || 'Pcs'}</strong></div>
+        <div class="table-wrapper">
+            <table class="data-table">
+                <thead><tr><th>Order #</th><th>Customer</th><th>Qty</th><th>Date</th><th>Status</th></tr></thead>
+                <tbody>${rows}</tbody>
+            </table>
+        </div>
+        <div class="modal-actions"><button class="btn btn-primary" onclick="closeModal()">Done</button></div>
+    `);
 }
 
 async function viewCatalogItem(itemId) {

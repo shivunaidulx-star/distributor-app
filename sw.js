@@ -1,4 +1,4 @@
-const CACHE = 'distromanager-v16';
+const CACHE = 'distromanager-v17';
 const STATIC = ['./', './index.html', './style.css', './app.js', './manifest.json'];
 
 // Helper to ignore query parameters (like ?v=67) for cache matching
@@ -27,20 +27,20 @@ self.addEventListener('fetch', e => {
     // Skip external APIs and CDNs
     if (url.includes('supabase.co') || url.includes('fonts.') || url.includes('cdn.')) return;
 
-    // Stale-While-Revalidate Strategy
+    // Network-First Strategy
+    // This ensures that if the user is online, they ALWAYS get the latest code.
+    // If they are offline, we fall back to the cache.
     e.respondWith(
-        caches.open(CACHE).then(cache => {
-            const cleanedReq = cleanURL(url);
-            return cache.match(cleanedReq).then(cachedRes => {
-                const fetchPromise = fetch(e.request).then(networkRes => {
-                    if (networkRes && networkRes.status === 200) {
-                        cache.put(cleanedReq, networkRes.clone());
-                    }
-                    return networkRes;
-                }).catch(() => cachedRes); // Fallback to cache if network fails entirely
-
-                return cachedRes || fetchPromise;
-            });
-        })
+        fetch(e.request)
+            .then(networkRes => {
+                const resClone = networkRes.clone();
+                caches.open(CACHE).then(cache => {
+                    cache.put(cleanURL(url), resClone);
+                });
+                return networkRes;
+            })
+            .catch(() => {
+                return caches.match(cleanURL(url));
+            })
     );
 });
