@@ -4715,7 +4715,7 @@ async function saveSalesOrder() {
         total: finalTotal,
         discountPct: discPct,
         discountAmt: discAmt,
-        notes: $('f-so-notes').value.trim()
+        notes: $('f-so-notes') ? $('f-so-notes').value.trim() : ''
     };
 
     // Blocked customer check
@@ -4765,6 +4765,7 @@ async function saveSalesOrder() {
         if (andNew && !editId) openSalesOrderModal();
     } catch (err) {
         window._saveAndNew = false;
+        endSave();
         alert('Error saving order: ' + err.message);
     }
 }
