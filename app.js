@@ -886,7 +886,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         // Link Logout button
         const logoutBtn = $('btn-logout');
         if (logoutBtn) logoutBtn.addEventListener('click', (e) => { e.preventDefault(); logout(); });
-        $('btn-logout').addEventListener('click', logout);
         $('sidebar-close').addEventListener('click', () => sidebar.classList.remove('open'));
         $('sidebar-toggle').addEventListener('click', () => sidebar.classList.toggle('open'));
         $('modal-close').addEventListener('click', closeModal);
