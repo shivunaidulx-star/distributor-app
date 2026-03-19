@@ -16,8 +16,32 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css?v=23">
+    <style>
+        #app-loading {
+            position: fixed; inset: 0; background: var(--bg-body, #f8fafc);
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            z-index: 99999; transition: opacity 0.4s ease, visibility 0.4s;
+        }
+        #app-loading.hidden { opacity: 0; visibility: hidden; pointer-events: none; }
+        .spinner {
+            width: 48px; height: 48px; border: 4px solid var(--border, #e2e8f0);
+            border-top-color: var(--primary, #f97316); border-radius: 50%;
+            animation: spin 1s linear infinite; margin-bottom: 16px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
 </head>
 <body>
+    <!-- Initial Loading State -->
+    <div id="app-loading">
+        <div class="spinner"></div>
+        <p style="font-family:'Inter',sans-serif;font-weight:600;color:var(--text-primary,#1e293b);margin:0">Loading DistroManager...</p>
+        <p style="font-family:'Inter',sans-serif;font-size:0.8rem;color:var(--text-muted,#64748b);margin-top:8px">Initializing database & workspace</p>
+        <div id="boot-error-ui" class="hidden" style="margin-top:24px;text-align:center;padding:0 20px">
+             <p style="color:#ef4444;font-weight:600;margin-bottom:12px">⚠️ Failed to start application</p>
+             <button onclick="location.reload()" class="btn btn-primary">Retry Now</button>
+        </div>
+    </div>
     <!-- Setup Wizard (first launch) -->
     <div id="setup-wizard" class="login-screen hidden">
         <div class="login-card" style="max-width:480px">
@@ -208,12 +232,10 @@
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
     <script src="app.js?v=67"></script>
     <script>
-        // Unregister old service workers to clear stale cache, then register fresh
+        // Efficient Service Worker registration
         if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.getRegistrations().then(function(registrations) {
-                registrations.forEach(function(reg) { reg.unregister(); });
-            }).then(function() {
-                navigator.serviceWorker.register('sw.js').catch(function() {});
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('sw.js').catch(err => console.warn('SW Register Error:', err));
             });
         }
     </script>

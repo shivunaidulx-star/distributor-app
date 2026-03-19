@@ -20,13 +20,25 @@ const DB = {
     },
 
     async refresh() {
-        // Load settings and all tables in parallel (not sequential)
-        const tables = ['users', 'parties', 'inventory', 'sales_orders', 'invoices', 'payments', 'expenses', 'party_ledger', 'stock_ledger', 'categories', 'uom', 'packers', 'delivery_persons', 'delivery'];
-        const [, ...results] = await Promise.all([
+        // Core tables needed for boot/login
+        const coreTables = ['users'];
+        // All other tables
+        const tables = ['parties', 'inventory', 'sales_orders', 'invoices', 'payments', 'expenses', 'party_ledger', 'stock_ledger', 'categories', 'uom', 'packers', 'delivery_persons', 'delivery'];
+        
+        // 1. Load settings and core tables FIRST for fast boot
+        const [settings, ...coreResults] = await Promise.all([
             this.loadSettings(),
-            ...tables.map(t => supabaseClient.from(t).select('*'))
+            ...coreTables.map(t => supabaseClient.from(t).select('*'))
         ]);
-        results.forEach((res, i) => {
+        coreResults.forEach((res, i) => {
+            if (!res.error) this.cache[coreTables[i]] = this._toCamel(res.data || []);
+        });
+
+        // 2. Load the rest of the tables in background (don't block UI if non-essential)
+        // Note: For now we'll still wait for them to ensure consistent app state, 
+        // but parallelized and separate from core.
+        const otherResults = await Promise.all(tables.map(t => supabaseClient.from(t).select('*')));
+        otherResults.forEach((res, i) => {
             if (res.error) console.error(`Error caching ${tables[i]}:`, res.error);
             else this.cache[tables[i]] = this._toCamel(res.data || []);
         });
@@ -513,10 +525,16 @@ async function repairCancelledInvoiceOrders() {
     try {
         const invoices = DB.cache['invoices'] || [];
         const orders = DB.cache['sales_orders'] || [];
+        if (!invoices.length || !orders.length) return;
+
+        // Use Map for O(1) lookup instead of find() O(N) inside loop
+        const orderMap = new Map();
+        orders.forEach(o => orderMap.set(o.orderNo, o));
+
         const repairs = [];
         invoices.forEach(function (inv) {
             if (inv.status === 'cancelled' && inv.fromOrder) {
-                const order = orders.find(function (o) { return o.orderNo === inv.fromOrder; });
+                const order = orderMap.get(inv.fromOrder);
                 if (order && order.packed && order.invoiceNo === inv.invoiceNo) {
                     repairs.push(DB.update('salesorders', order.id, {
                         packed: false, packedBy: null, packedAt: null, invoiceNo: null,
@@ -790,27 +808,48 @@ window.addEventListener('mousedown', function (e) {
 });
 
 document.addEventListener('DOMContentLoaded', async () => {
-    // Check for saved customer portal session first
-    if (cpRestoreSession()) return;
-    await DB.refresh(); // Populate cache immediately
-    await repairCancelledInvoiceOrders();
-    await checkFirstLaunch();
-    $('btn-login').addEventListener('click', login);
-    $('login-pin').addEventListener('keypress', e => { if (e.key === 'Enter') login(); });
-    $('btn-logout').addEventListener('click', logout);
-    $('sidebar-close').addEventListener('click', () => sidebar.classList.remove('open'));
-    $('sidebar-toggle').addEventListener('click', () => sidebar.classList.toggle('open'));
-    $('modal-close').addEventListener('click', closeModal);
-    $('modal-overlay').addEventListener('click', e => { if (e.target === $('modal-overlay')) closeModal(); });
-    document.querySelectorAll('.nav-item').forEach(item => {
-        item.addEventListener('click', async e => { e.preventDefault(); await navigateTo(item.dataset.page); sidebar.classList.remove('open'); });
-    });
-    // Auto-select "0" in number inputs so typing replaces it instead of appending
-    document.addEventListener('focus', function(e) {
-        if (e.target.tagName === 'INPUT' && e.target.type === 'number' && e.target.value === '0') {
-            e.target.select();
+    const loadingEl = $('app-loading');
+    try {
+        // Check for saved customer portal session first
+        if (cpRestoreSession()) {
+            if (loadingEl) loadingEl.classList.add('hidden');
+            return;
         }
-    }, true);
+        
+        await DB.refresh(); // Populate cache immediately
+        await repairCancelledInvoiceOrders();
+        await checkFirstLaunch();
+        
+        $('btn-login').addEventListener('click', login);
+        $('login-pin').addEventListener('keypress', e => { if (e.key === 'Enter') login(); });
+        $('btn-logout').addEventListener('click', logout);
+        $('sidebar-close').addEventListener('click', () => sidebar.classList.remove('open'));
+        $('sidebar-toggle').addEventListener('click', () => sidebar.classList.toggle('open'));
+        $('modal-close').addEventListener('click', closeModal);
+        $('modal-overlay').addEventListener('click', e => { if (e.target === $('modal-overlay')) closeModal(); });
+        document.querySelectorAll('.nav-item').forEach(item => {
+            item.addEventListener('click', async e => { e.preventDefault(); await navigateTo(item.dataset.page); sidebar.classList.remove('open'); });
+        });
+        // Auto-select "0" in number inputs so typing replaces it instead of appending
+        document.addEventListener('focus', function(e) {
+            if (e.target.tagName === 'INPUT' && e.target.type === 'number' && e.target.value === '0') {
+                e.target.select();
+            }
+        }, true);
+
+        // Success: hide loading
+        if (loadingEl) loadingEl.classList.add('hidden');
+        
+    } catch (err) {
+        console.error('Boot Error:', err);
+        const errorUI = $('boot-error-ui');
+        if (errorUI) errorUI.classList.remove('hidden');
+        // Keep loading spinner visible but show the error UI
+        const spinner = document.querySelector('#app-loading .spinner');
+        if (spinner) spinner.style.display = 'none';
+        const loadingText = document.querySelector('#app-loading p');
+        if (loadingText) loadingText.textContent = 'Boot Interrupted';
+    }
 });
 
 // --- Modal ---
