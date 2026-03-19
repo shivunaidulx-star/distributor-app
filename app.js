@@ -1244,6 +1244,7 @@ const MORE_ITEMS = [
     { page: 'staffmaster',     icon: '👤', label: 'Staff' },
     { page: 'attendance',      icon: '📅', label: 'Attendance' },
     { page: 'hrpayroll',       icon: '💵', label: 'Payroll' },
+    { fn: 'forceHardRefresh()',icon: '🔄', label: 'Hard Refresh' }
 ];
 
 const BOTTOM_NAV_TABS = {
