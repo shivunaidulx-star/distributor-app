@@ -655,6 +655,33 @@ async function completeSetup() {
     await showLoginScreen();
 }
 
+// --- Session Persistence ---
+function dmSaveSession(user) {
+    const session = {
+        user: user,
+        expiry: Date.now() + (4 * 60 * 60 * 1000) // 4 hours
+    };
+    localStorage.setItem('dm_session', JSON.stringify(session));
+}
+
+function dmRestoreSession() {
+    try {
+        const saved = localStorage.getItem('dm_session');
+        if (!saved) return false;
+        const session = JSON.parse(saved);
+        if (!session || !session.user || !session.expiry) return false;
+        if (Date.now() > session.expiry) {
+            localStorage.removeItem('dm_session');
+            return false;
+        }
+        doLoginSuccess(session.user, true); // true = silent/restore
+        return true;
+    } catch(e) {
+        localStorage.removeItem('dm_session');
+        return false;
+    }
+}
+
 // =============================================
 //  AUTH
 // =============================================
@@ -688,6 +715,11 @@ async function login() {
 
     if (!user || user.pin !== pin) return alert('Invalid User ID or PIN');
 
+    dmSaveSession(user);
+    doLoginSuccess(user);
+}
+
+async function doLoginSuccess(user, isRestore = false) {
     currentUser = user;
     loginScreen.classList.add('hidden');
     appEl.classList.remove('hidden');
@@ -763,6 +795,7 @@ async function saveChangedPin() {
 
 function logout() {
     currentUser = null;
+    localStorage.removeItem('dm_session');
     $('login-pin').value = '';
     const bn = $('bottom-nav');
     if (bn) bn.classList.add('hidden');
@@ -831,9 +864,16 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (loadingEl) loadingEl.classList.add('hidden');
             return;
         }
-        
+
         await DB.refresh(); // Populate cache (core only) immediately
-        await checkFirstLaunch();
+
+        // Check for main app session
+        if (dmRestoreSession()) {
+            clearTimeout(bootTimeout);
+            if (loadingEl) loadingEl.classList.add('hidden');
+        } else {
+            await checkFirstLaunch();
+        }
         
         $('btn-login').addEventListener('click', login);
         $('login-pin').addEventListener('keypress', e => { if (e.key === 'Enter') login(); });
@@ -6605,29 +6645,36 @@ async function openPaymentModal(prefillPartyId) {
         <!-- Amount & Mode section -->
         <div class="pay-section">
             <div style="font-size:0.72rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px">AMOUNT & MODE</div>
-            <div style="margin-bottom:14px">
-                <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:6px">Amount Received ₹ *</div>
-                <input type="number" id="f-pay-amount" min="0" placeholder="0.00"
-                    style="font-size:2rem;font-weight:700;color:var(--text-primary);border:none;border-bottom:2px solid var(--primary);background:transparent;width:100%;padding:6px 0;outline:none"
-                    oninput="onPayAmountChange()">
+            <!-- Payment Modes / Split Payment -->
+            <div id="pay-modes-container" style="margin-bottom:12px">
+                <div class="pay-mode-row" style="display:grid;grid-template-columns:1fr 120px 40px;gap:8px;margin-bottom:8px;align-items:end">
+                    <div class="form-group" style="margin-bottom:0">
+                        <label style="font-size:0.75rem">Mode</label>
+                        <select class="f-pay-row-mode" onchange="onPayModeChange()"><option>Cash</option><option>UPI</option><option>Bank Transfer</option><option>Cheque</option></select>
+                    </div>
+                    <div class="form-group" style="margin-bottom:0">
+                        <label style="font-size:0.75rem">Amount ₹</label>
+                        <input type="number" class="f-pay-row-amount" placeholder="0.00" oninput="onPayAmountChange()">
+                    </div>
+                    <div style="height:38px"></div> <!-- Spacer for delete button alignment -->
+                </div>
             </div>
+            <button class="btn btn-outline btn-sm" onclick="addPaymentModeRow()" style="margin-bottom:14px;width:100%;border-style:dashed">+ Add Another Mode (Split Payment)</button>
+
             <div style="margin-bottom:14px">
-                <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:6px">Discount ₹</div>
+                <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:6px">Total Discount ₹</div>
                 <input type="number" id="f-pay-discount" min="0" placeholder="0.00"
-                    style="font-size:1.5rem;font-weight:600;color:var(--text-secondary);border:none;border-bottom:1px solid var(--border);background:transparent;width:100%;padding:4px 0;outline:none"
+                    style="font-size:1.2rem;font-weight:600;color:var(--text-secondary);border:none;border-bottom:1px solid var(--border);background:transparent;width:100%;padding:4px 0;outline:none"
                     oninput="onPayAmountChange()">
             </div>
             <div style="margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-top:1px dashed var(--border)">
+                <span style="font-size:0.9rem;font-weight:700;color:var(--text-muted)">Total Received:</span>
+                <span style="font-size:1.2rem;font-weight:800;color:var(--primary)" id="pay-total-received-display">₹0.00</span>
+            </div>
+            <div style="margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;padding-top:4px">
                 <span style="font-size:0.9rem;font-weight:700;color:var(--text-muted)">Total Balance Reduction:</span>
-                <span style="font-size:1.2rem;font-weight:800;color:var(--primary)" id="pay-total-display">₹0.00</span>
+                <span style="font-size:1.2rem;font-weight:800;color:var(--success)" id="pay-total-display">₹0.00</span>
             </div>
-            <!-- Mode chips -->
-            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
-                ${['Cash','UPI','Bank Transfer','Cheque'].map(m =>
-                    `<button type="button" class="pay-mode-chip-btn${m==='Cash'?' active':''}" onclick="selectPayMode('${m}')" id="pay-mode-btn-${m.replace(' ','-')}">${m==='Cash'?'💵':m==='UPI'?'📲':m==='Bank Transfer'?'🏦':'📄'} ${m}</button>`
-                ).join('')}
-            </div>
-            <input type="hidden" id="f-pay-mode" value="Cash">
             <div id="pay-qr-box" style="text-align:center;margin:10px 0;display:none;"></div>
             <div id="pay-cheque-fields" style="display:none;">
                 <div class="form-row"><div class="form-group"><label>Cheque No *</label><input id="f-pay-cheque-no" placeholder="e.g. 123456"></div>
@@ -6689,13 +6736,45 @@ async function openPaymentModal(prefillPartyId) {
     updatePaymentQR();
 }
 
-// Mode chip selector
+// Payment Mode Row Helpers
+window.addPaymentModeRow = function() {
+    const container = $('pay-modes-container');
+    const div = document.createElement('div');
+    div.className = 'pay-mode-row';
+    div.style = 'display:grid;grid-template-columns:1fr 120px 40px;gap:8px;margin-bottom:8px;align-items:end';
+    div.innerHTML = `
+        <div class="form-group" style="margin-bottom:0">
+            <select class="f-pay-row-mode" onchange="onPayModeChange()"><option>Cash</option><option>UPI</option><option>Bank Transfer</option><option>Cheque</option></select>
+        </div>
+        <div class="form-group" style="margin-bottom:0">
+            <input type="number" class="f-pay-row-amount" placeholder="0.00" oninput="onPayAmountChange()">
+        </div>
+        <button class="btn-icon" onclick="this.parentNode.remove();onPayAmountChange()" style="height:38px;color:var(--danger)">🗑️</button>
+    `;
+    container.appendChild(div);
+};
+
+window.onPayAmountChange = function() {
+    let totalReceived = 0;
+    document.querySelectorAll('.f-pay-row-amount').forEach(inp => totalReceived += (+inp.value || 0));
+    const disc = +($('f-pay-discount')?.value) || 0;
+    const totalReduction = totalReceived + disc;
+    
+    if ($('pay-total-received-display')) $('pay-total-received-display').textContent = currency(totalReceived);
+    if ($('pay-total-display')) $('pay-total-display').textContent = currency(totalReduction);
+
+    const partyId = ($('f-pay-party-id') || {}).value || '';
+    if (partyId) updatePaymentInvoicesAllocation(totalReduction);
+};
+
+// Mode chip selector (legacy support, but we now use dropdowns in rows)
 window.selectPayMode = function(mode) {
-    $('f-pay-mode').value = mode;
-    document.querySelectorAll('.pay-mode-chip-btn').forEach(b => b.classList.remove('active'));
-    const btn = document.getElementById('pay-mode-btn-' + mode.replace(' ','-'));
-    if (btn) btn.classList.add('active');
-    onPayModeChange();
+    // For single mode logic, we'll just update the first row's mode
+    const firstSelect = document.querySelector('.f-pay-row-mode');
+    if (firstSelect) {
+        firstSelect.value = mode;
+        onPayModeChange();
+    }
 };
 function onPayTypeChange() {
     const inp = $('f-pay-type');
@@ -6931,18 +7010,20 @@ async function savePayment() {
     const payPartyId = ($('f-pay-party-id') || {}).value || '';
     const payPartyName = ($('f-pay-party') || {}).value?.trim() || '';
     if (!payPartyId) { endSave(); return alert('Please select a party from the dropdown'); }
-    const amt = +$('f-pay-amount').value; if (!amt || amt <= 0) { endSave(); return alert('Enter valid amount'); }
-    const disc = +($('f-pay-discount')?.value) || 0;
-    const totalReduction = amt + disc;
-    const mode = $('f-pay-mode').value;
 
-    let chequeNo = '', chequeBank = '', chequeDate = '';
-    if (mode === 'Cheque') {
-        chequeNo = $('f-pay-cheque-no').value.trim();
-        chequeBank = $('f-pay-cheque-bank').value.trim();
-        chequeDate = $('f-pay-cheque-date').value;
-        if (!chequeNo || !chequeBank || !chequeDate) return alert('Cheque details required');
-    }
+    // Collect all payment modes and amounts
+    const payRows = [];
+    document.querySelectorAll('.pay-mode-row').forEach(row => {
+        const m = row.querySelector('.f-pay-row-mode').value;
+        const a = +(row.querySelector('.f-pay-row-amount').value || 0);
+        if (a > 0) payRows.push({ mode: m, amount: a });
+    });
+
+    if (payRows.length === 0) { endSave(); return alert('Enter at least one payment amount'); }
+
+    const disc = +($('f-pay-discount')?.value) || 0;
+    const totalReceived = payRows.reduce((sum, r) => sum + r.amount, 0);
+    const totalReduction = totalReceived + disc;
 
     let allocations = {};
     let totalAlloc = 0;
@@ -6954,33 +7035,41 @@ async function savePayment() {
         }
     });
 
-    if (totalAlloc > totalReduction + 0.01) return alert('Allocation exceeds total amount (Received + Discount).');
+    if (totalAlloc > totalReduction + 0.01) { endSave(); return alert('Allocation exceeds total amount (Received + Discount).'); }
 
     const payType = $('f-pay-type').value;
     const invNo = Object.keys(allocations).length === 1 ? Object.keys(allocations)[0] : (Object.keys(allocations).length > 1 ? 'Multi' : '');
 
     try {
         const payRefNo = buildPayRefNo();
-        const payData = {
+        const commonData = {
             payNo: payRefNo,
             date: $('f-pay-date').value,
             type: payType,
             partyId: payPartyId,
             partyName: payPartyName,
-            amount: amt,
-            discount: disc,
-            totalReduction: totalReduction,
-            mode: mode,
             note: $('f-pay-note').value.trim(),
             invoiceNo: invNo,
             allocations: Object.keys(allocations).length > 0 ? allocations : null,
-            chequeNo, chequeBank, chequeDate,
-            chequeStatus: mode === 'Cheque' ? 'Pending' : null,
             createdBy: currentUser.name,
             collectedBy: ($('f-pay-collected-by') ? $('f-pay-collected-by').value : null) || currentUser.name
         };
 
-        await DB.insert('payments', payData);
+        // If multiple modes, we save multiple records
+        // Discount is added only to the FIRST record to avoid duplication in accounting
+        for (let i = 0; i < payRows.length; i++) {
+            const row = payRows[i];
+            const rowDisc = i === 0 ? disc : 0;
+            const payData = {
+                ...commonData,
+                id: 'pay_' + Date.now() + '_' + i,
+                amount: row.amount,
+                discount: rowDisc,
+                totalReduction: row.amount + rowDisc,
+                mode: row.mode
+            };
+            await DB.insert('payments', payData);
+        }
         incrementPayNo();
 
         // Automatic Expense Entry for Discount
