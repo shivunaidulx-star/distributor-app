@@ -930,7 +930,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 // --- Modal ---
-function openModal(title, html, footer) {
+function openModal(title, html, footer, isFullScreen = false) {
     $('modal-title').textContent = title;
     $('modal-body').innerHTML = html;
     const footerEl = $('modal-footer');
@@ -938,6 +938,10 @@ function openModal(title, html, footer) {
         if (footer) { footerEl.innerHTML = footer; footerEl.classList.remove('hidden'); }
         else { footerEl.innerHTML = ''; footerEl.classList.add('hidden'); }
     }
+    const modalWrap = document.querySelector('.modal');
+    if (isFullScreen) modalWrap.classList.add('full-screen-modal');
+    else modalWrap.classList.remove('full-screen-modal');
+    
     $('modal-overlay').classList.remove('hidden');
     // Prevent background page scroll while modal is open
     document.body.style.overflow = 'hidden';
@@ -4308,7 +4312,7 @@ async function openSalesOrderModal() {
                 <button class="btn btn-outline btn-block" onclick="closeSoItemSubModal()" style="margin-top:10px">Done Adding</button>
             </div>
         </div>
-    `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveSalesOrder()">＋ Save & New</button><button class="btn btn-primary" onclick="saveSalesOrder()">✅ Submit Order</button>`);
+    `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveSalesOrder()">＋ Save & New</button><button class="btn btn-primary" onclick="saveSalesOrder()">✅ Submit Order</button>`, true);
 
     // Init custom searchable dropdowns
     initSearchDropdown('f-so-party', buildPartySearchList(customers));
@@ -5695,7 +5699,7 @@ async function openInvoiceModal(type = 'sale') {
                 <button class="btn btn-outline btn-block" onclick="closeInvItemSubModal()" style="margin-top:10px">Done Adding</button>
             </div>
         </div>
-    `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveInvoice()">＋ Save & New</button><button class="btn btn-primary" onclick="saveInvoice()">💾 Save Invoice</button>`);
+    `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveInvoice()">＋ Save & New</button><button class="btn btn-primary" onclick="saveInvoice()">💾 Save Invoice</button>`, true);
 
     // Init custom searchable dropdowns
     initSearchDropdown('f-inv-party', buildPartySearchList(filteredParties), function (party) {

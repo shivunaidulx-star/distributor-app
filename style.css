@@ -1420,6 +1420,26 @@ table { border-collapse: collapse; width: 100%; }
    RESPONSIVE
    ============================================ */
 @media (max-width: 768px) {
+    .modal.full-screen-modal {
+        max-height: 100vh;
+        height: 100vh;
+        border-radius: 0;
+        margin: 0;
+        width: 100%;
+        max-width: 100%;
+    }
+    .modal.full-screen-modal .modal-header {
+        border-radius: 0;
+        padding: 18px 20px;
+    }
+    .modal.full-screen-modal .modal-body {
+        padding-bottom: 30px; 
+    }
+    /* Hide the transparent overlay border space */
+    .modal-overlay:has(.modal.full-screen-modal) {
+        padding: 0;
+    }
+
     .sidebar {
         transform: translateX(-100%);
     }
