@@ -1127,10 +1127,20 @@ async function ensureGeolocation() {
                 resolve(window._userCoords);
             },
             () => resolve(null),
-            { timeout: 3000, enableHighAccuracy: false }
+            { timeout: 6000, maximumAge: 300000, enableHighAccuracy: false }
         );
     });
 }
+
+window.forceHardRefresh = async function() {
+    if ('serviceWorker' in navigator) {
+        try {
+            const regs = await navigator.serviceWorker.getRegistrations();
+            for (let r of regs) await r.unregister();
+        } catch(e) { console.error('SW unregister failed', e); }
+    }
+    window.location.reload(true);
+};
 
 function buildPartySearchList(parties) {
     // Filter out blocked/deactivated parties from lookups
@@ -4592,11 +4602,21 @@ window.updateSoTotal = function() {
     const discAmt = +($('f-so-disc-amt')?.value || 0);
     
     let finalTotal = subtotal;
-    if (discPct > 0) finalTotal -= (subtotal * discPct / 100);
-    if (discAmt > 0) finalTotal -= discAmt;
+    let totalDiscount = 0;
+    if (discPct > 0) totalDiscount += (subtotal * discPct / 100);
+    if (discAmt > 0) totalDiscount += discAmt;
+    finalTotal -= totalDiscount;
     
     const el = $('so-total-display');
-    if (el) el.textContent = `Total: ${currency(Math.max(0, finalTotal))}`;
+    if (el) {
+        el.innerHTML = `
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;font-size:0.82rem;text-align:right;width:100%">
+            <span style="color:var(--text-muted)">Subtotal: <b>${currency(subtotal)}</b></span>
+            ${totalDiscount ? `<span style="color:var(--danger)">Discount: <b>-${currency(totalDiscount)}</b></span>` : ''}
+            <span style="color:var(--text-muted);border-top:1px dashed var(--border);padding-top:3px;margin-top:2px;width:100%"></span>
+            <span style="font-size:1.15rem;font-weight:800;color:var(--accent)">Total: ${currency(Math.max(0, finalTotal))}</span>
+        </div>`;
+    }
 }
 
 function renderSOLines() {
@@ -6053,10 +6073,12 @@ function updateInvoiceTotal() {
     const discPct  = +(($('f-inv-disc-pct') || {}).value || 0);
     const discAmt  = +(($('f-inv-disc-amt') || {}).value || 0);
     
+    let totalDiscount = 0;
+    if (discPct > 0) totalDiscount += (sub * discPct / 100);
+    if (discAmt > 0) totalDiscount += discAmt;
+
     // Prices are GST-inclusive; total = subtotal + roundoff - global discounts
-    let total = sub + roundoff;
-    if (discPct > 0) total -= (sub * discPct / 100);
-    if (discAmt > 0) total -= discAmt;
+    let total = sub + roundoff - totalDiscount;
     total = Math.max(0, total);
 
     const el = $('inv-total-display'); if (!el) return;
@@ -6072,21 +6094,23 @@ function updateInvoiceTotal() {
             if (li.gstRate > 0) rateMap[li.gstRate] = (rateMap[li.gstRate] || 0) + (li.taxAmount || 0);
         });
         rateLines = Object.entries(rateMap).sort((a,b)=>+a[0]-+b[0])
-            .map(([r, amt]) => `<span style="color:var(--text-muted)">GST ${r}%: <b>${currency(amt)}</b></span>`).join('');
+            .map(([r, amt]) => `<span style="color:var(--text-muted)">GST ${r}% <i>(Incl.)</i>: <b>${currency(amt)}</b></span>`).join('');
     } else if (gst > 0) {
         // Global GST% — price is inclusive, so back-calculate
         taxableAmt = +(sub / (1 + gst / 100)).toFixed(2);
         totalTax   = +(sub - taxableAmt).toFixed(2);
-        rateLines  = `<span style="color:var(--text-muted)">GST ${gst}%: <b>${currency(totalTax)}</b></span>`;
+        rateLines  = `<span style="color:var(--text-muted)">GST ${gst}% <i>(Incl.)</i>: <b>${currency(totalTax)}</b></span>`;
     }
 
     el.innerHTML = `
-        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;font-size:0.82rem">
-            ${taxableAmt !== undefined ? `<span style="color:var(--text-muted)">Taxable: <b>${currency(taxableAmt)}</b></span>` : ''}
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;font-size:0.82rem;width:100%;text-align:right">
+            ${taxableAmt !== undefined ? `<span style="color:var(--text-muted)">Taxable Amount: <b>${currency(taxableAmt)}</b></span>` : ''}
             ${rateLines || ''}
-            ${totalTax  ? `<span style="color:var(--text-muted)">Total GST: <b>${currency(totalTax)}</b></span>` : ''}
-            <span style="color:var(--text-muted);${(taxableAmt !== undefined)?'border-top:1px dashed var(--border);padding-top:3px;margin-top:2px':''}">Subtotal: <b>${currency(sub)}</b></span>
+            ${totalTax  ? `<span style="color:var(--text-muted)">Total GST <i>(Included)</i>: <b>${currency(totalTax)}</b></span>` : ''}
+            <span style="color:var(--text-muted);${(taxableAmt !== undefined)?'border-top:1px dashed var(--border);padding-top:3px;margin-top:2px;width:100%':''}">Subtotal: <b>${currency(sub)}</b></span>
+            ${totalDiscount ? `<span style="color:var(--danger)">Discount: <b>-${currency(totalDiscount)}</b></span>` : ''}
             ${roundoff ? `<span style="color:var(--text-muted)">Round Off: <b style="color:${roundoff<0?'#ef4444':'#10b981'}">${roundoff>0?'+':''}${currency(roundoff)}</b></span>` : ''}
+            <span style="color:var(--text-muted);border-top:1px dashed var(--border);padding-top:3px;margin-top:2px;width:100%"></span>
             <span style="font-size:1.15rem;font-weight:800;color:var(--accent)">Total: ${currency(total)}</span>
         </div>`;
 }
@@ -6404,14 +6428,60 @@ async function viewInvoice(id) {
 
             return `<div style="margin-top:15px;padding:12px;background:var(--bg-body);border-radius:6px;border:1px solid var(--border)">
                 <div style="display:flex;justify-content:space-between;align-items:center;">
-                    <div><strong>Remaining Balance Due:</strong> <span style="font-size:1.1rem;font-weight:700;color:var(--danger)">${currency(due)}</span></div>
-                    <div>${advanceHtml}</div>
+                    <div><strong>Remaining Balance Due:</strong> <span style="font-size:1.1rem;font-weight:700;color:var(--danger)">${currency(due)}</span>
+                    ${i.allocatedTo ? `<div style="font-size:0.8rem;color:var(--text-muted);margin-top:4px">Assigned to: <b style="color:var(--warning)">${escapeHtml(i.allocatedTo)}</b></div>` : ''}
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">
+                        <button class="btn btn-outline btn-sm" onclick="openAssignCollectorModal('${i.id}')" style="font-size:0.8rem">👤 Assign Collector</button>
+                        ${advanceHtml}
+                    </div>
                 </div>
             </div>`;
         })()}
         </div>
         <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Close</button><button class="btn btn-primary" onclick="printInvoice()">🖨️ Print</button></div>`);
 }
+
+async function openAssignCollectorModal(invId) {
+    const users = await DB.getAll('users');
+    const collectors = users.filter(u => ['Admin','Manager','Salesman'].includes(u.role));
+    
+    openModal('Assign Collector', `
+        <div class="form-group" style="margin-bottom:20px">
+            <label>Select Staff / Salesman</label>
+            <select id="f-assign-collector">
+                <option value="">-- Remove Assignment --</option>
+                ${collectors.map(u => `<option value="${u.name}">${u.name} (${u.role})</option>`).join('')}
+            </select>
+        </div>
+        <div class="modal-actions">
+            <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="executeAssignCollector('${invId}')">Save Assignment</button>
+        </div>
+    `);
+}
+
+async function executeAssignCollector(invId) {
+    const collector = $('f-assign-collector').value;
+    const invoices = await DB.getAll('invoices');
+    const inv = invoices.find(i => i.id === invId);
+    if (!inv) return;
+    
+    const historyEntry = {
+        date: new Date().toISOString(),
+        assignedTo: collector || 'Unassigned',
+        assignedBy: currentUser ? currentUser.name : 'System'
+    };
+    
+    const allocationHistory = Array.isArray(inv.allocationHistory) ? inv.allocationHistory : [];
+    allocationHistory.push(historyEntry);
+    
+    await DB.update('invoices', invId, { allocatedTo: collector || null, allocationHistory });
+    showToast(collector ? 'Invoice assigned to ' + collector : 'Assignment removed', 'success');
+    closeModal();
+    if (currentPage === 'invoices') renderInvoices();
+}
+
 function cancelInvoiceDirectly(id) {
     const invoices = DB.get('db_invoices');
     const inv = invoices.find(i => i.id === id);
@@ -9892,6 +9962,7 @@ function renderReports() {
             <div class="report-card" onclick="showReport('chequeregister')"><div class="report-icon-wrap"><div class="report-icon">📝</div></div><div class="report-text"><h4>Cheque Register</h4><p>Track cheque deposits & clearance</p></div></div>
             <div class="report-card" onclick="showReport('salesman')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(124,58,237,0.12),rgba(99,102,241,0.08))"><div class="report-icon">🏆</div></div><div class="report-text"><h4>Salesman Performance</h4><p>Invoices + collections by salesman</p></div></div>
             <div class="report-card" onclick="showReport('user-outstanding')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(239,68,68,0.12),rgba(249,115,22,0.08))"><div class="report-icon">👤💰</div></div><div class="report-text"><h4>Outstanding by User</h4><p>Pending bills grouped by salesman</p></div></div>
+            <div class="report-card" onclick="showReport('collection-allocations')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(59,130,246,0.12),rgba(37,99,235,0.08))"><div class="report-icon">👤💳</div></div><div class="report-text"><h4>Collection Allocations</h4><p>Track assigned invoices & payments</p></div></div>
             <div class="report-card" onclick="showReport('daybook')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(20,184,166,0.12),rgba(6,182,212,0.08))"><div class="report-icon">📒</div></div><div class="report-text"><h4>Day Book</h4><p>Date-wise transaction summary</p></div></div>
         </div>
 
@@ -9951,6 +10022,72 @@ async function showReport(type) {
         <div id="r-s-out"></div>`;
         renderSalesRpt();
     }
+    
+    if (type === 'collection-allocations') {
+        window._rAllocAll = invoices.filter(i => i.type === 'sale' && i.status !== 'cancelled' && i.allocatedTo);
+        const collectors = [...new Set(window._rAllocAll.map(i => i.allocatedTo))].filter(Boolean).sort();
+        
+        el.innerHTML = `
+        <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
+            <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
+                <div class="form-group"><label>Filter Collector</label><select id="r-ca-user" onchange="renderCollectionAllocationsRpt()"><option value="">All</option>${collectors.map(c=>`<option>${c}</option>`).join('')}</select></div>
+                <div class="form-group"><label>Status</label><select id="r-ca-status" onchange="renderCollectionAllocationsRpt()"><option value="">All Assigned</option><option value="pending">Pending Balance</option><option value="paid">Fully Paid</option></select></div>
+                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-allocations','CollectionAllocations_${today()}')">📥 Export</button></div>
+            </div>
+        </div></div>
+        <div id="r-ca-out"></div>`;
+        
+        window.renderCollectionAllocationsRpt = async function() {
+            const userFlt = $('r-ca-user').value;
+            const statusFlt = $('r-ca-status').value;
+            
+            let html = '<div class="table-wrapper"><table class="data-table" id="tbl-allocations"><thead><tr><th>Collector</th><th>Invoice No</th><th>Date</th><th>Customer</th><th>Total Amt</th><th>Paid</th><th>Balance</th><th>Assigned On</th></tr></thead><tbody>';
+            let grandTotal = 0, grandPaid = 0, grandBal = 0;
+            
+            for (const inv of window._rAllocAll) {
+                if (userFlt && inv.allocatedTo !== userFlt) continue;
+                
+                const paid = await getInvoicePaidAmount(inv.invoiceNo);
+                const bal = inv.total - paid;
+                
+                if (statusFlt === 'pending' && bal <= 0) continue;
+                if (statusFlt === 'paid' && bal > 0) continue;
+                
+                grandTotal += inv.total;
+                grandPaid += paid;
+                grandBal += bal;
+                
+                let assignDate = '-';
+                if (inv.allocationHistory && inv.allocationHistory.length) {
+                    const last = inv.allocationHistory[inv.allocationHistory.length - 1];
+                    assignDate = fmtDate(last.date.substring(0,10));
+                }
+                
+                html += `<tr>
+                    <td><span class="badge badge-info">${escapeHtml(inv.allocatedTo)}</span></td>
+                    <td><a href="#" onclick="viewInvoice('${inv.id}')" style="color:var(--primary);text-decoration:underline;font-weight:600">${inv.invoiceNo}</a></td>
+                    <td>${fmtDate(inv.date)}</td>
+                    <td>${escapeHtml(inv.partyName)}</td>
+                    <td>${currency(inv.total)}</td>
+                    <td class="amount-green">${currency(paid)}</td>
+                    <td style="color:${bal>0?'var(--danger)':'inherit'};font-weight:600">${currency(bal)}</td>
+                    <td style="font-size:0.8rem;color:var(--text-muted)">${assignDate}</td>
+                </tr>`;
+            }
+            
+            html += `<tr style="font-weight:700;background:var(--bg-card)">
+                <td colspan="4" style="text-align:right">Total</td>
+                <td>${currency(grandTotal)}</td>
+                <td class="amount-green">${currency(grandPaid)}</td>
+                <td style="color:var(--danger)">${currency(grandBal)}</td>
+                <td></td>
+            </tr></tbody></table></div>`;
+            $('r-ca-out').innerHTML = html;
+        };
+        
+        await window.renderCollectionAllocationsRpt();
+    }
+
     if (type === 'purchases') {
         window._rPurchAll = invoices.filter(i => i.type === 'purchase' && i.status !== 'cancelled');
         const monthStart = today().substring(0, 8) + '01';
