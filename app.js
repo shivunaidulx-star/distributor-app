@@ -4379,7 +4379,7 @@ function updateSOLine(idx, field, value) {
 function renderSOLines() {
     const el = $('so-lines-list'); if (!el) return;
     
-    const header = `<div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:2px solid var(--border);font-size:0.7rem;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px">
+    const header = `<div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:2px solid var(--border);font-size:0.7rem;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px;min-width:600px">
         <span style="width:20px;text-align:center">#</span>
         <span style="flex:1">Item</span>
         <span style="width:45px;text-align:center">Qty</span>
@@ -4395,7 +4395,7 @@ function renderSOLines() {
         const edited = li.listedPrice !== undefined && Math.abs(li.price - li.listedPrice) > 0.01;
         const alertStyle = li._priceAlert ? 'background:rgba(239, 68, 68, 0.05); border-left:3px solid var(--danger); padding-left:5px' : (edited ? 'background:rgba(245,158,11,0.05); border-left:3px solid var(--warning); padding-left:5px' : '');
         
-        return `<div style="display:flex;align-items:center;gap:6px;padding:6px 0;border-bottom:1px solid var(--border);${alertStyle}">
+        return `<div style="display:flex;align-items:center;gap:6px;padding:6px 0;border-bottom:1px solid var(--border);${alertStyle};min-width:600px">
             <span style="width:20px;text-align:center;font-size:0.75rem;color:var(--text-muted)">${i + 1}</span>
             <div style="flex:1;min-width:0">
                 <div style="font-size:0.8rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600">${li.name}</div>
@@ -5729,7 +5729,7 @@ function renderInvoiceLines() {
     const el = $('inv-lines-list'); if (!el) return;
     const invType = ($('f-inv-type')||{}).value;
 
-    const header = `<div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:2px solid var(--border);font-size:0.7rem;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px">
+    const header = `<div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:2px solid var(--border);font-size:0.7rem;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px;min-width:600px">
         <span style="width:20px;text-align:center">#</span>
         <span style="flex:1">Item</span>
         <span style="width:45px;text-align:center">Qty</span>
@@ -5747,7 +5747,7 @@ function renderInvoiceLines() {
         const alertStyle = li._priceAlert ? 'background:rgba(239, 68, 68, 0.05); border-left:3px solid var(--danger); padding-left:5px' : (edited ? 'background:rgba(245,158,11,0.05); border-left:3px solid var(--warning); padding-left:5px' : '');
 
         return `<div style="padding:6px 0;border-bottom:1px solid var(--border);${alertStyle}">
-            <div style="display:flex;align-items:center;gap:6px">
+            <div style="display:flex;align-items:center;gap:6px;min-width:600px">
                 <span style="width:20px;text-align:center;font-size:0.75rem;color:var(--text-muted)">${i+1}</span>
                 <div style="flex:1;min-width:0">
                     <div style="font-size:0.8rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${li.name}</div>
