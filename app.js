@@ -1003,8 +1003,18 @@ function buildItemSearchList(inventoryItems) {
 // Helper to build party list for search dropdown
 function buildPartySearchList(parties) {
     // Filter out blocked/deactivated parties from lookups
-    const activeParties = parties.filter(p => p.active !== false && !p.blocked);
-    return activeParties.map(p => ({
+    let pts = parties.filter(p => p.active !== false && !p.blocked);
+    
+    // Sort by proximity if coordinates are available
+    if (window._userCoords) {
+        pts.sort((a, b) => {
+            const da = haversine(window._userCoords.lat, window._userCoords.lng, a.lat, a.lng);
+            const db = haversine(window._userCoords.lat, window._userCoords.lng, b.lat, b.lng);
+            return da - db;
+        });
+    }
+
+    return pts.map(p => ({
         id: p.id,
         label: p.name,
         value: p.name,
@@ -1043,7 +1053,31 @@ async function navigateTo(page) {
     if (renderers[page]) {
         await renderers[page]();
     }
+    // Update user location on specific pages
+    if (['catalog', 'salesorders', 'payments', 'parties'].includes(page)) {
+        updateUserLocation();
+    }
 }
+
+// Global User Location
+window._userCoords = null;
+async function updateUserLocation() {
+    if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(pos => {
+            window._userCoords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        }, err => console.warn('Geolocation failed', err));
+    }
+}
+
+// Global Haversine Utility
+window.haversine = function(lat1, lon1, lat2, lon2) {
+    if (!lat1 || !lon1 || !lat2 || !lon2) return Infinity;
+    const R = 6371; // km
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+};
 
 // =============================================
 //  BOTTOM NAV — More Sheet & FAB
@@ -1834,6 +1868,7 @@ async function renderParties() {
             <div class="filter-group">
                 <button class="btn btn-outline" onclick="openColumnPersonalizer('parties','renderParties')" style="border-color:var(--accent);color:var(--accent)">⚙️ Columns</button>
                 ${!isSalesman() ? `<button class="btn btn-outline" onclick="downloadPartyTemplate()">📋 Party Template</button>
+                <button class="btn btn-outline" onclick="exportPartiesExcel()">📤 Export Parties</button>
                 <button class="btn btn-outline" onclick="importPartyExcel()">📥 Import Parties</button>
                 <button class="btn btn-outline" style="border-color:#f59e0b;color:#f59e0b" onclick="downloadOpeningBalTemplate()">📋 Opening Bal Template</button>
                 <button class="btn btn-outline" style="border-color:#f59e0b;color:#f59e0b" onclick="importOpeningBalExcel()">📥 Import Opening Bal</button>
@@ -2200,10 +2235,10 @@ async function deleteParty(id) {
 
 // --- Party Excel Import ---
 function downloadPartyTemplate() {
-    let csv = 'Name *,Type (Customer/Supplier) *,Phone,GSTIN,Address,City,Post Code,Opening Balance,Credit Limit,Payment Terms (COD/Net7/Net15/Net30/Net60),Blocked (true/false)\n';
-    csv += 'Acme Corp,Customer,9988776655,27AADCA2230M1Z2,123 Main St,Mumbai,400001,1000,50000,Net30,false\n';
-    csv += 'Global Supplies,Supplier,9876543210,,45 Park Ave,Delhi,110001,0,0,COD,false\n';
-    csv += 'Raj Traders,Customer,9876500001,29ABCDE1234F1Z5,MG Road,Bangalore,560001,500,20000,Net15,false\n';
+    let csv = 'Name *,Type (Customer/Supplier) *,Phone,GSTIN,Address,City,Post Code,Location Lat,Location Lng,Opening Balance,Credit Limit,Payment Terms (COD/Net7/Net15/Net30/Net60),Blocked (true/false)\n';
+    csv += 'Acme Corp,Customer,9988776655,27AADCA2230M1Z2,123 Main St,Mumbai,400001,19.0760,72.8777,1000,50000,Net30,false\n';
+    csv += 'Global Supplies,Supplier,9876543210,,45 Park Ave,Delhi,110001,,0,0,COD,false\n';
+    csv += 'Raj Traders,Customer,9876500001,29ABCDE1234F1Z5,MG Road,Bangalore,560001,12.9716,77.5946,500,20000,Net15,false\n';
     downloadCSV(csv, 'party_import_template.csv');
     showToast('Party template downloaded!', 'success');
 }
@@ -2375,7 +2410,9 @@ function processPartyImport(event) {
         for (let i = 1; i < lines.length; i++) {
             const cols = parseCSVLine(lines[i]);
             if (cols.length < 2) { errors.push(`Row ${i + 1}: Not enough columns`); continue; }
-            const [name, typeStr, phone, city, gstin, address, balStr] = cols.map(c => (c || '').trim());
+            // Expected Order (matching template):
+            // 0:Name, 1:Type, 2:Phone, 3:GSTIN, 4:Address, 5:City, 6:PostCode, 7:Lat, 8:Lng, 9:OpeningBal, 10:CreditLimit, 11:PayTerms, 12:Blocked
+            const [name, typeStr, phone, gstin, address, city, postCode, lat, lng, balStr] = cols.map(c => (c || '').trim());
             if (!name) { errors.push(`Row ${i + 1}: Name is empty`); continue; }
             const existingParty = parties.find(p => p.name.toLowerCase() === name.toLowerCase());
             if (pendingPartyImports.some(p => p.name.toLowerCase() === name.toLowerCase())) {
@@ -2386,6 +2423,9 @@ function processPartyImport(event) {
             const entry = {
                 name, type: partyType,
                 phone: phone || '', city: city || '', gstin: gstin || '', address: address || '',
+                postCode: postCode || '',
+                lat: lat ? +lat : null,
+                lng: lng ? +lng : null,
                 balance: existingParty ? existingParty.balance : balance,
                 isUpdate: !!existingParty
             };
@@ -3565,6 +3605,16 @@ async function exportInventoryExcel() {
     downloadCSV(csv, 'inventory_' + today() + '.csv');
 }
 
+async function exportPartiesExcel() {
+    const parties = await DB.getAll('parties');
+    if (!parties.length) return alert('No parties to export');
+    let csv = 'Name,Type,Phone,GSTIN,Address,City,Post Code,Location Lat,Location Lng,Balance,Credit Limit,Payment Terms,Blocked\n';
+    parties.forEach(p => {
+        csv += `"${p.name}","${p.type}","${p.phone || ''}","${p.gstin || ''}","${p.address || ''}","${p.city || ''}","${p.postCode || ''}",${p.lat || ''},${p.lng || ''},${p.balance || 0},${p.creditLimit || 0},"${p.paymentTerms || ''}",${p.blocked || false}\n`;
+    });
+    downloadCSV(csv, 'parties_' + today() + '.csv');
+}
+
 // --- Excel Template Download ---
 function downloadStockTemplate() {
     const dt = today();
@@ -4037,7 +4087,7 @@ async function openSalesOrderModal() {
             <div class="form-group"><label>&nbsp;</label><button class="btn btn-primary btn-block" onclick="addSOLine()">Add</button></div>
         </div>
         
-        <div id="so-lines-list"></div>
+        <div class="table-wrapper"><div id="so-lines-list"></div></div>
         <div style="text-align:right;font-size:1.1rem;font-weight:700;color:var(--accent)" id="so-total-display">Total: ₹0.00</div>
         
         <div class="form-group" style="margin-top:12px"><label>Notes</label><input id="f-so-notes" placeholder="Instructions..."></div>
@@ -5338,7 +5388,7 @@ async function openInvoiceModal(type) {
             <div class="form-group"><label>&nbsp;</label><button class="btn btn-primary btn-block" onclick="addInvoiceLine()">Add</button></div>
         </div>
         
-        <div id="inv-lines-list"></div>
+        <div class="table-wrapper"><div id="inv-lines-list"></div></div>
         <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:8px">
             <div class="form-group" style="min-width:100px">
                 <label>GST %</label>
@@ -6423,19 +6473,11 @@ function _initPayPartyDropdown(parties, filterType) {
     if (navigator.geolocation) {
         navigator.geolocation.getCurrentPosition(
             (pos) => {
-                const userLat = pos.coords.latitude;
-                const userLng = pos.coords.longitude;
-                const haversine = (lat1, lon1, lat2, lon2) => {
-                    const R = 6371; // km
-                    const dLat = (lat2 - lat1) * Math.PI / 180;
-                    const dLon = (lon2 - lon1) * Math.PI / 180;
-                    const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
-                    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-                };
+                window._userCoords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
                 const withDist = filtered.map(p => {
                     const lat = parseFloat(p.gpsLat || p.latitude || 0);
                     const lng = parseFloat(p.gpsLng || p.longitude || 0);
-                    const dist = (lat && lng) ? haversine(userLat, userLng, lat, lng) : 99999;
+                    const dist = (lat && lng) ? haversine(window._userCoords.lat, window._userCoords.lng, lat, lng) : 99999;
                     return { ...p, _dist: dist };
                 });
                 withDist.sort((a, b) => a._dist - b._dist);
@@ -7386,17 +7428,23 @@ function renderExpRows(expenses) {
 
 async function viewExpenseDoc(docNo, type) {
     if (type === 'payment') {
-        // Open payment voucher directly by payNo
-        const payments = DB.get('db_payments') || await DB.getAll('payments');
-        const p = payments.find(x => x.payNo === docNo || x.id === docNo);
-        if (p) { viewPaymentDetails(p.id); return; }
-        showToast('Payment record not found: ' + docNo, 'error');
+        // Navigate to payments first
+        navigateTo('payments');
+        setTimeout(async () => {
+            const payments = DB.get('db_payments') || await DB.getAll('payments');
+            const p = payments.find(x => x.payNo === docNo || x.id === docNo);
+            if (p) { viewPaymentDetails(p.id); }
+            else { showToast('Payment record not found: ' + docNo, 'error'); }
+        }, 150);
     } else {
-        // Open invoice modal directly by invoiceNo
-        const invoices = DB.get('db_invoices') || await DB.getAll('invoices');
-        const inv = invoices.find(x => x.invoiceNo === docNo);
-        if (inv) { viewInvoice(inv.id); return; }
-        showToast('Invoice not found: ' + docNo, 'error');
+        // Navigate to invoices first
+        navigateTo('invoices');
+        setTimeout(async () => {
+            const invoices = DB.get('db_invoices') || await DB.getAll('invoices');
+            const inv = invoices.find(x => x.invoiceNo === docNo);
+            if (inv) { viewInvoice(inv.id); }
+            else { showToast('Invoice not found: ' + docNo, 'error'); }
+        }, 150);
     }
 }
 
@@ -12497,7 +12545,7 @@ async function createOrderFromCatalog() {
             <div class="form-group"><label>&nbsp;</label><button class="btn btn-primary btn-block" onclick="addSOLine()">Add</button></div>
         </div>
         
-        <div id="so-lines-list"></div>
+        <div class="table-wrapper"><div id="so-lines-list"></div></div>
         <div style="text-align:right;font-size:1.1rem;font-weight:700;color:var(--accent)" id="so-total-display">Total: ${currency(soItems.reduce((s, li) => s + li.amount, 0))}</div>
         
         <div class="form-group" style="margin-top:12px"><label>Notes</label><input id="f-so-notes" placeholder="Instructions..."></div>
@@ -13786,7 +13834,18 @@ async function renderHRPayroll() {
         const net = +Math.max(0, earned - toDeduct).toFixed(2);
         const salRec = salRecs.find(r => r.staff_id === s.id);
         const paid = salRec && salRec.status === 'paid';
-        return { s, p, hd, pl, daysEff, earned, advPending, toDeduct, net, salRec, paid };
+
+        let displayEarned = earned;
+        let displayDeducted = toDeduct;
+        let displayNet = net;
+
+        if (paid) {
+            displayEarned = salRec.earned_salary || earned;
+            displayDeducted = salRec.advances || 0;
+            displayNet = salRec.net_payable || (displayEarned - displayDeducted);
+        }
+
+        return { s, p, hd, pl, daysEff, earned: displayEarned, advPending, toDeduct: displayDeducted, net: displayNet, salRec, paid };
     });
 
     const totalEarned = rows.reduce((t, r) => t + r.earned, 0);
@@ -13927,65 +13986,75 @@ function updateNetPayable(staffId, earned) {
 }
 
 async function markSalaryPaid(staffId, staffName, month, monthlySalary, workingDays, daysEff, earned) {
-    // Fetch ALL advances for this staff ordered oldest first (FIFO)
-    const { data: allAdvs } = await supabaseClient
-        .from('salary_advances').select('*')
-        .eq('staff_id', staffId)
-        .order('date', { ascending: true });
+    try {
+        // Fetch ALL advances for this staff ordered oldest first (FIFO)
+        const { data: allAdvs, error: advErr } = await supabaseClient
+            .from('salary_advances').select('*')
+            .eq('staff_id', staffId)
+            .order('date', { ascending: true });
+        
+        if (advErr) throw advErr;
 
-    const pendingAdvs = (allAdvs || []).filter(a => Math.max(0, (a.amount||0) - (a.deducted||0)) > 0);
-    const totalPending = pendingAdvs.reduce((t, a) => t + Math.max(0, (a.amount||0) - (a.deducted||0)), 0);
+        const pendingAdvs = (allAdvs || []).filter(a => Math.max(0, (a.amount||0) - (a.deducted||0)) > 0);
+        const totalPending = pendingAdvs.reduce((t, a) => t + Math.max(0, (a.amount||0) - (a.deducted||0)), 0);
 
-    // Read admin-edited deduction amount (if input exists on page)
-    const deductInput = document.getElementById('deduct-' + staffId);
-    const requestedDeduction = deductInput
-        ? Math.min(Math.max(0, +deductInput.value || 0), Math.min(earned, totalPending))
-        : Math.min(earned, totalPending);
+        // Read admin-edited deduction amount (if input exists on page)
+        const deductInput = document.getElementById('deduct-' + staffId);
+        const requestedDeduction = deductInput
+            ? Math.min(Math.max(0, +deductInput.value || 0), Math.min(earned, totalPending))
+            : Math.min(earned, totalPending);
 
-    // FIFO: deduct from oldest advance first, capped at requestedDeduction
-    let remaining = requestedDeduction;
-    let totalDeducted = 0;
-    const advUpdates = []; // { id, newDeducted, deductNow, date, notes, total, oldDeducted }
+        // FIFO: deduct from oldest advance first, capped at requestedDeduction
+        let remaining = requestedDeduction;
+        let totalDeducted = 0;
+        const advUpdates = []; // { id, newDeducted, deductNow, date, notes, total, oldDeducted }
 
-    for (const adv of pendingAdvs) {
-        if (remaining <= 0) break;
-        const bal = Math.max(0, (adv.amount||0) - (adv.deducted||0));
-        const deductNow = +Math.min(bal, remaining).toFixed(2);
-        remaining = +(remaining - deductNow).toFixed(2);
-        totalDeducted = +(totalDeducted + deductNow).toFixed(2);
-        advUpdates.push({ id: adv.id, newDeducted: +((adv.deducted||0) + deductNow).toFixed(2), deductNow, date: adv.date, notes: adv.notes, total: adv.amount, oldDeducted: adv.deducted||0 });
+        for (const adv of pendingAdvs) {
+            if (remaining <= 0) break;
+            const bal = Math.max(0, (adv.amount||0) - (adv.deducted||0));
+            const deductNow = +Math.min(bal, remaining).toFixed(2);
+            remaining = +(remaining - deductNow).toFixed(2);
+            totalDeducted = +(totalDeducted + deductNow).toFixed(2);
+            advUpdates.push({ id: adv.id, newDeducted: +((adv.deducted||0) + deductNow).toFixed(2), deductNow, date: adv.date, notes: adv.notes, total: adv.amount, oldDeducted: adv.deducted||0 });
+        }
+
+        const net = +Math.max(0, earned - totalDeducted).toFixed(2);
+        const carryForward = +(totalPending - totalDeducted).toFixed(2);
+
+        // Build confirmation message
+        let confLines = [`Staff: ${staffName}`, `Earned: ${currency(earned)}`];
+        if (totalDeducted > 0) {
+            confLines.push(`Advance deducted: - ${currency(totalDeducted)}`);
+            if (carryForward > 0) confLines.push(`Carry-forward balance: ${currency(carryForward)}`);
+        }
+        confLines.push(`Net Payable: ${currency(net)}`);
+        if (!confirm(confLines.join('\n'))) return;
+
+        // Update each advance's deducted amount
+        const ops = advUpdates.map(u =>
+            supabaseClient.from('salary_advances').update({ deducted: u.newDeducted }).eq('id', u.id)
+        );
+
+        // Upsert salary record
+        const { data: existing } = await supabaseClient.from('salary_records').select('id').eq('staff_id', staffId).eq('month', month).single();
+        const rec = { staff_id: staffId, staff_name: staffName, month, monthly_salary: monthlySalary, working_days: workingDays, days_present: daysEff, earned_salary: earned, advances: totalDeducted, net_payable: net, status: 'paid', paid_date: today(), paid_by: currentUser.name };
+        if (existing) {
+            ops.push(supabaseClient.from('salary_records').update(rec).eq('id', existing.id));
+        } else {
+            rec.id = 'sal_' + Date.now() + '_' + staffId.slice(-4);
+            ops.push(supabaseClient.from('salary_records').insert(rec));
+        }
+
+        const results = await Promise.all(ops);
+        const firstError = results.find(r => r.error);
+        if (firstError) throw firstError.error;
+
+        showToast(`Salary paid for ${staffName}! Net: ${currency(net)}${carryForward > 0 ? ' | Adv carry-forward: ' + currency(carryForward) : ''}`, 'success');
+        renderHRPayroll();
+    } catch (err) {
+        console.error('Error marking salary as paid:', err);
+        alert('Error: ' + err.message);
     }
-
-    const net = +Math.max(0, earned - totalDeducted).toFixed(2);
-    const carryForward = +(totalPending - totalDeducted).toFixed(2);
-
-    // Build confirmation message
-    let confLines = [`Staff: ${staffName}`, `Earned: ${currency(earned)}`];
-    if (totalDeducted > 0) {
-        confLines.push(`Advance deducted: - ${currency(totalDeducted)}`);
-        if (carryForward > 0) confLines.push(`Carry-forward balance: ${currency(carryForward)}`);
-    }
-    confLines.push(`Net Payable: ${currency(net)}`);
-    if (!confirm(confLines.join('\n'))) return;
-
-    // Update each advance's deducted amount
-    const ops = advUpdates.map(u =>
-        supabaseClient.from('salary_advances').update({ deducted: u.newDeducted }).eq('id', u.id)
-    );
-
-    // Upsert salary record
-    const { data: existing } = await supabaseClient.from('salary_records').select('id').eq('staff_id', staffId).eq('month', month).single();
-    const rec = { staff_id: staffId, staff_name: staffName, month, monthly_salary: monthlySalary, working_days: workingDays, days_present: daysEff, earned_salary: earned, advances: totalDeducted, net_payable: net, status: 'paid', paid_date: today(), paid_by: currentUser.name };
-    if (existing) {
-        ops.push(supabaseClient.from('salary_records').update(rec).eq('id', existing.id));
-    } else {
-        rec.id = 'sal_' + Date.now() + '_' + staffId.slice(-4);
-        ops.push(supabaseClient.from('salary_records').insert(rec));
-    }
-
-    await Promise.all(ops);
-    showToast(`Salary paid for ${staffName}! Net: ${currency(net)}${carryForward > 0 ? ' | Adv carry-forward: ' + currency(carryForward) : ''}`, 'success');
-    renderHRPayroll();
 }
 
 async function resetSalaryPaid(staffId, staffName, month) {
