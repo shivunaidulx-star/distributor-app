@@ -1379,8 +1379,11 @@ function buildMoreSheet() {
     const allowed = getUserPages(currentUser || { role: 'Admin', roles: [] });
     const mainTabPages = (BOTTOM_NAV_TABS[role] || []).map(t => t.page);
     // Only show items in More sheet that are allowed AND not already a main tab
-    const moreItems = MORE_ITEMS.filter(it => allowed.includes(it.page) && !mainTabPages.includes(it.page));
-    grid.innerHTML = moreItems.map(it => `<button class="more-sheet-item" onclick="navigateTo('${it.page}')">
+    const moreItems = MORE_ITEMS.filter(it => {
+        if (it.fn) return true;
+        return allowed.includes(it.page) && !mainTabPages.includes(it.page);
+    });
+    grid.innerHTML = moreItems.map(it => `<button class="more-sheet-item" onclick="${it.fn || `navigateTo('${it.page}')`}">
             <span class="more-sheet-icon">${it.icon}</span>
             <span class="more-sheet-label">${it.label}</span>
         </button>`).join('') + `<button class="more-sheet-item" onclick="logout()" style="border-top:1px solid var(--border)">
