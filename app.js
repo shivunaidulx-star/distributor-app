@@ -6984,14 +6984,21 @@ window.updatePaymentQR = function () {
         if (+inp.value > 0) invNotes.push(inp.dataset.inv);
     });
     const tn = invNotes.length ? invNotes.join(',') : '';
+    const partyName = ($('f-pay-party') || {}).value?.trim() || '';
 
     if (mode === 'UPI' && amount > 0 && co.upi) {
         box.style.display = 'block';
         let upiString = `upi://pay?pa=${co.upi}&pn=${encodeURIComponent(co.name || 'Company')}&am=${amount}&cu=INR`;
-        if (tn) upiString += `&tn=${encodeURIComponent('Inv:' + tn)}`;
+        const noteParts = [];
+        if (partyName) noteParts.push(partyName);
+        if (tn) noteParts.push('Inv:' + tn);
+        if (noteParts.length) upiString += `&tn=${encodeURIComponent(noteParts.join(' | '))}`;
         const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(upiString)}`;
+        const noteDisplay = [];
+        if (tn) noteDisplay.push('<span style="color:var(--accent)">Invoice: ' + tn + '</span>');
+        if (partyName) noteDisplay.push('<span style="color:var(--text-primary);font-weight:600">' + partyName + '</span>');
         box.innerHTML = `<img src="${qrUrl}" alt="Scan to pay via UPI" style="display:block;margin:0 auto;border:1px solid var(--border);border-radius:8px;padding:8px;background:#fff;max-width:180px;width:180px;">
-        <div style="font-size:0.8rem;color:var(--text-secondary);margin-top:4px;text-align:center;">Scan with any UPI App${tn ? '<br><span style="color:var(--accent)">Invoice: ' + tn + '</span>' : ''}</div>`;
+        <div style="font-size:0.8rem;color:var(--text-secondary);margin-top:4px;text-align:center;">Scan with any UPI App${noteDisplay.length ? '<br>' + noteDisplay.join('<br>') : ''}</div>`;
     } else {
         box.style.display = 'none';
         box.innerHTML = '';
