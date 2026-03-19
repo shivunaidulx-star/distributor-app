@@ -797,11 +797,23 @@ async function saveChangedPin() {
 function logout() {
     currentUser = null;
     localStorage.removeItem('dm_session');
-    $('login-pin').value = '';
+    
+    // Clear login fields
+    if ($('login-pin')) $('login-pin').value = '';
+    if ($('login-userid')) $('login-userid').value = '';
+    
+    // Hide app elements
     const bn = $('bottom-nav');
     if (bn) bn.classList.add('hidden');
     const fab = $('app-fab');
     if (fab) fab.classList.add('hidden');
+    
+    // Close overlays, sidebars and modals
+    closeMoreSheet();
+    const sidebar = document.getElementById('sidebar');
+    if (sidebar) sidebar.classList.remove('open');
+    closeModal();
+    
     showLoginScreen();
 }
 
@@ -1104,7 +1116,22 @@ function buildItemSearchList(inventoryItems) {
 }
 
 
-// Helper to build party list for search dropdown
+// Helper to ensure we have user coordinates for proximity sorting
+async function ensureGeolocation() {
+    if (window._userCoords) return window._userCoords;
+    if (!navigator.geolocation) return null;
+    return new Promise((resolve) => {
+        navigator.geolocation.getCurrentPosition(
+            (pos) => {
+                window._userCoords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+                resolve(window._userCoords);
+            },
+            () => resolve(null),
+            { timeout: 3000, enableHighAccuracy: false }
+        );
+    });
+}
+
 function buildPartySearchList(parties) {
     // Filter out blocked/deactivated parties from lookups
     let pts = parties.filter(p => p.active !== false && !p.blocked);
@@ -4155,6 +4182,9 @@ async function filterSOTable() {
 }
 async function openSalesOrderModal() {
     soItems = [];
+    // Trigger geolocation in background
+    ensureGeolocation();
+    
     const [parties, inv, categories] = await Promise.all([
         DB.getAll('parties'),
         DB.getAll('inventory'),
@@ -4200,7 +4230,18 @@ async function openSalesOrderModal() {
         </div>
         
         <div class="table-wrapper"><div id="so-lines-list"></div></div>
-        <div style="text-align:right;font-size:1.1rem;font-weight:700;color:var(--accent)" id="so-total-display">Total: ₹0.00</div>
+        
+        <div style="display:flex; justify-content:flex-end; gap:15px; align-items:flex-end; margin-top:10px; flex-wrap:wrap">
+            <div class="form-group" style="width:100px; margin-bottom:0">
+                <label style="font-size:0.7rem">Discount %</label>
+                <input type="number" id="f-so-disc-pct" value="0" min="0" max="100" step="0.01" oninput="updateSoTotal()">
+            </div>
+            <div class="form-group" style="width:100px; margin-bottom:0">
+                <label style="font-size:0.7rem">Discount ₹</label>
+                <input type="number" id="f-so-disc-amt" value="0" min="0" step="0.01" oninput="updateSoTotal()">
+            </div>
+            <div style="text-align:right; font-size:1.15rem; font-weight:800; color:var(--accent)" id="so-total-display">Total: ₹0.00</div>
+        </div>
         
         <div class="form-group" style="margin-top:12px"><label>Notes</label><input id="f-so-notes" placeholder="Instructions..."></div>
     `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveSalesOrder()">＋ Save & New</button><button class="btn btn-primary" onclick="saveSalesOrder()">✅ Submit Order</button>`);
@@ -4488,6 +4529,20 @@ function updateSOLine(idx, field, value) {
 
     renderSOLines();
 }
+
+window.updateSoTotal = function() {
+    const subtotal = soItems.reduce((s, l) => s + l.amount, 0);
+    const discPct = +($('f-so-disc-pct')?.value || 0);
+    const discAmt = +($('f-so-disc-amt')?.value || 0);
+    
+    let finalTotal = subtotal;
+    if (discPct > 0) finalTotal -= (subtotal * discPct / 100);
+    if (discAmt > 0) finalTotal -= discAmt;
+    
+    const el = $('so-total-display');
+    if (el) el.textContent = `Total: ${currency(Math.max(0, finalTotal))}`;
+}
+
 function renderSOLines() {
     const el = $('so-lines-list'); if (!el) return;
     
@@ -4526,7 +4581,7 @@ function renderSOLines() {
         </div>`;
     }).join('');
 
-    const el2 = $('so-total-display'); if (el2) el2.textContent = `Total: ${currency(soItems.reduce((s, l) => s + l.amount, 0))}`;
+    updateSoTotal();
 }
 async function saveSalesOrder() {
     if (!beginSave()) return;
@@ -4553,6 +4608,14 @@ async function saveSalesOrder() {
     let partyName = matched.name;
 
     const editId = $('f-so-edit-id') ? $('f-so-edit-id').value : '';
+    const discPct = +($('f-so-disc-pct')?.value || 0);
+    const discAmt = +($('f-so-disc-amt')?.value || 0);
+    const subtotal = soItems.reduce((s, l) => s + l.amount, 0);
+    let finalTotal = subtotal;
+    if (discPct > 0) finalTotal -= (subtotal * discPct / 100);
+    if (discAmt > 0) finalTotal -= discAmt;
+    finalTotal = Math.max(0, finalTotal);
+
     const data = {
         date: $('f-so-date').value,
         expectedDeliveryDate: ($('f-so-delivery') && $('f-so-delivery').value) ? $('f-so-delivery').value : null,
@@ -4560,7 +4623,9 @@ async function saveSalesOrder() {
         partyId: partyId,
         partyName: partyName,
         items: [...soItems],
-        total: soItems.reduce((s, l) => s + l.amount, 0),
+        total: finalTotal,
+        discountPct: discPct,
+        discountAmt: discAmt,
         notes: $('f-so-notes').value.trim()
     };
 
@@ -5448,8 +5513,9 @@ function updateInvDueDate(party) {
     dueDateEl.style.color = 'var(--accent)';
     dueDateEl.title = `${termName} — ${term.days} days from invoice date`;
 }
-async function openInvoiceModal(type) {
+async function openInvoiceModal(type = 'sale') {
     invoiceItems = [];
+    ensureGeolocation();
     const ptype = type === 'sale' ? 'Customer' : 'Supplier';
     const [parties, inv, categories] = await Promise.all([
         DB.getAll('parties'),
@@ -5896,8 +5962,15 @@ function updateInvoiceTotal() {
     const sub      = invoiceItems.reduce((s, li) => s + li.amount, 0);
     const gst      = +(($('f-inv-gst')      || {}).value || 0);
     const roundoff = +(($('f-inv-roundoff') || {}).value || 0);
-    // Prices are GST-inclusive; total = subtotal + roundoff (no additional GST added)
-    const total    = sub + roundoff;
+    const discPct  = +(($('f-inv-disc-pct') || {}).value || 0);
+    const discAmt  = +(($('f-inv-disc-amt') || {}).value || 0);
+    
+    // Prices are GST-inclusive; total = subtotal + roundoff - global discounts
+    let total = sub + roundoff;
+    if (discPct > 0) total -= (sub * discPct / 100);
+    if (discAmt > 0) total -= discAmt;
+    total = Math.max(0, total);
+
     const el = $('inv-total-display'); if (!el) return;
 
     // Build GST breakdown from per-item rates first, then fall back to global rate
@@ -5965,9 +6038,17 @@ async function saveInvoice() {
         const sub2 = invoiceItems.reduce((s, li) => s + li.amount, 0);
         const gst2 = +($('f-inv-gst').value || 0);
         const ro2  = +(($('f-inv-roundoff')||{}).value || 0);
-        const invoiceTotal = sub2 + (sub2 * gst2 / 100) + ro2;
+        const discPct = +(($('f-inv-disc-pct') || {}).value || 0);
+        const discAmt = +(($('f-inv-disc-amt') || {}).value || 0);
+        
+        // Prices are GST-inclusive
+        let invoiceTotal = sub2 + ro2;
+        if (discPct > 0) invoiceTotal -= (sub2 * discPct / 100);
+        if (discAmt > 0) invoiceTotal -= discAmt;
+        invoiceTotal = Math.max(0, invoiceTotal);
+
         if (((invParty.balance || 0) + invoiceTotal) > invParty.creditLimit) {
-            if (!confirm(`⚠️ Credit limit exceeded!\nCredit Limit: ${currency(invParty.creditLimit)}\nCurrent Balance: ${currency(invParty.balance || 0)}\nThis Invoice: ${currency(invoiceTotal)}\n\nProceed anyway?`)) return;
+            if (!confirm(`⚠️ Credit limit exceeded!\nCredit Limit: ${currency(invParty.creditLimit)}\nCurrent Balance: ${currency(invParty.balance || 0)}\nThis Invoice: ${currency(invoiceTotal)}\n\nProceed anyway?`)) { endSave(); return; }
         }
     }
 
@@ -5979,12 +6060,24 @@ async function saveInvoice() {
     const gst  = +($('f-inv-gst').value || 0);
     const type = $('f-inv-type').value;
     let roundoff = +(($('f-inv-roundoff')||{}).value || 0);
+    const discPctGlobal = +(($('f-inv-disc-pct') || {}).value || 0);
+    const discAmtGlobal = +(($('f-inv-disc-amt') || {}).value || 0);
+
     if (type === 'sale' && roundoff === 0) {
-        roundoff = +(Math.round(sub) - sub).toFixed(2);
+        let tempTotal = sub;
+        if (discPctGlobal > 0) tempTotal -= (sub * discPctGlobal / 100);
+        if (discAmtGlobal > 0) tempTotal -= discAmtGlobal;
+        tempTotal = Math.max(0, tempTotal);
+        roundoff = +(Math.round(tempTotal) - tempTotal).toFixed(2);
+        
         const roEl = $('f-inv-roundoff'); if (roEl) roEl.value = roundoff;
         updateInvoiceTotal();
     }
-    const total = sub + roundoff;
+    
+    let total = sub + roundoff;
+    if (discPctGlobal > 0) total -= (sub * discPctGlobal / 100);
+    if (discAmtGlobal > 0) total -= discAmtGlobal;
+    total = Math.max(0, total);
     const vyaparInvNo = type === 'sale' ? ($('f-vyapar-inv-no') ? $('f-vyapar-inv-no').value.trim() : '') : '';
     if (type === 'sale' && !vyaparInvNo) return alert('Vyapar Invoice No. is mandatory for sale invoices.');
 
@@ -6088,6 +6181,8 @@ async function saveInvoice() {
             invoiceNo: invNo, date: $('f-inv-date').value, dueDate: dueDateVal || null,
             type, partyId, partyName, items: [...invoiceItems],
             subtotal: sub, gst, roundOff: roundoff, total,
+            discountPct: discPctGlobal,
+            discountAmt: discAmtGlobal,
             status: fromOrderId ? 'from-packing' : 'created',
             createdBy: currentUser.name,
             ...(vyaparInvNo ? { vyaparInvoiceNo: vyaparInvNo } : {}),
@@ -6564,7 +6659,16 @@ function printPaymentReceipt() {
 }
 
 function _initPayPartyDropdown(parties, filterType) {
-    const filtered = filterType ? parties.filter(p => p.type === filterType) : parties;
+    let filtered = filterType ? parties.filter(p => p.type === filterType) : parties;
+    
+    if (window.userCoords) {
+        filtered = [...filtered].sort((a,b) => {
+            const distA = calculateDistance(window.userCoords.latitude, window.userCoords.longitude, a.lat||0, a.lng||0);
+            const distB = calculateDistance(window.userCoords.latitude, window.userCoords.longitude, b.lat||0, b.lng||0);
+            if (distA === Infinity && distB === Infinity) return 0;
+            return distA - distB;
+        });
+    }
     
     // For payments, we MUST allow blocked parties so they can clear dues.
     // We cannot use the default buildPartySearchList because it hides blocked parties.
@@ -6611,6 +6715,7 @@ function _initPayPartyDropdown(parties, filterType) {
     }
 }
 async function openPaymentModal(prefillPartyId) {
+    ensureGeolocation();
     // Hide FAB — full-page form has its own footer buttons
     const fab = $('app-fab');
     if (fab) fab.classList.add('hidden');
@@ -6985,18 +7090,19 @@ window.updatePaymentQR = function () {
     });
     const tn = invNotes.length ? invNotes.join(',') : '';
     const partyName = ($('f-pay-party') || {}).value?.trim() || '';
+    const userName = currentUser?.name || '';
 
     if (mode === 'UPI' && amount > 0 && co.upi) {
         box.style.display = 'block';
         let upiString = `upi://pay?pa=${co.upi}&pn=${encodeURIComponent(co.name || 'Company')}&am=${amount}&cu=INR`;
         const noteParts = [];
-        if (partyName) noteParts.push(partyName);
+        if (partyName) noteParts.push(partyName + (userName ? ' - ' + userName : ''));
         if (tn) noteParts.push('Inv:' + tn);
         if (noteParts.length) upiString += `&tn=${encodeURIComponent(noteParts.join(' | '))}`;
         const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(upiString)}`;
         const noteDisplay = [];
         if (tn) noteDisplay.push('<span style="color:var(--accent)">Invoice: ' + tn + '</span>');
-        if (partyName) noteDisplay.push('<span style="color:var(--text-primary);font-weight:600">' + partyName + '</span>');
+        if (partyName) noteDisplay.push('<span style="color:var(--text-primary);font-weight:600">' + partyName + (userName ? ' - ' + userName : '') + '</span>');
         box.innerHTML = `<img src="${qrUrl}" alt="Scan to pay via UPI" style="display:block;margin:0 auto;border:1px solid var(--border);border-radius:8px;padding:8px;background:#fff;max-width:180px;width:180px;">
         <div style="font-size:0.8rem;color:var(--text-secondary);margin-top:4px;text-align:center;">Scan with any UPI App${noteDisplay.length ? '<br>' + noteDisplay.join('<br>') : ''}</div>`;
     } else {
@@ -8593,6 +8699,18 @@ async function generateInvoiceFromPacked(orderId) {
                 </div>
             </div>
             <div id="inv-total-display" style="text-align:right;font-size:1rem;color:var(--text-secondary);font-weight:600;margin-top:4px">Total: ₹0.00</div>
+            
+            <div style="display:flex; justify-content:flex-end; gap:12px; align-items:flex-end; margin-top:8px; flex-wrap:wrap">
+                <div class="form-group" style="width:90px; margin-bottom:0">
+                    <label style="font-size:0.65rem">Disc %</label>
+                    <input type="number" id="f-inv-disc-pct" value="0" min="0" max="100" step="0.01" oninput="updateInvoiceTotal()">
+                </div>
+                <div class="form-group" style="width:90px; margin-bottom:0">
+                    <label style="font-size:0.65rem">Disc ₹</label>
+                    <input type="number" id="f-inv-disc-amt" value="0" min="0" step="0.01" oninput="updateInvoiceTotal()">
+                </div>
+            </div>
+            
             <div id="inv-advance-section" style="margin-top:10px"></div>
             <div class="modal-actions">
                 <button class="btn btn-outline" onclick="closeModal()">Cancel</button>

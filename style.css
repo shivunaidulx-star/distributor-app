@@ -557,33 +557,28 @@ table { border-collapse: collapse; width: 100%; }
 }
 
 .stat-card .stat-icon {
-    font-size: 1.3rem;
-    width: 38px;
-    height: 38px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(255, 255, 255, 0.07);
-    border-radius: 10px;
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    flex-shrink: 0;
+    display: none !important;
 }
 
 .stat-card .stat-value {
-    font-size: 1.3rem;
+    font-size: 1.05rem;
     font-weight: 800;
     letter-spacing: -0.5px;
     margin-bottom: 0;
     line-height: 1;
+    white-space: nowrap;
 }
 
 .stat-card .stat-label {
-    font-size: 0.68rem;
+    font-size: 0.58rem;
     color: var(--text-secondary);
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.2px;
     font-weight: 600;
     line-height: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 /* ============================================
@@ -2014,9 +2009,13 @@ body {
     background: rgba(0,0,0,0.35);
     z-index: 1100;
     backdrop-filter: blur(2px);
-    transition: opacity 0.25s;
+    transition: opacity 0.25s, visibility 0.25s;
 }
-.more-sheet-overlay.hidden { display: none; }
+.more-sheet-overlay.hidden { 
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+}
 .more-sheet {
     position: fixed;
     bottom: 0; left: 0; right: 0;
@@ -2536,30 +2535,28 @@ body {
     }
     
     .stat-card {
-        padding: 10px 12px;
+        padding: 8px 12px;
         display: flex;
         flex-direction: row;
         align-items: center;
-        gap: 10px;
+        gap: 8px;
     }
     
     .stat-card .stat-icon {
-        font-size: 1.2rem;
-        margin-bottom: 0;
-        width: 32px;
-        height: 32px;
-        flex-shrink: 0;
+        display: none;
     }
     
     .stat-card .stat-value {
-        font-size: 1.1rem;
+        font-size: 0.95rem;
         margin-bottom: 0;
         line-height: 1;
+        white-space: nowrap;
     }
     
     .stat-card .stat-label {
-        font-size: 0.62rem;
+        font-size: 0.55rem;
         line-height: 1;
+        white-space: nowrap;
     }
 }
 
