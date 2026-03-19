@@ -1109,6 +1109,10 @@ async function navigateTo(page) {
     if (renderers[page]) {
         await renderers[page]();
     }
+    // Auto-sync Catalog in background
+    if (page === 'catalog') {
+        syncCatalogData(true); // silent=true
+    }
     // Update user location on specific pages
     if (['catalog', 'salesorders', 'payments', 'parties'].includes(page)) {
         updateUserLocation();
@@ -12178,8 +12182,18 @@ async function importUomExcel(e) {
 //  ITEM CATALOG (Visual product grid for Sales Orders)
 // =============================================
 let catalogCart = [];
+let _catalogAutoSyncInterval = null;
 
 async function renderCatalog() {
+    // Setup background interval if not already running
+    if (!_catalogAutoSyncInterval) {
+        _catalogAutoSyncInterval = setInterval(() => {
+            if (currentPage === 'catalog') {
+                console.log('Catalog: Auto-syncing stock...');
+                syncCatalogData(true); // silent
+            }
+        }, 60 * 1000);
+    }
     const [allItems, categories] = await Promise.all([
         DB.getAll('inventory'),
         DB.getAll('categories')
@@ -12219,15 +12233,15 @@ async function renderCatalog() {
         ${catalogCart.length ? renderCatalogCartBar() : ''}`;
 }
 
-async function syncCatalogData() {
-    showToast('Syncing latest stock...', 'info');
+async function syncCatalogData(silent = false) {
+    if (!silent) showToast('Syncing latest stock...', 'info');
     await Promise.all([
         DB.getAll('inventory'),
         DB.getAll('salesorders'),
         DB.getAll('parties')
     ]);
-    renderCatalog();
-    showToast('Stock sync complete!', 'success');
+    if (currentPage === 'catalog') renderCatalog();
+    if (!silent) showToast('Stock sync complete!', 'success');
 }
 
 async function renderCatalogCards(items) {
