@@ -4398,7 +4398,7 @@ function renderSOLines() {
         return `<div style="display:flex;align-items:center;gap:6px;padding:6px 0;border-bottom:1px solid var(--border);${alertStyle};min-width:600px">
             <span style="width:20px;text-align:center;font-size:0.75rem;color:var(--text-muted)">${i + 1}</span>
             <div style="flex:1;min-width:0">
-                <div style="font-size:0.8rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600">${li.name}</div>
+                <div style="font-size:0.8rem;font-weight:600;word-break:break-word">${li.name}</div>
                 ${li._priceAlert ? `<div style="font-size:0.6rem;color:var(--danger);font-weight:700">⚠️ < ${currency(li.purchasePrice)}</div>` : ''}
             </div>
             <input type="number" value="${li.qty}" min="1" style="width:45px;padding:4px 2px;border-radius:4px;border:1px solid var(--border);text-align:center;font-size:0.75rem" onchange="updateSOLine(${i},'qty',this.value)">
@@ -5750,7 +5750,7 @@ function renderInvoiceLines() {
             <div style="display:flex;align-items:center;gap:6px;min-width:600px">
                 <span style="width:20px;text-align:center;font-size:0.75rem;color:var(--text-muted)">${i+1}</span>
                 <div style="flex:1;min-width:0">
-                    <div style="font-size:0.8rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${li.name}</div>
+                    <div style="font-size:0.8rem;font-weight:600;word-break:break-word">${li.name}</div>
                     ${li._priceAlert ? `<div style="font-size:0.6rem;color:var(--danger);font-weight:700">⚠️ < ${currency(li.purchasePrice)}</div>` : ''}
                 </div>
                 <input type="number" value="${li.qty}" min="0.001" step="any" style="width:45px;padding:4px 2px;border-radius:4px;border:1px solid var(--border);text-align:center;font-size:0.75rem" onchange="updateInvoiceLine(${i},'qty',this.value)">
