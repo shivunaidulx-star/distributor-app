@@ -809,6 +809,10 @@ function logout() {
 function buildSidebar() {
     const pages = getUserPages(currentUser);
     document.querySelectorAll('.sidebar-nav .nav-item').forEach(el => {
+        if (el.id === 'btn-logout') {
+            el.style.display = 'flex'; // Always show Logout
+            return;
+        }
         el.style.display = pages.includes(el.dataset.page) ? 'flex' : 'none';
     });
     const divider = document.querySelector('.nav-divider');
@@ -878,6 +882,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         
         $('btn-login').addEventListener('click', login);
         $('login-pin').addEventListener('keypress', e => { if (e.key === 'Enter') login(); });
+        
+        // Link Logout button
+        const logoutBtn = $('btn-logout');
+        if (logoutBtn) logoutBtn.addEventListener('click', (e) => { e.preventDefault(); logout(); });
         $('btn-logout').addEventListener('click', logout);
         $('sidebar-close').addEventListener('click', () => sidebar.classList.remove('open'));
         $('sidebar-toggle').addEventListener('click', () => sidebar.classList.toggle('open'));
@@ -6760,9 +6768,12 @@ window.onPayAmountChange = function() {
     document.querySelectorAll('.f-pay-row-amount').forEach(inp => totalReceived += (+inp.value || 0));
     const disc = +($('f-pay-discount')?.value) || 0;
     const totalReduction = totalReceived + disc;
-    
+
     if ($('pay-total-received-display')) $('pay-total-received-display').textContent = currency(totalReceived);
     if ($('pay-total-display')) $('pay-total-display').textContent = currency(totalReduction);
+
+    autoAllocPayment();
+    updatePaymentQR();
 
     const partyId = ($('f-pay-party-id') || {}).value || '';
     if (partyId) updatePaymentInvoicesAllocation(totalReduction);
@@ -6888,20 +6899,12 @@ async function onPayPartyChange() {
     autoAllocPayment();
 }
 
-window.onPayAmountChange = function () {
-    const amt = +($('f-pay-amount')?.value) || 0;
-    const disc = +($('f-pay-discount')?.value) || 0;
-    const total = amt + disc;
-    const el = $('pay-total-display');
-    if (el) el.textContent = currency(total);
-
-    autoAllocPayment();
-    if (typeof updatePaymentQR === 'function') updatePaymentQR();
-};
+// onPayAmountChange is defined above with multi-mode support
 
 // FIFO allocation across checked invoices only
 window.autoAllocPayment = function () {
-    const amt = +($('f-pay-amount')?.value) || 0;
+    let amt = 0;
+    document.querySelectorAll('.f-pay-row-amount').forEach(inp => amt += (+inp.value || 0));
     const disc = +($('f-pay-discount')?.value) || 0;
     let remaining = amt + disc;
 
@@ -6937,7 +6940,9 @@ window.togglePayAllocInv = function () {
 window.updatePayAllocSummary = function () {
     let allocated = 0;
     document.querySelectorAll('.pay-alloc-input').forEach(inp => allocated += (+inp.value || 0));
-    const amt = +($('f-pay-amount')?.value) || 0;
+    let amt = 0;
+    document.querySelectorAll('.f-pay-row-amount').forEach(inp => amt += (+inp.value || 0));
+    if (!amt) amt = +($('f-pay-amount')?.value) || 0; // fallback for modal context
     const disc = +($('f-pay-discount')?.value) || 0;
     const totalReduction = amt + disc;
     const unused = +(totalReduction - allocated).toFixed(2);
@@ -6955,8 +6960,19 @@ window.updatePayAllocSummary = function () {
 window.updatePaymentQR = function () {
     const box = $('pay-qr-box');
     if (!box) return;
-    const mode = $('f-pay-mode').value;
-    const amount = +$('f-pay-amount').value || 0;
+    // With multi-mode rows, UPI QR shows if any row has UPI selected
+    const modeSelects = [...document.querySelectorAll('.f-pay-row-mode')];
+    const upiRow = modeSelects.find(s => s.value === 'UPI');
+    const mode = upiRow ? 'UPI' : (modeSelects[0]?.value || '');
+    // Sum the UPI row's amount specifically, or total if single mode
+    let amount = 0;
+    if (upiRow) {
+        const row = upiRow.closest('.pay-mode-row');
+        const amtInp = row ? row.querySelector('.f-pay-row-amount') : null;
+        amount = amtInp ? (+amtInp.value || 0) : 0;
+    } else {
+        document.querySelectorAll('.f-pay-row-amount').forEach(inp => amount += (+inp.value || 0));
+    }
     // Always read directly from localStorage to get the freshest UPI setting
     const co = DB.ls.getObj('db_company') || {};
 
@@ -6986,10 +7002,10 @@ window.updatePaymentQR = function () {
 
 window.onPayModeChange = function () {
     updatePaymentQR();
-    const mode = $('f-pay-mode').value;
+    const modes = [...document.querySelectorAll('.f-pay-row-mode')].map(s => s.value);
     const chequeFields = $('pay-cheque-fields');
     if (chequeFields) {
-        chequeFields.style.display = (mode === 'Cheque') ? 'block' : 'none';
+        chequeFields.style.display = modes.includes('Cheque') ? 'block' : 'none';
     }
 }
 
