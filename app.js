@@ -2235,10 +2235,10 @@ async function deleteParty(id) {
 
 // --- Party Excel Import ---
 function downloadPartyTemplate() {
-    let csv = 'Name *,Type (Customer/Supplier) *,Phone,GSTIN,Address,City,Post Code,Location Lat,Location Lng,Opening Balance,Credit Limit,Payment Terms (COD/Net7/Net15/Net30/Net60),Blocked (true/false)\n';
-    csv += 'Acme Corp,Customer,9988776655,27AADCA2230M1Z2,123 Main St,Mumbai,400001,19.0760,72.8777,1000,50000,Net30,false\n';
-    csv += 'Global Supplies,Supplier,9876543210,,45 Park Ave,Delhi,110001,,0,0,COD,false\n';
-    csv += 'Raj Traders,Customer,9876500001,29ABCDE1234F1Z5,MG Road,Bangalore,560001,12.9716,77.5946,500,20000,Net15,false\n';
+    let csv = 'Party Code *,Name *,Type (Customer/Supplier) *,Phone,GSTIN,Address,City,Post Code,Location Lat,Location Lng,Opening Balance,Credit Limit,Payment Terms (COD/Net7/Net15/Net30/Net60),Blocked (true/false)\n';
+    csv += 'ACME,Acme Corp,Customer,9988776655,27AADCA2230M1Z2,123 Main St,Mumbai,400001,19.0760,72.8777,1000,50000,Net30,false\n';
+    csv += 'GLOB,Global Supplies,Supplier,9876543210,,45 Park Ave,Delhi,110001,,0,0,COD,false\n';
+    csv += 'RAJE,Raj Traders,Customer,9876500001,29ABCDE1234F1Z5,MG Road,Bangalore,560001,12.9716,77.5946,500,20000,Net15,false\n';
     downloadCSV(csv, 'party_import_template.csv');
     showToast('Party template downloaded!', 'success');
 }
@@ -2411,8 +2411,8 @@ function processPartyImport(event) {
             const cols = parseCSVLine(lines[i]);
             if (cols.length < 2) { errors.push(`Row ${i + 1}: Not enough columns`); continue; }
             // Expected Order (matching template):
-            // 0:Name, 1:Type, 2:Phone, 3:GSTIN, 4:Address, 5:City, 6:PostCode, 7:Lat, 8:Lng, 9:OpeningBal, 10:CreditLimit, 11:PayTerms, 12:Blocked
-            const [name, typeStr, phone, gstin, address, city, postCode, lat, lng, balStr] = cols.map(c => (c || '').trim());
+            // 0:PartyCode, 1:Name, 2:Type, 3:Phone, 4:GSTIN, 5:Address, 6:City, 7:PostCode, 8:Lat, 9:Lng, 10:OpeningBal, 11:CreditLimit, 12:PayTerms, 13:Blocked
+            const [partyCode, name, typeStr, phone, gstin, address, city, postCode, lat, lng, balStr] = cols.map(c => (c || '').trim());
             if (!name) { errors.push(`Row ${i + 1}: Name is empty`); continue; }
             const existingParty = parties.find(p => p.name.toLowerCase() === name.toLowerCase());
             if (pendingPartyImports.some(p => p.name.toLowerCase() === name.toLowerCase())) {
@@ -2421,7 +2421,7 @@ function processPartyImport(event) {
             const partyType = typeStr.toLowerCase().includes('supp') ? 'Supplier' : 'Customer';
             const balance = +(balStr || 0);
             const entry = {
-                name, type: partyType,
+                name, partyCode: partyCode || null, type: partyType,
                 phone: phone || '', city: city || '', gstin: gstin || '', address: address || '',
                 postCode: postCode || '',
                 lat: lat ? +lat : null,
@@ -2467,8 +2467,9 @@ function showPartyImportPreview(errors) {
 
     if (pendingPartyImports.length) {
         html += `<div style="max-height:350px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius-sm)">
-            <table class="data-table" style="font-size:0.85rem"><thead><tr><th>Name</th><th>Type</th><th>Phone</th><th>City</th><th>GSTIN</th><th>Address</th><th>Status</th><th></th></tr></thead>
+            <table class="data-table" style="font-size:0.85rem"><thead><tr><th>Code</th><th>Name</th><th>Type</th><th>Phone</th><th>City</th><th>GSTIN</th><th>Address</th><th>Status</th><th></th></tr></thead>
             <tbody>${pendingPartyImports.map((p, idx) => `<tr id="pi-row-${idx}">
+                <td><input value="${p.partyCode||''}" onchange="pendingPartyImports[${idx}].partyCode=this.value.toUpperCase()" style="width:70px;background:var(--bg-input);border:1px solid var(--border);border-radius:4px;padding:4px 6px;color:var(--text-primary);font-size:0.82rem;font-family:monospace"></td>
                 <td><input value="${p.name}" onchange="pendingPartyImports[${idx}].name=this.value" style="width:100%;background:var(--bg-input);border:1px solid var(--border);border-radius:4px;padding:4px 6px;color:var(--text-primary);font-size:0.85rem"></td>
                 <td><select onchange="pendingPartyImports[${idx}].type=this.value" style="background:var(--bg-input);border:1px solid var(--border);border-radius:4px;padding:4px;color:var(--text-primary);font-size:0.85rem">
                     <option value="Customer" ${p.type === 'Customer' ? 'selected' : ''}>Customer</option>
@@ -3608,9 +3609,9 @@ async function exportInventoryExcel() {
 async function exportPartiesExcel() {
     const parties = await DB.getAll('parties');
     if (!parties.length) return alert('No parties to export');
-    let csv = 'Name,Type,Phone,GSTIN,Address,City,Post Code,Location Lat,Location Lng,Balance,Credit Limit,Payment Terms,Blocked\n';
+    let csv = 'Party Code,Name,Type,Phone,GSTIN,Address,City,Post Code,Location Lat,Location Lng,Balance,Credit Limit,Payment Terms,Blocked\n';
     parties.forEach(p => {
-        csv += `"${p.name}","${p.type}","${p.phone || ''}","${p.gstin || ''}","${p.address || ''}","${p.city || ''}","${p.postCode || ''}",${p.lat || ''},${p.lng || ''},${p.balance || 0},${p.creditLimit || 0},"${p.paymentTerms || ''}",${p.blocked || false}\n`;
+        csv += `"${p.partyCode || ''}","${p.name}","${p.type}","${p.phone || ''}","${p.gstin || ''}","${p.address || ''}","${p.city || ''}","${p.postCode || ''}",${p.lat || ''},${p.lng || ''},${p.balance || 0},${p.creditLimit || 0},"${p.paymentTerms || ''}",${p.blocked || false}\n`;
     });
     downloadCSV(csv, 'parties_' + today() + '.csv');
 }

@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS parties (
     lng NUMERIC,
     balance NUMERIC DEFAULT 0,
     credit_limit NUMERIC DEFAULT 0,
-    blocked BOOLEAN DEFAULT false
+    blocked BOOLEAN DEFAULT false,
+    party_code TEXT
 );
 ALTER TABLE parties ADD COLUMN IF NOT EXISTS gstin TEXT;
 ALTER TABLE parties ADD COLUMN IF NOT EXISTS address TEXT;
@@ -43,6 +44,7 @@ ALTER TABLE parties ADD COLUMN IF NOT EXISTS credit_limit NUMERIC DEFAULT 0;
 ALTER TABLE parties ADD COLUMN IF NOT EXISTS blocked BOOLEAN DEFAULT false;
 ALTER TABLE parties ADD COLUMN IF NOT EXISTS post_code TEXT;
 ALTER TABLE parties ADD COLUMN IF NOT EXISTS payment_terms TEXT;
+ALTER TABLE parties ADD COLUMN IF NOT EXISTS party_code TEXT;
 
 -- ─────────────────────────────────────────────
 -- 3. INVENTORY
