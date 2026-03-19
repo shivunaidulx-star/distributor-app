@@ -1341,7 +1341,10 @@ function buildMoreSheet() {
     grid.innerHTML = moreItems.map(it => `<button class="more-sheet-item" onclick="navigateTo('${it.page}')">
             <span class="more-sheet-icon">${it.icon}</span>
             <span class="more-sheet-label">${it.label}</span>
-        </button>`).join('');
+        </button>`).join('') + `<button class="more-sheet-item" onclick="logout()" style="border-top:1px solid var(--border)">
+            <span class="more-sheet-icon">🚪</span>
+            <span class="more-sheet-label" style="color:var(--danger)">Logout</span>
+        </button>`;
     // Hide "More" btn if nothing to show
     const moreBtn = $('bn-more-btn');
     if (moreBtn) moreBtn.style.display = moreItems.length ? '' : 'none';
