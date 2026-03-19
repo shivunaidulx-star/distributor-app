@@ -7085,6 +7085,9 @@ async function savePayment() {
                 mode: row.mode
             };
             await DB.insert('payments', payData);
+            
+            // Record each mode in ledger
+            await addPartyLedgerEntry(payPartyId, payPartyName, payType === 'in' ? 'Payment In' : 'Payment Out', row.amount * (payType === 'in' ? -1 : 1), payRefNo, row.mode, invNo);
         }
         incrementPayNo();
 
@@ -7108,7 +7111,6 @@ async function savePayment() {
             const balChange = payType === 'in' ? -totalReduction : totalReduction;
             const newBal = (party.balance || 0) + balChange;
             await DB.update('parties', party.id, { balance: newBal });
-            await addPartyLedgerEntry(party.id, party.name, payType === 'in' ? 'Payment In' : 'Payment Out', balChange, payRefNo, mode);
         }
 
         const andNew = window._saveAndNew; window._saveAndNew = false;

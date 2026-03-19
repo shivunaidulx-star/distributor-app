@@ -160,7 +160,7 @@
                     <span class="nav-icon">⚙️</span><span class="nav-label">Company Setup</span>
                 </a>
                 <div class="nav-divider"></div>
-                <a href="#" class="nav-item" id="btn-logout" style="color:var(--danger)">
+                <a href="#" class="nav-item" onclick="logout()" style="color:var(--danger)">
                     <span class="nav-icon">🚪</span><span class="nav-label">Logout</span>
                 </a>
             </nav>
@@ -234,7 +234,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" defer></script>
-    <script src="app.js?v=72"></script>
+    <script src="app.js?v=73"></script>
     <script>
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
