@@ -4268,11 +4268,11 @@ async function openSalesOrderModal() {
         <div style="display:flex; justify-content:flex-end; gap:15px; align-items:flex-end; margin-top:10px; flex-wrap:wrap">
             <div class="form-group" style="width:100px; margin-bottom:0">
                 <label style="font-size:0.7rem">Discount %</label>
-                <input type="number" id="f-so-disc-pct" value="0" min="0" max="100" step="0.01" oninput="updateSoTotal()">
+                <input type="number" id="f-so-disc-pct" value="0" min="0" max="100" step="0.01" oninput="onSoDiscPctChange()">
             </div>
             <div class="form-group" style="width:100px; margin-bottom:0">
                 <label style="font-size:0.7rem">Discount ₹</label>
-                <input type="number" id="f-so-disc-amt" value="0" min="0" step="0.01" oninput="updateSoTotal()">
+                <input type="number" id="f-so-disc-amt" value="0" min="0" step="0.01" oninput="onSoDiscAmtChange()">
             </div>
             <div style="text-align:right; font-size:1.15rem; font-weight:800; color:var(--accent)" id="so-total-display">Total: ₹0.00</div>
         </div>
@@ -4604,16 +4604,33 @@ function updateSOLine(idx, field, value) {
     renderSOLines();
 }
 
+function onSoDiscPctChange() {
+    const subtotal = soItems.reduce((s, l) => s + l.amount, 0);
+    const pct = +($('f-so-disc-pct')?.value || 0);
+    const amtEl = $('f-so-disc-amt');
+    if (amtEl) {
+        if (pct === 0) amtEl.value = '0';
+        else amtEl.value = (subtotal * pct / 100).toFixed(2);
+    }
+    window.updateSoTotal();
+}
+function onSoDiscAmtChange() {
+    const subtotal = soItems.reduce((s, l) => s + l.amount, 0);
+    const amt = +($('f-so-disc-amt')?.value || 0);
+    const pctEl = $('f-so-disc-pct');
+    if (pctEl) {
+        if (subtotal > 0 && amt > 0) pctEl.value = ((amt / subtotal) * 100).toFixed(2);
+        else pctEl.value = '0';
+    }
+    window.updateSoTotal();
+}
 window.updateSoTotal = function() {
     const subtotal = soItems.reduce((s, l) => s + l.amount, 0);
-    const discPct = +($('f-so-disc-pct')?.value || 0);
     const discAmt = +($('f-so-disc-amt')?.value || 0);
     
-    let finalTotal = subtotal;
-    let totalDiscount = 0;
-    if (discPct > 0) totalDiscount += (subtotal * discPct / 100);
-    if (discAmt > 0) totalDiscount += discAmt;
-    finalTotal -= totalDiscount;
+    // UI sync ensures discAmt exactly reflects discPct, so we never double-deduct
+    const totalDiscount = discAmt;
+    let finalTotal = subtotal - totalDiscount;
     
     const el = $('so-total-display');
     if (el) {
@@ -4630,7 +4647,7 @@ window.updateSoTotal = function() {
 function renderSOLines() {
     const el = $('so-lines-list'); if (!el) return;
     
-    const header = `<div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:2px solid var(--border);font-size:0.7rem;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px;min-width:600px">
+    const header = `<div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:2px solid var(--border);font-size:0.7rem;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px;width:100%">
         <span style="width:20px;text-align:center">#</span>
         <span style="flex:1">Item</span>
         <span style="width:45px;text-align:center">Qty</span>
@@ -4646,10 +4663,10 @@ function renderSOLines() {
         const edited = li.listedPrice !== undefined && Math.abs(li.price - li.listedPrice) > 0.01;
         const alertStyle = li._priceAlert ? 'background:rgba(239, 68, 68, 0.05); border-left:3px solid var(--danger); padding-left:5px' : (edited ? 'background:rgba(245,158,11,0.05); border-left:3px solid var(--warning); padding-left:5px' : '');
         
-        return `<div style="display:flex;align-items:center;gap:6px;padding:6px 0;border-bottom:1px solid var(--border);${alertStyle};min-width:600px">
+        return `<div style="display:flex;align-items:center;gap:6px;padding:6px 0;border-bottom:1px solid var(--border);${alertStyle};width:100%">
             <span style="width:20px;text-align:center;font-size:0.75rem;color:var(--text-muted)">${i + 1}</span>
-            <div style="flex:1;min-width:0">
-                <div style="font-size:0.8rem;font-weight:600;word-break:break-word">${li.name}</div>
+            <div style="flex:1;min-width:140px;max-width:300px">
+                <div style="font-size:0.8rem;font-weight:600;white-space:normal;word-break:break-word;line-height:1.2">${li.name}</div>
                 ${li._priceAlert ? `<div style="font-size:0.6rem;color:var(--danger);font-weight:700">⚠️ < ${currency(li.purchasePrice)}</div>` : ''}
             </div>
             <input type="number" value="${li.qty}" min="1" style="width:45px;padding:4px 2px;border-radius:4px;border:1px solid var(--border);text-align:center;font-size:0.75rem" onchange="updateSOLine(${i},'qty',this.value)">
@@ -4701,7 +4718,7 @@ async function saveSalesOrder() {
     const discAmt = +($('f-so-disc-amt')?.value || 0);
     const subtotal = soItems.reduce((s, l) => s + l.amount, 0);
     let finalTotal = subtotal;
-    if (discPct > 0) finalTotal -= (subtotal * discPct / 100);
+    // Since disc-amt is automatically synced with disc-pct by the UI, we only deduct discAmt
     if (discAmt > 0) finalTotal -= discAmt;
     finalTotal = Math.max(0, finalTotal);
 
@@ -5644,11 +5661,11 @@ async function openInvoiceModal(type = 'sale') {
             </div>
             <div class="form-group" style="min-width:70px;margin-bottom:0;flex:1">
                 <label style="font-size:0.75rem">Disc %</label>
-                <input type="number" id="f-inv-disc-pct" value="0" min="0" max="100" step="0.1" onchange="updateInvoiceTotal()">
+                <input type="number" id="f-inv-disc-pct" value="0" min="0" max="100" step="0.1" oninput="onInvDiscPctChange()">
             </div>
             <div class="form-group" style="min-width:70px;margin-bottom:0;flex:1">
                 <label style="font-size:0.75rem">Disc ₹</label>
-                <input type="number" id="f-inv-disc-amt" value="0" min="0" step="0.01" placeholder="0.00" onchange="updateInvoiceTotal()">
+                <input type="number" id="f-inv-disc-amt" value="0" min="0" step="0.01" placeholder="0.00" oninput="onInvDiscAmtChange()">
             </div>
         </div>
         
@@ -5758,7 +5775,12 @@ async function loadAvailableAdvances(partyId) {
         html += `<tr>
             <td>${fmtDate(a.date)}</td>
             <td style="color:var(--success)">${currency(a.avail)}</td>
-            <td><input type="number" step="0.01" max="${a.avail.toFixed(2)}" class="form-control inv-apply-adv-input" data-pay="${a.id}" placeholder="0" style="padding:4px;width:100px" oninput="calcAppliedAdvance()"></td>
+            <td>
+                <div style="display:flex;align-items:center;gap:4px">
+                    <input type="checkbox" onchange="toggleAdvanceApply(this, '${a.id}', ${a.avail})" style="width:16px;height:16px;cursor:pointer" title="Auto-apply maximum">
+                    <input type="number" id="f-adv-amt-${a.id}" step="0.01" max="${a.avail.toFixed(2)}" class="form-control inv-apply-adv-input" data-pay="${a.id}" placeholder="0" style="padding:4px;width:90px" oninput="calcAppliedAdvance()">
+                </div>
+            </td>
         </tr>`;
     });
 
@@ -5774,6 +5796,36 @@ window.calcAppliedAdvance = function () {
     document.querySelectorAll('.inv-apply-adv-input').forEach(inp => tot += (+inp.value || 0));
     const lbl = document.getElementById('lbl-inv-total-adv');
     if (lbl) lbl.innerText = '₹' + tot.toFixed(2);
+};
+
+window.toggleAdvanceApply = function(chk, payId, maxAvail) {
+    const inp = document.getElementById('f-adv-amt-' + payId);
+    if (!inp) return;
+    
+    if (chk.checked) {
+        // Calculate how much we still need to pay off
+        const sub      = invoiceItems.reduce((s, li) => s + li.amount, 0);
+        const gst      = +(($('f-inv-gst')      || {}).value || 0);
+        const roundoff = +(($('f-inv-roundoff') || {}).value || 0);
+        const discAmt  = +(($('f-inv-disc-amt') || {}).value || 0);
+        let total = sub + roundoff - discAmt;
+        total = Math.max(0, total);
+        
+        // Find existing applied amounts EXCLUDING the current input
+        let alreadyApplied = 0;
+        document.querySelectorAll('.inv-apply-adv-input').forEach(el => {
+            if (el.id !== 'f-adv-amt-' + payId) alreadyApplied += (+el.value || 0);
+        });
+        
+        let need = total - alreadyApplied;
+        if (need < 0) need = 0;
+        
+        const applyAmt = Math.min(need, maxAvail);
+        inp.value = applyAmt > 0 ? applyAmt.toFixed(2) : '';
+    } else {
+        inp.value = '';
+    }
+    calcAppliedAdvance();
 };
 
 var _invItemDropdown = null;
@@ -6028,7 +6080,7 @@ function renderInvoiceLines() {
     const el = $('inv-lines-list'); if (!el) return;
     const invType = ($('f-inv-type')||{}).value;
 
-    const header = `<div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:2px solid var(--border);font-size:0.7rem;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px;min-width:600px">
+    const header = `<div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:2px solid var(--border);font-size:0.7rem;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px;width:100%">
         <span style="width:20px;text-align:center">#</span>
         <span style="flex:1">Item</span>
         <span style="width:45px;text-align:center">Qty</span>
@@ -6046,10 +6098,10 @@ function renderInvoiceLines() {
         const alertStyle = li._priceAlert ? 'background:rgba(239, 68, 68, 0.05); border-left:3px solid var(--danger); padding-left:5px' : (edited ? 'background:rgba(245,158,11,0.05); border-left:3px solid var(--warning); padding-left:5px' : '');
 
         return `<div style="padding:6px 0;border-bottom:1px solid var(--border);${alertStyle}">
-            <div style="display:flex;align-items:center;gap:6px;min-width:600px">
+            <div style="display:flex;align-items:center;gap:6px;width:100%">
                 <span style="width:20px;text-align:center;font-size:0.75rem;color:var(--text-muted)">${i+1}</span>
-                <div style="flex:1;min-width:0">
-                    <div style="font-size:0.8rem;font-weight:600;word-break:break-word">${li.name}</div>
+                <div style="flex:1;min-width:140px;max-width:300px">
+                    <div style="font-size:0.8rem;font-weight:600;white-space:normal;word-break:break-word;line-height:1.2">${li.name}</div>
                     ${li._priceAlert ? `<div style="font-size:0.6rem;color:var(--danger);font-weight:700">⚠️ < ${currency(li.purchasePrice)}</div>` : ''}
                 </div>
                 <input type="number" value="${li.qty}" min="0.001" step="any" style="width:45px;padding:4px 2px;border-radius:4px;border:1px solid var(--border);text-align:center;font-size:0.75rem" onchange="updateInvoiceLine(${i},'qty',this.value)">
@@ -6075,16 +6127,34 @@ function renderInvoiceLines() {
     }
     updateInvoiceTotal();
 }
+function onInvDiscPctChange() {
+    const sub = invoiceItems.reduce((s, li) => s + li.amount, 0);
+    const pct = +($('f-inv-disc-pct').value || 0);
+    const amtEl = $('f-inv-disc-amt');
+    if (amtEl) {
+        if (pct === 0) amtEl.value = '0';
+        else amtEl.value = (sub * pct / 100).toFixed(2);
+    }
+    updateInvoiceTotal();
+}
+function onInvDiscAmtChange() {
+    const sub = invoiceItems.reduce((s, li) => s + li.amount, 0);
+    const amt = +($('f-inv-disc-amt').value || 0);
+    const pctEl = $('f-inv-disc-pct');
+    if (pctEl) {
+        if (sub > 0 && amt > 0) pctEl.value = ((amt / sub) * 100).toFixed(2);
+        else pctEl.value = '0';
+    }
+    updateInvoiceTotal();
+}
 function updateInvoiceTotal() {
     const sub      = invoiceItems.reduce((s, li) => s + li.amount, 0);
     const gst      = +(($('f-inv-gst')      || {}).value || 0);
     const roundoff = +(($('f-inv-roundoff') || {}).value || 0);
-    const discPct  = +(($('f-inv-disc-pct') || {}).value || 0);
     const discAmt  = +(($('f-inv-disc-amt') || {}).value || 0);
     
-    let totalDiscount = 0;
-    if (discPct > 0) totalDiscount += (sub * discPct / 100);
-    if (discAmt > 0) totalDiscount += discAmt;
+    // UI sync ensures discAmt exactly reflects discPct, so we never double-deduct
+    const totalDiscount = discAmt;
 
     // Prices are GST-inclusive; total = subtotal + roundoff - global discounts
     let total = sub + roundoff - totalDiscount;
@@ -6159,13 +6229,10 @@ async function saveInvoice() {
         const sub2 = invoiceItems.reduce((s, li) => s + li.amount, 0);
         const gst2 = +($('f-inv-gst').value || 0);
         const ro2  = +(($('f-inv-roundoff')||{}).value || 0);
-        const discPct = +(($('f-inv-disc-pct') || {}).value || 0);
         const discAmt = +(($('f-inv-disc-amt') || {}).value || 0);
         
-        // Prices are GST-inclusive
-        let invoiceTotal = sub2 + ro2;
-        if (discPct > 0) invoiceTotal -= (sub2 * discPct / 100);
-        if (discAmt > 0) invoiceTotal -= discAmt;
+        // Prices are GST-inclusive. UI sync treats discAmt as the single source of truth.
+        let invoiceTotal = sub2 + ro2 - discAmt;
         invoiceTotal = Math.max(0, invoiceTotal);
 
         if (((invParty.balance || 0) + invoiceTotal) > invParty.creditLimit) {
@@ -6181,13 +6248,10 @@ async function saveInvoice() {
     const gst  = +($('f-inv-gst').value || 0);
     const type = $('f-inv-type').value;
     let roundoff = +(($('f-inv-roundoff')||{}).value || 0);
-    const discPctGlobal = +(($('f-inv-disc-pct') || {}).value || 0);
     const discAmtGlobal = +(($('f-inv-disc-amt') || {}).value || 0);
 
     if (type === 'sale' && roundoff === 0) {
-        let tempTotal = sub;
-        if (discPctGlobal > 0) tempTotal -= (sub * discPctGlobal / 100);
-        if (discAmtGlobal > 0) tempTotal -= discAmtGlobal;
+        let tempTotal = sub - discAmtGlobal;
         tempTotal = Math.max(0, tempTotal);
         roundoff = +(Math.round(tempTotal) - tempTotal).toFixed(2);
         
@@ -6195,9 +6259,7 @@ async function saveInvoice() {
         updateInvoiceTotal();
     }
     
-    let total = sub + roundoff;
-    if (discPctGlobal > 0) total -= (sub * discPctGlobal / 100);
-    if (discAmtGlobal > 0) total -= discAmtGlobal;
+    let total = sub + roundoff - discAmtGlobal;
     total = Math.max(0, total);
     const vyaparInvNo = type === 'sale' ? ($('f-vyapar-inv-no') ? $('f-vyapar-inv-no').value.trim() : '') : '';
     if (type === 'sale' && !vyaparInvNo) return alert('Vyapar Invoice No. is mandatory for sale invoices.');
