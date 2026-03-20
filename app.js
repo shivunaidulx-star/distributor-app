@@ -800,7 +800,7 @@ async function doLoginSuccess(user, isRestore = false) {
     appEl.classList.remove('hidden');
     $('sidebar-username').textContent = user.name;
     const displayRoles = Array.isArray(user.roles) && user.roles.length ? user.roles.join(' | ') : (user.role || '');
-    $('sidebar-role').textContent = displayRoles + ' (v92)';
+    $('sidebar-role').textContent = displayRoles + ' (v93)';
     $('sidebar-avatar').textContent = user.name.charAt(0).toUpperCase();
 
     const co = DB.ls.getObj('db_company');
@@ -4837,7 +4837,7 @@ async function saveSalesOrder(id) {
     const dateVal = $('f-so-date').value;
 
     // 2. Back-date Restriction: Only Admin can post to a date before today
-    if (currentUser.role !== 'Admin' && !DB.canPostBackDate(dateVal)) {
+    if (!DB.canPostBackDate(dateVal)) {
         endSave();
         return alert("Access Denied: Only Admin can post records for a past date.");
     }
@@ -6373,7 +6373,7 @@ async function saveInvoice(id) {
     }
     if (!beginSave()) return;
     const dateVal = $('f-inv-date').value;
-    if (currentUser.role !== 'Admin' && !DB.canPostBackDate(dateVal)) {
+    if (!DB.canPostBackDate(dateVal)) {
         endSave();
         return alert("Access Denied: Only Admin can post invoices for a past date.");
     }
@@ -7496,7 +7496,7 @@ async function savePayment(id) {
     }
     if (!beginSave()) return;
     const dateVal = $('f-pay-date').value;
-    if (currentUser.role !== 'Admin' && !DB.canPostBackDate(dateVal)) {
+    if (!DB.canPostBackDate(dateVal)) {
         endSave();
         return alert("Access Denied: Only Admin can post payments for a past date.");
     }
@@ -7539,7 +7539,7 @@ async function savePayment(id) {
 
     const payType = $('f-pay-type').value;
     const date = $('f-pay-date').value;
-    if (currentUser.role !== 'Admin' && !DB.canPostBackDate(date)) {
+    if (!DB.canPostBackDate(date)) {
         endSave();
         return alert('Back-dated entries are restricted to Admins/Authorized users.');
     }
@@ -8220,7 +8220,7 @@ async function saveExpense(id) {
     }
     if (!beginSave()) return;
     const dateVal = $('f-exp-date').value;
-    if (currentUser.role !== 'Admin' && !DB.canPostBackDate(dateVal)) {
+    if (!DB.canPostBackDate(dateVal)) {
         endSave();
         return alert("Access Denied: Only Admin can post expenses for a past date.");
     }
