@@ -15,7 +15,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=29">
+    <link rel="stylesheet" href="style.css?v=33">
     <style>
         #app-loading {
             position: fixed; inset: 0; background: var(--bg-body, #f8fafc);
@@ -241,26 +241,46 @@
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" defer></script>
-    <script src="app.js?v=86"></script>
+    <script src="app.js?v=90"></script>
     <script>
+        // Force fully clear everything and reload
+        async function forceHardRefresh() {
+            if (confirm("This will clear all local app cache and reload everything. Proceed?")) {
+                if ('serviceWorker' in navigator) {
+                    const regs = await navigator.serviceWorker.getRegistrations();
+                    for (let reg of regs) await reg.unregister();
+                }
+                const cacheNames = await caches.keys();
+                for (let name of cacheNames) await caches.delete(name);
+                window.location.reload(true);
+            }
+        }
+
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
                 navigator.serviceWorker.register('sw.js').then(reg => {
                     console.log('SW registered');
-                    reg.update(); // Force immediate update check
-                    setInterval(() => { reg.update(); }, 60 * 1000 * 30); // 30min
+                    reg.update(); // Trigger check
+                    
                     reg.onupdatefound = () => {
-                        const installingWorker = reg.installing;
-                        installingWorker.onstatechange = () => {
-                            if (installingWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                                console.log("New version installed in background. Will apply on next reload.");
-                                if (confirm("A new version is available! Refresh to apply updates?")) {
-                                    window.location.reload(true);
-                                }
+                        const newWorker = reg.installing;
+                        newWorker.onstatechange = () => {
+                            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                                // New worker is ready but waiting. 
+                                // Since we have skipWaiting() in sw.js, it will activate immediately.
+                                console.log('New version available. Reloading...');
                             }
                         };
                     };
                 }).catch(err => console.warn('SW Register Error:', err));
+            });
+
+            // The 'controllerchange' event fires when a new service worker takes over.
+            let refreshing = false;
+            navigator.serviceWorker.addEventListener('controllerchange', () => {
+                if (refreshing) return;
+                refreshing = true;
+                window.location.reload();
             });
         }
     </script>

@@ -231,6 +231,36 @@ const DB = {
         } catch(e) { console.warn('loadSettings error:', e); }
     },
 
+
+    // --- SECURITY & PERMISSIONS ---
+    // Check if current user can edit/delete records (Admin only by default)
+    canEdit() {
+        if (!window.currentUser) return false;
+        if (window.currentUser.role === 'Admin') return true;
+        return !!window.currentUser.canEdit; // Check custom per-user permission
+    },
+
+    // Check if user can post to a back-date (Admin only)
+    canPostBackDate(dateStr) {
+        if (!window.currentUser) return false;
+        if (window.currentUser.role === 'Admin') return true;
+        const today = new Date().toISOString().split('T')[0];
+        return dateStr >= today; // Non-admins can only post today or future
+    },
+
+    // --- EXPORT TO EXCEL ---
+    exportToExcel(tableId, filename = 'export') {
+        const tbl = document.getElementById(tableId);
+        if (!tbl) return alert('Table not found for export');
+        try {
+            const wb = XLSX.utils.table_to_book(tbl, { sheet: "Sheet1" });
+            XLSX.writeFile(wb, `${filename}_${new Date().toISOString().split('T')[0]}.xlsx`);
+        } catch (e) {
+            console.error('Excel Export Error:', e);
+            alert('Failed to export to Excel. Please try again.');
+        }
+    },
+
     id() { 
         if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
         return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
@@ -1005,6 +1035,7 @@ function openModal(title, html, footer, isFullScreen = false) {
     $('modal-overlay').classList.remove('hidden');
     // Prevent background page scroll while modal is open
     document.body.style.overflow = 'hidden';
+    document.body.classList.add('modal-open');
     // Hide FAB so it doesn't overlap modal buttons
     const fab = $('app-fab');
     if (fab) fab.classList.add('hidden');
@@ -1025,6 +1056,7 @@ function openModal(title, html, footer, isFullScreen = false) {
 function closeModal() {
     $('modal-overlay').classList.add('hidden');
     document.body.style.overflow = ''; // Restore page scroll
+    document.body.classList.remove('modal-open');
     document.querySelectorAll('.search-dropdown-list').forEach(d => d.remove());
     const footerEl = $('modal-footer');
     if (footerEl) { footerEl.innerHTML = ''; footerEl.classList.add('hidden'); }
@@ -4764,8 +4796,21 @@ function closeSoItemSubModal() { const el = $('so-item-sub-modal'); if (el) el.c
 function openInvItemSubModal() { const el = $('inv-item-sub-modal'); if (el) el.classList.add('active'); }
 function closeInvItemSubModal() { const el = $('inv-item-sub-modal'); if (el) el.classList.remove('active'); }
 
-async function saveSalesOrder() {
+async function saveSalesOrder(id) {
+    // 1. Edit Restriction: Only Admin or users with 'canEdit' permission can edit existing records
+    if (id && !DB.canEdit()) {
+        return alert("Access Denied: You do not have permission to edit existing records. Please contact Admin.");
+    }
+
     if (!beginSave()) return;
+    const dateVal = $('f-so-date').value;
+
+    // 2. Back-date Restriction: Only Admin can post to a date before today
+    if (!DB.canPostBackDate(dateVal)) {
+        endSave();
+        return alert("Access Denied: Only Admin can post records for a past date.");
+    }
+
     const pe = $('f-so-party'); if (!pe.value) { endSave(); return alert('Select customer'); } if (!soItems.length) { endSave(); return alert('Add items'); }
 
     const parties = await DB.getAll('parties');
@@ -5519,6 +5564,7 @@ async function renderInvoices() {
         <div class="section-toolbar">
             <div class="filter-group"><select id="inv-type-filter" onchange="filterInvTable2()"><option value="">All</option><option value="sale">Sale</option><option value="purchase">Purchase</option></select>
             <input class="search-box" id="inv-search2" placeholder="Search..." oninput="filterInvTable2()" style="width:200px">
+            <button class="btn btn-outline" onclick="DB.exportToExcel('tbl-invoices', 'invoices')" style="border-color:#16a34a;color:#16a34a">📊 Export</button>
             <button class="detailed-view-btn ${window._detailedInvoices ? 'active' : ''}" onclick="toggleDetailedInvoices()">🔍 Detailed View</button>
             <button class="btn btn-outline" onclick="openColumnPersonalizer('invoices','renderInvoices')" style="border-color:var(--accent);color:var(--accent)">⚙️ Columns</button></div>
             <div class="filter-group">
@@ -5528,7 +5574,7 @@ async function renderInvoices() {
         </div>
         <div class="card"><div class="card-body">
             <div class="table-wrapper">
-                <table class="data-table"><thead><tr>${ColumnManager.get('invoices').filter(c=>c.visible).map(c=>`<th>${c.label}</th>`).join('')}</tr></thead>
+                <table class="data-table" id="tbl-invoices"><thead><tr>${ColumnManager.get('invoices').filter(c=>c.visible).map(c=>`<th>${c.label}</th>`).join('')}</tr></thead>
                 <tbody id="invoice-tbody">${renderInvoiceRows(visibleInvoices)}</tbody></table>
             </div>
         </div></div>`;
@@ -6290,8 +6336,16 @@ function autoRoundOff() {
     const el   = $('f-inv-roundoff'); if (el) el.value = diff;
     updateInvoiceTotal();
 }
-async function saveInvoice() {
+async function saveInvoice(id) {
+    if (id && !DB.canEdit()) {
+        return alert("Access Denied: You do not have permission to edit invoices. Please contact Admin.");
+    }
     if (!beginSave()) return;
+    const dateVal = $('f-inv-date').value;
+    if (!DB.canPostBackDate(dateVal)) {
+        endSave();
+        return alert("Access Denied: Only Admin can post invoices for a past date.");
+    }
     const pe = $('f-inv-party'); if (!pe.value) { endSave(); return alert('Select a party'); } if (!invoiceItems.length) { endSave(); return alert('Add items'); }
 
     const parties = DB.get('db_parties');
@@ -6737,6 +6791,9 @@ async function executeCancelInvoice(id) {
     }
 }
 async function deleteInvoice(id) {
+    if (!DB.canEdit()) {
+        return alert("Access Denied: Only Admin or users with Edit permission can delete records.");
+    }
     const invoices = await DB.getAll('invoices');
     const inv = invoices.find(i => i.id === id);
     if (!inv) return;
@@ -6798,41 +6855,31 @@ async function renderPayments() {
             <div class="stat-card green"><div class="stat-icon">📥</div><div class="stat-value" id="pay-stat-in">${currency(totalIn)}</div><div class="stat-label">Payment In</div></div>
             ${!isSalesman ? `<div class="stat-card red"><div class="stat-icon">📤</div><div class="stat-value" id="pay-stat-out">${currency(totalOut)}</div><div class="stat-label">Payment Out</div></div>` : ''}
         </div>
-        <div id="pay-mode-bar-wrap" style="margin-bottom:14px">${Object.keys(modeBreakup).length > 0 ? `
-        <div class="pay-summary-bar">
-            <div class="pay-summary-total">
-                <span class="pay-sum-label">Mode Breakup (In)</span>
-                <span class="pay-sum-value" id="pay-mode-total">${currency(totalIn)}</span>
+        <div class="pay-toolbar-compact">
+            <div class="pay-breakup-section">
+                <div style="flex-shrink:0">
+                    <div style="font-size:0.65rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">Mode Breakup (In)</div>
+                    <div style="font-size:1.1rem;font-weight:800;color:var(--primary)">${currency(totalIn)}</div>
+                </div>
+                <div id="pay-mode-chips" style="display:flex;gap:6px">${modeChips}</div>
             </div>
-            <div class="pay-summary-modes" id="pay-mode-chips">${modeChips}</div>
-        </div>` : ''}</div>
-        <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px">
-            <!-- Row 1: Date range (flex so inputs shrink properly on Android) -->
-            <div style="display:flex;gap:8px">
-                <div style="flex:1;min-width:0"><label style="font-size:0.7rem;color:var(--text-muted);display:block;margin-bottom:2px">From</label>
-                    <input type="date" id="pay-f-from" value="${monthStart}" onchange="filterPayTable()" style="width:100%;min-width:0;box-sizing:border-box"></div>
-                <div style="flex:1;min-width:0"><label style="font-size:0.7rem;color:var(--text-muted);display:block;margin-bottom:2px">To</label>
-                    <input type="date" id="pay-f-to" value="${today1}" onchange="filterPayTable()" style="width:100%;min-width:0;box-sizing:border-box"></div>
+            <div class="pay-filters-section">
+                <div class="pay-filter-group"><label>From</label><input type="date" id="pay-f-from" value="${monthStart}" onchange="filterPayTable()"></div>
+                <div class="pay-filter-group"><label>To</label><input type="date" id="pay-f-to" value="${today1}" onchange="filterPayTable()"></div>
+                <div class="pay-filter-group" style="flex:1.5;min-width:180px"><label>Search</label><input id="pay-search" placeholder="Search parties/receipts..." oninput="filterPayTable()" class="search-box" style="margin:0"></div>
+                <div class="pay-filter-group"><label>Type</label><select id="pay-type-filter" onchange="filterPayTable()"><option value="">All Types</option><option value="in">Payment In</option><option value="out">Payment Out</option></select></div>
+                <div class="pay-filter-group"><label>Mode</label><select id="pay-mode-filter" onchange="filterPayTable()"><option value="">All Modes</option><option>Cash</option><option>UPI</option><option>Cheque</option><option>Bank Transfer</option></select></div>
+                ${!isSalesman ? `<div class="pay-filter-group"><label>Collector</label><select id="pay-collector-filter" onchange="filterPayTable()"><option value="">All</option>${[...new Set(visiblePayments.map(p=>p.collectedBy||p.createdBy).filter(Boolean))].map(n=>`<option>${n}</option>`).join('')}</select></div>` : ''}
+                <div style="display:flex;gap:6px;align-items:center;padding-top:14px">
+                    <button class="btn btn-outline btn-sm" onclick="DB.exportToExcel('tbl-payments', 'payments')" title="Export Excel" style="border-color:#16a34a;color:#16a34a">📊</button>
+                    <button class="btn btn-outline btn-sm" onclick="openColumnPersonalizer('payments','renderPayments')" title="Column Config" style="border-color:var(--accent);color:var(--accent)">⚙️</button>
+                    <button class="btn btn-primary" onclick="openPaymentModal()" style="white-space:nowrap;padding:8px 16px">${isSalesman ? '+ Record' : '+ Record'}</button>
+                </div>
             </div>
-            <!-- Row 2: Search + Columns -->
-            <div style="display:flex;gap:8px;align-items:center">
-                <input class="search-box" id="pay-search" placeholder="Search..." oninput="filterPayTable()" style="flex:1;min-width:0;margin:0">
-                <button class="btn btn-outline" onclick="openColumnPersonalizer('payments','renderPayments')" style="border-color:var(--accent);color:var(--accent);white-space:nowrap;flex-shrink:0">⚙️ Columns</button>
-            </div>
-            <!-- Row 3: Type + Mode filters -->
-            <div style="display:flex;gap:8px">
-                <select id="pay-type-filter" onchange="filterPayTable()" style="flex:1;min-width:0"><option value="">All Types</option><option value="in">Payment In</option><option value="out">Payment Out</option></select>
-                <select id="pay-mode-filter" onchange="filterPayTable()" style="flex:1;min-width:0"><option value="">All Modes</option><option>Cash</option><option>UPI</option><option>Cheque</option><option>Bank Transfer</option></select>
-            </div>
-            ${!isSalesman ? `<!-- Row 4: Collector + Record button -->
-            <div style="display:flex;gap:8px;align-items:center">
-                <select id="pay-collector-filter" onchange="filterPayTable()" style="flex:1;min-width:0"><option value="">All Collectors</option>${[...new Set(visiblePayments.map(p=>p.collectedBy||p.createdBy).filter(Boolean))].map(n=>`<option>${n}</option>`).join('')}</select>
-                <button class="btn btn-primary" onclick="openPaymentModal()" style="white-space:nowrap;flex-shrink:0">+ Record</button>
-            </div>` : `<button class="btn btn-primary" onclick="openPaymentModal()" style="width:100%">+ Record Payment</button>`}
         </div>
         <div class="card" style="margin-top:12px"><div class="card-body">
             <div class="table-wrapper">
-                <table class="data-table"><thead><tr>${ColumnManager.get('payments').filter(c=>c.visible).map(c=>`<th>${c.label}</th>`).join('')}</tr></thead>
+                <table class="data-table" id="tbl-payments"><thead><tr>${ColumnManager.get('payments').filter(c=>c.visible).map(c=>`<th>${c.label}</th>`).join('')}</tr></thead>
                 <tbody id="pay-tbody">${renderPayRows(visiblePayments)}</tbody></table>
             </div>
         </div></div>`;
@@ -7435,8 +7482,16 @@ window.calcTotalAllocation = function () {
     const lbl = document.getElementById('lbl-total-alloc');
     if (lbl) lbl.innerText = '₹' + tot.toFixed(2);
 };
-async function savePayment() {
+async function savePayment(id) {
+    if (id && !DB.canEdit()) {
+        return alert("Access Denied: You do not have permission to edit payments. Please contact Admin.");
+    }
     if (!beginSave()) return;
+    const dateVal = $('f-pay-date').value;
+    if (!DB.canPostBackDate(dateVal)) {
+        endSave();
+        return alert("Access Denied: Only Admin can post payments for a past date.");
+    }
     
     // UI lock
     const saveBtn = document.getElementById('btn-save-payment');
@@ -7475,7 +7530,12 @@ async function savePayment() {
     if (totalAlloc > totalReduction + 0.01) { endSave(); return alert('Allocation exceeds total amount (Received + Discount).'); }
 
     const payType = $('f-pay-type').value;
-    const invNo = Object.keys(allocations).length === 1 ? Object.keys(allocations)[0] : (Object.keys(allocations).length > 1 ? 'Multi' : '');
+    const date = $('f-pay-date').value;
+    if (!DB.canPostBackDate(date)) {
+        endSave();
+        return alert('Back-dated entries are restricted to Admins/Authorized users.');
+    }
+    const invNo = Object.keys(allocations).length === 1 ? Object.keys(allocations)[0] : (Object.keys(allocations).length > 1 ? Object.keys(allocations).join(',') : '');
 
     try {
         const payRefNo = buildPayRefNo();
@@ -7791,6 +7851,9 @@ async function linkPaymentToInvoice(payId) {
     }
 }
 async function deletePayment(id) {
+    if (!DB.canEdit()) {
+        return alert("Access Denied: Only Admin or users with Edit permission can delete records.");
+    }
     if (!confirm('Delete payment? Effects will be reversed.')) return;
     try {
         const payments = await DB.getAll('payments');
@@ -7914,7 +7977,7 @@ window.saveEditedPayment = async function (id) {
     });
     if (totalAlloc > totalReduction + 0.01) return alert('Allocation exceeds total reduction (Amount + Discount).');
 
-    const invNo = Object.keys(allocations).length === 1 ? Object.keys(allocations)[0] : (Object.keys(allocations).length > 1 ? 'Multi' : '');
+    const invNo = Object.keys(allocations).length === 1 ? Object.keys(allocations)[0] : (Object.keys(allocations).length > 1 ? Object.keys(allocations).join(',') : '');
 
     try {
         const payments = await DB.getAll('payments');
@@ -8143,8 +8206,16 @@ function openExpenseModal() {
     `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveExpense()">＋ Save & New</button><button class="btn btn-primary" onclick="saveExpense()">💾 Save Expense</button>`);
 }
 
-async function saveExpense() {
+async function saveExpense(id) {
+    if (id && !DB.canEdit()) {
+        return alert("Access Denied: You do not have permission to edit expenses. Please contact Admin.");
+    }
     if (!beginSave()) return;
+    const dateVal = $('f-exp-date').value;
+    if (!DB.canPostBackDate(dateVal)) {
+        endSave();
+        return alert("Access Denied: Only Admin can post expenses for a past date.");
+    }
     const amt = +$('f-exp-amt').value; if (!amt) { endSave(); return alert('Enter amount'); }
     const expData = {
         date: $('f-exp-date').value,
@@ -11943,6 +12014,10 @@ function openUserModal(id) {
                     <input type="checkbox" id="perm-expenses" value="expenses" ${(u && Array.isArray(u.extra_perms) && u.extra_perms.includes('expenses'))?'checked':''} onchange="this.parentElement.style.borderColor=this.checked?'var(--primary)':'var(--border)';this.parentElement.style.background=this.checked?'#eff6ff':'';this.parentElement.style.fontWeight=this.checked?'600':'400'">
                     💸 View Expenses
                 </label>
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:6px 12px;border:2px solid var(--accent);border-radius:20px;font-size:0.85rem;${(u && u.canEdit)?'border-color:var(--accent);background:rgba(249,115,22,0.1);font-weight:600':''}">
+                    <input type="checkbox" id="f-user-canedit" ${u && u.canEdit ? 'checked' : ''} onchange="this.parentElement.style.borderColor=this.checked?'var(--accent)':'var(--border)';this.parentElement.style.background=this.checked?'rgba(249,115,22,0.1)':'';this.parentElement.style.fontWeight=this.checked?'600':'400'">
+                    ✏️ Can Edit Records
+                </label>
             </div>
         </div>
         <div class="modal-actions">
@@ -11971,8 +12046,10 @@ async function saveUser(id) {
     const conflict = allUsers.find(u => u.userId && u.userId.toLowerCase() === userId && u.id !== id);
     if (conflict) return alert(`User ID "${userId}" is already taken by ${conflict.name}`);
 
+    const canEditPerm = $('f-user-canedit').checked;
+
     const primaryRole = selectedRoles[0];
-    const data = { name, userId, role: primaryRole, roles: selectedRoles, pin, monthlyTarget: target, extra_perms: extraPerms };
+    const data = { name, userId, role: primaryRole, roles: selectedRoles, pin, monthlyTarget: target, extra_perms: extraPerms, canEdit: canEditPerm };
 
     try {
         if (id) {

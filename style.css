@@ -513,8 +513,30 @@ table { border-collapse: collapse; width: 100%; }
     font-size: 0.9rem;
     pointer-events: none;
 }
+
+/* Compact Toolbar for Payments Page */
+.pay-toolbar-compact {
+    display: flex; gap: 16px; align-items: stretch; background: var(--bg-card);
+    border: 1px solid var(--border); border-radius: 12px; padding: 12px;
+    margin-bottom: 14px; flex-wrap: wrap; box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+}
+.pay-breakup-section {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 12px;
+    border-right: 1px solid var(--border); padding-right: 16px;
+}
+.pay-filters-section {
+    flex: 1; display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end;
+}
+.pay-filter-group { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 120px; }
+.pay-filter-group label { font-size: 0.65rem; color: var(--text-muted); font-weight: 700; text-transform: uppercase; }
+.pay-filter-group input, .pay-filter-group select { padding: 6px 10px; font-size: 0.82rem; border-radius: 8px; }
+
+@media (max-width: 991px) {
+    .pay-breakup-section { border-right: none; border-bottom: 1px solid var(--border); padding-bottom: 12px; width: 100%; justify-content: flex-start; }
+}
+
 @media (max-width: 768px) {
-    .omnibox-container { display: none !important; } /* Hide on small mobile to prevent header overlap */
+    .omnibox-container { display: none !important; }
 }
 
 .current-date {
@@ -2085,6 +2107,12 @@ body {
 }
 .bn-item:active .bn-icon { transform: scale(0.92); }
 
+/* Hide menu bar when modal open or keyboard visible */
+body.modal-open .bottom-nav { display: none !important; }
+@media screen and (max-height: 500px) {
+    .bottom-nav { display: none !important; }
+}
+
 @media (max-width: 768px) {
     .bottom-nav { display: flex; }
     .main-content { padding-bottom: calc(62px + env(safe-area-inset-bottom)); }
@@ -2922,5 +2950,16 @@ body {
 .detailed-view-btn.active {
     background: var(--primary);
     color: #fff;
+}
+
+/* Detailed report row grouping */
+.ipnl-summary {
+    border-top: 2px solid var(--border) !important;
+}
+.ipnl-summary:first-child {
+    border-top: none !important;
+}
+.ipnl-detail {
+    border-left: 3px solid rgba(249, 115, 22, 0.2);
 }
 
