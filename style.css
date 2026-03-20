@@ -531,6 +531,32 @@ table { border-collapse: collapse; width: 100%; }
 .pay-filter-group label { font-size: 0.65rem; color: var(--text-muted); font-weight: 700; text-transform: uppercase; }
 .pay-filter-group input, .pay-filter-group select { padding: 6px 10px; font-size: 0.82rem; border-radius: 8px; }
 
+/* Horizontal scrolling for Mode Breakup chips */
+#pay-mode-chips {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    padding-bottom: 6px;
+    -webkit-overflow-scrolling: touch;
+    flex: 1;
+    scrollbar-width: none; /* Hide scrollbar Firefox */
+}
+#pay-mode-chips::-webkit-scrollbar { display: none; } /* Hide scrollbar Chrome/Safari */
+
+.pay-mode-chip {
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 8px 14px;
+    display: flex;
+    flex-direction: column;
+    min-width: 100px;
+    flex-shrink: 0;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+.pay-mode-chip span { font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase; font-weight: 700; }
+.pay-mode-chip strong { font-size: 1rem; color: var(--text-primary); }
+
 @media (max-width: 991px) {
     .pay-breakup-section { border-right: none; border-bottom: 1px solid var(--border); padding-bottom: 12px; width: 100%; justify-content: flex-start; }
 }

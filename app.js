@@ -24,7 +24,9 @@ const DB = {
             'salaryrecords': 'salary_records',
             'salaryadvances': 'salary_advances',
             'customerregistrations': 'customer_registrations',
-            'customerotps': 'customer_otps'
+            'customerotps': 'customer_otps',
+            'partyledger': 'party_ledger',
+            'stockledger': 'stock_ledger'
         };
         const normalized = alias.toLowerCase().replace(/[-_]/g, '');
         return map[alias] || map[normalized] || alias;
@@ -129,14 +131,31 @@ const DB = {
     },
 
     get(key) { 
+        const actual = this.mapTable(key.replace(/^db_/, ''));
+        if (this.cache[actual]) return this.cache[actual];
         if (this.cache[key]) return this.cache[key];
-        return this.ls.get(key); 
+        return this.ls.get(key);
     },
     getObj(key) { 
+        const actual = this.mapTable(key.replace(/^db_/, ''));
+        if (this.cache[actual]) return this.cache[actual];
         if (this.cache[key]) return this.cache[key];
-        return this.ls.getObj(key); 
+        return this.ls.getObj(key);
     },
     set(key, data) { return this.ls.set(key, data); },
+
+    // Security: Set session context for Supabase RLS
+    async setSecureSession(user) {
+        if (!user) return;
+        try {
+            await supabaseClient.rpc('set_session_role', { 
+                user_role: user.role,
+                user_id: (user.userId || user.id || '').toLowerCase()
+            });
+        } catch (e) {
+            console.warn('setSecureSession error (Ensure RPC is installed):', e.message);
+        }
+    },
 
     // New Async Supabase methods with Auto Mapping
     _toSnake(obj) {
@@ -780,6 +799,8 @@ function dmRestoreSession() {
             return false;
         }
         doLoginSuccess(session.user, true); // true = silent/restore
+        // Session restoration also needs secure context
+        DB.setSecureSession(session.user);
         return true;
     } catch(e) {
         localStorage.removeItem('dm_session');
@@ -827,6 +848,9 @@ async function login() {
 async function doLoginSuccess(user, isRestore = false) {
     currentUser = user;
     window.currentUser = user; // Ensure global access too
+    
+    // Explicitly set security context in Supabase session
+    await DB.setSecureSession(user);
     loginScreen.classList.add('hidden');
     appEl.classList.remove('hidden');
     $('sidebar-username').textContent = user.name;
@@ -7241,6 +7265,7 @@ async function openPaymentModal(prefillPartyId) {
     }
 
     updatePaymentQR();
+    onPayModeChange();
 }
 
 // Payment Mode Row Helpers
@@ -7588,7 +7613,10 @@ async function savePayment(id) {
             invoiceNo: invNo,
             allocations: Object.keys(allocations).length > 0 ? allocations : null,
             createdBy: currentUser.name,
-            collectedBy: ($('f-pay-collected-by') ? $('f-pay-collected-by').value : null) || currentUser.name
+            collectedBy: ($('f-pay-collected-by') ? $('f-pay-collected-by').value : null) || currentUser.name,
+            chequeNo: $('f-pay-cheque-no')?.value || null,
+            chequeBank: $('f-pay-cheque-bank')?.value || null,
+            chequeDate: $('f-pay-cheque-date')?.value || null
         };
 
         // If multiple modes, we save multiple records
