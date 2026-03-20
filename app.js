@@ -243,9 +243,12 @@ const DB = {
     // Check if user can post to a back-date (Admin only)
     canPostBackDate(dateStr) {
         if (!window.currentUser) return false;
-        if (window.currentUser.role === 'Admin') return true;
-        const today = new Date().toISOString().split('T')[0];
-        return dateStr >= today; // Non-admins can only post today or future
+        // Case-insensitive role check and also check boolean canEdit if available
+        const role = (window.currentUser.role || '').toLowerCase();
+        if (role === 'admin' || role === 'administrator') return true;
+        
+        const todayStr = today(); // Use the local today function
+        return dateStr >= todayStr; // Non-admins can only post today or future
     },
 
     // --- EXPORT TO EXCEL ---
@@ -1587,7 +1590,12 @@ function compressImage(file, { maxWidth = 1024, maxHeight = 1024, quality = 0.75
 
 function currency(n) { return '₹' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function fmtDate(d) { return d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '-'; }
-function today() { return new Date().toISOString().split('T')[0]; }
+function today() { 
+    const d = new Date();
+    // Correct for local timezone offset to get local YYYY-MM-DD
+    const offset = d.getTimezoneOffset() * 60000;
+    return new Date(d.getTime() - offset).toISOString().split('T')[0];
+}
 function isSalesman() { return currentUser && currentUser.role === 'Salesman'; }
 function isPacker()   { return currentUser && currentUser.role === 'Packing'; }
 function canEdit()    { return currentUser && (currentUser.role === 'Admin' || currentUser.role === 'Manager'); }
