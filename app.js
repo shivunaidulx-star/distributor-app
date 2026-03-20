@@ -3,6 +3,10 @@
    ============================================ */
 
 // --- Supabase Config ---
+// ⚠️ SECURITY WARNING: The SUPABASE_KEY is an 'anon' key and is visible in the frontend. 
+// To prevent data breaches, you MUST enable Row Level Security (RLS) on your Supabase dashboard.
+// Each table (parties, inventory, invoices, etc.) should have an RLS policy that restricts 
+// access to the 'anon' role with appropriate 'USING' and 'CHECK' expressions.
 const SUPABASE_URL = 'https://pfukfcnxvrkefcmevcxq.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBmdWtmY254dnJrZWZjbWV2Y3hxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM0NTk2MjksImV4cCI6MjA4OTAzNTYyOX0.tPCMJ431g5iHb9qkRSzMWlV0dL_iVPNXPnQjJ0DwZPw';
 const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -11,6 +15,20 @@ const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const DB = {
     // ✅ Centralised Cache for Sync Access
     cache: {},
+    
+    // ✅ Centralised Table Mapping (Scaleable)
+    mapTable(alias) {
+        const map = {
+            'salesorders': 'sales_orders',
+            'purchaseorders': 'purchase_orders',
+            'salaryrecords': 'salary_records',
+            'salaryadvances': 'salary_advances',
+            'customerregistrations': 'customer_registrations',
+            'customerotps': 'customer_otps'
+        };
+        const normalized = alias.toLowerCase().replace(/[-_]/g, '');
+        return map[alias] || map[normalized] || alias;
+    },
 
     // localStorage helper
     ls: {
@@ -38,24 +56,24 @@ const DB = {
             });
         } catch(e) { console.error('Core Refresh Error:', e); }
 
-        // 2. Start loading secondary tables in the background - DO NOT await here!
-        // This allows the app to show the Login/Dashboard immediately.
+        // 2. Start loading secondary tables in the background
         tables.forEach(t => {
-            supabaseClient.from(t).select('*').then(res => {
-                if (res.error) console.error(`Bg Refresh Error ${t}:`, res.error);
+            const actualTable = this.mapTable(t);
+            supabaseClient.from(actualTable).select('*').then(res => {
+                if (res.error) console.error(`Bg Refresh Error ${actualTable}:`, res.error);
                 else {
                     const camel = this._toCamel(res.data || []);
-                    this.cache[t] = camel;
-                    this.cache[`db_${t}`] = camel;
+                    this.cache[actualTable] = camel;
+                    
                     // Trigger a UI refresh if we are on a page that needs this data
                     const isCatalog = currentPage === 'catalog';
-                    if (currentPage === t || (t === 'sales_orders' && currentPage === 'salesorders') || (isCatalog && (t === 'sales_orders' || t === 'inventory' || t === 'parties'))) {
-                        console.log(`Bg loaded ${t}, refreshing UI...`);
+                    if (currentPage === actualTable || (actualTable === 'sales_orders' && currentPage === 'salesorders') || (isCatalog && (actualTable === 'sales_orders' || actualTable === 'inventory' || actualTable === 'parties'))) {
+                        console.log(`Bg loaded ${actualTable}, refreshing UI...`);
                         clearTimeout(this._bgNavTimer);
                         this._bgNavTimer = setTimeout(() => navigateTo(currentPage), 300);
                     }
                     // Run data repair only after both invoices and sales_orders are cached
-                    if (t === 'invoices' || t === 'sales_orders') {
+                    if (actualTable === 'invoices' || actualTable === 'sales_orders') {
                         if (this.cache['invoices'] && this.cache['sales_orders']) {
                             repairCancelledInvoiceOrders();
                         }
@@ -85,24 +103,29 @@ const DB = {
     async backgroundSync() {
         console.log('Running background sync...');
         const tables = ['sales_orders', 'invoices', 'payments', 'inventory', 'parties'];
-        await this.refreshTables(tables);
-        this.cache._lastRefresh = Date.now();
-        // Removed forced UI refresh to prevent interrupting the user's active workflow
+        const success = await this.refreshTables(tables);
+        if (success) {
+            this.cache._lastRefresh = Date.now();
+            console.log('Background sync completed successfully.');
+        } else {
+            console.warn('Background sync partial failure. Timestamp not updated.');
+        }
     },
 
     // Refresh only specific tables — much faster than full refresh after saves
     async refreshTables(tableList) {
-        const results = await Promise.all(tableList.map(t => supabaseClient.from(t).select('*')));
+        const results = await Promise.all(tableList.map(t => supabaseClient.from(this.mapTable(t)).select('*')));
+        let allSuccess = true;
         results.forEach((res, i) => {
-            if (res.error) { console.error(`Error refreshing ${tableList[i]}:`, res.error); return; }
-            const t = tableList[i];
-            const camel = this._toCamel(res.data || []);
-            this.cache[t] = camel;
-            this.cache[`db_${t}`] = camel;
-            // Legacy camelCase keys for renamed tables
-            if (t === 'sales_orders') this.cache['db_salesorders'] = camel;
-            if (t === 'purchase_orders') this.cache['db_purchaseorders'] = camel;
+            if (res.error) { 
+                console.error(`Error refreshing ${tableList[i]}:`, res.error); 
+                allSuccess = false;
+                return; 
+            }
+            const actual = this.mapTable(tableList[i]);
+            this.cache[actual] = this._toCamel(res.data || []);
         });
+        return allSuccess;
     },
 
     get(key) { 
@@ -161,34 +184,32 @@ const DB = {
     },
 
     async getAll(table) {
-        // Handle legacy table name calls
-        const actualTable = table.replace('salesorders', 'sales_orders').replace('purchaseorders', 'purchase_orders');
+        const actualTable = this.mapTable(table);
         const { data, error } = await supabaseClient.from(actualTable).select('*');
         if (error) { console.error(`Error fetching ${actualTable}:`, error); return []; }
         const camelData = this._toCamel(data) || [];
         this.cache[actualTable] = camelData;
-        this.cache[`db_${table}`] = camelData; // Sync legacy key
         return camelData;
     },
 
     async insert(table, row) {
-        const actualTable = table.replace('salesorders', 'sales_orders').replace('purchaseorders', 'purchase_orders');
+        const actualTable = this.mapTable(table);
         const { data, error } = await supabaseClient.from(actualTable).insert(this._clean(this._toSnake(row))).select();
-        if (error) { console.error(`Error inserting into ${actualTable}:`, error.message, '|', error.details, '| sent:', JSON.stringify(this._toSnake(row))); throw error; }
+        if (error) { console.error(`Error inserting into ${actualTable}:`, error.message, '| sent:', JSON.stringify(this._toSnake(row))); throw error; }
         await this.refreshTables([actualTable]);
         return this._toCamel(data[0]);
     },
 
     async update(table, id, row) {
-        const actualTable = table.replace('salesorders', 'sales_orders').replace('purchaseorders', 'purchase_orders');
+        const actualTable = this.mapTable(table);
         const { data, error } = await supabaseClient.from(actualTable).update(this._clean(this._toSnake(row))).eq('id', id).select();
-        if (error) { console.error(`Error updating ${actualTable}:`, error.message, '|', error.details, '| sent:', JSON.stringify(this._toSnake(row))); throw error; }
+        if (error) { console.error(`Error updating ${actualTable}:`, error.message, '| sent:', JSON.stringify(this._toSnake(row))); throw error; }
         await this.refreshTables([actualTable]);
         return this._toCamel(data[0]);
     },
 
     async delete(table, id) {
-        const actualTable = table.replace('salesorders', 'sales_orders').replace('purchaseorders', 'purchase_orders');
+        const actualTable = this.mapTable(table);
         const { error } = await supabaseClient.from(actualTable).delete().eq('id', id);
         if (error) { console.error(`Error deleting from ${actualTable}:`, error); throw error; }
         await this.refreshTables([actualTable]);
@@ -196,12 +217,12 @@ const DB = {
 
     // ── Raw operations — NO auto-refresh (batch multiple then call DB.refresh() once) ──
     async rawUpdate(table, id, row) {
-        const actualTable = table.replace('salesorders', 'sales_orders').replace('purchaseorders', 'purchase_orders');
+        const actualTable = this.mapTable(table);
         const { error } = await supabaseClient.from(actualTable).update(this._clean(this._toSnake(row))).eq('id', id);
         if (error) { console.error(`rawUpdate ${actualTable}:`, error.message); throw error; }
     },
     async rawInsert(table, row) {
-        const actualTable = table.replace('salesorders', 'sales_orders').replace('purchaseorders', 'purchase_orders');
+        const actualTable = this.mapTable(table);
         const { data, error } = await supabaseClient.from(actualTable).insert(this._clean(this._toSnake(row))).select();
         if (error) { console.error(`rawInsert ${actualTable}:`, error.message); throw error; }
         return this._toCamel(data[0]);
@@ -800,7 +821,7 @@ async function doLoginSuccess(user, isRestore = false) {
     appEl.classList.remove('hidden');
     $('sidebar-username').textContent = user.name;
     const displayRoles = Array.isArray(user.roles) && user.roles.length ? user.roles.join(' | ') : (user.role || '');
-    $('sidebar-role').textContent = displayRoles + ' (v93)';
+    $('sidebar-role').textContent = displayRoles + ' (v94)';
     $('sidebar-avatar').textContent = user.name.charAt(0).toUpperCase();
 
     const co = DB.ls.getObj('db_company');
@@ -1198,7 +1219,7 @@ function initSearchDropdown(inputId, items, onSelect) {
             const filtered = dd._filtered || [];
             if (filtered[idx]) selectItem(filtered[idx]);
         }
-    });
+    }, sig);
 
     inp.addEventListener('blur', () => { setTimeout(closeDD, 200); }, sig);
 
