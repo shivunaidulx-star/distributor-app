@@ -13766,6 +13766,7 @@ async function renderInventorySetup() {
             <button class="catalog-pill ${invSetupTab === 'uom' ? 'active' : ''}" onclick="invSetupTab='uom';renderInventorySetup()">📏 UOM</button>
             <button class="catalog-pill ${invSetupTab === 'brands' ? 'active' : ''}" onclick="invSetupTab='brands';renderInventorySetup()">🏭 Brands</button>
             <button class="catalog-pill ${invSetupTab === 'tax' ? 'active' : ''}" onclick="invSetupTab='tax';renderInventorySetup()">💹 Tax / GST</button>
+            <button class="btn btn-outline btn-sm" style="border-color:var(--primary);color:var(--primary);margin-left:auto" onclick="showReport('indent')">📑 Generate Indent</button>
         </div>
         <div id="inv-setup-content"></div>`;
 
