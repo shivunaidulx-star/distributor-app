@@ -70,9 +70,9 @@ const DB = {
                     // Trigger a UI refresh if we are on a page that needs this data
                     const isCatalog = currentPage === 'catalog';
                     if (currentPage === actualTable || (actualTable === 'sales_orders' && currentPage === 'salesorders') || (isCatalog && (actualTable === 'sales_orders' || actualTable === 'inventory' || actualTable === 'parties'))) {
-                        console.log(`Bg loaded ${actualTable}, refreshing UI...`);
+                        console.log(`Bg loaded ${actualTable}, silent UI refresh...`);
                         clearTimeout(this._bgNavTimer);
-                        this._bgNavTimer = setTimeout(() => navigateTo(currentPage), 300);
+                        this._bgNavTimer = setTimeout(() => navigateTo(currentPage, { silent: true }), 300);
                     }
                     // Run data repair only after both invoices and sales_orders are cached
                     if (actualTable === 'invoices' || actualTable === 'sales_orders') {
@@ -1338,7 +1338,8 @@ function buildPartySearchList(parties) {
 
 
 // --- Navigation ---
-async function navigateTo(page) {
+async function navigateTo(page, options = {}) {
+    const isSilent = options.silent === true;
     if (!currentUser) return showLoginScreen();
     // Clear balance filter when navigating away from parties
     if (page !== 'parties') window._partyBalanceFilter = null;
@@ -1357,8 +1358,10 @@ async function navigateTo(page) {
     const titles = { dashboard: 'Dashboard', parties: 'Parties', partyledger: 'Party Ledger', inventorysetup: 'Inventory Setup', categories: 'Categories Master', uom: 'UOM Master', inventory: 'Inventory', catalog: 'Item Catalog', salesorders: 'Sales Orders', purchaseorders: 'Purchase Orders', invoices: 'Invoices', payments: 'Payments', expenses: 'Expenses', packing: 'Packing', delivery: 'Delivery', reports: 'Reports', packers: 'Packers Master', deliverypersons: 'Delivery Persons', users: 'Users & Roles', setup: 'Company Setup', customerrequests: 'Customer Requests', staffmaster: 'Staff Master', attendance: 'Attendance', hrpayroll: 'HR & Payroll' };
     pageTitle.textContent = titles[page] || page;
 
-    // Show a small loader in the content area
-    pageContent.innerHTML = '<div style="display:flex;justify-content:center;align-items:center;height:200px"><div class="loader"></div></div>';
+    // Show a loader ONLY if NOT silent refresh
+    if (!isSilent) {
+        pageContent.innerHTML = '<div style="display:flex;justify-content:center;align-items:center;height:200px"><div class="loader"></div></div>';
+    }
 
     const renderers = { dashboard: renderDashboard, parties: renderParties, partyledger: renderPartyLedgerLayout, inventorysetup: renderInventorySetup, categories: renderCategories, uom: renderUOM, inventory: renderInventory, catalog: renderCatalog, salesorders: renderSalesOrders, purchaseorders: renderPurchaseOrders, invoices: renderInvoices, payments: renderPayments, expenses: renderExpenses, packing: renderPacking, delivery: renderDelivery, reports: renderReports, packers: renderPackers, deliverypersons: renderDeliveryPersons, users: renderUsers, setup: renderCompanySetup, customerrequests: renderCustomerRequests, staffmaster: renderStaffMaster, attendance: renderAttendance, hrpayroll: renderHRPayroll };
 
