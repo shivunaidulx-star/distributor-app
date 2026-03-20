@@ -791,7 +791,7 @@ async function doLoginSuccess(user, isRestore = false) {
     appEl.classList.remove('hidden');
     $('sidebar-username').textContent = user.name;
     const displayRoles = Array.isArray(user.roles) && user.roles.length ? user.roles.join(' | ') : (user.role || '');
-    $('sidebar-role').textContent = displayRoles + ' (v91)';
+    $('sidebar-role').textContent = displayRoles + ' (v92)';
     $('sidebar-avatar').textContent = user.name.charAt(0).toUpperCase();
 
     const co = DB.ls.getObj('db_company');
@@ -7117,14 +7117,14 @@ async function openPaymentModal(prefillPartyId) {
             <div id="pay-modes-container" style="margin-bottom:12px">
                 <div class="pay-mode-row" style="display:grid;grid-template-columns:1fr 120px 40px;gap:8px;margin-bottom:8px;align-items:end">
                     <div class="form-group" style="margin-bottom:0">
-                        <label style="font-size:0.75rem">Mode</label>
-                        <select class="f-pay-row-mode" onchange="onPayModeChange()"><option>Cash</option><option>UPI</option><option>Bank Transfer</option><option>Cheque</option></select>
-                    </div>
-                    <div class="form-group" style="margin-bottom:0">
                         <label style="font-size:0.75rem">Amount ₹</label>
                         <input type="number" class="f-pay-row-amount" placeholder="0.00" oninput="onPayAmountChange()">
                     </div>
-                    <div style="height:38px"></div> <!-- Spacer for delete button alignment -->
+                    <div class="form-group" style="margin-bottom:0">
+                        <label style="font-size:0.75rem">Mode</label>
+                        <select class="f-pay-row-mode" onchange="onPayModeChange()"><option>Cash</option><option>UPI</option><option>Bank Transfer</option><option>Cheque</option></select>
+                    </div>
+                    <div style="height:38px"></div> <!-- Spacer substitute -->
                 </div>
             </div>
             <button class="btn btn-outline btn-sm" onclick="addPaymentModeRow()" style="margin-bottom:14px;width:100%;border-style:dashed">+ Add Another Mode (Split Payment)</button>
@@ -7212,10 +7212,10 @@ window.addPaymentModeRow = function() {
     div.style = 'display:grid;grid-template-columns:1fr 120px 40px;gap:8px;margin-bottom:8px;align-items:end';
     div.innerHTML = `
         <div class="form-group" style="margin-bottom:0">
-            <select class="f-pay-row-mode" onchange="onPayModeChange()"><option>Cash</option><option>UPI</option><option>Bank Transfer</option><option>Cheque</option></select>
+            <input type="number" class="f-pay-row-amount" placeholder="0.00" oninput="onPayAmountChange()">
         </div>
         <div class="form-group" style="margin-bottom:0">
-            <input type="number" class="f-pay-row-amount" placeholder="0.00" oninput="onPayAmountChange()">
+            <select class="f-pay-row-mode" onchange="onPayModeChange()"><option>Cash</option><option>UPI</option><option>Bank Transfer</option><option>Cheque</option></select>
         </div>
         <button class="btn-icon" onclick="this.parentNode.remove();onPayAmountChange()" style="height:38px;color:var(--danger)">🗑️</button>
     `;
