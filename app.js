@@ -242,10 +242,11 @@ const DB = {
 
     // Check if user can post to a back-date (Admin only)
     canPostBackDate(dateStr) {
-        if (!window.currentUser) return false;
+        // Use the local currentUser variable which is the source of truth
+        const u = currentUser; 
+        if (!u) return false;
         
         // Robust role checking
-        const u = window.currentUser;
         const roles = (Array.isArray(u.roles) ? u.roles : [u.role]).map(r => (r || '').toLowerCase());
         const isAdmin = roles.some(r => r === 'admin' || r === 'administrator' || r === 'owner' || r === 'manager');
         
@@ -794,6 +795,7 @@ async function login() {
 
 async function doLoginSuccess(user, isRestore = false) {
     currentUser = user;
+    window.currentUser = user; // Ensure global access too
     loginScreen.classList.add('hidden');
     appEl.classList.remove('hidden');
     $('sidebar-username').textContent = user.name;
