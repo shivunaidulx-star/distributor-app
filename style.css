@@ -2037,12 +2037,16 @@ body {
     .modal-body .form-row,
     .modal-body .form-row-3 { grid-template-columns: 1fr; }
 
-    /* Buttons in single row */
+    /* Buttons in single row - Relative pos to avoid obscuring inputs */
     .modal-actions {
         display: flex !important;
         flex-direction: row !important;
         gap: 6px !important;
         padding-bottom: 24px !important;
+        position: relative !important;
+        background: transparent !important;
+        margin-top: 10px !important;
+    }
     }
     .modal-actions .btn {
         flex: 1 !important;
