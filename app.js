@@ -24,6 +24,9 @@ const DB = {
         const coreTables = ['users', 'categories', 'uom']; 
         const tables = ['parties', 'inventory', 'sales_orders', 'invoices', 'payments', 'expenses', 'party_ledger', 'stock_ledger', 'packers', 'delivery_persons', 'delivery'];
         
+        // Mark last refresh time
+        this.cache._lastRefresh = Date.now();
+
         // 1. Load settings and core tables FIRST - block the boot sequence for these
         try {
             const [settings, ...coreResults] = await Promise.all([
@@ -65,6 +68,26 @@ const DB = {
         this.cache['db_users'] = this.cache['users'] || [];
         this.cache['db_categories'] = this.cache['categories'] || [];
         this.cache['db_uom'] = this.cache['uom'] || [];
+
+        // 3. Setup Auto-Sync (every 5 minutes or when tab becomes visible)
+        if (!this._syncInit) {
+            this._syncInit = true;
+            setInterval(() => this.backgroundSync(), 5 * 60 * 1000); // 5 min
+            window.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'visible' && (Date.now() - this.cache._lastRefresh > 2 * 60 * 1000)) {
+                    console.log('Tab visible, auto-refreshing stale data...');
+                    this.backgroundSync();
+                }
+            });
+        }
+    },
+
+    async backgroundSync() {
+        console.log('Running background sync...');
+        const tables = ['sales_orders', 'invoices', 'payments', 'inventory', 'parties'];
+        await this.refreshTables(tables);
+        this.cache._lastRefresh = Date.now();
+        // Removed forced UI refresh to prevent interrupting the user's active workflow
     },
 
     // Refresh only specific tables — much faster than full refresh after saves
@@ -112,6 +135,18 @@ const DB = {
             res[camel] = obj[key];
         }
         return res;
+    },
+
+    // Show skeleton loaders in a container
+    showSkeleton(containerId, rows = 5) {
+        const el = typeof containerId === 'string' ? document.getElementById(containerId) : containerId;
+        if (!el) return;
+        let html = '<div style="padding:20px">';
+        for (let i = 0; i < rows; i++) {
+            html += '<div class="skeleton skeleton-card"></div>';
+        }
+        html += '</div>';
+        el.innerHTML = html;
     },
 
     // Convert empty strings to null for date/numeric columns so Postgres doesn't choke
@@ -865,7 +900,31 @@ window.addEventListener('mousedown', function (e) {
     }
 });
 
+// --- App Init ---
 document.addEventListener('DOMContentLoaded', async () => {
+    initApp();
+    setupPullToRefresh();
+});
+
+function setupPullToRefresh() {
+    let touchStart = 0;
+    const content = $('page-content');
+    if (!content) return;
+
+    content.addEventListener('touchstart', e => {
+        if (content.scrollTop === 0) touchStart = e.touches[0].pageY;
+    }, { passive: true });
+
+    content.addEventListener('touchend', e => {
+        const touchEnd = e.changedTouches[0].pageY;
+        if (content.scrollTop === 0 && touchEnd - touchStart > 100) {
+            showToast('Refreshing...', 'info');
+            DB.refresh().then(() => navigateTo(currentPage));
+        }
+    }, { passive: true });
+}
+
+async function initApp() {
     const loadingEl = $('app-loading');
     
     // Safety timeout: if app doesn't boot in 10s, try to proceed anyway
@@ -927,7 +986,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         const loadingText = document.querySelector('#app-loading p');
         if (loadingText) loadingText.textContent = 'Boot Interrupted';
     }
-});
+}
+
 
 // --- Modal ---
 function openModal(title, html, footer, isFullScreen = false) {
@@ -1564,6 +1624,7 @@ function filterNavWidget(q) {
     rows.forEach(r => r.style.display = (!s || r.dataset.name.includes(s)) ? '' : 'none');
 }
 async function renderDashboard() {
+    DB.showSkeleton(pageContent, 3);
     const role = currentUser.role;
     // Batch fetch data from Supabase
     const [invoices, payments, expenses, inventory, salesOrders, dels, parties] = await Promise.all([
@@ -2031,6 +2092,7 @@ function saveDashboardSettings() {
 let _partyTab = 'all';
 
 async function renderParties() {
+    DB.showSkeleton(pageContent, 5);
     window._bulkParties = new Set();
     const parties = await DB.getAll('parties');
     const customers = parties.filter(p => p.type === 'Customer');
@@ -2081,6 +2143,7 @@ async function renderParties() {
             </div>
         </div></div>
         <input type="file" id="party-file-input" accept=".csv,.txt,.xlsx,.xls" style="display:none" onchange="processPartyImport(event)">`;
+    initSwipeActions();
 }
 function renderPartyRows(parties) {
     if (!parties.length) return '<tr><td colspan="8"><div class="empty-state"><span class="empty-icon">👥</span><p>No parties found</p></div></td></tr>';
@@ -2105,7 +2168,7 @@ function renderPartyRows(parties) {
             paymentTerms: `<td style="font-size:0.82rem">${p.paymentTerms ? `<span class="badge badge-info" style="font-size:0.72rem">${escapeHtml(p.paymentTerms)}</span>` : '<span style="color:var(--text-muted)">-</span>'}</td>`,
             address:      `<td style="font-size:0.82rem;color:var(--text-muted);max-width:220px;white-space:normal">${escapeHtml(p.address || '-')}</td>`,
         };
-        return `<tr data-type="${p.type}"><td style="width:36px;text-align:center"><input type="checkbox" class="bulk-chk-party" data-id="${p.id}" onchange="toggleBulkParty('${p.id}',this)" style="width:16px;height:16px;cursor:pointer" ${window._bulkParties && window._bulkParties.has(p.id) ? 'checked' : ''}></td>${cols.map(c => cellMap[c.key] || '').join('')}</tr>`;
+        return `<tr class="swipe-row" data-type="${p.type}"><td style="width:36px;text-align:center"><input type="checkbox" class="bulk-chk-party" data-id="${p.id}" onchange="toggleBulkParty('${p.id}',this)" style="width:16px;height:16px;cursor:pointer" ${window._bulkParties && window._bulkParties.has(p.id) ? 'checked' : ''}></td>${cols.map(c => cellMap[c.key] || '').join('')}</tr>`;
     }).join('');
 }
 async function filterPartyTable() {
@@ -2889,6 +2952,7 @@ function updateNavBadges(inventory) {
 }
 
 async function renderInventory() {
+    DB.showSkeleton(pageContent, 5);
     window._bulkItems = new Set();
     // Fetch all required data in parallel
     const [items, salesOrders] = await Promise.all([
@@ -4626,9 +4690,16 @@ function onSoDiscAmtChange() {
 }
 window.updateSoTotal = function() {
     const subtotal = soItems.reduce((s, l) => s + l.amount, 0);
-    const discAmt = +($('f-so-disc-amt')?.value || 0);
+    const pct = +(($('f-so-disc-pct') || {}).value || 0);
+    let discAmt = +(($('f-so-disc-amt') || {}).value || 0);
     
-    // UI sync ensures discAmt exactly reflects discPct, so we never double-deduct
+    // Dynamically recalculate discount amount if percentage is set, so it updates when items are added
+    if (pct > 0) {
+        discAmt = +(subtotal * pct / 100).toFixed(2);
+        const amtEl = $('f-so-disc-amt');
+        if (amtEl) amtEl.value = discAmt;
+    }
+    
     const totalDiscount = discAmt;
     let finalTotal = subtotal - totalDiscount;
     
@@ -5444,6 +5515,7 @@ async function renderInvoices() {
         <div class="section-toolbar">
             <div class="filter-group"><select id="inv-type-filter" onchange="filterInvTable2()"><option value="">All</option><option value="sale">Sale</option><option value="purchase">Purchase</option></select>
             <input class="search-box" id="inv-search2" placeholder="Search..." oninput="filterInvTable2()" style="width:200px">
+            <button class="detailed-view-btn ${window._detailedInvoices ? 'active' : ''}" onclick="toggleDetailedInvoices()">🔍 Detailed View</button>
             <button class="btn btn-outline" onclick="openColumnPersonalizer('invoices','renderInvoices')" style="border-color:var(--accent);color:var(--accent)">⚙️ Columns</button></div>
             <div class="filter-group">
                 <button class="btn btn-primary" onclick="openInvoiceModal('sale')">+ Sale Invoice</button>
@@ -5456,6 +5528,8 @@ async function renderInvoices() {
                 <tbody id="invoice-tbody">${renderInvoiceRows(visibleInvoices)}</tbody></table>
             </div>
         </div></div>`;
+    
+    initSwipeActions();
 }
 async function getInvoicePaidAmount(invNo) {
     const payments = await DB.getAll('payments');
@@ -5480,6 +5554,11 @@ function renderInvoiceRows(invs) {
     const canPay = canEdit() || currentUser.role === 'Salesman';
     const cols = ColumnManager.get('invoices').filter(c => c.visible);
     return invs.map(i => {
+        let detailedRow = '';
+        if (window._detailedInvoices && i.items && i.items.length) {
+            const itemNames = i.items.map(li => `• ${li.name}`).join(' ');
+            detailedRow = `<tr class="detailed-info-row"><td colspan="${cols.length}" style="font-size:0.75rem;padding:4px 18px;color:var(--text-muted);background:#fafafa">${itemNames}</td></tr>`;
+        }
         const cellMap = {
             date:      `<td>${fmtDate(i.date)}</td>`,
             invoiceNo: `<td style="font-weight:600;text-decoration:${i.status === 'cancelled' ? 'line-through' : 'none'}">${i.invoiceNo}${i.vyaparInvoiceNo ? `<br><span style="font-size:0.7rem;font-weight:500;color:var(--primary)">V: ${escapeHtml(i.vyaparInvoiceNo)}</span>` : ''}${i.assignedTo ? `<br><span style="font-size:0.68rem;color:var(--info);font-weight:600">👤 ${escapeHtml(i.assignedTo)}${i.handoverDate ? ' · ' + fmtDate(i.handoverDate) : ''}</span>` : ''}</td>`,
@@ -6151,9 +6230,16 @@ function updateInvoiceTotal() {
     const sub      = invoiceItems.reduce((s, li) => s + li.amount, 0);
     const gst      = +(($('f-inv-gst')      || {}).value || 0);
     const roundoff = +(($('f-inv-roundoff') || {}).value || 0);
-    const discAmt  = +(($('f-inv-disc-amt') || {}).value || 0);
+    const pct      = +(($('f-inv-disc-pct') || {}).value || 0);
+    let discAmt    = +(($('f-inv-disc-amt') || {}).value || 0);
     
-    // UI sync ensures discAmt exactly reflects discPct, so we never double-deduct
+    // Dynamically recalculate discount amount if percentage is set, so it updates when items are added
+    if (pct > 0) {
+        discAmt = +(sub * pct / 100).toFixed(2);
+        const amtEl = $('f-inv-disc-amt');
+        if (amtEl) amtEl.value = discAmt;
+    }
+
     const totalDiscount = discAmt;
 
     // Prices are GST-inclusive; total = subtotal + roundoff - global discounts
@@ -7228,7 +7314,7 @@ window.autoAllocPayment = function () {
     let amt = 0;
     document.querySelectorAll('.f-pay-row-amount').forEach(inp => amt += (+inp.value || 0));
     const disc = +($('f-pay-discount')?.value) || 0;
-    let remaining = amt + disc;
+    let remaining = +(amt + disc).toFixed(2);
 
     // Zero out unchecked invoices first
     document.querySelectorAll('.pay-alloc-chk:not(:checked)').forEach(chk => {
@@ -7243,7 +7329,7 @@ window.autoAllocPayment = function () {
         const max = +chk.dataset.max;
         if (remaining >= max) {
             inp.value = max.toFixed(2);
-            remaining -= max;
+            remaining = +(remaining - max).toFixed(2);
         } else if (remaining > 0) {
             inp.value = remaining.toFixed(2);
             remaining = 0;
@@ -7412,13 +7498,18 @@ async function savePayment() {
                 id: DB.id(),
                 amount: row.amount,
                 discount: rowDisc,
-                totalReduction: row.amount + rowDisc,
+                totalReduction: +(row.amount + rowDisc).toFixed(2),
                 mode: row.mode
             };
             await DB.insert('payments', payData);
             
             // Record each mode in ledger
-            await addPartyLedgerEntry(payPartyId, payPartyName, payType === 'in' ? 'Payment In' : 'Payment Out', row.amount * (payType === 'in' ? -1 : 1), payRefNo, row.mode, invNo);
+            await addPartyLedgerEntry(payPartyId, payPartyName, payType === 'in' ? 'Payment In' : 'Payment Out', row.amount * (payType === 'in' ? -1 : 1), payRefNo, row.mode + (invNo ? ' [' + invNo + ']' : ''), invNo);
+            
+            // If there's a discount, record it as a separate ledger entry to ensure balance is correct
+            if (rowDisc > 0) {
+                await addPartyLedgerEntry(payPartyId, payPartyName, payType === 'in' ? 'Discount Allowed' : 'Discount Received', rowDisc * (payType === 'in' ? -1 : 1), payRefNo, 'Discount' + (invNo ? ' [' + invNo + ']' : ''), invNo);
+            }
         }
         incrementPayNo();
 
@@ -7435,12 +7526,11 @@ async function savePayment() {
             });
         }
 
-        // Update party balance
-        const parties = await DB.getAll('parties');
-        const party = parties.find(p => p.id === payPartyId);
+        // Update party balance explicitly
+        const party = (await DB.getAll('parties')).find(p => p.id === payPartyId);
         if (party) {
             const balChange = payType === 'in' ? -totalReduction : totalReduction;
-            const newBal = (party.balance || 0) + balChange;
+            const newBal = +( (party.balance || 0) + balChange ).toFixed(2);
             await DB.update('parties', party.id, { balance: newBal });
         }
 
@@ -8923,11 +9013,11 @@ async function generateInvoiceFromPacked(orderId) {
             <div style="display:flex; justify-content:flex-end; gap:12px; align-items:flex-end; margin-top:8px; flex-wrap:wrap">
                 <div class="form-group" style="width:90px; margin-bottom:0">
                     <label style="font-size:0.65rem">Disc %</label>
-                    <input type="number" id="f-inv-disc-pct" value="0" min="0" max="100" step="0.01" oninput="updateInvoiceTotal()">
+                    <input type="number" id="f-inv-disc-pct" value="0" min="0" max="100" step="0.01" oninput="onInvDiscPctChange()">
                 </div>
                 <div class="form-group" style="width:90px; margin-bottom:0">
                     <label style="font-size:0.65rem">Disc ₹</label>
-                    <input type="number" id="f-inv-disc-amt" value="0" min="0" step="0.01" oninput="updateInvoiceTotal()">
+                    <input type="number" id="f-inv-disc-amt" value="0" min="0" step="0.01" oninput="onInvDiscAmtChange()">
                 </div>
             </div>
             
@@ -9062,7 +9152,17 @@ async function confirmBulkInvoices() {
         ]);
 
         let successCount = 0;
+        let skippedCount = 0;
+        const allInvoices = await DB.getAll('invoices');
+
         for (const r of rows) {
+            // Check if invoice already exists (indempotency check)
+            if (allInvoices.some(inv => inv.invoiceNo === r.invNo)) {
+                console.warn(`Invoice ${r.invNo} already exists, skipping.`);
+                skippedCount++;
+                continue;
+            }
+
             const o = orders.find(x => x.id === r.orderId);
             if (!o) continue;
 
@@ -9117,9 +9217,14 @@ async function confirmBulkInvoices() {
             ops.push(DB.rawInsert('invoices', invData));
             ops.push(DB.rawUpdate('salesorders', o.id, { invoiceNo: r.invNo }));
 
-            await Promise.all(ops);
-            incrementVyaparNo();
-            successCount++;
+            try {
+                await Promise.all(ops);
+                incrementVyaparNo();
+                successCount++;
+            } catch (pErr) {
+                console.error(`Failed to commit invoice ${r.invNo}:`, pErr);
+                throw new Error(`Critical failure at Invoice ${r.invNo}: ${pErr.message}. Some invoices might have been generated.`);
+            }
         }
 
         await DB.refreshTables(['invoices', 'inventory', 'parties', 'sales_orders']);
@@ -10042,6 +10147,10 @@ function renderReports() {
             <div class="report-card" onclick="showReport('user-outstanding')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(239,68,68,0.12),rgba(249,115,22,0.08))"><div class="report-icon">👤💰</div></div><div class="report-text"><h4>Outstanding by User</h4><p>Pending bills grouped by salesman</p></div></div>
             <div class="report-card" onclick="showReport('collection-allocations')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(59,130,246,0.12),rgba(37,99,235,0.08))"><div class="report-icon">👤💳</div></div><div class="report-text"><h4>Collection Allocations</h4><p>Track assigned invoices & payments</p></div></div>
             <div class="report-card" onclick="showReport('daybook')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(20,184,166,0.12),rgba(6,182,212,0.08))"><div class="report-icon">📒</div></div><div class="report-text"><h4>Day Book</h4><p>Date-wise transaction summary</p></div></div>
+            <div class="report-card" onclick="showReport('stock-aging')"><div class="report-icon-wrap" style="background:var(--bg-primary)"><div class="report-icon">⏳</div></div><div class="report-text"><h4>Stock Aging</h4><p>Stock staying >30/60/90 days</p></div></div>
+            <div class="report-card" onclick="showReport('salesman-ach')"><div class="report-icon-wrap" style="background:var(--bg-primary)"><div class="report-icon">🎯</div></div><div class="report-text"><h4>Target vs Achievement</h4><p>Salesman performance vs targets</p></div></div>
+            <div class="report-card" onclick="showReport('party-soa')"><div class="report-icon-wrap" style="background:var(--bg-primary)"><div class="report-icon">👥</div></div><div class="report-text"><h4>Statement of Account</h4><p>Full party ledger with print</p></div></div>
+            <div class="report-card" onclick="showReport('abc-analysis')"><div class="report-icon-wrap" style="background:var(--bg-primary)"><div class="report-icon">🔍</div></div><div class="report-text"><h4>ABC Analysis</h4><p>Revenue-based item classification</p></div></div>
         </div>
 
         <div class="section-toolbar" style="margin-top:28px">
@@ -10180,6 +10289,61 @@ async function showReport(type) {
         await window.renderCollectionAllocationsRpt();
     }
 
+    if (type === 'stock-aging') {
+        const stockLedger = await DB.getAll('stock_ledger');
+        el.innerHTML = `
+        <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px; display:flex; justify-content:space-between; align-items:center">
+            <h3 style="margin:0">📦 Stock Aging & Expiry Report</h3>
+            <button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-aging','StockAging_${today()}')">📥 Export</button>
+        </div></div>
+        <div id="r-aging-out"></div>`;
+        
+        window.renderStockAgingRpt = async function() {
+            let html = '<div class="table-wrapper"><table class="data-table" id="tbl-aging"><thead><tr><th>Item Name</th><th>Code</th><th>Current Stock</th><th>0-30 Days</th><th>31-60 Days</th><th>61-90 Days</th><th>>90 Days</th><th>Expiry</th></tr></thead><tbody>';
+            
+            const now = new Date();
+            for (const item of inventory) {
+                if (item.stock <= 0) continue;
+                
+                const ledger = stockLedger.filter(l => l.itemId === item.id).sort((a,b) => new Date(b.date) - new Date(a.date));
+                let rem = item.stock;
+                let buckets = [0, 0, 0, 0]; // 0-30, 31-60, 61-90, 91+
+                
+                for (const entry of ledger) {
+                    if (rem <= 0) break;
+                    if (entry.qty > 0) { // Positive movement (Purchase/Adjustment)
+                        const addedQty = Math.min(rem, entry.qty);
+                        const days = Math.floor((now - new Date(entry.date)) / (1000*60*60*24));
+                        if (days <= 30) buckets[0] += addedQty;
+                        else if (days <= 60) buckets[1] += addedQty;
+                        else if (days <= 90) buckets[2] += addedQty;
+                        else buckets[3] += addedQty;
+                        rem -= addedQty;
+                    }
+                }
+                // If there's still remainder, it's very old stock (older than ledger history)
+                if (rem > 0) buckets[3] += rem;
+
+                const expiryDate = item.expiryDate ? fmtDate(item.expiryDate) : '-';
+                const isNearExpiry = item.expiryDate && (new Date(item.expiryDate) - now < 30 * 24*60*60*1000);
+
+                html += `<tr>
+                    <td><strong>${escapeHtml(item.name)}</strong></td>
+                    <td>${item.code || '-'}</td>
+                    <td>${item.stock} ${item.unit || 'Pcs'}</td>
+                    <td>${buckets[0] || '-'}</td>
+                    <td>${buckets[1] || '-'}</td>
+                    <td>${buckets[2] || '-'}</td>
+                    <td style="color:${buckets[3]>0?'var(--danger)':'inherit'}">${buckets[3] || '-'}</td>
+                    <td style="color:${isNearExpiry?'var(--danger)':'inherit'}">${expiryDate}</td>
+                </tr>`;
+            }
+            html += '</tbody></table></div>';
+            $('r-aging-out').innerHTML = html;
+        };
+        renderStockAgingRpt();
+    }
+
     if (type === 'purchases') {
         window._rPurchAll = invoices.filter(i => i.type === 'purchase' && i.status !== 'cancelled');
         const monthStart = today().substring(0, 8) + '01';
@@ -10197,6 +10361,161 @@ async function showReport(type) {
         <div id="r-p-out"></div>`;
         renderPurchaseRpt();
     }
+    if (type === 'salesman-ach') {
+        const monthStart = today().substring(0, 8) + '01';
+        el.innerHTML = `
+        <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
+            <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
+                <div class="form-group"><label>Month</label><input type="month" id="r-sa-month" value="${today().substring(0,7)}" onchange="renderSalesmanAchRpt()"></div>
+                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-salesman-ach','SalesmanPerformance_${today()}')">📥 Export</button></div>
+            </div>
+        </div></div>
+        <div id="r-sa-out"></div>`;
+        
+        window.renderSalesmanAchRpt = async function() {
+            const selMonth = $('r-sa-month').value; // YYYY-MM
+            const start = selMonth + '-01';
+            const end = selMonth + '-31';
+
+            const filteredInvoices = invoices.filter(i => i.type === 'sale' && i.status !== 'cancelled' && i.date >= start && i.date <= end);
+            const filteredPayments = payments.filter(p => p.type === 'in' && p.date >= start && p.date <= end);
+            const salesmanUsers = users.filter(u => Array.isArray(u.roles) ? u.roles.includes('Salesman') : u.role === 'Salesman');
+
+            let html = '<div class="table-wrapper"><table class="data-table" id="tbl-salesman-ach"><thead><tr><th>Salesman</th><th>Target</th><th>Achievement</th><th>Achievement %</th><th>Collections</th></tr></thead><tbody>';
+            
+            for (const u of salesmanUsers) {
+                const sales = filteredInvoices.filter(i => i.createdBy === u.name).reduce((s, i) => s + i.total, 0);
+                const colls = filteredPayments.filter(p => p.createdBy === u.name).reduce((s, p) => s + p.amount, 0);
+                const target = u.monthlyTarget || 0;
+                const pct = target > 0 ? (sales / target * 100) : 0;
+                const progressClass = pct >= 100 ? 'bg-success' : pct >= 75 ? 'bg-info' : pct >= 50 ? 'bg-warning' : 'bg-danger';
+
+                html += `<tr>
+                    <td style="font-weight:600">${escapeHtml(u.name)}</td>
+                    <td>${currency(target)}</td>
+                    <td style="font-weight:600">${currency(sales)}</td>
+                    <td>
+                        <div style="display:flex;align-items:center;gap:10px">
+                            <div class="progress-bar-wrap" style="flex:1;height:8px;background:#eee;border-radius:4px;overflow:hidden">
+                                <div style="width:${Math.min(100, pct)}%;height:100%;background:${pct >= 100 ? '#10b981' : '#f97316'}"></div>
+                            </div>
+                            <span style="font-size:0.75rem;font-weight:700">${pct.toFixed(1)}%</span>
+                        </div>
+                    </td>
+                    <td class="amount-green">${currency(colls)}</td>
+                </tr>`;
+            }
+            html += '</tbody></table></div>';
+            $('r-sa-out').innerHTML = html;
+        };
+        renderSalesmanAchRpt();
+    }
+
+    if (type === 'party-soa') {
+        const monthStart = today().substring(0, 8) + '01';
+        el.innerHTML = `
+        <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
+            <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
+                <div class="form-group"><label>Select Party</label><input id="r-soa-party-input" placeholder="Type party name..." style="width:200px"></div>
+                <div class="form-group"><label>From Date</label><input type="date" id="r-soa-from" value="${monthStart}" onchange="renderPartySOARpt()"></div>
+                <div class="form-group"><label>To Date</label><input type="date" id="r-soa-to" value="${today()}" onchange="renderPartySOARpt()"></div>
+                <div class="form-group" style="align-self:flex-end">
+                    <button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-soa','Statement_${today()}')">📥 Export</button>
+                    <button class="btn btn-outline btn-sm" onclick="window.print()">🖨️ Print</button>
+                </div>
+            </div>
+        </div></div>
+        <div id="r-soa-out"></div>`;
+        
+        let selectedPartyId = null;
+        initSearchDropdown('r-soa-party-input', buildPartySearchList(parties), function(p) {
+            selectedPartyId = p.id;
+            renderPartySOARpt();
+        });
+
+        window.renderPartySOARpt = async function() {
+            if (!selectedPartyId) return $('r-soa-out').innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted)">Please select a party to view statement.</div>';
+            
+            const from = $('r-soa-from').value;
+            const to = $('r-soa-to').value;
+            const ledger = (await DB.getAll('party_ledger')).filter(l => l.partyId === selectedPartyId && l.date >= from && l.date <= to).sort((a,b) => new Date(a.date) - new Date(b.date));
+            const party = parties.find(p => p.id === selectedPartyId);
+
+            let html = `
+                <div class="card"><div class="card-body padded">
+                    <div style="display:flex;justify-content:space-between;border-bottom:2px solid #eee;padding-bottom:10px;margin-bottom:15px">
+                        <div><h2 style="margin:0">${escapeHtml(party.name)}</h2><p style="margin:0;color:var(--text-muted)">${party.mobile || ''} | ${party.address || ''}</p></div>
+                        <div style="text-align:right"><h4 style="margin:0">Statement of Account</h4><p style="margin:0;color:var(--text-muted)">${fmtDate(from)} to ${fmtDate(to)}</p></div>
+                    </div>
+                    <div class="table-wrapper"><table class="data-table" id="tbl-soa"><thead><tr><th>Date</th><th>Type</th><th>Ref No</th><th>Description</th><th>Debit (Out)</th><th>Credit (In)</th><th>Balance</th></tr></thead><tbody>`;
+            
+            ledger.forEach(l => {
+                const debit = l.amount > 0 ? l.amount : 0;
+                const credit = l.amount < 0 ? Math.abs(l.amount) : 0;
+                html += `<tr>
+                    <td>${fmtDate(l.date)}</td>
+                    <td><span class="badge ${l.type.includes('Payment')?'badge-success':'badge-info'}">${l.type}</span></td>
+                    <td>${l.docNo || '-'}</td>
+                    <td style="font-size:0.8rem">${escapeHtml(l.notes || '')}</td>
+                    <td>${debit ? currency(debit) : '-'}</td>
+                    <td class="amount-green">${credit ? currency(credit) : '-'}</td>
+                    <td style="font-weight:600;color:${l.balance>0?'var(--danger)':'var(--success)'}">${currency(Math.abs(l.balance))} ${l.balance>0?'Dr':'Cr'}</td>
+                </tr>`;
+            });
+            html += '</tbody></table></div></div></div>';
+            $('r-soa-out').innerHTML = html;
+        };
+    }
+
+    if (type === 'abc-analysis') {
+        el.innerHTML = `
+        <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px; display:flex; justify-content:space-between; align-items:center">
+            <h3 style="margin:0">🔍 ABC Inventory Analysis</h3>
+            <button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-abc','ABCAnalysis_${today()}')">📥 Export</button>
+        </div></div>
+        <div id="r-abc-out"></div>`;
+
+        window.renderABCAnalysisRpt = async function() {
+            // Revenue contribution based on all-time invoices
+            const itemRevenue = {};
+            invoices.filter(i => i.type === 'sale' && i.status !== 'cancelled').forEach(inv => {
+                inv.items.forEach(li => {
+                    itemRevenue[li.itemId] = (itemRevenue[li.itemId] || 0) + (li.qty * li.price);
+                });
+            });
+
+            const totalRev = Object.values(itemRevenue).reduce((a,b) => a+b, 0);
+            const sorted = inventory.map(item => ({
+                ...item,
+                revenue: itemRevenue[item.id] || 0,
+                pct: totalRev > 0 ? ((itemRevenue[item.id] || 0) / totalRev * 100) : 0
+            })).sort((a,b) => b.revenue - a.revenue);
+
+            let cumulativePct = 0;
+            let html = '<div class="table-wrapper"><table class="data-table" id="tbl-abc"><thead><tr><th>Rank</th><th>Item Name</th><th>Revenue (₹)</th><th>% Share</th><th>Cumul %</th><th>Class</th></tr></thead><tbody>';
+            
+            sorted.forEach((item, idx) => {
+                cumulativePct += item.pct;
+                let abcClass = 'C';
+                let color = '#991b1b'; // Red for C
+                if (cumulativePct <= 70) { abcClass = 'A'; color = '#10b981'; } 
+                else if (cumulativePct <= 90) { abcClass = 'B'; color = '#f97316'; }
+                
+                html += `<tr>
+                    <td>${idx + 1}</td>
+                    <td style="font-weight:600">${escapeHtml(item.name)}</td>
+                    <td>${currency(item.revenue)}</td>
+                    <td>${item.pct.toFixed(2)}%</td>
+                    <td>${cumulativePct.toFixed(2)}%</td>
+                    <td><span class="badge" style="background:${color};color:#fff;font-weight:800;width:30px;text-align:center">${abcClass}</span></td>
+                </tr>`;
+            });
+            html += '</tbody></table></div>';
+            $('r-abc-out').innerHTML = html;
+        };
+        renderABCAnalysisRpt();
+    }
+
     if (type === 'pnl') {
         window._rPnlInv = invoices.filter(i => i.status !== 'cancelled');
         window._rPnlExp = expenses;
@@ -11597,6 +11916,10 @@ function openUserModal(id) {
                 <button type="button" onclick="const p=$('f-user-pin');p.type=p.type==='password'?'text':'password'" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:1rem">👁</button>
             </div>
         </div>
+        <div class="form-group">
+            <label>Monthly Sales Target (₹) <span style="font-size:0.78rem;color:var(--text-muted)">(optional)</span></label>
+            <input type="number" id="f-user-target" class="form-control" value="${u ? (u.monthlyTarget || 0) : 0}" placeholder="e.g. 500000">
+        </div>
         <div class="form-group" id="extra-perms-section">
             <label>Extra Permissions <span style="font-size:0.78rem;color:var(--text-muted)">(beyond role defaults)</span></label>
             <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:8px">
@@ -11639,13 +11962,13 @@ async function saveUser(id) {
     if (!selectedRoles.length) return alert('Select at least one role');
     if (!pin || !/^\d{4,6}$/.test(pin)) return alert('PIN must be 4 to 6 digits (numbers only)');
 
-    // Check userId uniqueness
+    const target = parseFloat($('f-user-target').value) || 0;
     const allUsers = DB.cache['users'] || [];
     const conflict = allUsers.find(u => u.userId && u.userId.toLowerCase() === userId && u.id !== id);
     if (conflict) return alert(`User ID "${userId}" is already taken by ${conflict.name}`);
 
     const primaryRole = selectedRoles[0];
-    const data = { name, userId, role: primaryRole, roles: selectedRoles, pin, extra_perms: extraPerms };
+    const data = { name, userId, role: primaryRole, roles: selectedRoles, pin, monthlyTarget: target, extra_perms: extraPerms };
 
     try {
         if (id) {
@@ -14953,4 +15276,141 @@ async function viewPaySlip(staffId, month) {
 }
 
 
+
+
+// =============================================
+//  GLOBAL SEARCH (OMNIBOX)
+// =============================================
+let _searchTimer;
+function onGlobalSearch(q) {
+    clearTimeout(_searchTimer);
+    if (!q || q.trim().length < 2) return hideSearchResults();
+    _searchTimer = setTimeout(() => executeGlobalSearch(q.trim()), 300);
+}
+
+async function executeGlobalSearch(q) {
+    const lq = q.toLowerCase();
+    const [parties, inventory, invoices] = await Promise.all([
+        DB.getAll('parties'),
+        DB.getAll('inventory'),
+        DB.getAll('invoices')
+    ]);
+
+    const results = {
+        parties: parties.filter(p => p.name.toLowerCase().includes(lq) || (p.mobile && p.mobile.includes(lq))).slice(0, 5),
+        inventory: inventory.filter(p => p.name.toLowerCase().includes(lq) || (p.code && p.code.toLowerCase().includes(lq))).slice(0, 5),
+        invoices: invoices.filter(p => p.invoiceNo.toLowerCase().includes(lq) || p.partyName.toLowerCase().includes(lq)).slice(0, 5)
+    };
+
+    renderSearchResultsOverlay(q, results);
+}
+
+function renderSearchResultsOverlay(q, results) {
+    let overlay = document.getElementById('search-results-overlay');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'search-results-overlay';
+        overlay.className = 'search-results-overlay';
+        document.body.appendChild(overlay);
+    }
+    overlay.classList.remove('hidden');
+
+    const total = results.parties.length + results.inventory.length + results.invoices.length;
+    if (total === 0) {
+        overlay.innerHTML = `<div style="padding:20px;text-align:center;color:var(--text-muted)">No results found for "${escapeHtml(q)}"</div>`;
+        return;
+    }
+
+    let html = `<div class="search-results-header">Results for "${escapeHtml(q)}"</div>`;
+    
+    if (results.parties.length) {
+        html += `<div class="search-category">Parties</div>`;
+        results.parties.forEach(p => {
+            html += `<div class="search-item" onclick="hideSearchResults();navigateTo('parties');setTimeout(()=>openPartyModal('${p.id}'),300)">
+                <div class="search-item-title">${escapeHtml(p.name)}</div>
+                <div class="search-item-detail">${p.mobile || ''} | Bal: ${currency(p.balance)}</div>
+            </div>`;
+        });
+    }
+    if (results.inventory.length) {
+        html += `<div class="search-category">Inventory</div>`;
+        results.inventory.forEach(p => {
+            html += `<div class="search-item" onclick="hideSearchResults();navigateTo('inventory')">
+                <div class="search-item-title">${escapeHtml(p.name)}</div>
+                <div class="search-item-detail">Code: ${p.code || '-'} | Stock: ${p.stock || 0} ${p.unit || 'Pcs'}</div>
+            </div>`;
+        });
+    }
+    if (results.invoices.length) {
+        html += `<div class="search-category">Invoices</div>`;
+        results.invoices.forEach(p => {
+            html += `<div class="search-item" onclick="hideSearchResults();viewInvoice('${p.invoiceNo}')">
+                <div class="search-item-title">${p.invoiceNo}</div>
+                <div class="search-item-detail">${p.partyName} | ${currency(p.total)}</div>
+            </div>`;
+        });
+    }
+
+    overlay.innerHTML = html;
+}
+
+function hideSearchResults() {
+    const overlay = document.getElementById('search-results-overlay');
+    if (overlay) overlay.classList.add('hidden');
+}
+
+function renderSearchResults() {
+    // This is a placeholder for navigateTo('search') if ever used
+    pageContent.innerHTML = `<div class="card"><div class="card-body">Use the top search bar for global search.</div></div>`;
+}
+
+// =============================================
+//  MOBILE SWIPE ACTIONS
+// =============================================
+function initSwipeActions() {
+    if (window.innerWidth > 768) return; // Desktop doesn't need swipes
+    
+    const rows = document.querySelectorAll('.swipe-row');
+    rows.forEach(row => {
+        if (row._swipeInit) return;
+        row._swipeInit = true;
+        
+        let startX = 0;
+        let diff = 0;
+        let isSwiping = false;
+
+        row.addEventListener('touchstart', e => {
+            startX = e.touches[0].clientX;
+            isSwiping = true;
+            row.style.transition = 'none';
+        }, { passive: true });
+
+        row.addEventListener('touchmove', e => {
+            if (!isSwiping) return;
+            const x = e.touches[0].clientX;
+            diff = x - startX;
+            // Only allow swiping left (to reveal delete/edit on the right)
+            if (diff < 0) {
+                const move = Math.max(-140, diff); // Max 140px (two buttons)
+                row.style.transform = `translateX(${move}px)`;
+            }
+        }, { passive: true });
+
+        row.addEventListener('touchend', e => {
+            isSwiping = false;
+            row.style.transition = 'transform 0.3s cubic-bezier(0.18, 0.89, 0.32, 1.28)';
+            if (diff < -60) {
+                row.style.transform = 'translateX(-140px)'; // Stay open
+            } else {
+                row.style.transform = 'translateX(0)';
+            }
+            diff = 0;
+        }, { passive: true });
+
+        // Close on click elsewhere
+        document.addEventListener('touchstart', e => {
+            if (!row.contains(e.target)) row.style.transform = 'translateX(0)';
+        }, { passive: true });
+    });
+}
 

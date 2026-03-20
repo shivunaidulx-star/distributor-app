@@ -184,6 +184,10 @@
             <header class="topbar">
                 <button id="sidebar-toggle" class="sidebar-toggle">☰</button>
                 <h2 id="page-title" class="page-title">Dashboard</h2>
+                <div class="omnibox-container">
+                    <span class="omnibox-icon">🔍</span>
+                    <input type="text" id="global-search" class="omnibox-input" placeholder="Search parties, items, invoices..." oninput="onGlobalSearch(this.value)">
+                </div>
                 <div class="topbar-right">
                     <span class="current-date" id="current-date"></span>
                 </div>
