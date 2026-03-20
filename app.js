@@ -10095,7 +10095,7 @@ async function showReport(type) {
     }
     
     if (type === 'collection-allocations') {
-        window._rAllocAll = invoices.filter(i => i.type === 'sale' && i.status !== 'cancelled' && i.allocatedTo);
+        window._rAllocAll = invoices.filter(i => i.type === 'sale' && i.status !== 'cancelled');
         const collectors = [...new Set(window._rAllocAll.map(i => i.allocatedTo))].filter(Boolean).sort();
         
         el.innerHTML = `
@@ -10135,7 +10135,7 @@ async function showReport(type) {
                 }
                 
                 html += `<tr>
-                    <td><span class="badge badge-info">${escapeHtml(inv.allocatedTo)}</span></td>
+                    <td><span class="badge ${inv.allocatedTo ? 'badge-info' : 'badge-outline'}">${escapeHtml(inv.allocatedTo || 'Unassigned')}</span></td>
                     <td><a href="#" onclick="viewInvoice('${inv.id}')" style="color:var(--primary);text-decoration:underline;font-weight:600">${inv.invoiceNo}</a></td>
                     <td>${fmtDate(inv.date)}</td>
                     <td>${escapeHtml(inv.partyName)}</td>
