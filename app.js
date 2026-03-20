@@ -791,7 +791,7 @@ async function doLoginSuccess(user, isRestore = false) {
     appEl.classList.remove('hidden');
     $('sidebar-username').textContent = user.name;
     const displayRoles = Array.isArray(user.roles) && user.roles.length ? user.roles.join(' | ') : (user.role || '');
-    $('sidebar-role').textContent = displayRoles;
+    $('sidebar-role').textContent = displayRoles + ' (v91)';
     $('sidebar-avatar').textContent = user.name.charAt(0).toUpperCase();
 
     const co = DB.ls.getObj('db_company');
