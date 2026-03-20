@@ -907,6 +907,13 @@ history.pushState(null, '', window.location.href);
 window.addEventListener('popstate', function () {
     history.pushState(null, '', window.location.href);
 });
+window.addEventListener('focusin', (e) => {
+    if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) {
+        setTimeout(() => {
+            e.target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 300);
+    }
+}, true);
 
 // 2. Block horizontal trackpad/wheel scroll that Chrome uses to trigger back/forward
 window.addEventListener('wheel', function (e) {
@@ -4806,7 +4813,7 @@ async function saveSalesOrder(id) {
     const dateVal = $('f-so-date').value;
 
     // 2. Back-date Restriction: Only Admin can post to a date before today
-    if (!DB.canPostBackDate(dateVal)) {
+    if (currentUser.role !== 'Admin' && !DB.canPostBackDate(dateVal)) {
         endSave();
         return alert("Access Denied: Only Admin can post records for a past date.");
     }
@@ -6342,7 +6349,7 @@ async function saveInvoice(id) {
     }
     if (!beginSave()) return;
     const dateVal = $('f-inv-date').value;
-    if (!DB.canPostBackDate(dateVal)) {
+    if (currentUser.role !== 'Admin' && !DB.canPostBackDate(dateVal)) {
         endSave();
         return alert("Access Denied: Only Admin can post invoices for a past date.");
     }
@@ -6885,35 +6892,12 @@ async function renderPayments() {
         </div></div>`;
 }
 function buildPayInvoiceCell(p) {
-    // Multi-invoice allocation — show each invoice + amount
     if (p.allocations && Object.keys(p.allocations).length > 0) {
-        const chips = Object.entries(p.allocations).map(([inv, amt]) =>
-            `<a href="#" onclick="viewInvoiceByNo('${inv}');return false"
-                style="display:inline-flex;align-items:center;gap:4px;background:rgba(249,115,22,0.1);
-                border:1px solid rgba(249,115,22,0.3);border-radius:6px;padding:2px 7px;
-                font-size:0.72rem;font-weight:600;color:var(--primary);text-decoration:none;
-                margin:2px;white-space:nowrap" title="View Invoice">
-                ${escapeHtml(inv)} <span style="color:var(--text-muted)">₹${(+amt).toFixed(0)}</span>
-            </a>`
-        ).join('');
-        const unallocated = p.amount - Object.values(p.allocations).reduce((s, v) => s + (+v), 0);
-        const unallocBadge = unallocated > 0.01
-            ? `<span style="display:inline-block;font-size:0.7rem;color:var(--success);margin-top:2px">+₹${unallocated.toFixed(0)} unallocated</span>`
-            : '';
-        return `<div style="line-height:1.8">${chips}${unallocBadge}</div>`;
+        return Object.entries(p.allocations).map(([inv, amt]) => `${inv} - ${AMT(amt)}`).join(', ');
     }
-    // Single invoice
-    if (p.invoiceNo && p.invoiceNo !== 'Advance') {
-        return `<a href="#" onclick="viewInvoiceByNo('${p.invoiceNo}');return false" class="badge badge-info" style="cursor:pointer;color:white;text-decoration:none">${escapeHtml(p.invoiceNo)}</a>`;
-    }
-    // Advance / unlinked
-    if (p.invoiceNo === 'Advance') {
-        return `<span class="badge badge-warning">Advance</span>`;
-    }
-    return canEdit() && p.type === 'in'
-        ? `<button class="btn-icon" style="font-size:0.7rem;color:var(--accent)" onclick="openLinkInvoiceModal('${p.id}')" title="Link Invoice">🔗 Link</button>`
-        : '<span style="color:var(--text-muted)">—</span>';
+    return p.invoiceNo || '-';
 }
+function AMT(v) { return (+v).toFixed(0); }
 
 function renderPayRows(pays) {
     if (!pays.length) return '<tr><td colspan="8" class="empty-state"><p>No payments found</p></td></tr>';
@@ -7488,7 +7472,7 @@ async function savePayment(id) {
     }
     if (!beginSave()) return;
     const dateVal = $('f-pay-date').value;
-    if (!DB.canPostBackDate(dateVal)) {
+    if (currentUser.role !== 'Admin' && !DB.canPostBackDate(dateVal)) {
         endSave();
         return alert("Access Denied: Only Admin can post payments for a past date.");
     }
@@ -7531,7 +7515,7 @@ async function savePayment(id) {
 
     const payType = $('f-pay-type').value;
     const date = $('f-pay-date').value;
-    if (!DB.canPostBackDate(date)) {
+    if (currentUser.role !== 'Admin' && !DB.canPostBackDate(date)) {
         endSave();
         return alert('Back-dated entries are restricted to Admins/Authorized users.');
     }
@@ -8212,7 +8196,7 @@ async function saveExpense(id) {
     }
     if (!beginSave()) return;
     const dateVal = $('f-exp-date').value;
-    if (!DB.canPostBackDate(dateVal)) {
+    if (currentUser.role !== 'Admin' && !DB.canPostBackDate(dateVal)) {
         endSave();
         return alert("Access Denied: Only Admin can post expenses for a past date.");
     }
@@ -10226,6 +10210,7 @@ function renderReports() {
             <div class="report-card" onclick="showReport('salesman-ach')"><div class="report-icon-wrap" style="background:var(--bg-primary)"><div class="report-icon">🎯</div></div><div class="report-text"><h4>Target vs Achievement</h4><p>Salesman performance vs targets</p></div></div>
             <div class="report-card" onclick="showReport('party-soa')"><div class="report-icon-wrap" style="background:var(--bg-primary)"><div class="report-icon">👥</div></div><div class="report-text"><h4>Statement of Account</h4><p>Full party ledger with print</p></div></div>
             <div class="report-card" onclick="showReport('abc-analysis')"><div class="report-icon-wrap" style="background:var(--bg-primary)"><div class="report-icon">🔍</div></div><div class="report-text"><h4>ABC Analysis</h4><p>Revenue-based item classification</p></div></div>
+            <div class="report-card" onclick="showReport('indent')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(249,115,22,0.12),rgba(234,88,12,0.08))"><div class="report-icon">📋</div></div><div class="report-text"><h4>Purchase Indent</h4><p>Suggested PO based on 30d sales</p></div></div>
         </div>
 
         <div class="section-toolbar" style="margin-top:28px">
@@ -10591,6 +10576,10 @@ async function showReport(type) {
         renderABCAnalysisRpt();
     }
 
+    if (type === 'indent') {
+        renderPurchaseIndentReport(el, inventory, invoices, categories);
+        return;
+    }
     if (type === 'pnl') {
         window._rPnlInv = invoices.filter(i => i.status !== 'cancelled');
         window._rPnlExp = expenses;

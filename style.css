@@ -886,8 +886,13 @@ table { border-collapse: collapse; width: 100%; }
     bottom: 0;
     background: var(--bg-card);
     padding: 12px 0 4px;
-    border-top: 1px solid var(--border);
-    z-index: 5;
+    z-index: 100;
+}
+.modal-actions .btn {
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    padding: 10px 12px;
 }
 
 .modal-footer {
@@ -1992,9 +1997,19 @@ body {
     .action-btns { gap: 8px; }
     .btn-icon { width: 36px; height: 36px; font-size: 1rem; }
 
-    /* Modal actions stack */
-    .modal-actions { flex-direction: column; gap: 10px; }
-    .modal-actions .btn { width: 100%; }
+    /* Modal actions row */
+    .modal-actions {
+        flex-direction: row !important;
+        gap: 8px !important;
+        padding-bottom: 22px !important; /* Extra gap from keyboard */
+    }
+    .modal-actions .btn {
+        width: auto !important;
+        flex: 1 !important;
+        font-size: 0.82rem !important;
+        padding: 10px 4px !important;
+        white-space: nowrap !important;
+    }
 
     /* BUG-008 fix: don't hide columns — let tables scroll horizontally instead */
     /* .data-table th:nth-child(n+6),
@@ -2022,9 +2037,19 @@ body {
     .modal-body .form-row,
     .modal-body .form-row-3 { grid-template-columns: 1fr; }
 
-    /* Buttons full-width, stacked — Save & New stays compact */
-    .modal-actions { flex-direction: column-reverse; }
-    .modal-actions .btn:not(.btn-save-new) { width: 100%; min-height: 48px; font-size: 1rem; }
+    /* Buttons in single row */
+    .modal-actions {
+        display: flex !important;
+        flex-direction: row !important;
+        gap: 6px !important;
+        padding-bottom: 24px !important;
+    }
+    .modal-actions .btn {
+        flex: 1 !important;
+        width: auto !important;
+        min-height: 42px !important;
+        font-size: 0.82rem !important;
+    }
     .modal-footer { flex-direction: column-reverse; gap: 8px; }
     .modal-footer .btn:not(.btn-save-new) { width: 100%; min-height: 48px; }
 
