@@ -514,7 +514,7 @@ table { border-collapse: collapse; width: 100%; }
     pointer-events: none;
 }
 @media (max-width: 768px) {
-    .omnibox-container { display: none; } /* Hide on small mobile by default, will add a toggle later */
+    .omnibox-container { display: none !important; } /* Hide on small mobile to prevent header overlap */
 }
 
 .current-date {

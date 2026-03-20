@@ -1088,11 +1088,15 @@ function initSearchDropdown(inputId, items, onSelect) {
     function openDD() {
         renderItems(inp.value);
         dd.classList.add('open');
+        // Prevent dropdown from being clipped by modal-body by adding bottom margin
+        const h = Math.min(220, (dd._filtered || []).length * 40 + 20);
+        wrapper.style.marginBottom = h + 'px';
     }
 
     function closeDD() {
         dd.classList.remove('open');
         highlightIdx = -1;
+        wrapper.style.marginBottom = '0px';
     }
 
     function selectItem(item) {
