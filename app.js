@@ -1596,9 +1596,18 @@ function today() {
     const offset = d.getTimezoneOffset() * 60000;
     return new Date(d.getTime() - offset).toISOString().split('T')[0];
 }
-function isSalesman() { return currentUser && currentUser.role === 'Salesman'; }
-function isPacker()   { return currentUser && currentUser.role === 'Packing'; }
-function canEdit()    { return currentUser && (currentUser.role === 'Admin' || currentUser.role === 'Manager'); }
+function isSalesman() { 
+    const r = (currentUser?.role || '').toLowerCase();
+    return r === 'salesman'; 
+}
+function isPacker() { 
+    const r = (currentUser?.role || '').toLowerCase();
+    return r === 'packing' || r === 'packer'; 
+}
+function canEdit() { 
+    const r = (currentUser?.role || '').toLowerCase();
+    return r === 'admin' || r === 'administrator' || r === 'manager'; 
+}
 
 // =============================================
 //  DASHBOARD
