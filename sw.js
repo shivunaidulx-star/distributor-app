@@ -1,4 +1,4 @@
-const CACHE = 'distromanager-v34';
+const CACHE = 'distromanager-v35';
 const STATIC = ['./', './index.html', './style.css', './app.js', './manifest.json'];
 
 // Helper to ignore query parameters (like ?v=67) for cache matching
