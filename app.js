@@ -598,7 +598,7 @@ async function addLedgerEntry(itemId, itemName, entryType, qty, documentNo, reas
         entryType, qty, runningStock: item ? item.stock : 0,
         documentNo: (documentNo && typeof documentNo === 'object') ? JSON.stringify(documentNo) : (documentNo || ''),
         reason: reason || '',
-        createdBy: currentUser ? currentUser.name : 'System'
+        created_by: currentUser ? currentUser.userId : 'System'
     });
 }
 
@@ -611,7 +611,7 @@ async function addPartyLedgerEntry(partyId, partyName, type, amount, docNo, note
         type, amount, balance: party ? party.balance : 0,
         docNo: (docNo && typeof docNo === 'object') ? JSON.stringify(docNo) : (docNo || ''),
         notes: notes || '',
-        createdBy: currentUser ? currentUser.name : 'System'
+        created_by: currentUser ? currentUser.userId : 'System'
     });
 }
 
@@ -1313,11 +1313,23 @@ window.forceHardRefresh = async function() {
     window.location.reload(true);
 };
 
+// ✅ NEW: Ensures GPS is fresh before sorting
+async function getFreshLocationAndSort(items, buildType = 'party') {
+    showToast('Refreshing location...', 'info', 1000);
+    // Force a fresh GPS ping
+    window._userCoords = null; 
+    await ensureGeolocation(); 
+    
+    if (buildType === 'party') {
+        return buildPartySearchList(items);
+    }
+    return items; // For catalog we just update global coords
+}
+
+// ✅ UPDATED: Support Party ID [partyCode] in Search
 function buildPartySearchList(parties) {
-    // Filter out blocked/deactivated parties from lookups
     let pts = parties.filter(p => p.active !== false && !p.blocked);
     
-    // Sort by proximity if coordinates are available
     if (window._userCoords) {
         pts.sort((a, b) => {
             const da = haversine(window._userCoords.lat, window._userCoords.lng, a.lat, a.lng);
@@ -1328,11 +1340,12 @@ function buildPartySearchList(parties) {
 
     return pts.map(p => ({
         id: p.id,
-        label: p.name,
+        label: `${p.name} [${p.partyCode || 'No ID'}]`, 
         value: p.name,
-        code: '',
+        code: p.partyCode || '',
         stockText: p.phone || '',
-        searchText: (p.name + ' ' + (p.phone || ''))
+        // Enhanced search text to include the Code/ID
+        searchText: `${p.name} ${p.phone || ''} ${p.partyCode || ''}`.toLowerCase()
     }));
 }
 
@@ -1355,7 +1368,7 @@ async function navigateTo(page, options = {}) {
     // Update FAB for this page
     updateFab(page);
 
-    const titles = { dashboard: 'Dashboard', parties: 'Parties', partyledger: 'Party Ledger', inventorysetup: 'Inventory Setup', categories: 'Categories Master', uom: 'UOM Master', inventory: 'Inventory', catalog: 'Item Catalog', salesorders: 'Sales Orders', purchaseorders: 'Purchase Orders', invoices: 'Invoices', payments: 'Payments', expenses: 'Expenses', packing: 'Packing', delivery: 'Delivery', reports: 'Reports', packers: 'Packers Master', deliverypersons: 'Delivery Persons', users: 'Users & Roles', setup: 'Company Setup', customerrequests: 'Customer Requests', staffmaster: 'Staff Master', attendance: 'Attendance', hrpayroll: 'HR & Payroll' };
+    const titles = { dashboard: 'Dashboard', parties: 'Parties', partyledger: 'Party Ledger', inventorysetup: 'Inventory Setup', categories: 'Categories Master', uom: 'UOM Master', inventory: 'Inventory', catalog: 'Item Catalog', salesorders: 'Sales Orders', purchaseorders: 'Purchase Orders', invoices: 'Invoices', payments: 'Payments', expenses: 'Expenses', packing: 'Packing', delivery: 'Delivery', reports: 'Reports', packers: 'Packers Master', deliverypersons: 'Delivery Persons', users: 'Users & Roles', setup: 'Company Setup', customerrequests: 'Customer Requests', staffmaster: 'Staff Master', attendance: 'Attendance', hrpayroll: 'HR & Payroll', packorder: 'Pack Order' };
     pageTitle.textContent = titles[page] || page;
 
     // Show a loader ONLY if NOT silent refresh
@@ -1363,7 +1376,7 @@ async function navigateTo(page, options = {}) {
         pageContent.innerHTML = '<div style="display:flex;justify-content:center;align-items:center;height:200px"><div class="loader"></div></div>';
     }
 
-    const renderers = { dashboard: renderDashboard, parties: renderParties, partyledger: renderPartyLedgerLayout, inventorysetup: renderInventorySetup, categories: renderCategories, uom: renderUOM, inventory: renderInventory, catalog: renderCatalog, salesorders: renderSalesOrders, purchaseorders: renderPurchaseOrders, invoices: renderInvoices, payments: renderPayments, expenses: renderExpenses, packing: renderPacking, delivery: renderDelivery, reports: renderReports, packers: renderPackers, deliverypersons: renderDeliveryPersons, users: renderUsers, setup: renderCompanySetup, customerrequests: renderCustomerRequests, staffmaster: renderStaffMaster, attendance: renderAttendance, hrpayroll: renderHRPayroll };
+    const renderers = { dashboard: renderDashboard, parties: renderParties, partyledger: renderPartyLedgerLayout, inventorysetup: renderInventorySetup, categories: renderCategories, uom: renderUOM, inventory: renderInventory, catalog: renderCatalog, salesorders: renderSalesOrders, purchaseorders: renderPurchaseOrders, invoices: renderInvoices, payments: renderPayments, expenses: renderExpenses, packing: renderPacking, delivery: renderDelivery, reports: renderReports, packers: renderPackers, deliverypersons: renderDeliveryPersons, users: renderUsers, setup: renderCompanySetup, customerrequests: renderCustomerRequests, staffmaster: renderStaffMaster, attendance: renderAttendance, hrpayroll: renderHRPayroll, packorder: renderPackOrderPage };
 
     if (renderers[page]) {
         await renderers[page]();
@@ -1762,33 +1775,109 @@ async function renderDashboard() {
     ]);
 
     // ── SALESMAN DASHBOARD ──
+    // ── SALESMAN DASHBOARD ──
     if (role === 'Salesman') {
-        const mySO = salesOrders.filter(o => o.createdBy === currentUser.name);
+        // 1. My Orders
+        const mySO = salesOrders.filter(o => o.createdBy === currentUser.userId || o.createdBy === currentUser.name);
+        
+        // 2. Monthly Sales Performance
+        const startOfMonth = today().substring(0, 8) + '01';
+        const myMonthInvoices = invoices.filter(i => 
+            i.type === 'sale' && 
+            i.status !== 'cancelled' && 
+            i.date >= startOfMonth && 
+            (i.createdBy === currentUser.userId || i.createdBy === currentUser.name)
+        );
+
+        const currentAch = myMonthInvoices.reduce((s, i) => s + i.total, 0);
+        const target = currentUser.monthlyTarget || 0;
+        const achPct = target > 0 ? Math.min(100, (currentAch / target) * 100) : 0;
+        const barColor = achPct >= 100 ? '#22c55e' : achPct >= 75 ? '#3b82f6' : achPct >= 50 ? '#f59e0b' : '#ef4444';
+
+        // 3. Daily Collection Tracker
+        const todayStr = today();
+        const myTodayPayments = payments.filter(p => 
+            p.type === 'in' && 
+            p.date === todayStr && 
+            (p.collectedBy === currentUser.userId || p.collectedBy === currentUser.name || p.createdBy === currentUser.userId || p.createdBy === currentUser.name)
+        );
+        const todayCollection = myTodayPayments.reduce((s, p) => s + p.amount, 0);
+
         pageContent.innerHTML = `
+            <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; margin-bottom: 16px;">
+                
+                <div class="card" style="margin:0; border-left: 4px solid ${barColor}">
+                    <div class="card-body" style="padding:16px">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px">
+                            <h4 style="margin:0; font-size:0.9rem; color:var(--text-secondary)">🎯 Monthly Sales Target</h4>
+                            <span style="font-weight:800; color:${barColor}">${achPct.toFixed(1)}%</span>
+                        </div>
+                        <div style="height:10px; background:var(--bg-body); border-radius:10px; overflow:hidden; margin-bottom:12px; border:1px solid var(--border)">
+                            <div style="width:${achPct}%; height:100%; background:${barColor}; transition: width 1s ease-in-out"></div>
+                        </div>
+                        <div style="display:flex; justify-content:space-between; align-items:center">
+                            <div>
+                                <div style="font-size:0.7rem; color:var(--text-muted); text-transform:uppercase">Achieved</div>
+                                <div style="font-size:1.05rem; font-weight:700; color:var(--text-primary)">${currency(currentAch)}</div>
+                            </div>
+                            <div style="text-align:right">
+                                <div style="font-size:0.7rem; color:var(--text-muted); text-transform:uppercase">Target</div>
+                                <div style="font-size:1.05rem; font-weight:700; color:var(--text-secondary)">${target > 0 ? currency(target) : 'Not Set'}</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card" style="margin:0; border-left: 4px solid #10b981">
+                    <div class="card-body" style="padding:16px; display:flex; flex-direction:column; justify-content:center">
+                        <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:8px">
+                            <h4 style="margin:0; font-size:0.9rem; color:var(--text-secondary)">💰 Today's Collection</h4>
+                            <span class="badge badge-success" style="font-size:0.75rem">${myTodayPayments.length} Receipts</span>
+                        </div>
+                        <div style="font-size:1.8rem; font-weight:800; color:#10b981; line-height:1.2">
+                            ${currency(todayCollection)}
+                        </div>
+                        <div style="font-size:0.75rem; color:var(--text-muted); margin-top:4px">
+                            Total amount received today
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <div class="stats-grid">
                 <div class="stat-card amber"><div class="stat-icon">⏳</div><div class="stat-value">${mySO.filter(o => o.status === 'pending').length}</div><div class="stat-label">My Pending</div></div>
                 <div class="stat-card green"><div class="stat-icon">✅</div><div class="stat-value">${mySO.filter(o => o.status === 'approved').length}</div><div class="stat-label">My Approved</div></div>
                 <div class="stat-card red"><div class="stat-icon">❌</div><div class="stat-value">${mySO.filter(o => o.status === 'rejected').length}</div><div class="stat-label">My Rejected</div></div>
                 <div class="stat-card blue"><div class="stat-icon">📦</div><div class="stat-value">${mySO.length}</div><div class="stat-label">Total Orders</div></div>
             </div>
+
             <div class="section-toolbar" style="margin-top:8px"><h3>Quick Actions</h3></div>
             <div class="quick-actions">
                 <button class="quick-action-btn" onclick="navigateTo('salesorders')"><span class="qa-icon">📝</span><span class="qa-label">New Order</span></button>
                 <button class="quick-action-btn" onclick="navigateTo('parties')"><span class="qa-icon">👥</span><span class="qa-label">Parties</span></button>
-                <button class="quick-action-btn" onclick="navigateTo('inventory')"><span class="qa-icon">📦</span><span class="qa-label">Inventory</span></button>
+                <button class="quick-action-btn" onclick="navigateTo('catalog')"><span class="qa-icon">🛍️</span><span class="qa-label">Catalog</span></button>
                 <button class="quick-action-btn" onclick="openPartyGpsModal()"><span class="qa-icon">📍</span><span class="qa-label">Update GPS</span></button>
             </div>
-            <div class="card"><div class="card-header"><h3>My Recent Orders</h3></div><div class="card-body">
-                <div class="table-wrapper">
-                    <table class="data-table"><thead><tr><th>Date</th><th>Order #</th><th>Party</th><th>Status</th><th>Total</th></tr></thead>
-                    <tbody>${mySO.slice(-5).reverse().map(o => {
-                        const stMap = { pending: 'badge-warning', approved: 'badge-success', rejected: 'badge-danger' };
-                        const stText = o.status || 'pending';
-                        return `<tr><td>${fmtDate(o.date)}</td><td>${o.orderNo}</td><td>${o.partyName}</td><td><span class="badge ${stMap[stText]||'badge-warning'}" style="text-transform:capitalize">${stText}</span></td><td class="amount-green">${currency(o.total)}</td></tr>`;
-                    }).join('') || '<tr><td colspan="5"><div class="empty-state"><span class="empty-icon">📝</span><p>No orders yet</p><p class="empty-subtitle">Create your first sales order to get started</p></div></td></tr>'}</tbody></table>
+
+            <div class="card">
+                <div class="card-header"><h3>My Recent Orders</h3></div>
+                <div class="card-body">
+                    <div class="table-wrapper">
+                        <table class="data-table">
+                            <thead><tr><th>Date</th><th>Order #</th><th>Party</th><th>Status</th><th>Total</th></tr></thead>
+                            <tbody>${mySO.slice(-5).reverse().map(o => {
+                                const stMap = { pending: 'badge-warning', approved: 'badge-success', rejected: 'badge-danger' };
+                                const stText = o.status || 'pending';
+                                return `<tr><td>${fmtDate(o.date)}</td><td>${o.orderNo}</td><td>${o.partyName}</td><td><span class="badge ${stMap[stText]||'badge-warning'}" style="text-transform:capitalize">${stText}</span></td><td class="amount-green">${currency(o.total)}</td></tr>`;
+                            }).join('') || '<tr><td colspan="5" class="empty-state"><p>No orders yet</p><p class="empty-subtitle">Create your first sales order to get started</p></div></td></tr>'}
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
-            </div></div>
-            ${renderPartyNavWidget(parties)}`; return;
+            </div>
+            ${renderPartyNavWidget(parties)}
+        `; 
+        return;
     }
 
     // ── DELIVERY DASHBOARD ──
@@ -4430,8 +4519,7 @@ async function filterSOTable() {
 }
 async function openSalesOrderModal() {
     soItems = [];
-    // Trigger geolocation and wait for it to ensure proximity sorting works
-    await ensureGeolocation();
+
     
     const [parties, inv, categories] = await Promise.all([
         DB.getAll('parties'),
@@ -4506,8 +4594,9 @@ async function openSalesOrderModal() {
         </div>
     `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveSalesOrder()">＋ Save & New</button><button class="btn btn-primary" onclick="saveSalesOrder()">✅ Submit Order</button>`, true);
 
-    // Init custom searchable dropdowns
-    initSearchDropdown('f-so-party', buildPartySearchList(customers));
+    // Fetch fresh GPS and then init the search dropdown
+    const sortedParties = await getFreshLocationAndSort(customers, 'party');
+    initSearchDropdown('f-so-party', sortedParties);
 
     _soItemDropdown = initSearchDropdown('f-so-item-input', buildItemSearchList(inv), function (item) {
         $('f-so-price').value = item.salePrice || '';
@@ -6426,217 +6515,182 @@ function autoRoundOff() {
     updateInvoiceTotal();
 }
 async function saveInvoice(id) {
+    // 1. Security Check
     if (id && !DB.canEdit()) {
         return alert("Access Denied: You do not have permission to edit invoices. Please contact Admin.");
     }
+
     if (!beginSave()) return;
+
     const dateVal = $('f-inv-date').value;
-    if (!DB.canPostBackDate(dateVal)) {
+
+    // 2. Back-date Restriction
+    if (currentUser.role !== 'Admin' && !DB.canPostBackDate(dateVal)) {
         endSave();
         return alert("Access Denied: Only Admin can post invoices for a past date.");
     }
-    const pe = $('f-inv-party'); if (!pe.value) { endSave(); return alert('Select a party'); } if (!invoiceItems.length) { endSave(); return alert('Add items'); }
 
-    const parties = DB.get('db_parties');
-    let partyId = '';
-    let partyName = pe.value;
-    const match = pe.value.match(/^(.*) \[(.*)\]$/);
-    if (match) {
-        partyName = match[1].trim();
-        const p = parties.find(x => x.name === partyName && (x.phone || '') === match[2].trim());
-        if (p) partyId = p.id;
-    } else {
-        const p = parties.find(x => x.name.toLowerCase() === pe.value.trim().toLowerCase());
-        if (p) partyId = p.id;
+    const pe = $('f-inv-party');
+    if (!pe.value) { endSave(); return alert('Select a party'); }
+    if (!invoiceItems.length) { endSave(); return alert('Add items'); }
+
+    // Resolve Party
+    const parties = await DB.getAll('parties');
+    const storedId = pe.dataset.selectedId || '';
+    let matched = storedId
+        ? parties.find(x => String(x.id) === storedId)
+        : parties.find(x => x.name.toLowerCase() === pe.value.trim().toLowerCase());
+
+    if (!matched) {
+        endSave();
+        return alert('Invalid party selected. Please select from the dropdown.');
     }
 
-    if (!partyId) return alert('Invalid party selected. Please select from the dropdown.');
+    const partyId = matched.id;
+    const partyName = matched.name;
+    const invType = ($('f-inv-type') || {}).value;
 
-    const invParty = parties.find(p => String(p.id) === String(partyId));
-    if (invParty && invParty.blocked && ($('f-inv-type')||{}).value === 'sale') {
-        return alert(`❌ "${invParty.name}" is blocked. Cannot create a sale invoice for a blocked customer. Contact admin to unblock.`);
+    // Blocked check
+    if (invType === 'sale' && matched.blocked) {
+        endSave();
+        return alert(`❌ "${partyName}" is blocked. Cannot create a sale invoice. Contact admin.`);
     }
 
-    const invType = ($('f-inv-type')||{}).value;
-    if (invType === 'sale' && invParty && invParty.creditLimit > 0) {
-        const sub2 = invoiceItems.reduce((s, li) => s + li.amount, 0);
-        const gst2 = +($('f-inv-gst').value || 0);
-        const ro2  = +(($('f-inv-roundoff')||{}).value || 0);
-        const discAmt = +(($('f-inv-disc-amt') || {}).value || 0);
-        
-        // Prices are GST-inclusive. UI sync treats discAmt as the single source of truth.
-        let invoiceTotal = sub2 + ro2 - discAmt;
-        invoiceTotal = Math.max(0, invoiceTotal);
+    // Prepare Totals
+    const sub = invoiceItems.reduce((s, li) => s + li.amount, 0);
+    const gst = +($('f-inv-gst')?.value || 0);
+    const discPct = +($('f-inv-disc-pct')?.value || 0);
+    const discAmt = +($('f-inv-disc-amt')?.value || 0);
+    let roundoff = +(($('f-inv-roundoff') || {}).value || 0);
 
-        if (((invParty.balance || 0) + invoiceTotal) > invParty.creditLimit) {
-            if (!confirm(`⚠️ Credit limit exceeded!\nCredit Limit: ${currency(invParty.creditLimit)}\nCurrent Balance: ${currency(invParty.balance || 0)}\nThis Invoice: ${currency(invoiceTotal)}\n\nProceed anyway?`)) { endSave(); return; }
+    // Auto-calculate roundoff if it's a new sale and currently 0
+    if (invType === 'sale' && roundoff === 0) {
+        let tempTotal = sub - discAmt;
+        tempTotal = Math.max(0, tempTotal);
+        roundoff = +(Math.round(tempTotal) - tempTotal).toFixed(2);
+    }
+
+    let total = +(sub + roundoff - discAmt).toFixed(2);
+    total = Math.max(0, total);
+
+    // Credit Limit Check
+    if (invType === 'sale' && matched.creditLimit > 0) {
+        if (((matched.balance || 0) + total) > matched.creditLimit) {
+            if (!confirm(`⚠️ Credit limit exceeded!\nLimit: ${currency(matched.creditLimit)}\nCurrent Bal: ${currency(matched.balance)}\nThis Inv: ${currency(total)}\n\nProceed?`)) { 
+                endSave(); 
+                return; 
+            }
         }
     }
 
     const invNo = $('f-inv-no').value.trim();
-    const invoices = DB.get('db_invoices');
-    if (invoices.find(i => i.invoiceNo === invNo)) return alert('Invoice number ' + invNo + ' already exists!');
+    const vyaparInvNo = invType === 'sale' ? ($('f-vyapar-inv-no')?.value.trim() || '') : '';
+    if (invType === 'sale' && !vyaparInvNo) { endSave(); return alert('Vyapar Invoice No. is mandatory.'); }
 
-    const sub  = invoiceItems.reduce((s, li) => s + li.amount, 0);
-    const gst  = +($('f-inv-gst').value || 0);
-    const type = $('f-inv-type').value;
-    let roundoff = +(($('f-inv-roundoff')||{}).value || 0);
-    const discAmtGlobal = +(($('f-inv-disc-amt') || {}).value || 0);
-
-    if (type === 'sale' && roundoff === 0) {
-        let tempTotal = sub - discAmtGlobal;
-        tempTotal = Math.max(0, tempTotal);
-        roundoff = +(Math.round(tempTotal) - tempTotal).toFixed(2);
-        
-        const roEl = $('f-inv-roundoff'); if (roEl) roEl.value = roundoff;
-        updateInvoiceTotal();
-    }
-    
-    let total = sub + roundoff - discAmtGlobal;
-    total = Math.max(0, total);
-    const vyaparInvNo = type === 'sale' ? ($('f-vyapar-inv-no') ? $('f-vyapar-inv-no').value.trim() : '') : '';
-    if (type === 'sale' && !vyaparInvNo) return alert('Vyapar Invoice No. is mandatory for sale invoices.');
-
-    // Read fromOrder before modal closes
     const fromOrderId = ($('f-inv-from-order') || {}).value || '';
 
     try {
-        const inventory = DB.get('db_inventory');
-        const co2 = DB.getObj('db_company');
-
-        // Stock availability checks
-        if (type === 'sale') {
-            const co2 = DB.getObj('db_company');
-            if (co2 && !co2.allowNegativeStock) {
-                const shortItems = [];
-                await Promise.all(invoiceItems.map(async li => {
-                    const item = inventory.find(x => x.id === li.itemId);
-                    if (item) {
-                        const avail = (await getAvailableStock(item)).available;
-                        if (avail < li.qty) shortItems.push(`${li.name} (need ${li.qty}, available ${avail})`);
-                    }
-                }));
-
-                if (shortItems.length) { 
-                    endSave(); 
-                    return alert('Insufficient stock:\n' + shortItems.join('\n')); 
-                }
-                for (const li of invoiceItems) {
-                    const item = inventory.find(x => x.id === li.itemId);
-                    if (item && (item.stock || 0) < li.qty) { 
-                        endSave(); 
-                        return alert(`Insufficient stock for "${li.name}".\nAvailable: ${item.stock || 0}, Required: ${li.qty}`); 
-                    }
-                }
-            }
-        }
-
-        // Build all DB operations
+        const inventory = await DB.getAll('inventory');
         const ops = [];
 
+        // 3. Process Items (Stock & Ledger)
         for (const li of invoiceItems) {
             const item = inventory.find(x => x.id === li.itemId);
             if (!item) continue;
-            const qtyChange = type === 'sale' ? -li.qty : li.qty;
+
+            const qtyChange = invType === 'sale' ? -li.qty : li.qty;
             const newStock = (item.stock || 0) + qtyChange;
             const itemUpdate = { stock: newStock };
-            if (type === 'sale' && item.batches && item.batches.length) {
+
+            if (invType === 'sale' && item.batches && item.batches.length) {
                 const { updatedBatches, priceSync } = deductBatchQtyFifo(item, li.qty);
                 if (updatedBatches) { itemUpdate.batches = updatedBatches; Object.assign(itemUpdate, priceSync); }
             }
+
             ops.push(DB.rawUpdate('inventory', item.id, itemUpdate));
             ops.push(DB.rawInsert('stock_ledger', {
-                date: today(), itemId: item.id, itemName: item.name,
-                entryType: type === 'sale' ? 'Sale' : 'Purchase', qty: qtyChange,
-                runningStock: newStock, documentNo: invNo,
-                reason: type === 'sale' ? 'Sale Invoice' : 'Purchase Invoice',
-                createdBy: currentUser.name
+                date: dateVal,
+                item_id: item.id,
+                item_name: item.name,
+                entry_type: invType === 'sale' ? 'Sale' : 'Purchase',
+                qty: qtyChange,
+                running_stock: newStock,
+                document_no: invNo,
+                reason: invType === 'sale' ? 'Sale Invoice' : 'Purchase Invoice',
+                created_by: currentUser.userId
             }));
         }
 
-        // Expense Entry for Discount (only on posted invoice, not SO)
-        const globalDiscountAmt = discAmtGlobal + (discPctGlobal > 0 ? (sub * discPctGlobal / 100) : 0);
-        const totalDiscount = invoiceItems.reduce((s, li) => s + (li.discountAmt || 0), 0) + globalDiscountAmt;
-        if (totalDiscount > 0 && type === 'sale') {
+        // 4. Handle Discount Expense
+        if (discAmt > 0 && invType === 'sale') {
             ops.push(DB.rawInsert('expenses', {
-                id: DB.id(),
-                date: $('f-inv-date').value,
+                date: dateVal,
                 category: 'Sales Discount',
-                amount: +totalDiscount.toFixed(2),
-                partyId: partyId,
-                partyName: partyName,
-                docNo: invNo,
-                description: `Discount on ${invNo}`
+                amount: discAmt,
+                party_id: partyId,
+                party_name: partyName,
+                doc_no: invNo,
+                description: `Discount on ${invNo}`,
+                created_by: currentUser.userId
             }));
         }
 
-        // Party balance + ledger
-        const party = parties.find(p => p.id === partyId);
-        if (party) {
-            const balChange = type === 'sale' ? total : -total;
-            const newBal = (party.balance || 0) + balChange;
-            ops.push(DB.rawUpdate('parties', party.id, { balance: newBal }));
-            ops.push(DB.rawInsert('party_ledger', {
-                date: today(), partyId: party.id, partyName: party.name,
-                type: type === 'sale' ? 'Sale Invoice' : 'Purchase Invoice',
-                amount: balChange, balance: newBal, docNo: invNo,
-                notes: type === 'sale' ? 'Sale' : 'Purchase', createdBy: currentUser.name
-            }));
-        }
+        // 5. Update Party Balance & Ledger
+        const balChange = invType === 'sale' ? total : -total;
+        const newBal = +((matched.balance || 0) + balChange).toFixed(2);
+        ops.push(DB.rawUpdate('parties', partyId, { balance: newBal }));
+        ops.push(DB.rawInsert('party_ledger', {
+            date: dateVal,
+            party_id: partyId,
+            party_name: partyName,
+            type: invType === 'sale' ? 'Sale Invoice' : 'Purchase Invoice',
+            amount: balChange,
+            balance: newBal,
+            doc_no: invNo,
+            notes: invType === 'sale' ? 'Sale' : 'Purchase',
+            created_by: currentUser.userId
+        }));
 
-        // Resolve fromOrder number
-        let fromOrderNo = '';
-        if (fromOrderId) {
-            const allOrders2 = DB.get('db_salesorders');
-            const fo = allOrders2.find(x => x.id === fromOrderId);
-            if (fo) fromOrderNo = fo.orderNo;
-        }
-
-        // Invoice record
-        const dueDateVal = $('f-inv-due-date') ? $('f-inv-due-date').value : '';
+        // 6. Save Invoice Record
+        const dueDateVal = $('f-inv-due-date')?.value || null;
         const invData = {
-            invoiceNo: invNo, date: $('f-inv-date').value, dueDate: dueDateVal || null,
-            type, partyId, partyName, items: [...invoiceItems],
-            subtotal: sub, gst, roundOff: roundoff, total,
-            discountPct: discPctGlobal,
-            discountAmt: discAmtGlobal,
+            invoice_no: invNo,
+            date: dateVal,
+            due_date: dueDateVal,
+            type: invType,
+            party_id: partyId,
+            party_name: partyName,
+            items: JSON.stringify(invoiceItems),
+            subtotal: sub,
+            gst: gst,
+            round_off: roundoff,
+            total: total,
+            discount_pct: discPct,
+            discount_amt: discAmt,
             status: fromOrderId ? 'from-packing' : 'created',
-            createdBy: currentUser.name,
-            ...(vyaparInvNo ? { vyaparInvoiceNo: vyaparInvNo } : {}),
-            ...(fromOrderNo ? { fromOrder: fromOrderNo } : {})
+            created_by: currentUser.userId,
+            vyapar_invoice_no: vyaparInvNo,
+            from_order: fromOrderId ? (DB.get('sales_orders').find(o => o.id === fromOrderId)?.orderNo || '') : null
         };
+
         ops.push(DB.rawInsert('invoices', invData));
-        if (fromOrderId) ops.push(DB.rawUpdate('salesorders', fromOrderId, { invoiceNo: invNo }));
+        if (fromOrderId) ops.push(DB.rawUpdate('sales_orders', fromOrderId, { invoice_no: invNo }));
 
-        // Advance payment allocations
-        const advInputs = [...document.querySelectorAll('.inv-apply-adv-input')].filter(inp => +inp.value > 0);
-        if (advInputs.length) {
-            const payments = DB.get('db_payments');
-            for (const inp of advInputs) {
-                const pay = payments.find(p => p.id === inp.dataset.pay);
-                if (pay) {
-                    const allocs = { ...(pay.allocations || {}), [invNo]: (pay.allocations?.[invNo] || 0) + +inp.value };
-                    ops.push(DB.rawUpdate('payments', pay.id, { allocations: allocs }));
-                }
-            }
-        }
-
-        // Execute all in parallel
+        // 7. Commit to Database
         await Promise.all(ops);
-        await DB.refreshTables(['invoices', 'inventory', 'parties', 'payments', 'sales_orders']);
+        await DB.refreshTables(['invoices', 'inventory', 'parties', 'sales_orders']);
 
-        if (type === 'sale' && vyaparInvNo) incrementVyaparNo();
+        if (invType === 'sale' && vyaparInvNo) incrementVyaparNo();
 
         const andNew = window._saveAndNew; window._saveAndNew = false;
-        const savedType = invType;
         closeModal();
-        if (fromOrderId) {
-            await renderPacking();
-        } else {
-            await renderInvoices();
-        }
+        
+        if (fromOrderId) await renderPacking();
+        else await renderInvoices();
+
         showToast(`Invoice ${invNo} saved!`, 'success');
-        if (andNew && !fromOrderId) openInvoiceModal(savedType);
+        if (andNew) openInvoiceModal(invType);
+
     } catch (err) {
         window._saveAndNew = false;
         endSave();
@@ -7098,49 +7152,15 @@ function printPaymentReceipt() {
     w.document.close();
 }
 
-function _initPayPartyDropdown(parties, filterType) {
-    let filtered = filterType ? parties.filter(p => p.type === filterType) : parties;
 
-    // Search object list
-    const customPartySearchList = (pts) => pts.map(p => ({
-        id: p.id,
-        label: p.name + (p.blocked ? ' (Blocked)' : ''),
-        value: p.name,
-        code: '',
-        stockText: p.phone || '',
-        searchText: (p.name + ' ' + (p.phone || ''))
-    }));
-
-    const sortAndInit = (sortedParties) => {
-        initSearchDropdown('f-pay-party', customPartySearchList(sortedParties), (party) => {
-            if ($('f-pay-party-id')) $('f-pay-party-id').value = party.id || '';
-            onPayPartyChange();
-        });
-    };
-
-    if (window._userCoords) {
-        const withDist = filtered.map(p => {
-            const lat = parseFloat(p.lat || 0);
-            const lng = parseFloat(p.lng || 0);
-            const dist = (lat && lng) ? haversine(window._userCoords.lat, window._userCoords.lng, lat, lng) : 99999;
-            return { ...p, _dist: dist };
-        });
-        withDist.sort((a, b) => a._dist - b._dist);
-        sortAndInit(withDist);
-    } else {
-        const sorted = [...filtered].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-        sortAndInit(sorted);
-    }
-}
 async function openPaymentModal(prefillPartyId) {
-    await ensureGeolocation();
     // Hide FAB — full-page form has its own footer buttons
     const fab = $('app-fab');
     if (fab) fab.classList.add('hidden');
 
     // Render as full page (Vyapar-style) instead of a modal bottom sheet
     const [parties, users] = await Promise.all([DB.getAll('parties'), DB.getAll('users')]);
-    const collectors = users.filter(u => ['Admin','Manager','Salesman'].includes(u.role));
+    const collectors = users.filter(u => ['Admin', 'Manager', 'Salesman'].includes(u.role));
     const co = DB.ls.getObj('db_company') || {};
     const isSalesmanRole = currentUser.role === 'Salesman';
 
@@ -7228,7 +7248,7 @@ async function openPaymentModal(prefillPartyId) {
                 <div class="form-group"><label>Collected By</label>
                     <select id="f-pay-collected-by">
                         <option value="${currentUser.name}">${currentUser.name} (Me)</option>
-                        ${collectors.filter(u=>u.name!==currentUser.name).map(u=>`<option value="${u.name}">${u.name} (${u.role})</option>`).join('')}
+                        ${collectors.filter(u => u.name !== currentUser.name).map(u => `<option value="${u.name}">${u.name} (${u.role})</option>`).join('')}
                     </select>
                 </div>
             </div>
@@ -7253,8 +7273,43 @@ async function openPaymentModal(prefillPartyId) {
     window.scrollTo({ top: 0, behavior: 'instant' });
     if (pageContent) pageContent.scrollTop = 0;
 
-    // Init party search dropdown (sorted by GPS proximity)
-    _initPayPartyDropdown(parties, 'Customer');
+    const partyInput = $('f-pay-party');
+
+    // Helper function to initialize the search
+    const initPartySearch = async () => {
+        if (!partyInput.dataset.initDone) {
+            const parties = await DB.getAll('parties');
+            const ptType = $('f-pay-party-type')?.value || 'Customer';
+            const customers = parties.filter(p => p.type === ptType);
+            
+            // Get fresh GPS and build the sorted list
+            const sortedParties = await getFreshLocationAndSort(customers, 'party');
+            
+            initSearchDropdown('f-pay-party', sortedParties, (party) => {
+                if ($('f-pay-party-id')) $('f-pay-party-id').value = party.id || '';
+                onPayPartyChange();
+            });
+            
+            partyInput.dataset.initDone = "true";
+            
+            // Re-open the dropdown if focus was lost during the async GPS fetch
+            if (document.activeElement === partyInput) {
+                const dd = document.getElementById('f-pay-party-dropdown');
+                if (dd) dd.classList.add('open');
+            }
+        }
+    };
+
+    // Add the focus listener for manual clicks
+    partyInput.addEventListener('focus', initPartySearch, { once: true });
+
+    // AUTO-CLICK Logic: Automatically focus and trigger search
+    setTimeout(() => {
+        if (partyInput) {
+            partyInput.focus(); // Triggers the keyboard and the 'focus' event
+            initPartySearch();  // Ensures the GPS ping starts immediately
+        }
+    }, 300);
 
     // Pre-fill party if provided (e.g. from invoice "Receive Payment" button)
     if (prefillPartyId) {
@@ -7336,7 +7391,15 @@ async function onPayPartyTypeChange() {
     // Clear current selection
     if ($('f-pay-party')) $('f-pay-party').value = '';
     if ($('f-pay-party-id')) $('f-pay-party-id').value = '';
-    _initPayPartyDropdown(parties, ptype);
+    
+    const customers = parties.filter(p => p.type === ptype);
+    const sortedParties = await getFreshLocationAndSort(customers, 'party');
+    
+    initSearchDropdown('f-pay-party', sortedParties, (party) => {
+        if ($('f-pay-party-id')) $('f-pay-party-id').value = party.id || '';
+        onPayPartyChange();
+    });
+    
     onPayPartyChange();
 }
 async function onPayPartyChange() {
@@ -7550,27 +7613,30 @@ window.calcTotalAllocation = function () {
     if (lbl) lbl.innerText = '₹' + tot.toFixed(2);
 };
 async function savePayment(id) {
+    // 1. Security & Permission Check
     if (id && !DB.canEdit()) {
         return alert("Access Denied: You do not have permission to edit payments. Please contact Admin.");
     }
+    
     if (!beginSave()) return;
+
     const dateVal = $('f-pay-date').value;
-    if (!DB.canPostBackDate(dateVal)) {
+
+    // 2. Back-date Restriction Check
+    if (currentUser.role !== 'Admin' && !DB.canPostBackDate(dateVal)) {
         endSave();
         return alert("Access Denied: Only Admin can post payments for a past date.");
     }
     
-    // UI lock
-    const saveBtn = document.getElementById('btn-save-payment');
-    const saveNewBtn = document.getElementById('btn-save-new');
-    if (saveBtn) { saveBtn.disabled = true; saveBtn.innerHTML = '🕒 Saving...'; }
-    if (saveNewBtn) { saveNewBtn.disabled = true; saveNewBtn.innerHTML = '🕒 ...'; }
-    
     const payPartyId = ($('f-pay-party-id') || {}).value || '';
     const payPartyName = ($('f-pay-party') || {}).value?.trim() || '';
-    if (!payPartyId) { endSave(); return alert('Please select a party from the dropdown'); }
+    
+    if (!payPartyId) { 
+        endSave(); 
+        return alert('Please select a party from the dropdown'); 
+    }
 
-    // Collect all payment modes and amounts
+    // 3. Collect All Payment Modes (Split Payment Logic)
     const payRows = [];
     document.querySelectorAll('.pay-mode-row').forEach(row => {
         const m = row.querySelector('.f-pay-row-mode').value;
@@ -7578,12 +7644,16 @@ async function savePayment(id) {
         if (a > 0) payRows.push({ mode: m, amount: a });
     });
 
-    if (payRows.length === 0) { endSave(); return alert('Enter at least one payment amount'); }
+    if (payRows.length === 0) { 
+        endSave(); 
+        return alert('Enter at least one payment amount'); 
+    }
 
     const disc = +($('f-pay-discount')?.value) || 0;
     const totalReceived = payRows.reduce((sum, r) => sum + r.amount, 0);
-    const totalReduction = totalReceived + disc;
+    const totalReduction = +(totalReceived + disc).toFixed(2);
 
+    // 4. Collect Invoice Allocations
     let allocations = {};
     let totalAlloc = 0;
     document.querySelectorAll('.pay-alloc-input').forEach(inp => {
@@ -7594,93 +7664,103 @@ async function savePayment(id) {
         }
     });
 
-    if (totalAlloc > totalReduction + 0.01) { endSave(); return alert('Allocation exceeds total amount (Received + Discount).'); }
-
-    const payType = $('f-pay-type').value;
-    const date = $('f-pay-date').value;
-    if (!DB.canPostBackDate(date)) {
-        endSave();
-        return alert('Back-dated entries are restricted to Admins/Authorized users.');
+    if (totalAlloc > totalReduction + 0.01) { 
+        endSave(); 
+        return alert('Allocation exceeds total reduction (Received + Discount).'); 
     }
-    const invNo = Object.keys(allocations).length === 1 ? Object.keys(allocations)[0] : (Object.keys(allocations).length > 1 ? Object.keys(allocations).join(',') : '');
+
+    const payType = $('f-pay-type').value; // 'in' or 'out'
+    const invNoStr = Object.keys(allocations).join(', ');
 
     try {
         const payRefNo = buildPayRefNo();
-        const commonData = {
-            payNo: payRefNo,
-            date: $('f-pay-date').value,
-            type: payType,
-            partyId: payPartyId,
-            partyName: payPartyName,
-            note: $('f-pay-note').value.trim(),
-            invoiceNo: invNo,
-            allocations: Object.keys(allocations).length > 0 ? allocations : null,
-            createdBy: currentUser.name,
-            collectedBy: ($('f-pay-collected-by') ? $('f-pay-collected-by').value : null) || currentUser.name,
-            chequeNo: $('f-pay-cheque-no')?.value || null,
-            chequeBank: $('f-pay-cheque-bank')?.value || null,
-            chequeDate: $('f-pay-cheque-date')?.value || null
-        };
+        const ops = [];
 
-        // If multiple modes, we save multiple records
-        // Discount is added only to the FIRST record to avoid duplication in accounting
+        // 5. Create Database Records per Payment Mode
         for (let i = 0; i < payRows.length; i++) {
             const row = payRows[i];
-            const rowDisc = i === 0 ? disc : 0;
+            const rowDisc = i === 0 ? disc : 0; // Only attach discount to the first row to avoid double counting
+            
             const payData = {
-                ...commonData,
-                id: DB.id(),
+                pay_no: payRefNo,
+                date: dateVal,
+                type: payType,
+                party_id: payPartyId,
+                party_name: payPartyName,
                 amount: row.amount,
                 discount: rowDisc,
-                totalReduction: +(row.amount + rowDisc).toFixed(2),
-                mode: row.mode
+                total_reduction: +(row.amount + rowDisc).toFixed(2),
+                mode: row.mode,
+                note: $('f-pay-note').value.trim(),
+                invoice_no: invNoStr || (rowDisc > 0 ? 'Multi/Disc' : 'Advance'),
+                allocations: allocations, // Store full allocation map in each row for reference
+                created_by: currentUser.userId, // Tied to RLS get_my_user_id()
+                collected_by: $('f-pay-collected-by')?.value || currentUser.name
             };
-            await DB.insert('payments', payData);
-            
-            // Record each mode in ledger
-            await addPartyLedgerEntry(payPartyId, payPartyName, payType === 'in' ? 'Payment In' : 'Payment Out', row.amount * (payType === 'in' ? -1 : 1), payRefNo, row.mode + (invNo ? ' [' + invNo + ']' : ''), invNo);
-            
-            // If there's a discount, record it as a separate ledger entry to ensure balance is correct
-            if (rowDisc > 0) {
-                await addPartyLedgerEntry(payPartyId, payPartyName, payType === 'in' ? 'Discount Allowed' : 'Discount Received', rowDisc * (payType === 'in' ? -1 : 1), payRefNo, 'Discount' + (invNo ? ' [' + invNo + ']' : ''), invNo);
-            }
-        }
-        incrementPayNo();
 
-        // Automatic Expense Entry for Discount
-        if (disc > 0 && payType === 'in') {
-            await DB.insert('expenses', {
-                date: $('f-pay-date').value,
-                category: 'Payment Discount',
-                amount: disc,
-                partyId: payPartyId,
-                partyName: payPartyName,
-                docNo: payRefNo,
-                description: `Payment Discount for ${payPartyName} (${payRefNo})`
-            });
+            ops.push(DB.rawInsert('payments', payData));
         }
 
-        // Update party balance explicitly
-        const party = (await DB.getAll('parties')).find(p => p.id === payPartyId);
+        // 6. Update Party Balance
+        const parties = await DB.getAll('parties');
+        const party = parties.find(p => p.id === payPartyId);
+        
         if (party) {
             const balChange = payType === 'in' ? -totalReduction : totalReduction;
-            const newBal = +( (party.balance || 0) + balChange ).toFixed(2);
-            await DB.update('parties', party.id, { balance: newBal });
+            const newBal = +((party.balance || 0) + balChange).toFixed(2);
+            
+            ops.push(DB.rawUpdate('parties', party.id, { balance: newBal }));
+            
+            // Add Unified Ledger Entry
+            ops.push(DB.rawInsert('party_ledger', {
+                date: dateVal,
+                party_id: payPartyId,
+                party_name: payPartyName,
+                type: payType === 'in' ? 'Payment In' : 'Payment Out',
+                amount: balChange,
+                balance: newBal,
+                doc_no: payRefNo,
+                notes: `${payRows.map(r => r.mode).join('+')} | Disc: ${currency(disc)}`,
+                created_by: currentUser.userId
+            }));
         }
 
-        const andNew = window._saveAndNew; window._saveAndNew = false;
+        // 7. Automatic Expense Entry for Discount (Sales Only)
+        if (disc > 0 && payType === 'in') {
+            ops.push(DB.rawInsert('expenses', {
+                date: dateVal,
+                category: 'Payment Discount',
+                amount: disc,
+                party_id: payPartyId,
+                party_name: payPartyName,
+                doc_no: payRefNo,
+                description: `Payment Discount for ${payPartyName} (${payRefNo})`,
+                created_by: currentUser.userId
+            }));
+        }
+
+        // 8. Execute all operations
+        await Promise.all(ops);
+        incrementPayNo();
+
+        const andNew = window._saveAndNew; 
+        window._saveAndNew = false;
+        
         await renderPayments();
-        showToast('Payment saved!', 'success');
-        if (andNew) openPaymentModal();
+        showToast(`Payment ${payRefNo} saved successfully!`, 'success');
+        
+        if (andNew) {
+            openPaymentModal();
+        }
+
     } catch (err) {
         window._saveAndNew = false;
-        alert('Error: ' + err.message);
-    } finally {
-        if (saveBtn) { saveBtn.disabled = false; saveBtn.innerHTML = '💾 Save Payment'; }
-        if (saveNewBtn) { saveNewBtn.disabled = false; saveNewBtn.innerHTML = '＋ Save & New'; }
         endSave();
+        alert('Error saving payment: ' + err.message);
     }
 }
+
+
 async function openLinkInvoiceModal(payId) {
     const payments = await DB.getAll('payments');
     const pay = payments.find(p => p.id === payId); if (!pay) return;
@@ -7776,19 +7856,19 @@ async function saveDirectPayment() {
 
     const payRefNo = buildPayRefNo();
     const payData = {
-        payNo: payRefNo,
+        pay_no: payRefNo,
         date: $('f-pay-date').value,
         type: payType,
         partyId: inv.partyId,
         partyName: inv.partyName,
         amount: amt,
         discount: disc,
-        totalReduction: totalReduction,
+        total_reduction: totalReduction,
         mode: $('f-pay-mode').value,
         note: $('f-pay-note').value.trim(),
-        invoiceNo: inv.invoiceNo,
-        createdBy: currentUser.name,
-        collectedBy: currentUser.name
+        invoice_no: inv.invoiceNo,
+        created_by: currentUser.userId,
+        collected_by: currentUser.name
     };
 
     try {
@@ -8508,117 +8588,114 @@ async function executeAssignPacker(orderId) {
 }
 
 function startPacking(orderId) {
-    console.log('Starting packing for order:', orderId);
-    openPackModal(orderId);
+    window._currentPackingOrderId = orderId;
+    navigateTo('packorder');
 }
 
 // BUG-017 fix: track when packing started per order (so duration is accurate)
 window._packingStartTimes = window._packingStartTimes || {};
 
-function openPackModal(orderId) {
+async function renderPackOrderPage() {
+    const orderId = window._currentPackingOrderId;
     const orders = DB.get('db_salesorders');
-    const o = orders.find(x => x.id === orderId); 
-    if (!o) {
-        console.error('Order not found for packing:', orderId, 'Orders in cache:', orders.length);
-        showToast('Order not found. Please refresh and try again.', 'error', 5000);
-        return;
-    }
-    // Record packing start time the first time this order is opened for packing
-    if (!window._packingStartTimes[orderId]) {
-        window._packingStartTimes[orderId] = new Date().toISOString();
-    }
-    const inv = DB.get('db_inventory');
+    const o = orders.find(x => x.id === orderId);
+    if (!o) return navigateTo('packing');
 
-    // Check if assigned
+    // Record packing start time
+    if (!window._packingStartTimes) window._packingStartTimes = {};
+    if (!window._packingStartTimes[orderId]) window._packingStartTimes[orderId] = new Date().toISOString();
+    
+    const inv = DB.get('db_inventory');
     const assignedName = o.assignedPacker || currentUser.name;
 
-    openModal(`Pack Order ${o.orderNo}`, `
-        <div style="margin-bottom:14px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px">
-            <div><strong>Customer:</strong> ${o.partyName} | <strong>Order Total:</strong> ${currency(o.total)}</div>
-            <div><strong>Assigned To:</strong> <span class="badge badge-info">${assignedName}</span></div>
-        </div>
-        <h4 style="margin-bottom:10px;font-size:0.9rem">Items — Adjust Picked Qty & UOM</h4>
-        <div style="border:1px solid var(--border);border-radius:var(--radius-sm);overflow-x:auto;margin-bottom:14px">
-            <table class="data-table" style="margin:0;min-width:640px"><thead><tr><th style="width:32px">SL</th><th style="width:64px">Photo</th><th>Item</th><th>Order</th><th>Stock</th><th>Pack Qty</th><th>MRP Batch</th><th>UOM</th><th>Dis%</th><th>Dis₹</th><th>Picked</th><th>St.</th></tr></thead>
-            <tbody>${o.items.map((li, idx) => {
-        const item = inv.find(x => x.id === li.itemId);
-        let displayStock = 0;
-        let uomOptions = '';
-        if (item) {
-            displayStock = item.stock;
-            const uomList = [{ name: item.unit || 'Pcs', factor: 1, price: li.price || item.salePrice || 0 }, ...(item.uoms || [])];
-            const currentUom = li.selectedUom || li.uom || item.unit || 'Pcs';
-            uomOptions = uomList.map(u =>
-                `<option value="${u.name}" data-factor="${u.factor}" data-price="${u.price}" ${u.name === currentUom ? 'selected' : ''}>${u.name}</option>`
-            ).join('');
-        }
-        // MRP batch selection
-        const activeBatches = item ? getActiveBatches(item) : [];
-        let mrpSelectorHtml = '';
-        if (activeBatches.length > 1) {
-            mrpSelectorHtml = `<select id="pack-mrp-${idx}" onchange="packMrpSelected(${idx})" style="padding:4px;border-radius:4px;border:2px solid var(--warning);font-size:0.82rem;color:var(--warning);font-weight:600">
-                <option value="">⚠️ Confirm MRP</option>
-                ${activeBatches.map(b => `<option value="${b.salePrice}" data-mrp="${b.mrp}">MRP ₹${b.mrp} → Sale ₹${b.salePrice} (Qty:${b.qty})</option>`).join('')}
-            </select>`;
-        } else if (activeBatches.length === 1) {
-            mrpSelectorHtml = `<span style="font-size:0.8rem;color:var(--success)">MRP ₹${activeBatches[0].mrp}</span>
-                <input type="hidden" id="pack-mrp-${idx}" value="${activeBatches[0].salePrice}" data-confirmed="1">`;
-        } else {
-            mrpSelectorHtml = `<span style="font-size:0.78rem;color:var(--text-muted)">-</span>`;
-        }
-
-        // Photo cell
-        const photoCell = item && item.photo
-            ? `<td style="text-align:center;padding:4px">
-                <img src="${item.photo}" id="pack-photo-${idx}"
-                    style="width:52px;height:52px;object-fit:cover;border-radius:6px;cursor:pointer;border:2px solid var(--border)"
-                    onclick="packViewPhoto('${li.itemId}','${escapeHtml(li.name)}','${o.id}')" title="Click to enlarge">
-               </td>`
-            : `<td style="text-align:center;padding:4px">
-                <div id="pack-photo-${idx}"
-                    style="width:52px;height:52px;background:var(--bg-input);border:2px dashed var(--border);border-radius:6px;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;gap:2px;margin:auto"
-                    onclick="packAddItemPhoto('${li.itemId}',${idx})"
-                    title="No photo — tap to add (optional)">
-                    <span style="font-size:1.1rem">📷</span>
-                    <span style="font-size:0.58rem;color:var(--text-muted);line-height:1.2">Add<br>Photo</span>
+    pageContent.innerHTML = `
+        <div class="pack-workbench">
+            <div class="pack-header">
+                <div class="pack-meta">
+                    <span class="pack-back" onclick="navigateTo('packing')">← Back</span>
+                    <h2 class="pack-title">Order ${o.orderNo}</h2>
+                    <p class="pack-party">${escapeHtml(o.partyName)} | Total: ${currency(o.total)}</p>
                 </div>
-               </td>`;
+                <div class="pack-assigned">
+                    <span class="badge badge-info">${assignedName}</span>
+                </div>
+            </div>
 
-        return `<tr id="pack-row-${idx}">
-                    <td>${idx + 1}</td>
-                    ${photoCell}
-                    <td class="wrap-text" style="font-size:0.88rem;font-weight:600;min-width:140px">${escapeHtml(li.name)}</td>
-                    <td style="font-weight:600;text-align:center">${li.qty}</td>
-                    <td style="text-align:center"><span id="pack-stock-badge-${idx}" class="badge ${displayStock < li.qty ? 'badge-danger' : 'badge-success'}">${displayStock}</span></td>
-                    <td><input type="number" id="pack-qty-${idx}" value="${li.qty}" min="0" oninput="packLineChanged(${idx}, '${li.itemId}', ${o.items.length})" onchange="packLineChanged(${idx}, '${li.itemId}', ${o.items.length})" style="width:65px;padding:4px;border-radius:4px;border:1px solid var(--border);text-align:center"></td>
-                    <td>${mrpSelectorHtml}</td>
-                    <td><select id="pack-uom-${idx}" onchange="packLineChanged(${idx}, '${li.itemId}', ${o.items.length})" style="padding:4px;border-radius:4px;border:1px solid var(--border)">${uomOptions}</select></td>
-                    <td style="font-size:0.75rem;text-align:center">${li.discountPct || 0}%</td>
-                    <td style="font-size:0.75rem;text-align:center">${currency(li.discountAmt || 0)}</td>
-                    <td style="text-align:center"><input type="checkbox" id="pack-picked-${idx}" onchange="checkAllPicked(${o.items.length})" style="width:18px;height:18px;cursor:pointer"></td>
-                    <td style="text-align:center"><span id="pack-status-${idx}" title="Not Picked">🔴</span></td>
-                    <input type="hidden" id="pack-price-${idx}" value="${li.price}">
-                    <input type="hidden" id="pack-discount-pct-${idx}" value="${li.discountPct || 0}">
-                    <input type="hidden" id="pack-discount-amt-${idx}" value="${li.discountAmt || 0}">
-                </tr>`;
-    }).join('')}</tbody></table>
+            <div class="pack-items-list">
+                ${o.items.map((li, idx) => {
+                    const item = inv.find(x => x.id === li.itemId);
+                    const displayStock = item ? item.stock : 0;
+                    const currentUom = li.selectedUom || li.uom || (item ? item.unit : 'Pcs');
+                    const uomList = item ? [{ name: item.unit || 'Pcs', factor: 1, price: li.price || item.salePrice || 0 }, ...(item.uoms || [])] : [];
+                    
+                    // MRP Logic
+                    const activeBatches = item ? getActiveBatches(item) : [];
+                    let mrpHtml = '';
+                    if (activeBatches.length > 1) {
+                        mrpHtml = `
+                            <select id="pack-mrp-${idx}" onchange="packMrpSelected(${idx})" class="pack-mrp-select">
+                                <option value="">⚠️ Confirm MRP</option>
+                                ${activeBatches.map(b => `<option value="${b.salePrice}" data-mrp="${b.mrp}">MRP ₹${b.mrp} (Qty:${b.qty})</option>`).join('')}
+                            </select>`;
+                    } else if (activeBatches.length === 1) {
+                        mrpHtml = `<span class="pack-mrp-fixed">MRP ₹${activeBatches[0].mrp}</span>
+                                 <input type="hidden" id="pack-mrp-${idx}" value="${activeBatches[0].salePrice}" data-confirmed="1">`;
+                    }
+
+                    return `
+                        <div class="pack-card" id="pack-row-${idx}">
+                            <div class="pack-card-photo" onclick="packViewPhoto('${li.itemId}','${escapeHtml(li.name)}','${o.id}')">
+                                ${item && item.photo ? `<img src="${item.photo}">` : '📷'}
+                            </div>
+                            <div class="pack-card-info">
+                                <div class="pack-card-name">${escapeHtml(li.name)}</div>
+                                <div class="pack-card-stock">Stock: <span id="pack-stock-badge-${idx}" class="badge ${displayStock < li.qty ? 'badge-danger' : 'badge-success'}">${displayStock}</span></div>
+                                <div class="pack-card-controls">
+                                    <div class="pack-input-group">
+                                        <label>Pack Qty</label>
+                                        <input type="number" id="pack-qty-${idx}" value="${li.qty}" min="0" oninput="packLineChanged(${idx},'${li.itemId}',${o.items.length})">
+                                    </div>
+                                    <div class="pack-input-group">
+                                        <label>UOM</label>
+                                        <select id="pack-uom-${idx}" onchange="packLineChanged(${idx},'${li.itemId}',${o.items.length})">
+                                            ${uomList.map(u => `<option value="${u.name}" data-factor="${u.factor}" data-price="${u.price}" ${u.name === currentUom ? 'selected' : ''}>${u.name}</option>`).join('')}
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="pack-card-mrp">${mrpHtml}</div>
+                            </div>
+                            <div class="pack-card-status">
+                                <label class="pack-checkbox">
+                                    <input type="checkbox" id="pack-picked-${idx}" onchange="checkAllPicked(${o.items.length})">
+                                    <span class="checkmark"></span>
+                                </label>
+                                <span id="pack-status-${idx}" class="pack-dot">🔴</span>
+                            </div>
+                            <input type="hidden" id="pack-price-${idx}" value="${li.price}">
+                            <input type="hidden" id="pack-discount-pct-${idx}" value="${li.discountPct || 0}">
+                            <input type="hidden" id="pack-discount-amt-${idx}" value="${li.discountAmt || 0}">
+                        </div>`;
+                }).join('')}
+            </div>
+
+            <div class="pack-footer">
+                <button class="btn btn-outline" onclick="markAllPicked(${o.items.length})">☑️ All Picked</button>
+                <button class="btn btn-outline" onclick="showBarcodeScanner('${orderId}')">📷 Scan</button>
+                <button class="btn btn-danger" onclick="cannotCompletePacking('${orderId}')">❌ Fail</button>
+                <button class="btn btn-primary" id="btn-complete-packing" disabled onclick="completePacking('${orderId}')">✅ Complete</button>
+            </div>
         </div>
-        <input type="hidden" id="f-pack-packer" value="${assignedName}">
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
-            <button class="btn btn-outline btn-sm" onclick="markAllPicked(${o.items.length})">☑️ Mark All as Picked</button>
-            <button class="btn btn-outline btn-sm" onclick="showBarcodeScanner('${orderId}')">📷 Scan Barcode</button>
-        </div>`,
-        `<button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-         <button class="btn btn-danger" onclick="cannotCompletePacking('${orderId}')">❌ Cannot Complete</button>
-         <button class="btn btn-primary" id="btn-complete-packing" disabled onclick="completePacking('${orderId}')">✅ Complete Packing</button>`);
+    `;
 
     setTimeout(() => {
         o.items.forEach((li, idx) => {
             if ($(`pack-uom-${idx}`)) packLineChanged(idx, li.itemId, o.items.length);
         });
         checkAllPicked(o.items.length);
-    }, 100);
+    }, 50);
 }
+
+
 
 // --- Packing Photo Helpers ---
 function packViewPhoto(itemId, itemName, orderId) {
@@ -13312,6 +13389,8 @@ let catalogCart = [];
 let _catalogAutoSyncInterval = null;
 
 async function renderCatalog() {
+    // Ping GPS immediately when opening catalog
+    await getFreshLocationAndSort([], 'none'); 
     // Setup background interval if not already running
     if (!_catalogAutoSyncInterval) {
         _catalogAutoSyncInterval = setInterval(() => {
