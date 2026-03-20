@@ -627,7 +627,7 @@ table { border-collapse: collapse; width: 100%; }
     background: #ffffff;
     border: 1px solid rgba(0, 0, 0, 0.07);
     border-radius: var(--radius);
-    overflow: hidden;
+    overflow: visible;
     box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
 }
 
@@ -649,7 +649,7 @@ table { border-collapse: collapse; width: 100%; }
     -webkit-overflow-scrolling: touch;
     width: 100%;
 }
-.card-body.padded { padding: 22px; overflow-x: auto; }
+.card-body.padded { padding: 22px; overflow: visible; }
 
 /* Table wrapper — always scrollable */
 .table-wrapper {
