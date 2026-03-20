@@ -10638,34 +10638,131 @@ function renderInvPnlRpt() {
     if (to)    invs = invs.filter(i => i.date <= to);
     if (party) invs = invs.filter(i => (i.partyName||'').toLowerCase().includes(party));
     if (user)  invs = invs.filter(i => i.createdBy === user);
+
     let totalRev = 0, totalCost = 0;
-    const rows = invs.map(inv => {
+    const lossItems = []; // Track items sold below cost
+    let invoiceCount = 0;
+    let marginSum = 0;
+
+    const rows = invs.map((inv, idx) => {
         const revenue = inv.total;
         let cost = 0;
-        inv.items.forEach(li => { const item = invt.find(x => x.id === li.itemId); cost += (li.packedQty !== undefined ? li.packedQty : li.qty) * (item ? (item.purchasePrice||0) : 0); });
+        const itemRows = (inv.items || []).map(li => {
+            const item = invt.find(x => x.id === li.itemId);
+            const qty = li.packedQty !== undefined ? li.packedQty : li.qty;
+            const saleRate = li.price || 0;
+            const costRate = item ? (item.purchasePrice || 0) : 0;
+            const discount = li.discountAmt || 0;
+            const itemRevenue = li.amount || (qty * saleRate - discount);
+            const itemCost = qty * costRate;
+            const itemProfit = itemRevenue - itemCost;
+            const itemMargin = itemRevenue > 0 ? ((itemProfit / itemRevenue) * 100).toFixed(1) : '0.0';
+            cost += itemCost;
+
+            // Track loss items
+            if (+itemMargin < 0) {
+                lossItems.push({ name: li.name, invoiceNo: inv.invoiceNo, margin: itemMargin });
+            }
+
+            // Margin badge color
+            let badgeClass = 'badge-success'; // ≥20%
+            if (+itemMargin < 5) badgeClass = 'badge-danger';
+            else if (+itemMargin < 20) badgeClass = 'badge-warning';
+
+            return `<tr class="ipnl-detail ipnl-detail-${idx}" style="display:none;background:var(--bg-body)">
+                <td style="padding-left:32px;font-size:0.82rem">📦 ${escapeHtml(li.name || '-')}</td>
+                <td style="text-align:center;font-size:0.82rem">${qty} ${li.unit || 'Pcs'}</td>
+                <td style="text-align:right;font-size:0.82rem">${currency(saleRate)}</td>
+                <td style="text-align:right;font-size:0.82rem;color:var(--text-muted)">${currency(costRate)}</td>
+                <td style="text-align:right;font-size:0.82rem;color:var(--text-muted)">${discount > 0 ? currency(discount) : '-'}</td>
+                <td style="text-align:right;font-size:0.82rem">${currency(itemRevenue)}</td>
+                <td style="text-align:right;font-size:0.82rem;font-weight:600;color:${itemProfit >= 0 ? 'var(--success)' : 'var(--danger)'}">${currency(itemProfit)}</td>
+                <td style="text-align:right"><span class="badge ${badgeClass}" style="font-size:0.72rem">${itemMargin}%</span></td>
+            </tr>`;
+        }).join('');
+
         const profit = revenue - cost;
-        const margin = revenue > 0 ? ((profit/revenue)*100).toFixed(1) : '0.0';
+        const margin = revenue > 0 ? ((profit / revenue) * 100).toFixed(1) : '0.0';
         totalRev += revenue; totalCost += cost;
-        return `<tr><td>${fmtDate(inv.date)}</td><td style="font-weight:600">${inv.invoiceNo}</td><td>${escapeHtml(inv.partyName)}</td><td>${inv.createdBy||'-'}</td><td class="amount-green" style="text-align:right">${currency(revenue)}</td><td class="amount-red" style="text-align:right">${currency(cost)}</td><td class="${profit>=0?'amount-green':'amount-red'}" style="text-align:right;font-weight:700">${currency(profit)}</td><td style="font-weight:600;text-align:right;color:${+margin>=0?'var(--success)':'var(--danger)'}">${margin}%</td></tr>`;
+        invoiceCount++;
+        marginSum += +margin;
+
+        // Invoice-level margin badge
+        let invBadge = 'badge-success';
+        if (+margin < 5) invBadge = 'badge-danger';
+        else if (+margin < 20) invBadge = 'badge-warning';
+
+        const summaryRow = `<tr class="ipnl-summary" style="cursor:pointer" onclick="toggleInvPnlDetail(${idx})" title="Click to expand item details">
+            <td style="white-space:nowrap"><span class="ipnl-arrow" id="ipnl-arrow-${idx}" style="display:inline-block;transition:transform 0.2s;margin-right:4px;font-size:0.7rem">▶</span>${fmtDate(inv.date)}</td>
+            <td style="font-weight:600">${inv.invoiceNo}</td>
+            <td>${escapeHtml(inv.partyName)}</td>
+            <td>${inv.createdBy || '-'}</td>
+            <td class="amount-green" style="text-align:right">${currency(revenue)}</td>
+            <td class="amount-red" style="text-align:right">${currency(cost)}</td>
+            <td style="text-align:right;font-weight:700;color:${profit >= 0 ? 'var(--success)' : 'var(--danger)'}">${currency(profit)}</td>
+            <td style="text-align:right"><span class="badge ${invBadge}" style="font-size:0.75rem;font-weight:700">${margin}%</span></td>
+        </tr>`;
+
+        // Item detail header row
+        const detailHeader = `<tr class="ipnl-detail ipnl-detail-${idx}" style="display:none;background:rgba(249,115,22,0.06)">
+            <th style="padding-left:32px;font-size:0.75rem;font-weight:700;color:var(--primary)">Item</th>
+            <th style="text-align:center;font-size:0.75rem;font-weight:700;color:var(--primary)">Qty</th>
+            <th style="text-align:right;font-size:0.75rem;font-weight:700;color:var(--primary)">Sale Rate</th>
+            <th style="text-align:right;font-size:0.75rem;font-weight:700;color:var(--primary)">Cost Rate</th>
+            <th style="text-align:right;font-size:0.75rem;font-weight:700;color:var(--primary)">Discount</th>
+            <th style="text-align:right;font-size:0.75rem;font-weight:700;color:var(--primary)">Revenue</th>
+            <th style="text-align:right;font-size:0.75rem;font-weight:700;color:var(--primary)">Profit</th>
+            <th style="text-align:right;font-size:0.75rem;font-weight:700;color:var(--primary)">Margin</th>
+        </tr>`;
+
+        return summaryRow + detailHeader + itemRows;
     }).join('');
+
     const totalProfit = totalRev - totalCost;
-    const totalMargin = totalRev > 0 ? ((totalProfit/totalRev)*100).toFixed(1) : '0.0';
+    const totalMargin = totalRev > 0 ? ((totalProfit / totalRev) * 100).toFixed(1) : '0.0';
+    const avgMargin = invoiceCount > 0 ? (marginSum / invoiceCount).toFixed(1) : '0.0';
+
+    // Low-margin alert
+    let alertHtml = '';
+    if (lossItems.length > 0) {
+        const uniqueLoss = [...new Set(lossItems.map(l => l.name))];
+        alertHtml = `<div style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.25);border-radius:10px;padding:12px 16px;margin-bottom:16px;display:flex;align-items:flex-start;gap:10px">
+            <span style="font-size:1.3rem">⚠️</span>
+            <div>
+                <strong style="color:var(--danger);font-size:0.88rem">Low Margin Alert</strong>
+                <p style="font-size:0.8rem;color:var(--text-muted);margin:4px 0 0">${lossItems.length} item(s) sold below cost or at very low margin: <strong>${uniqueLoss.slice(0, 5).map(n => escapeHtml(n)).join(', ')}${uniqueLoss.length > 5 ? ` +${uniqueLoss.length - 5} more` : ''}</strong></p>
+            </div>
+        </div>`;
+    }
+
     out.innerHTML = `
     <div class="stats-grid-sm">
         <div class="stat-card green"><div class="stat-icon">💹</div><div class="stat-value">${currency(totalRev)}</div><div class="stat-label">Revenue</div></div>
-        <div class="stat-card red"><div class="stat-icon">📦</div><div class="stat-value">${currency(totalCost)}</div><div class="stat-label">Cost</div></div>
-        <div class="stat-card blue"><div class="stat-icon">📊</div><div class="stat-value">${currency(totalProfit)}</div><div class="stat-label">Profit (${totalMargin}%)</div></div>
+        <div class="stat-card red"><div class="stat-icon">📦</div><div class="stat-value">${currency(totalCost)}</div><div class="stat-label">Cost of Goods</div></div>
+        <div class="stat-card ${totalProfit >= 0 ? 'blue' : 'red'}"><div class="stat-icon">📊</div><div class="stat-value">${currency(totalProfit)}</div><div class="stat-label">Gross Profit (${totalMargin}%)</div></div>
+        <div class="stat-card amber"><div class="stat-icon">📈</div><div class="stat-value">${avgMargin}%</div><div class="stat-label">Avg Invoice Margin</div></div>
     </div>
+    ${alertHtml}
     <div class="card"><div class="card-body">
+        <p style="font-size:0.78rem;color:var(--text-muted);margin-bottom:10px">💡 Click any invoice row to expand and see item-level profit breakdown</p>
         <div class="table-wrapper">
             <table class="data-table" id="tbl-invpnl">
             <thead><tr><th>Date</th><th>Invoice</th><th>Party</th><th>Salesman</th><th style="text-align:right">Revenue</th><th style="text-align:right">Cost</th><th style="text-align:right">Profit</th><th style="text-align:right">Margin</th></tr></thead>
-            <tbody>${rows||'<tr><td colspan="8" class="empty-state"><p>No invoices found</p></td></tr>'}
-            <tr style="font-weight:700;background:rgba(0,212,170,0.1)"><td colspan="4" style="text-align:right">Total</td><td class="amount-green" style="text-align:right">${currency(totalRev)}</td><td class="amount-red" style="text-align:right">${currency(totalCost)}</td><td class="${totalProfit>=0?'amount-green':'amount-red'}" style="text-align:right">${currency(totalProfit)}</td><td style="text-align:right;font-weight:600">${totalMargin}%</td></tr>
+            <tbody>${rows || '<tr><td colspan="8" class="empty-state"><p>No invoices found</p></td></tr>'}
+            <tr style="font-weight:700;background:rgba(0,212,170,0.1)"><td colspan="4" style="text-align:right">Total (${invoiceCount} invoices)</td><td class="amount-green" style="text-align:right">${currency(totalRev)}</td><td class="amount-red" style="text-align:right">${currency(totalCost)}</td><td style="text-align:right;color:${totalProfit >= 0 ? 'var(--success)' : 'var(--danger)'};font-weight:700">${currency(totalProfit)}</td><td style="text-align:right;font-weight:600"><span class="badge ${+totalMargin >= 20 ? 'badge-success' : +totalMargin >= 5 ? 'badge-warning' : 'badge-danger'}">${totalMargin}%</span></td></tr>
             </tbody></table>
         </div>
     </div></div>`;
 }
+
+// Toggle expand/collapse for Invoice P&L detail rows
+window.toggleInvPnlDetail = function(idx) {
+    const rows = document.querySelectorAll('.ipnl-detail-' + idx);
+    const arrow = document.getElementById('ipnl-arrow-' + idx);
+    const isVisible = rows.length > 0 && rows[0].style.display !== 'none';
+    rows.forEach(r => r.style.display = isVisible ? 'none' : '');
+    if (arrow) arrow.style.transform = isVisible ? '' : 'rotate(90deg)';
+};
 
 function renderStockRpt() {
     const cat    = ($('r-st-cat')||{}).value||'';
