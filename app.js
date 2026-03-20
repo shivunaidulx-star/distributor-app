@@ -243,12 +243,16 @@ const DB = {
     // Check if user can post to a back-date (Admin only)
     canPostBackDate(dateStr) {
         if (!window.currentUser) return false;
-        // Case-insensitive role check and also check boolean canEdit if available
-        const role = (window.currentUser.role || '').toLowerCase();
-        if (role === 'admin' || role === 'administrator') return true;
         
-        const todayStr = today(); // Use the local today function
-        return dateStr >= todayStr; // Non-admins can only post today or future
+        // Robust role checking
+        const u = window.currentUser;
+        const roles = (Array.isArray(u.roles) ? u.roles : [u.role]).map(r => (r || '').toLowerCase());
+        const isAdmin = roles.some(r => r === 'admin' || r === 'administrator' || r === 'owner' || r === 'manager');
+        
+        if (isAdmin) return true;
+        
+        const todayStr = today(); 
+        return dateStr >= todayStr; 
     },
 
     // --- EXPORT TO EXCEL ---
