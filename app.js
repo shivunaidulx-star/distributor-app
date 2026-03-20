@@ -712,21 +712,23 @@ function renderSetupStep1() {
 }
 
 async function saveSetupStep1() {
-    const name = $('sw-company').value.trim();
-    if (!name) return alert('Company name is required');
+    try {
+        const name = $('sw-company').value.trim();
+        if (!name) return alert('Company name is required');
 
-    // We'll store company info in a special table or just as a single row in a 'metadata' table
-    // For now, let's keep basic company info in localStorage or a 'setup' table.
-    // Let's assume a 'db_company' table exists in the future, but for now we'll push on.
-    const coData = {
-        name,
-        phone: $('sw-phone').value.trim(),
-        gstin: $('sw-gstin').value.trim(),
-        address: $('sw-address').value.trim(),
-        city: $('sw-city').value.trim()
-    };
-    await DB.saveSettings('db_company', coData);
-    renderSetupStep2();
+        const coData = {
+            name,
+            phone: $('sw-phone').value.trim(),
+            gstin: $('sw-gstin').value.trim(),
+            address: $('sw-address').value.trim(),
+            city: $('sw-city').value.trim()
+        };
+        await DB.saveSettings('db_company', coData);
+        renderSetupStep2();
+    } catch (e) {
+        console.error('Setup Step 1 Error:', e);
+        alert('Failed to save company info: ' + (e.message || e));
+    }
 }
 
 function renderSetupStep2() {
@@ -739,15 +741,23 @@ function renderSetupStep2() {
 }
 
 async function completeSetup() {
-    const name = $('sw-admin-name').value.trim();
-    const userId = ($('sw-admin-userid') ? $('sw-admin-userid').value.trim() : '').toLowerCase().replace(/\s/g,'') || 'admin';
-    const pin = $('sw-admin-pin').value.trim();
-    if (!name) return alert('Name is required');
-    if (!pin || pin.length < 4 || pin.length > 6 || !/^\d+$/.test(pin)) return alert('PIN must be 4 to 6 digits (numbers only)');
+    try {
+        const name = $('sw-admin-name').value.trim();
+        const userId = ($('sw-admin-userid') ? $('sw-admin-userid').value.trim() : '').toLowerCase().replace(/\s/g,'') || 'admin';
+        const pin = $('sw-admin-pin').value.trim();
+        if (!name) return alert('Name is required');
+        if (!pin || pin.length < 4 || pin.length > 6 || !/^\d+$/.test(pin)) return alert('PIN must be 4 to 6 digits (numbers only)');
 
-    await DB.insert('users', { name, userId, role: 'Admin', roles: ['Admin'], pin });
-    setupWizard.classList.add('hidden');
-    await showLoginScreen();
+        // Proactively insert the first admin user
+        await DB.insert('users', { name, userId, role: 'Admin', roles: ['Admin'], pin });
+        
+        setupWizard.classList.add('hidden');
+        await showLoginScreen();
+        alert('Setup Complete! You can now login with User ID: ' + userId);
+    } catch (e) {
+        console.error('Setup Complete Error:', e);
+        alert('Failed to complete setup: ' + (e.message || e));
+    }
 }
 
 // --- Session Persistence ---
