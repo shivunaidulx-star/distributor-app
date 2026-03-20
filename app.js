@@ -15486,3 +15486,85 @@ function initSwipeActions() {
     });
 }
 
+
+// --- Purchase Indent Report & Bulk Buffer Update ---
+async function renderPurchaseIndentReport() {
+    const [inv, invoices, cats] = await Promise.all([
+        DB.getAll('inventory'),
+        DB.getAll('invoices'),
+        DB.getAll('categories')
+    ]);
+    const sales30d = invoices.filter(i => i.type === 'sale' && i.status !== 'cancelled' && i.date >= daysAgo(30));
+    
+    const salesMap = {};
+    sales30d.forEach(invRec => {
+        (invRec.items || []).forEach(li => {
+            const item = inv.find(x => x.id === li.itemId);
+            let qty = +li.qty || 0;
+            if (item && item.secUom && li.uom === item.secUom) {
+                qty *= (item.conversionFactor || 1);
+            }
+            salesMap[li.itemId] = (salesMap[li.itemId] || 0) + qty;
+        });
+    });
+
+    const el = document.getElementById('report-detail') || document.getElementById('page-content');
+    const catFlt = document.getElementById('r-ind-cat')?.value || '';
+    const subFlt = document.getElementById('r-ind-sub')?.value || '';
+
+    const reportData = inv.map(item => {
+        const s30 = salesMap[item.id] || 0;
+        const avg10 = Math.ceil((s30 / 30) * 10);
+        const stock = item.stock || 0;
+        const indent = Math.max(0, avg10 - stock);
+        return { ...item, s30, avg10, stock, indent };
+    }).filter(p => !catFlt || p.category === catFlt)
+      .filter(p => !subFlt || (p.subcategory && p.subcategory.toLowerCase().includes(subFlt.toLowerCase())));
+
+    window._lastIndentData = reportData;
+
+    el.innerHTML = `
+        <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
+            <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
+                <div class="form-group"><label>Category</label><select id="r-ind-cat" onchange="renderPurchaseIndentReport()"><option value="">All</option>${(cats||[]).map(c=>`<option ${catFlt===c.name?'selected':''}>${c.name}</option>`).join('')}</select></div>
+                <div class="form-group"><label>Sub-category</label><input id="r-ind-sub" value="${subFlt}" placeholder="Filter sub..." oninput="renderPurchaseIndentReport()" style="width:140px"></div>
+                <div class="form-group" style="align-self:flex-end;display:flex;gap:8px">
+                    <button class="btn btn-outline btn-sm" onclick="exportTableToExcel('tbl-indent','PurchaseIndent_${today()}')">📥 Export</button>
+                    <button class="btn btn-primary btn-sm" onclick="updateAllMinStockFromIndent()">🔄 Update Min Stock</button>
+                    <button class="btn btn-outline btn-sm" onclick="showReport('indent')">🔄 Refresh</button>
+                </div>
+            </div>
+        </div></div>
+        <div class="table-wrapper"><table class="data-table" id="tbl-indent">
+            <thead><tr><th>Item Name</th><th>Category</th><th>30d Sales</th><th>10d Buffer (MinReq)</th><th>Current Stock</th><th>Suggest Indent</th><th>UOM</th></tr></thead>
+            <tbody>${reportData.map(p => `<tr>
+                <td style="font-weight:600">${p.name}</td>
+                <td style="font-size:0.8rem">${p.subcategory || p.category}</td>
+                <td>${p.s30}</td>
+                <td style="background:rgba(249,115,22,0.05);font-weight:700">${p.avg10}</td>
+                <td style="color:${p.stock < p.avg10 ? '#ef4444' : '#22c55e'}">${p.stock}</td>
+                <td style="font-weight:700;color:var(--primary)">${p.indent > 0 ? p.indent : '-'}</td>
+                <td style="font-size:0.8rem;color:var(--text-muted)">${p.unit}</td>
+            </tr>`).join('')}</tbody>
+        </table></div>`;
+}
+
+async function updateAllMinStockFromIndent() {
+    if (!window._lastIndentData || !window._lastIndentData.length) return;
+    if (!confirm('Update "Minimum Stock" for ' + window._lastIndentData.length + ' items based on 10-day buffer?')) return;
+    
+    showToast('Updating minimum stocks...', 'info');
+    let updated = 0;
+    try {
+        for (const p of window._lastIndentData) {
+            if (p.avg10 > 0 && p.avg10 !== p.minStock) {
+                await DB.update('inventory', { id: p.id, minStock: p.avg10 });
+                updated++;
+            }
+        }
+        showToast('Updated Min Stock for ' + updated + ' items', 'success');
+        renderPurchaseIndentReport();
+    } catch (err) {
+        showToast('Error updating min stock: ' + err.message, 'error');
+    }
+}
