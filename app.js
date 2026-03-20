@@ -10096,7 +10096,7 @@ async function showReport(type) {
     
     if (type === 'collection-allocations') {
         window._rAllocAll = invoices.filter(i => i.type === 'sale' && i.status !== 'cancelled');
-        const collectors = [...new Set(window._rAllocAll.map(i => i.allocatedTo))].filter(Boolean).sort();
+        const collectors = [...new Set(window._rAllocAll.map(i => i.allocatedTo || i.assignedTo))].filter(Boolean).sort();
         
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
@@ -10116,7 +10116,8 @@ async function showReport(type) {
             let grandTotal = 0, grandPaid = 0, grandBal = 0;
             
             for (const inv of window._rAllocAll) {
-                if (userFlt && inv.allocatedTo !== userFlt) continue;
+                const currCollector = inv.allocatedTo || inv.assignedTo;
+                if (userFlt && currCollector !== userFlt) continue;
                 
                 const paid = await getInvoicePaidAmount(inv.invoiceNo);
                 const bal = inv.total - paid;
@@ -10132,10 +10133,12 @@ async function showReport(type) {
                 if (inv.allocationHistory && inv.allocationHistory.length) {
                     const last = inv.allocationHistory[inv.allocationHistory.length - 1];
                     assignDate = fmtDate(last.date.substring(0,10));
+                } else if (inv.handoverDate) {
+                    assignDate = fmtDate(inv.handoverDate);
                 }
                 
                 html += `<tr>
-                    <td><span class="badge ${inv.allocatedTo ? 'badge-info' : 'badge-outline'}">${escapeHtml(inv.allocatedTo || 'Unassigned')}</span></td>
+                    <td><span class="badge ${currCollector ? 'badge-info' : 'badge-outline'}">${escapeHtml(currCollector || 'Unassigned')}</span></td>
                     <td><a href="#" onclick="viewInvoice('${inv.id}')" style="color:var(--primary);text-decoration:underline;font-weight:600">${inv.invoiceNo}</a></td>
                     <td>${fmtDate(inv.date)}</td>
                     <td>${escapeHtml(inv.partyName)}</td>
