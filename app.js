@@ -11572,7 +11572,7 @@ function renderChequeRpt() {
         if (!c.chequeStatus || c.chequeStatus==='Pending') actionBtns = `<button class="btn btn-outline btn-sm" onclick="updateChequeStatus('${c.id}','Deposited')">Mark Deposited</button>`;
         else if (c.chequeStatus==='Deposited') actionBtns = `<button class="btn btn-primary btn-sm" onclick="updateChequeStatus('${c.id}','Cleared')">Mark Cleared</button>`;
         else actionBtns = '<span style="color:var(--success);font-weight:600">✔ Done</span>';
-        return `<tr><td style="font-size:0.8rem;color:var(--text-muted)">${c.id.substring(0,8)}</td><td>${fmtDate(c.date)}</td><td style="font-weight:600">${c.chequeNo||'-'}</td><td>${escapeHtml(c.partyName)}</td><td>${c.chequeBank||'-'}</td><td>${c.chequeDepositDate?fmtDate(c.chequeDepositDate):'-'}</td><td class="${c.type==='in'?'amount-green':'amount-red'}" style="text-align:right">${currency(c.amount)}</td><td><span class="badge ${statusBadge}">${c.chequeStatus||'Pending'}</span></td><td>${actionBtns}</td></tr>`;
+        return `<tr><td style="font-size:0.8rem;color:var(--text-muted)">${c.payNo || c.id.substring(0,8)}</td><td>${fmtDate(c.date)}</td><td style="font-weight:600">${c.chequeNo||'-'}</td><td>${escapeHtml(c.partyName)}</td><td>${c.chequeBank||'-'}</td><td>${c.chequeDepositDate?fmtDate(c.chequeDepositDate):'-'}</td><td class="${c.type==='in'?'amount-green':'amount-red'}" style="text-align:right">${currency(c.amount)}</td><td><span class="badge ${statusBadge}">${c.chequeStatus||'Pending'}</span></td><td>${actionBtns}</td></tr>`;
     }).join('');
     out.innerHTML = `
     <div class="stats-grid-sm">
