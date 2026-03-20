@@ -3049,6 +3049,7 @@ async function renderInventory() {
             <div class="filter-group" style="flex-wrap:wrap">
                 <button class="btn btn-outline" onclick="openColumnPersonalizer('inventory','renderInventory')" style="border-color:var(--accent);color:var(--accent)">⚙️ Columns</button>
                 ${canEdit() ? `<button class="btn btn-primary" onclick="openItemModal()">+ Add Item</button>
+                <button class="btn btn-outline" style="border-color:var(--primary);color:var(--primary)" onclick="showReport('indent')">📑 Generate Indent</button>
                 <button class="btn btn-outline" onclick="openStockAdjustmentModal()">🔧 Stock Adjustment</button>
                 <button class="btn btn-outline" onclick="exportInventoryExcel()">📤 Export Excel</button>
                 <button class="btn btn-outline" style="border-color:var(--primary);color:var(--primary)" onclick="downloadItemTemplate()">📋 Item Template</button>
