@@ -241,7 +241,7 @@
     <script>
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('sw.js?v=26').then(reg => {
+                navigator.serviceWorker.register('sw.js').then(reg => {
                     console.log('SW registered');
                     reg.update(); // Force immediate update check
                     setInterval(() => { reg.update(); }, 60 * 1000 * 30); // 30min
@@ -250,7 +250,9 @@
                         installingWorker.onstatechange = () => {
                             if (installingWorker.state === 'installed' && navigator.serviceWorker.controller) {
                                 console.log("New version installed in background. Will apply on next reload.");
-                                // Removed confirm() dialog to prevent update loops.
+                                if (confirm("A new version is available! Refresh to apply updates?")) {
+                                    window.location.reload(true);
+                                }
                             }
                         };
                     };
