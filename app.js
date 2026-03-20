@@ -6550,7 +6550,14 @@ async function executeAssignCollector(invId) {
     await DB.update('invoices', invId, { allocatedTo: collector || null, allocationHistory });
     showToast(collector ? 'Invoice assigned to ' + collector : 'Assignment removed', 'success');
     closeModal();
-    if (currentPage === 'invoices') renderInvoices();
+    if (currentPage === 'reports' && typeof window.renderCollectionAllocationsRpt === 'function') {
+        // Re-fetch data and re-render the report in-place
+        const freshInvoices = await DB.getAll('invoices');
+        window._rAllocAll = freshInvoices.filter(i => i.type === 'sale' && i.status !== 'cancelled');
+        await window.renderCollectionAllocationsRpt();
+    } else if (currentPage === 'invoices') {
+        renderInvoices();
+    }
 }
 
 function cancelInvoiceDirectly(id) {
@@ -10152,7 +10159,7 @@ async function showReport(type) {
                     <td style="font-size:0.8rem;color:var(--text-muted)">${assignDate}</td>
                     <td>
                         <div class="action-btns">
-                            <button class="btn-icon" style="color:var(--info)" title="Assign Salesman" onclick="openAssignInvoiceModal('${inv.id}')">👤</button>
+                            <button class="btn-icon" style="color:var(--info)" title="Assign Salesman" onclick="openAssignCollectorModal('${inv.id}')">👤</button>
                             <button class="btn-icon" style="color:var(--primary)" title="Assign Collector" onclick="openAssignCollectorModal('${inv.id}')">👷</button>
                             <button class="btn-icon" style="color:var(--success)" title="Payment History" onclick="showPaymentHistory('${inv.partyId}', '${inv.invoiceNo}')">💳</button>
                         </div>
@@ -10664,10 +10671,10 @@ function renderInvPnlRpt() {
                 lossItems.push({ name: li.name, invoiceNo: inv.invoiceNo, margin: itemMargin });
             }
 
-            // Margin badge color
-            let badgeClass = 'badge-success'; // ≥20%
-            if (+itemMargin < 5) badgeClass = 'badge-danger';
-            else if (+itemMargin < 20) badgeClass = 'badge-warning';
+            // Margin badge color: ≥12% green, 3-12% amber, <3% red
+            let badgeClass = 'badge-success';
+            if (+itemMargin < 3) badgeClass = 'badge-danger';
+            else if (+itemMargin < 12) badgeClass = 'badge-warning';
 
             return `<tr class="ipnl-detail ipnl-detail-${idx}" style="display:none;background:var(--bg-body)">
                 <td style="padding-left:32px;font-size:0.82rem">📦 ${escapeHtml(li.name || '-')}</td>
@@ -10687,10 +10694,10 @@ function renderInvPnlRpt() {
         invoiceCount++;
         marginSum += +margin;
 
-        // Invoice-level margin badge
+        // Invoice-level margin badge: ≥12% green, 3-12% amber, <3% red
         let invBadge = 'badge-success';
-        if (+margin < 5) invBadge = 'badge-danger';
-        else if (+margin < 20) invBadge = 'badge-warning';
+        if (+margin < 3) invBadge = 'badge-danger';
+        else if (+margin < 12) invBadge = 'badge-warning';
 
         const summaryRow = `<tr class="ipnl-summary" style="cursor:pointer" onclick="toggleInvPnlDetail(${idx})" title="Click to expand item details">
             <td style="white-space:nowrap"><span class="ipnl-arrow" id="ipnl-arrow-${idx}" style="display:inline-block;transition:transform 0.2s;margin-right:4px;font-size:0.7rem">▶</span>${fmtDate(inv.date)}</td>
@@ -10744,12 +10751,15 @@ function renderInvPnlRpt() {
     </div>
     ${alertHtml}
     <div class="card"><div class="card-body">
-        <p style="font-size:0.78rem;color:var(--text-muted);margin-bottom:10px">💡 Click any invoice row to expand and see item-level profit breakdown</p>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+            <p style="font-size:0.78rem;color:var(--text-muted);margin:0">💡 Click any invoice row to expand and see item-level profit breakdown</p>
+            <button class="btn btn-outline btn-sm" onclick="toggleAllInvPnlDetails()" id="btn-ipnl-expand" style="font-size:0.78rem;white-space:nowrap">📋 Expand All</button>
+        </div>
         <div class="table-wrapper">
             <table class="data-table" id="tbl-invpnl">
             <thead><tr><th>Date</th><th>Invoice</th><th>Party</th><th>Salesman</th><th style="text-align:right">Revenue</th><th style="text-align:right">Cost</th><th style="text-align:right">Profit</th><th style="text-align:right">Margin</th></tr></thead>
             <tbody>${rows || '<tr><td colspan="8" class="empty-state"><p>No invoices found</p></td></tr>'}
-            <tr style="font-weight:700;background:rgba(0,212,170,0.1)"><td colspan="4" style="text-align:right">Total (${invoiceCount} invoices)</td><td class="amount-green" style="text-align:right">${currency(totalRev)}</td><td class="amount-red" style="text-align:right">${currency(totalCost)}</td><td style="text-align:right;color:${totalProfit >= 0 ? 'var(--success)' : 'var(--danger)'};font-weight:700">${currency(totalProfit)}</td><td style="text-align:right;font-weight:600"><span class="badge ${+totalMargin >= 20 ? 'badge-success' : +totalMargin >= 5 ? 'badge-warning' : 'badge-danger'}">${totalMargin}%</span></td></tr>
+            <tr style="font-weight:700;background:rgba(0,212,170,0.1)"><td colspan="4" style="text-align:right">Total (${invoiceCount} invoices)</td><td class="amount-green" style="text-align:right">${currency(totalRev)}</td><td class="amount-red" style="text-align:right">${currency(totalCost)}</td><td style="text-align:right;color:${totalProfit >= 0 ? 'var(--success)' : 'var(--danger)'};font-weight:700">${currency(totalProfit)}</td><td style="text-align:right;font-weight:600"><span class="badge ${+totalMargin >= 12 ? 'badge-success' : +totalMargin >= 3 ? 'badge-warning' : 'badge-danger'}">${totalMargin}%</span></td></tr>
             </tbody></table>
         </div>
     </div></div>`;
@@ -10762,6 +10772,16 @@ window.toggleInvPnlDetail = function(idx) {
     const isVisible = rows.length > 0 && rows[0].style.display !== 'none';
     rows.forEach(r => r.style.display = isVisible ? 'none' : '');
     if (arrow) arrow.style.transform = isVisible ? '' : 'rotate(90deg)';
+};
+
+// Toggle ALL expand/collapse for Invoice P&L
+window.toggleAllInvPnlDetails = function() {
+    const allDetails = document.querySelectorAll('.ipnl-detail');
+    const btn = document.getElementById('btn-ipnl-expand');
+    const anyHidden = [...allDetails].some(r => r.style.display === 'none');
+    allDetails.forEach(r => r.style.display = anyHidden ? '' : 'none');
+    document.querySelectorAll('.ipnl-arrow').forEach(a => a.style.transform = anyHidden ? 'rotate(90deg)' : '');
+    if (btn) btn.textContent = anyHidden ? '📋 Collapse All' : '📋 Expand All';
 };
 
 function renderStockRpt() {
