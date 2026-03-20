@@ -10101,7 +10101,7 @@ async function showReport(type) {
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
             <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
-                <div class="form-group"><label>Filter Collector</label><select id="r-ca-user" onchange="renderCollectionAllocationsRpt()"><option value="">All</option>${collectors.map(c=>`<option>${c}</option>`).join('')}</select></div>
+                <div class="form-group"><label>Filter Collector</label><select id="r-ca-user" onchange="renderCollectionAllocationsRpt()"><option value="">All</option><option value="Unassigned">Unassigned</option>${collectors.map(c=>`<option>${c}</option>`).join('')}</select></div>
                 <div class="form-group"><label>Status</label><select id="r-ca-status" onchange="renderCollectionAllocationsRpt()"><option value="">All Assigned</option><option value="pending">Pending Balance</option><option value="paid">Fully Paid</option></select></div>
                 <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-allocations','CollectionAllocations_${today()}')">📥 Export</button></div>
             </div>
@@ -10112,12 +10112,16 @@ async function showReport(type) {
             const userFlt = $('r-ca-user').value;
             const statusFlt = $('r-ca-status').value;
             
-            let html = '<div class="table-wrapper"><table class="data-table" id="tbl-allocations"><thead><tr><th>Collector</th><th>Invoice No</th><th>Date</th><th>Customer</th><th>Total Amt</th><th>Paid</th><th>Balance</th><th>Assigned On</th></tr></thead><tbody>';
+            let html = '<div class="table-wrapper"><table class="data-table" id="tbl-allocations"><thead><tr><th>Collector</th><th>Invoice No</th><th>Date</th><th>Customer</th><th>Total Amt</th><th>Paid</th><th>Balance</th><th>Assigned On</th><th>Action</th></tr></thead><tbody>';
             let grandTotal = 0, grandPaid = 0, grandBal = 0;
             
             for (const inv of window._rAllocAll) {
                 const currCollector = inv.allocatedTo || inv.assignedTo;
-                if (userFlt && currCollector !== userFlt) continue;
+                if (userFlt === 'Unassigned') {
+                    if (currCollector) continue;
+                } else if (userFlt && currCollector !== userFlt) {
+                    continue;
+                }
                 
                 const paid = await getInvoicePaidAmount(inv.invoiceNo);
                 const bal = inv.total - paid;
@@ -10146,6 +10150,13 @@ async function showReport(type) {
                     <td class="amount-green">${currency(paid)}</td>
                     <td style="color:${bal>0?'var(--danger)':'inherit'};font-weight:600">${currency(bal)}</td>
                     <td style="font-size:0.8rem;color:var(--text-muted)">${assignDate}</td>
+                    <td>
+                        <div class="action-btns">
+                            <button class="btn-icon" style="color:var(--info)" title="Assign Salesman" onclick="openAssignInvoiceModal('${inv.id}')">👤</button>
+                            <button class="btn-icon" style="color:var(--primary)" title="Assign Collector" onclick="openAssignCollectorModal('${inv.id}')">👷</button>
+                            <button class="btn-icon" style="color:var(--success)" title="Payment History" onclick="showPaymentHistory('${inv.partyId}', '${inv.invoiceNo}')">💳</button>
+                        </div>
+                    </td>
                 </tr>`;
             }
             
@@ -10154,7 +10165,7 @@ async function showReport(type) {
                 <td>${currency(grandTotal)}</td>
                 <td class="amount-green">${currency(grandPaid)}</td>
                 <td style="color:var(--danger)">${currency(grandBal)}</td>
-                <td></td>
+                <td colspan="2"></td>
             </tr></tbody></table></div>`;
             $('r-ca-out').innerHTML = html;
         };
