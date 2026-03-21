@@ -1,9 +1,9 @@
 /* ============================================
-   DistroManager — Core Application (Refactored)
+   DistroManager  Core Application (Refactored)
    ============================================ */
 
 // --- Supabase Config ---
-// ⚠️ SECURITY WARNING: The SUPABASE_KEY is an 'anon' key and is visible in the frontend. 
+//  SECURITY WARNING: The SUPABASE_KEY is an 'anon' key and is visible in the frontend. 
 // To prevent data breaches, you MUST enable Row Level Security (RLS) on your Supabase dashboard.
 // Each table (parties, inventory, invoices, etc.) should have an RLS policy that restricts 
 // access to the 'anon' role with appropriate 'USING' and 'CHECK' expressions.
@@ -13,15 +13,17 @@ const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // --- Database Layer (Modified for Supabase) ---
 const DB = {
-    // ✅ Centralised Cache for Sync Access
+    //  Centralised Cache for Sync Access
     cache: {},
-    
-    // ✅ Centralised Table Mapping (Scaleable)
+
+    //  Centralised Table Mapping (Scaleable)
     mapTable(alias) {
         const map = {
             'salesorders': 'sales_orders',
             'purchaseorders': 'purchase_orders',
-            'salaryrecords': 'salary_records',
+            'staffmaster': 'staff',
+            'attendance': 'attendance',
+            'hrpayroll': 'salary_records',
             'salaryadvances': 'salary_advances',
             'customerregistrations': 'customer_registrations',
             'customerotps': 'customer_otps',
@@ -32,31 +34,103 @@ const DB = {
         return map[alias] || map[normalized] || alias;
     },
 
-    // localStorage helper
+    // IndexedDB native wrapper for unlimited offline storage
+    idb: {
+        db: null,
+        init() {
+            return new Promise((resolve, reject) => {
+                const req = indexedDB.open('DistroDB', 1);
+                req.onupgradeneeded = e => {
+                    if (!e.target.result.objectStoreNames.contains('store')) e.target.result.createObjectStore('store');
+                };
+                req.onsuccess = e => { this.db = e.target.result; resolve(); };
+                req.onerror = () => reject(req.error);
+            });
+        },
+        async get(key) {
+            if (!this.db) await this.init();
+            return new Promise((resolve, reject) => {
+                const req = this.db.transaction('store', 'readonly').objectStore('store').get(key);
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error);
+            });
+        },
+        async set(key, val) {
+            if (!this.db) await this.init();
+            return new Promise((resolve, reject) => {
+                const req = this.db.transaction('store', 'readwrite').objectStore('store').put(val, key);
+                req.onsuccess = () => resolve();
+                req.onerror = () => reject(req.error);
+            });
+        }
+    },
+
+    async loadCacheFromIDB() {
+        try {
+            await this.idb.init();
+            const keys = ['db_users', 'db_categories', 'db_uom', 'db_company', 'db_tax_settings', 'db_parties', 'db_inventory', 'db_sales_orders', 'db_invoices', 'db_payments', 'db_expenses', 'db_party_ledger', 'db_stock_ledger', 'db_packers', 'db_delivery_persons', 'db_delivery'];
+            await Promise.all(keys.map(async k => {
+                const val = await this.idb.get(k);
+                if (val) {
+                    this.cache[k] = val;
+                    this.cache[this.mapTable(k.replace(/^db_/, ''))] = val;
+                }
+            }));
+        } catch (e) { console.error('IDB load error', e); }
+    },
+
+    // Hybrid ls helper (now backed by in-memory + optional IDB persistence)
     ls: {
-        get(key) { try { return JSON.parse(localStorage.getItem(key)) || []; } catch(e) { return []; } },
-        getObj(key) { try { return JSON.parse(localStorage.getItem(key)) || {}; } catch(e) { return {}; } },
-        set(key, data) { localStorage.setItem(key, JSON.stringify(data)); }
+        get(key) {
+            if (DB.cache[key]) return DB.cache[key];
+            const mapped = DB.mapTable(key.replace(/^db_/, ''));
+            if (DB.cache[mapped]) return DB.cache[mapped];
+            try { return JSON.parse(localStorage.getItem(key)) || []; } catch (e) { return []; }
+        },
+        getObj(key) {
+            if (DB.cache[key]) return DB.cache[key];
+            const mapped = DB.mapTable(key.replace(/^db_/, ''));
+            if (DB.cache[mapped]) return DB.cache[mapped];
+            try { return JSON.parse(localStorage.getItem(key)) || {}; } catch (e) { return {}; }
+        },
+        set(key, data) {
+            DB.cache[key] = data;
+            const mapped = DB.mapTable(key.replace(/^db_/, ''));
+            DB.cache[mapped] = data;
+
+            DB.idb.set(key, data).catch(console.error);
+
+            if (typeof data === 'object' && !Array.isArray(data) && JSON.stringify(data).length < 50000) {
+                try { localStorage.setItem(key, JSON.stringify(data)); } catch (e) { }
+            }
+        }
     },
 
     async refresh() {
         // Core tables needed for Login & Dashboard basic structure
-        const coreTables = ['users', 'categories', 'uom']; 
+        const coreTables = ['users', 'categories', 'uom'];
         const tables = ['parties', 'inventory', 'sales_orders', 'invoices', 'payments', 'expenses', 'party_ledger', 'stock_ledger', 'packers', 'delivery_persons', 'delivery'];
-        
+
         // Mark last refresh time
         this.cache._lastRefresh = Date.now();
 
-        // 1. Load settings and core tables FIRST - block the boot sequence for these
+        // 1. Pre-load local cache from IndexedDB so offline mode responds instantly
+        await this.loadCacheFromIDB();
+
+        // 2. Load settings and core tables FIRST - block the boot sequence for these
         try {
             const [settings, ...coreResults] = await Promise.all([
                 this.loadSettings(),
                 ...coreTables.map(t => supabaseClient.from(t).select('*'))
             ]);
             coreResults.forEach((res, i) => {
-                if (!res.error) this.cache[coreTables[i]] = this._toCamel(res.data || []);
+                if (!res.error) {
+                    const camelData = this._toCamel(res.data || []);
+                    this.cache[coreTables[i]] = camelData;
+                    this.idb.set('db_' + coreTables[i], camelData).catch(console.error);
+                }
             });
-        } catch(e) { console.error('Core Refresh Error:', e); }
+        } catch (e) { console.error('Core Refresh Error:', e); }
 
         // 2. Start loading secondary tables in the background
         tables.forEach(t => {
@@ -66,7 +140,8 @@ const DB = {
                 else {
                     const camel = this._toCamel(res.data || []);
                     this.cache[actualTable] = camel;
-                    
+                    this.idb.set('db_' + actualTable, camel).catch(console.error);
+
                     // Trigger a UI refresh if we are on a page that needs this data
                     const isCatalog = currentPage === 'catalog';
                     if (currentPage === actualTable || (actualTable === 'sales_orders' && currentPage === 'salesorders') || (isCatalog && (actualTable === 'sales_orders' || actualTable === 'inventory' || actualTable === 'parties'))) {
@@ -114,29 +189,30 @@ const DB = {
         }
     },
 
-    // Refresh only specific tables — much faster than full refresh after saves
     async refreshTables(tableList) {
         const results = await Promise.all(tableList.map(t => supabaseClient.from(this.mapTable(t)).select('*')));
         let allSuccess = true;
         results.forEach((res, i) => {
-            if (res.error) { 
-                console.error(`Error refreshing ${tableList[i]}:`, res.error); 
+            if (res.error) {
+                console.error(`Error refreshing ${tableList[i]}:`, res.error);
                 allSuccess = false;
-                return; 
+                return;
             }
             const actual = this.mapTable(tableList[i]);
-            this.cache[actual] = this._toCamel(res.data || []);
+            const camelData = this._toCamel(res.data || []);
+            this.cache[actual] = camelData;
+            this.idb.set('db_' + actual, camelData).catch(console.error);
         });
         return allSuccess;
     },
 
-    get(key) { 
+    get(key) {
         const actual = this.mapTable(key.replace(/^db_/, ''));
         if (this.cache[actual]) return this.cache[actual];
         if (this.cache[key]) return this.cache[key];
         return this.ls.get(key);
     },
-    getObj(key) { 
+    getObj(key) {
         const actual = this.mapTable(key.replace(/^db_/, ''));
         if (this.cache[actual]) return this.cache[actual];
         if (this.cache[key]) return this.cache[key];
@@ -148,7 +224,7 @@ const DB = {
     async setSecureSession(user) {
         if (!user) return;
         try {
-            await supabaseClient.rpc('set_session_role', { 
+            await supabaseClient.rpc('set_session_role', {
                 user_role: user.role,
                 user_id: (user.userId || user.id || '').toLowerCase()
             });
@@ -174,7 +250,17 @@ const DB = {
         const res = {};
         for (const key in obj) {
             const camel = key.replace(/([-_][a-z])/ig, ($1) => $1.toUpperCase().replace('-', '').replace('_', ''));
-            res[camel] = obj[key];
+            let val = obj[key];
+
+            // 🚀 FIX: Global safety net to catch and parse corrupted JSON strings from the DB
+            if (typeof val === 'string' && ['items', 'packed_items', 'allocations', 'price_tiers', 'batches', 'package_numbers', 'cannot_complete_lines'].includes(key)) {
+                try {
+                    const parsed = JSON.parse(val);
+                    if (typeof parsed === 'object' && parsed !== null) val = parsed;
+                } catch (e) { } // Silently ignore if it's just normal text
+            }
+
+            res[camel] = val;
         }
         return res;
     },
@@ -205,9 +291,13 @@ const DB = {
     async getAll(table) {
         const actualTable = this.mapTable(table);
         const { data, error } = await supabaseClient.from(actualTable).select('*');
-        if (error) { console.error(`Error fetching ${actualTable}:`, error); return []; }
+        if (error) {
+            console.warn(`Offline or Error fetching ${actualTable}. Falling back to IDB Cache.`);
+            return this.get(actualTable) || [];
+        }
         const camelData = this._toCamel(data) || [];
         this.cache[actualTable] = camelData;
+        this.idb.set('db_' + actualTable, camelData).catch(console.error);
         return camelData;
     },
 
@@ -234,7 +324,7 @@ const DB = {
         await this.refreshTables([actualTable]);
     },
 
-    // ── Raw operations — NO auto-refresh (batch multiple then call DB.refresh() once) ──
+    //  Raw operations  NO auto-refresh (batch multiple then call DB.refresh() once) 
     async rawUpdate(table, id, row) {
         const actualTable = this.mapTable(table);
         const { error } = await supabaseClient.from(actualTable).update(this._clean(this._toSnake(row))).eq('id', id);
@@ -247,7 +337,7 @@ const DB = {
         return this._toCamel(data[0]);
     },
 
-    // ── Settings: persisted in Supabase `settings` table AND localStorage ──
+    //  Settings: persisted in Supabase `settings` table AND localStorage 
     async saveSettings(key, data) {
         this.ls.set(key, data); // always update local immediately
         try {
@@ -256,10 +346,10 @@ const DB = {
                 console.warn('saveSettings cloud error:', error.message);
                 // Show warning if it looks like table is missing or permission denied
                 if (error.code === '42P01' || error.message?.includes('does not exist')) {
-                    showToast('⚠️ Cloud sync failed: settings table missing. Run schema.sql in Supabase.', 'error');
+                    showToast(' Cloud sync failed: settings table missing. Run schema.sql in Supabase.', 'error');
                 }
             }
-        } catch(e) { console.warn('saveSettings error:', e); }
+        } catch (e) { console.warn('saveSettings error:', e); }
     },
     async loadSettings() {
         try {
@@ -268,7 +358,7 @@ const DB = {
             if (data && data.length > 0) {
                 data.forEach(row => { this.ls.set(row.key, row.value); });
             }
-        } catch(e) { console.warn('loadSettings error:', e); }
+        } catch (e) { console.warn('loadSettings error:', e); }
     },
 
 
@@ -283,17 +373,17 @@ const DB = {
     // Check if user can post to a back-date (Admin only)
     canPostBackDate(dateStr) {
         // Use the local currentUser variable which is the source of truth
-        const u = currentUser; 
+        const u = currentUser;
         if (!u) return false;
-        
+
         // Robust role checking
         const roles = (Array.isArray(u.roles) ? u.roles : [u.role]).map(r => (r || '').toLowerCase());
         const isAdmin = roles.some(r => r === 'admin' || r === 'administrator' || r === 'owner' || r === 'manager');
-        
+
         if (isAdmin) return true;
-        
-        const todayStr = today(); 
-        return dateStr >= todayStr; 
+
+        const todayStr = today();
+        return dateStr >= todayStr;
     },
 
     // --- EXPORT TO EXCEL ---
@@ -309,124 +399,124 @@ const DB = {
         }
     },
 
-    id() { 
+    id() {
         if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
-        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
             var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
             return v.toString(16);
         });
     }
 };
 
-// ── Column Personalization Manager ──
+//  Column Personalization Manager 
 const ColumnManager = {
     PAGES: {
         inventory: [
-            { key: 'name',          label: 'Item Name',   required: true  },
-            { key: 'abc',           label: 'ABC',         visible: true   },
-            { key: 'warehouse',     label: 'Warehouse',   visible: false  },
-            { key: 'hsn',           label: 'HSN',         visible: false  },
-            { key: 'unit',          label: 'Unit',        visible: true   },
-            { key: 'purchasePrice', label: 'Purchase ₹',  visible: true   },
-            { key: 'salePrice',     label: 'Sale ₹',      visible: true   },
-            { key: 'mrp',           label: 'MRP',         visible: false  },
-            { key: 'stock',         label: 'Stock',       visible: true   },
-            { key: 'reserved',      label: 'Reserved',    visible: true   },
-            { key: 'avail',         label: 'Avail',       visible: true   },
-            { key: 'value',         label: 'Value',       visible: true   },
-            { key: 'actions',       label: 'Actions',     required: true  },
+            { key: 'name', label: 'Item Name', required: true },
+            { key: 'abc', label: 'ABC', visible: true },
+            { key: 'warehouse', label: 'Warehouse', visible: false },
+            { key: 'hsn', label: 'HSN', visible: false },
+            { key: 'unit', label: 'Unit', visible: true },
+            { key: 'purchasePrice', label: 'Purchase ', visible: true },
+            { key: 'salePrice', label: 'Sale ', visible: true },
+            { key: 'mrp', label: 'MRP', visible: false },
+            { key: 'stock', label: 'Stock', visible: true },
+            { key: 'reserved', label: 'Reserved', visible: true },
+            { key: 'avail', label: 'Avail', visible: true },
+            { key: 'value', label: 'Value', visible: true },
+            { key: 'actions', label: 'Actions', required: true },
         ],
         parties: [
-            { key: 'name',         label: 'Name',          required: true },
-            { key: 'partyCode',    label: 'Party Code',    visible: true  },
-            { key: 'type',         label: 'Type',          visible: true  },
-            { key: 'phone',        label: 'Phone',         visible: true  },
-            { key: 'city',         label: 'City',          visible: true  },
-            { key: 'postCode',     label: 'Post Code',     visible: true  },
-            { key: 'paymentTerms', label: 'Payment Terms', visible: true  },
-            { key: 'gstin',        label: 'GSTIN',         visible: false },
-            { key: 'balance',      label: 'Balance',       visible: true  },
-            { key: 'actions',      label: 'Actions',       required: true },
-            { key: 'address',      label: 'Address',       visible: false },
+            { key: 'name', label: 'Name', required: true },
+            { key: 'partyCode', label: 'Party Code', visible: true },
+            { key: 'type', label: 'Type', visible: true },
+            { key: 'phone', label: 'Phone', visible: true },
+            { key: 'city', label: 'City', visible: true },
+            { key: 'postCode', label: 'Post Code', visible: true },
+            { key: 'paymentTerms', label: 'Payment Terms', visible: true },
+            { key: 'gstin', label: 'GSTIN', visible: false },
+            { key: 'balance', label: 'Balance', visible: true },
+            { key: 'actions', label: 'Actions', required: true },
+            { key: 'address', label: 'Address', visible: false },
         ],
         salesorders: [
-            { key: 'date',     label: 'Date',        visible: true  },
-            { key: 'orderNo',  label: 'Order #',     required: true },
-            { key: 'party',    label: 'Party',       visible: true  },
-            { key: 'delivery', label: 'Delivery By', visible: true  },
-            { key: 'items',    label: 'Items',       visible: false },
-            { key: 'total',    label: 'Total',       visible: true  },
-            { key: 'by',       label: 'Created By',  visible: false },
-            { key: 'status',   label: 'Status',      visible: true  },
-            { key: 'actions',  label: 'Actions',     required: true },
+            { key: 'date', label: 'Date', visible: true },
+            { key: 'orderNo', label: 'Order #', required: true },
+            { key: 'party', label: 'Party', visible: true },
+            { key: 'delivery', label: 'Delivery By', visible: true },
+            { key: 'items', label: 'Items', visible: false },
+            { key: 'total', label: 'Total', visible: true },
+            { key: 'by', label: 'Created By', visible: false },
+            { key: 'status', label: 'Status', visible: true },
+            { key: 'actions', label: 'Actions', required: true },
         ],
         purchaseorders: [
-            { key: 'date',    label: 'Date',     visible: true  },
-            { key: 'poNo',    label: 'PO #',     required: true },
-            { key: 'party',   label: 'Supplier', visible: true  },
-            { key: 'items',   label: 'Items',    visible: false },
-            { key: 'total',   label: 'Total',    visible: true  },
-            { key: 'status',  label: 'Status',   visible: true  },
-            { key: 'actions', label: 'Actions',  required: true },
+            { key: 'date', label: 'Date', visible: true },
+            { key: 'poNo', label: 'PO #', required: true },
+            { key: 'party', label: 'Supplier', visible: true },
+            { key: 'items', label: 'Items', visible: false },
+            { key: 'total', label: 'Total', visible: true },
+            { key: 'status', label: 'Status', visible: true },
+            { key: 'actions', label: 'Actions', required: true },
         ],
         invoices: [
-            { key: 'date',      label: 'Date',       visible: true  },
-            { key: 'invoiceNo', label: 'Invoice #',  required: true },
-            { key: 'party',     label: 'Party',      visible: true  },
-            { key: 'type',      label: 'Type',       visible: true  },
-            { key: 'status',    label: 'Status',     visible: true  },
-            { key: 'items',     label: 'Items',      visible: false },
-            { key: 'total',     label: 'Total',      visible: true  },
-            { key: 'actions',   label: 'Actions',    required: true },
+            { key: 'date', label: 'Date', visible: true },
+            { key: 'invoiceNo', label: 'Invoice #', required: true },
+            { key: 'party', label: 'Party', visible: true },
+            { key: 'type', label: 'Type', visible: true },
+            { key: 'status', label: 'Status', visible: true },
+            { key: 'items', label: 'Items', visible: false },
+            { key: 'total', label: 'Total', visible: true },
+            { key: 'actions', label: 'Actions', required: true },
         ],
         payments: [
-            { key: 'date',        label: 'Date',         visible: true  },
-            { key: 'receiptNo',   label: 'Receipt #',    visible: true  },
-            { key: 'party',       label: 'Party',        required: true },
-            { key: 'type',        label: 'Type',         visible: true  },
-            { key: 'invoiceNo',   label: 'Invoice',      visible: true  },
-            { key: 'mode',        label: 'Mode',         visible: true  },
+            { key: 'date', label: 'Date', visible: true },
+            { key: 'receiptNo', label: 'Receipt #', visible: true },
+            { key: 'party', label: 'Party', required: true },
+            { key: 'type', label: 'Type', visible: true },
+            { key: 'invoiceNo', label: 'Invoice', visible: true },
+            { key: 'mode', label: 'Mode', visible: true },
             { key: 'collectedBy', label: 'Collected By', visible: false },
-            { key: 'amount',      label: 'Amount',       visible: true  },
-            { key: 'actions',     label: 'Actions',      required: true },
+            { key: 'amount', label: 'Amount', visible: true },
+            { key: 'actions', label: 'Actions', required: true },
         ],
         expenses: [
-            { key: 'date',      label: 'Date',       visible: true  },
-            { key: 'category',  label: 'Category',   visible: true  },
-            { key: 'party',     label: 'Party',      visible: true  },
-            { key: 'docNo',     label: 'Doc No',     visible: true  },
-            { key: 'amount',    label: 'Amount',     visible: true  },
-            { key: 'addedBy',   label: 'Added By',   visible: false },
-            { key: 'actions',   label: 'Actions',    required: true },
+            { key: 'date', label: 'Date', visible: true },
+            { key: 'category', label: 'Category', visible: true },
+            { key: 'party', label: 'Party', visible: true },
+            { key: 'docNo', label: 'Doc No', visible: true },
+            { key: 'amount', label: 'Amount', visible: true },
+            { key: 'addedBy', label: 'Added By', visible: false },
+            { key: 'actions', label: 'Actions', required: true },
         ],
         packing: [
-            { key: 'orderNo',      label: 'Order #',     required: true },
-            { key: 'date',         label: 'Date',        visible: true  },
-            { key: 'party',        label: 'Party',       visible: true  },
-            { key: 'items',        label: 'Items',       visible: false },
-            { key: 'total',        label: 'Total',       visible: true  },
-            { key: 'assignedTo',   label: 'Assigned To', visible: true  },
-            { key: 'actions',      label: 'Actions',     required: true },
+            { key: 'orderNo', label: 'Order #', required: true },
+            { key: 'date', label: 'Date', visible: true },
+            { key: 'party', label: 'Party', visible: true },
+            { key: 'items', label: 'Items', visible: false },
+            { key: 'total', label: 'Total', visible: true },
+            { key: 'assignedTo', label: 'Assigned To', visible: true },
+            { key: 'actions', label: 'Actions', required: true },
         ],
         delivery: [
-            { key: 'orderNo',      label: 'Order #',    required: true },
-            { key: 'invoiceNo',    label: 'Invoice',    visible: true  },
-            { key: 'invoiceDate',  label: 'Inv Date',   visible: false },
-            { key: 'party',        label: 'Party',      visible: true  },
-            { key: 'location',     label: 'Location',   visible: true  },
-            { key: 'phone',        label: 'Phone',      visible: true  },
-            { key: 'person',       label: 'Person',     visible: true  },
-            { key: 'packages',     label: 'Packages',   visible: false },
-            { key: 'status',       label: 'Status',     visible: true  },
-            { key: 'reason',       label: 'Reason',     visible: false },
-            { key: 'actions',      label: 'Actions',    required: true },
+            { key: 'orderNo', label: 'Order #', required: true },
+            { key: 'invoiceNo', label: 'Invoice', visible: true },
+            { key: 'invoiceDate', label: 'Inv Date', visible: false },
+            { key: 'party', label: 'Party', visible: true },
+            { key: 'location', label: 'Location', visible: true },
+            { key: 'phone', label: 'Phone', visible: true },
+            { key: 'person', label: 'Person', visible: true },
+            { key: 'packages', label: 'Packages', visible: false },
+            { key: 'status', label: 'Status', visible: true },
+            { key: 'reason', label: 'Reason', visible: false },
+            { key: 'actions', label: 'Actions', required: true },
         ],
     },
     get(page) {
         try {
             const saved = JSON.parse(localStorage.getItem('colcfg_' + page));
             if (saved && saved.length) return saved;
-        } catch(e) {}
+        } catch (e) { }
         return this.PAGES[page].map(c => ({ ...c, visible: c.required || c.visible !== false }));
     },
     save(page, cols) {
@@ -443,21 +533,21 @@ function openColumnPersonalizer(page, rerenderFn) {
 
     const rows = cols.map((c, i) => `
         <div class="col-cfg-row" data-idx="${i}" style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)">
-            <span style="cursor:grab;color:var(--text-muted);font-size:1.1rem;user-select:none">⠿</span>
+            <span style="cursor:grab;color:var(--text-muted);font-size:1.1rem;user-select:none"></span>
             <span style="flex:1;font-size:0.9rem;font-weight:500">${c.label}</span>
-            <button class="btn btn-outline btn-sm" title="Move Up"    onclick="colMoveUp(${i},'${page}','${rerenderFn}')"    ${i===0?'disabled':''}>↑</button>
-            <button class="btn btn-outline btn-sm" title="Move Down"  onclick="colMoveDown(${i},'${page}','${rerenderFn}')"  ${i===cols.length-1?'disabled':''}>↓</button>
+            <button class="btn btn-outline btn-sm" title="Move Up"    onclick="colMoveUp(${i},'${page}','${rerenderFn}')"    ${i === 0 ? 'disabled' : ''}></button>
+            <button class="btn btn-outline btn-sm" title="Move Down"  onclick="colMoveDown(${i},'${page}','${rerenderFn}')"  ${i === cols.length - 1 ? 'disabled' : ''}></button>
             ${c.required
-                ? `<span class="badge badge-outline" style="opacity:0.5;min-width:56px;text-align:center">Always</span>`
-                : `<button class="btn btn-sm ${c.visible?'btn-primary':'btn-outline'}" onclick="colToggle(${i},'${page}','${rerenderFn}')" style="min-width:56px">${c.visible?'Visible':'Hidden'}</button>`
-            }
+            ? `<span class="badge badge-outline" style="opacity:0.5;min-width:56px;text-align:center">Always</span>`
+            : `<button class="btn btn-sm ${c.visible ? 'btn-primary' : 'btn-outline'}" onclick="colToggle(${i},'${page}','${rerenderFn}')" style="min-width:56px">${c.visible ? 'Visible' : 'Hidden'}</button>`
+        }
         </div>`).join('');
 
-    openModal('⚙️ Personalise Columns', `
+    openModal(' Personalise Columns', `
         <p style="font-size:0.83rem;color:var(--text-muted);margin-bottom:14px">Show/hide columns and reorder them. Changes are saved to this device.</p>
         <div id="${listId}">${rows}</div>
         <div class="modal-actions">
-            <button class="btn btn-outline" onclick="colReset('${page}','${rerenderFn}')">↺ Reset Defaults</button>
+            <button class="btn btn-outline" onclick="colReset('${page}','${rerenderFn}')"> Reset Defaults</button>
             <button class="btn btn-outline" onclick="closeModal()">Close</button>
         </div>`);
 }
@@ -484,13 +574,13 @@ function colToggle(idx, page, rerenderFn) {
 }
 function colMoveUp(idx, page, rerenderFn) {
     const cols = ColumnManager.get(page);
-    if (idx > 0) { [cols[idx-1], cols[idx]] = [cols[idx], cols[idx-1]]; }
+    if (idx > 0) { [cols[idx - 1], cols[idx]] = [cols[idx], cols[idx - 1]]; }
     ColumnManager.save(page, cols);
     openColumnPersonalizer(page, rerenderFn);
 }
 function colMoveDown(idx, page, rerenderFn) {
     const cols = ColumnManager.get(page);
-    if (idx < cols.length-1) { [cols[idx], cols[idx+1]] = [cols[idx+1], cols[idx]]; }
+    if (idx < cols.length - 1) { [cols[idx], cols[idx + 1]] = [cols[idx + 1], cols[idx]]; }
     ColumnManager.save(page, cols);
     openColumnPersonalizer(page, rerenderFn);
 }
@@ -564,7 +654,7 @@ function showToast(message, type = 'success', duration = 3000) {
         container.style.cssText = 'position:fixed;top:20px;right:20px;z-index:10000;display:flex;flex-direction:column;gap:10px;pointer-events:none;';
         document.body.appendChild(container);
     }
-    const icons = { success: '✅', error: '❌', warning: '⚠️', info: 'ℹ️' };
+    const icons = { success: '', error: '', warning: '', info: '' };
     const colors = { success: '#8b5cf6', error: '#f43f5e', warning: '#f59e0b', info: '#6366f1' };
     const borders = { success: '#a78bfa', error: '#fb7185', warning: '#fbbf24', info: '#818cf8' };
     const toast = document.createElement('div');
@@ -727,7 +817,7 @@ function renderSetupStep1() {
         <div class="form-group"><label>GSTIN</label><input id="sw-gstin" placeholder="GST Number"></div></div>
         <div class="form-group"><label>Address</label><input id="sw-address" placeholder="Business Address"></div>
         <div class="form-group"><label>City</label><input id="sw-city" placeholder="City"></div>
-        <button class="btn btn-primary btn-block" onclick="saveSetupStep1()">Next →</button>`;
+        <button class="btn btn-primary btn-block" onclick="saveSetupStep1()">Next </button>`;
 }
 
 async function saveSetupStep1() {
@@ -754,22 +844,22 @@ function renderSetupStep2() {
     $('setup-step').innerHTML = `
         <h3 style="margin-bottom:16px;font-size:1rem">Step 2: Create Admin User</h3>
         <div class="form-group"><label>Admin Name *</label><input id="sw-admin-name" placeholder="Your Full Name"></div>
-        <div class="form-group"><label>User ID * <span style="font-size:0.78rem;color:var(--text-muted)">(used to login — e.g. admin, ram01)</span></label><input id="sw-admin-userid" placeholder="e.g. admin" style="text-transform:lowercase" oninput="this.value=this.value.toLowerCase().replace(/\\s/g,'')"></div>
+        <div class="form-group"><label>User ID * <span style="font-size:0.78rem;color:var(--text-muted)">(used to login  e.g. admin, ram01)</span></label><input id="sw-admin-userid" placeholder="e.g. admin" style="text-transform:lowercase" oninput="this.value=this.value.toLowerCase().replace(/\\s/g,'')"></div>
         <div class="form-group"><label>PIN * <span style="font-size:0.78rem;color:var(--text-muted)">(4 to 6 digits)</span></label><input type="password" id="sw-admin-pin" maxlength="6" placeholder="e.g. 1234 or 123456" inputmode="numeric"></div>
-        <button class="btn btn-primary btn-block" onclick="completeSetup()">Complete Setup ✓</button>`;
+        <button class="btn btn-primary btn-block" onclick="completeSetup()">Complete Setup </button>`;
 }
 
 async function completeSetup() {
     try {
         const name = $('sw-admin-name').value.trim();
-        const userId = ($('sw-admin-userid') ? $('sw-admin-userid').value.trim() : '').toLowerCase().replace(/\s/g,'') || 'admin';
+        const userId = ($('sw-admin-userid') ? $('sw-admin-userid').value.trim() : '').toLowerCase().replace(/\s/g, '') || 'admin';
         const pin = $('sw-admin-pin').value.trim();
         if (!name) return alert('Name is required');
         if (!pin || pin.length < 4 || pin.length > 6 || !/^\d+$/.test(pin)) return alert('PIN must be 4 to 6 digits (numbers only)');
 
         // Proactively insert the first admin user
         await DB.insert('users', { name, userId, role: 'Admin', roles: ['Admin'], pin });
-        
+
         setupWizard.classList.add('hidden');
         await showLoginScreen();
         alert('Setup Complete! You can now login with User ID: ' + userId);
@@ -802,7 +892,7 @@ function dmRestoreSession() {
         // Session restoration also needs secure context
         DB.setSecureSession(session.user);
         return true;
-    } catch(e) {
+    } catch (e) {
         localStorage.removeItem('dm_session');
         return false;
     }
@@ -832,7 +922,7 @@ async function showLoginScreen() {
 async function populateLoginUsers() { /* replaced by userId text input */ }
 
 async function login() {
-    const inputId = ($('login-userid') || {value:''}).value.trim();
+    const inputId = ($('login-userid') || { value: '' }).value.trim();
     const pin = $('login-pin').value.trim();
     if (!inputId) return alert('Enter your User ID');
     if (!pin) return alert('Enter your PIN');
@@ -848,14 +938,95 @@ async function login() {
 async function doLoginSuccess(user, isRestore = false) {
     currentUser = user;
     window.currentUser = user; // Ensure global access too
-    
+
     // Explicitly set security context in Supabase session
     await DB.setSecureSession(user);
     loginScreen.classList.add('hidden');
     appEl.classList.remove('hidden');
     $('sidebar-username').textContent = user.name;
     const displayRoles = Array.isArray(user.roles) && user.roles.length ? user.roles.join(' | ') : (user.role || '');
-    $('sidebar-role').textContent = displayRoles + ' (v94)';
+    $('sidebar-role').textContent = displayRoles + ' (v100)';
+    $('sidebar-avatar').textContent = user.name.charAt(0).toUpperCase();
+
+    const co = DB.ls.getObj('db_company');
+    $('sidebar-brand').textContent = co.name || 'DistroManager';
+    const sidebarLogo = document.querySelector('#sidebar .logo-icon-sm');
+    if (sidebarLogo) {
+        if (co.logo) {
+            sidebarLogo.innerHTML = `<img src="${co.logo}" style="width:100%;height:100%;object-fit:cover;border-radius:6px">`;
+            sidebarLogo.style.background = 'transparent';
+        } else {
+            sidebarLogo.textContent = (co.name || 'D').charAt(0).toUpperCase();
+            sidebarLogo.style.background = 'linear-gradient(135deg, var(--primary), var(--secondary))';
+        }
+    }
+    $('current-date').textContent = new Date().toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' });
+    buildSidebar();
+    showBottomNav();
+
+    // --- AUTOMATED BACKUP CHECK ---
+    if (user.role === 'Admin') {
+        const lastBackup = DB.ls.get('last_backup_date');
+        if (lastBackup !== today()) {
+            setTimeout(() => {
+                if (confirm(" Daily Backup Reminder\n\nYou haven't downloaded a database backup today. Would you like to download one now to keep your data safe?")) {
+                    downloadFullDatabaseBackup();
+                }
+            }, 2000); // Prompts 2 seconds after dashboard loads
+        }
+    }
+
+    await navigateTo('dashboard');
+}
+
+// =============================================
+//  AUTH
+// =============================================
+async function showLoginScreen() {
+    loginScreen.classList.remove('hidden');
+    setupWizard.classList.add('hidden');
+    appEl.classList.add('hidden');
+
+    const co = DB.ls.getObj('db_company'); // Keeping company info local for now as it's static
+    if (co.name) $('login-company-name').textContent = co.name;
+
+    const logoEl = document.querySelector('#login-screen .logo-icon');
+    if (logoEl) {
+        if (co.logo) {
+            logoEl.innerHTML = `<img src="${co.logo}" style="width:100%;height:100%;object-fit:cover;border-radius:12px">`;
+        } else {
+            logoEl.textContent = co.name ? co.name.charAt(0).toUpperCase() : 'D';
+        }
+    }
+}
+
+async function populateLoginUsers() { /* replaced by userId text input */ }
+
+async function login() {
+    const inputId = ($('login-userid') || { value: '' }).value.trim();
+    const pin = $('login-pin').value.trim();
+    if (!inputId) return alert('Enter your User ID');
+    if (!pin) return alert('Enter your PIN');
+    const users = await DB.getAll('users');
+    const user = users.find(u => (u.userId && u.userId.toLowerCase() === inputId.toLowerCase()) || u.name.toLowerCase() === inputId.toLowerCase());
+
+    if (!user || user.pin !== pin) return alert('Invalid User ID or PIN');
+
+    dmSaveSession(user);
+    doLoginSuccess(user);
+}
+
+async function doLoginSuccess(user, isRestore = false) {
+    currentUser = user;
+    window.currentUser = user; // Ensure global access too
+
+    // Explicitly set security context in Supabase session
+    await DB.setSecureSession(user);
+    loginScreen.classList.add('hidden');
+    appEl.classList.remove('hidden');
+    $('sidebar-username').textContent = user.name;
+    const displayRoles = Array.isArray(user.roles) && user.roles.length ? user.roles.join(' | ') : (user.role || '');
+    $('sidebar-role').textContent = displayRoles + ' (v100)';
     $('sidebar-avatar').textContent = user.name.charAt(0).toUpperCase();
 
     const co = DB.ls.getObj('db_company');
@@ -882,21 +1053,21 @@ function openChangePinModal() {
             <label>Current PIN *</label>
             <div style="position:relative">
                 <input type="password" id="cp-old-pin" class="form-control" maxlength="6" placeholder="Enter current PIN" inputmode="numeric" style="padding-right:40px">
-                <button type="button" onclick="const p=$('cp-old-pin');p.type=p.type==='password'?'text':'password'" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-muted)">👁</button>
+                <button type="button" onclick="const p=$('cp-old-pin');p.type=p.type==='password'?'text':'password'" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-muted)"></button>
             </div>
         </div>
         <div class="form-group">
             <label>New PIN * <span style="font-size:0.78rem;color:var(--text-muted)">(4 to 6 digits)</span></label>
             <div style="position:relative">
                 <input type="password" id="cp-new-pin" class="form-control" maxlength="6" placeholder="Enter new PIN" inputmode="numeric" style="padding-right:40px">
-                <button type="button" onclick="const p=$('cp-new-pin');p.type=p.type==='password'?'text':'password'" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-muted)">👁</button>
+                <button type="button" onclick="const p=$('cp-new-pin');p.type=p.type==='password'?'text':'password'" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-muted)"></button>
             </div>
         </div>
         <div class="form-group">
             <label>Confirm New PIN *</label>
             <div style="position:relative">
                 <input type="password" id="cp-confirm-pin" class="form-control" maxlength="6" placeholder="Re-enter new PIN" inputmode="numeric" style="padding-right:40px">
-                <button type="button" onclick="const p=$('cp-confirm-pin');p.type=p.type==='password'?'text':'password'" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-muted)">👁</button>
+                <button type="button" onclick="const p=$('cp-confirm-pin');p.type=p.type==='password'?'text':'password'" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-muted)"></button>
             </div>
         </div>
         <div class="modal-actions">
@@ -920,29 +1091,29 @@ async function saveChangedPin() {
         currentUser.pin = newPin;
         closeModal();
         showToast('PIN updated successfully!', 'success');
-    } catch(e) { alert('Error updating PIN: ' + e.message); }
+    } catch (e) { alert('Error updating PIN: ' + e.message); }
 }
 
 function logout() {
     currentUser = null;
     localStorage.removeItem('dm_session');
-    
+
     // Clear login fields
     if ($('login-pin')) $('login-pin').value = '';
     if ($('login-userid')) $('login-userid').value = '';
-    
+
     // Hide app elements
     const bn = $('bottom-nav');
     if (bn) bn.classList.add('hidden');
     const fab = $('app-fab');
     if (fab) fab.classList.add('hidden');
-    
+
     // Close overlays, sidebars and modals
     closeMoreSheet();
     const sidebar = document.getElementById('sidebar');
     if (sidebar) sidebar.classList.remove('open');
     closeModal();
-    
+
     showLoginScreen();
 }
 
@@ -964,7 +1135,7 @@ function buildSidebar() {
 }
 
 // --- Event Listeners ---
-// ── Prevent browser swipe-back / forward navigation ──
+//  Prevent browser swipe-back / forward navigation 
 
 // 1. Push a dummy state so there's always a history entry to absorb the back gesture
 history.pushState(null, '', window.location.href);
@@ -1027,7 +1198,7 @@ function setupPullToRefresh() {
 
 async function initApp() {
     const loadingEl = $('app-loading');
-    
+
     // Safety timeout: if app doesn't boot in 10s, try to proceed anyway
     const bootTimeout = setTimeout(() => {
         console.warn('Boot timeout reached. Forcing UI reveal.');
@@ -1051,10 +1222,10 @@ async function initApp() {
         } else {
             await checkFirstLaunch();
         }
-        
+
         $('btn-login').addEventListener('click', login);
         $('login-pin').addEventListener('keypress', e => { if (e.key === 'Enter') login(); });
-        
+
         // Link Logout button
         const logoutBtn = $('btn-logout');
         if (logoutBtn) logoutBtn.addEventListener('click', (e) => { e.preventDefault(); logout(); });
@@ -1066,7 +1237,7 @@ async function initApp() {
             item.addEventListener('click', async e => { e.preventDefault(); await navigateTo(item.dataset.page); sidebar.classList.remove('open'); });
         });
         // Auto-select "0" in number inputs so typing replaces it instead of appending
-        document.addEventListener('focus', function(e) {
+        document.addEventListener('focus', function (e) {
             if (e.target.tagName === 'INPUT' && e.target.type === 'number' && e.target.value === '0') {
                 e.target.select();
             }
@@ -1075,7 +1246,7 @@ async function initApp() {
         // Success: hide loading
         clearTimeout(bootTimeout);
         if (loadingEl) loadingEl.classList.add('hidden');
-        
+
     } catch (err) {
         clearTimeout(bootTimeout);
         console.error('Boot Error:', err);
@@ -1102,7 +1273,7 @@ function openModal(title, html, footer, isFullScreen = false) {
     const modalWrap = document.querySelector('.modal');
     if (isFullScreen) modalWrap.classList.add('full-screen-modal');
     else modalWrap.classList.remove('full-screen-modal');
-    
+
     $('modal-overlay').classList.remove('hidden');
     // Prevent background page scroll while modal is open
     document.body.style.overflow = 'hidden';
@@ -1303,33 +1474,33 @@ async function ensureGeolocation() {
     });
 }
 
-window.forceHardRefresh = async function() {
+window.forceHardRefresh = async function () {
     if ('serviceWorker' in navigator) {
         try {
             const regs = await navigator.serviceWorker.getRegistrations();
             for (let r of regs) await r.unregister();
-        } catch(e) { console.error('SW unregister failed', e); }
+        } catch (e) { console.error('SW unregister failed', e); }
     }
     window.location.reload(true);
 };
 
-// ✅ NEW: Ensures GPS is fresh before sorting
+//  NEW: Ensures GPS is fresh before sorting
 async function getFreshLocationAndSort(items, buildType = 'party') {
     showToast('Refreshing location...', 'info', 1000);
     // Force a fresh GPS ping
-    window._userCoords = null; 
-    await ensureGeolocation(); 
-    
+    window._userCoords = null;
+    await ensureGeolocation();
+
     if (buildType === 'party') {
         return buildPartySearchList(items);
     }
     return items; // For catalog we just update global coords
 }
 
-// ✅ UPDATED: Support Party ID [partyCode] in Search
+//  UPDATED: Support Party ID [partyCode] in Search
 function buildPartySearchList(parties) {
     let pts = parties.filter(p => p.active !== false && !p.blocked);
-    
+
     if (window._userCoords) {
         pts.sort((a, b) => {
             const da = haversine(window._userCoords.lat, window._userCoords.lng, a.lat, a.lng);
@@ -1340,7 +1511,7 @@ function buildPartySearchList(parties) {
 
     return pts.map(p => ({
         id: p.id,
-        label: `${p.name} [${p.partyCode || 'No ID'}]`, 
+        label: `${p.name} [${p.partyCode || 'No ID'}]`,
         value: p.name,
         code: p.partyCode || '',
         stockText: p.phone || '',
@@ -1402,70 +1573,70 @@ async function updateUserLocation() {
 }
 
 // Global Haversine Utility
-window.haversine = function(lat1, lon1, lat2, lon2) {
+window.haversine = function (lat1, lon1, lat2, lon2) {
     if (!lat1 || !lon1 || !lat2 || !lon2) return Infinity;
     const R = 6371; // km
     const dLat = (lat2 - lat1) * Math.PI / 180;
     const dLon = (lon2 - lon1) * Math.PI / 180;
-    const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
-    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 };
 
 // =============================================
-//  BOTTOM NAV — More Sheet & FAB
+//  BOTTOM NAV  More Sheet & FAB
 // =============================================
 const MORE_ITEMS = [
-    { page: 'payments',        icon: '💳', label: 'Payments' },
-    { page: 'parties',         icon: '👥', label: 'Parties' },
-    { page: 'inventory',       icon: '📦', label: 'Inventory' },
-    { page: 'packing',         icon: '📋', label: 'Packing' },
-    { page: 'delivery',        icon: '🚚', label: 'Delivery' },
-    { page: 'reports',         icon: '📈', label: 'Reports' },
-    { page: 'expenses',        icon: '💸', label: 'Expenses' },
-    { page: 'purchaseorders',  icon: '🛒', label: 'Purchase' },
-    { page: 'catalog',         icon: '🛍️', label: 'Catalog' },
-    { page: 'packers',         icon: '🧑‍🏭', label: 'Packers' },
-    { page: 'deliverypersons', icon: '🧑‍✈️', label: 'Del.Persons' },
-    { page: 'users',           icon: '🔐', label: 'Users' },
-    { page: 'setup',           icon: '⚙️', label: 'Setup' },
-    { page: 'staffmaster',     icon: '👤', label: 'Staff' },
-    { page: 'attendance',      icon: '📅', label: 'Attendance' },
-    { page: 'hrpayroll',       icon: '💵', label: 'Payroll' },
-    { fn: 'forceHardRefresh()',icon: '🔄', label: 'Hard Refresh' }
+    { page: 'payments', icon: '', label: 'Payments' },
+    { page: 'parties', icon: '', label: 'Parties' },
+    { page: 'inventory', icon: '', label: 'Inventory' },
+    { page: 'packing', icon: '', label: 'Packing' },
+    { page: 'delivery', icon: '', label: 'Delivery' },
+    { page: 'reports', icon: '', label: 'Reports' },
+    { page: 'expenses', icon: '', label: 'Expenses' },
+    { page: 'purchaseorders', icon: '', label: 'Purchase' },
+    { page: 'catalog', icon: '', label: 'Catalog' },
+    { page: 'packers', icon: '', label: 'Packers' },
+    { page: 'deliverypersons', icon: '', label: 'Del.Persons' },
+    { page: 'users', icon: '', label: 'Users' },
+    { page: 'setup', icon: '', label: 'Setup' },
+    { page: 'staffmaster', icon: '', label: 'Staff' },
+    { page: 'attendance', icon: '', label: 'Attendance' },
+    { page: 'hrpayroll', icon: '', label: 'Payroll' },
+    { fn: 'forceHardRefresh()', icon: '', label: 'Hard Refresh' }
 ];
 
 const BOTTOM_NAV_TABS = {
-    Admin:    [{ page:'dashboard', icon:'📊', label:'Home' }, { page:'catalog',      icon:'🛍️', label:'Catalog'  }, { page:'salesorders', icon:'📝', label:'Orders'   }, { page:'invoices', icon:'🧾', label:'Invoices' }, { fn:'openPaymentModal()', icon:'💰', label:'Record' }],
-    Manager:  [{ page:'dashboard', icon:'📊', label:'Home' }, { page:'catalog',      icon:'🛍️', label:'Catalog'  }, { page:'salesorders', icon:'📝', label:'Orders'   }, { page:'invoices', icon:'🧾', label:'Invoices' }, { fn:'openPaymentModal()', icon:'💰', label:'Record' }],
-    Salesman: [{ page:'dashboard', icon:'📊', label:'Home' }, { page:'catalog',      icon:'🛍️', label:'Catalog'  }, { page:'salesorders', icon:'📝', label:'Orders'   }, { page:'parties',  icon:'👥', label:'Parties'  }, { fn:'openPaymentModal()', icon:'💰', label:'Record' }],
-    Packing:  [{ page:'dashboard', icon:'📊', label:'Home' }, { page:'packing',      icon:'📋', label:'Packing'  }],
-    Delivery: [{ page:'dashboard', icon:'📊', label:'Home' }, { page:'delivery',     icon:'🚚', label:'Delivery' }],
+    Admin: [{ page: 'dashboard', icon: '', label: 'Home' }, { page: 'catalog', icon: '', label: 'Catalog' }, { page: 'salesorders', icon: '', label: 'Orders' }, { page: 'invoices', icon: '', label: 'Invoices' }, { fn: 'openPaymentModal()', icon: '', label: 'Record' }],
+    Manager: [{ page: 'dashboard', icon: '', label: 'Home' }, { page: 'catalog', icon: '', label: 'Catalog' }, { page: 'salesorders', icon: '', label: 'Orders' }, { page: 'invoices', icon: '', label: 'Invoices' }, { fn: 'openPaymentModal()', icon: '', label: 'Record' }],
+    Salesman: [{ page: 'dashboard', icon: '', label: 'Home' }, { page: 'catalog', icon: '', label: 'Catalog' }, { page: 'salesorders', icon: '', label: 'Orders' }, { page: 'parties', icon: '', label: 'Parties' }, { fn: 'openPaymentModal()', icon: '', label: 'Record' }],
+    Packing: [{ page: 'dashboard', icon: '', label: 'Home' }, { page: 'packing', icon: '', label: 'Packing' }],
+    Delivery: [{ page: 'dashboard', icon: '', label: 'Home' }, { page: 'delivery', icon: '', label: 'Delivery' }],
 };
 
-// ── All available quick actions ──
+//  All available quick actions 
 const ALL_QUICK_ACTIONS = [
-    { key:'new-sale',       icon:'🧾', label:'New Sale',     fn:"openInvoiceModal('sale')" },
-    { key:'payment-in',     icon:'💰', label:'Record Payment', fn:"openPaymentModal()" },
-    { key:'catalog',        icon:'🛍️', label:'Catalog',      fn:"navigateTo('catalog')" },
-    { key:'salesorders',    icon:'📝', label:'Orders',       fn:"navigateTo('salesorders')" },
-    { key:'parties',        icon:'👥', label:'Parties',      fn:"navigateTo('parties')" },
-    { key:'inventory',      icon:'📦', label:'Inventory',    fn:"navigateTo('inventory')" },
-    { key:'invoices',       icon:'🧾', label:'Invoices',     fn:"navigateTo('invoices')" },
-    { key:'payments',       icon:'💳', label:'Payments',     fn:"navigateTo('payments')" },
-    { key:'delivery',       icon:'🚚', label:'Delivery',     fn:"navigateTo('delivery')" },
-    { key:'expenses',       icon:'💸', label:'Expenses',     fn:"navigateTo('expenses')" },
-    { key:'reports',        icon:'📈', label:'Reports',      fn:"navigateTo('reports')" },
-    { key:'packing',        icon:'📋', label:'Packing',      fn:"navigateTo('packing')" },
-    { key:'purchaseorders', icon:'🛒', label:'Purchase',     fn:"navigateTo('purchaseorders')" },
-    { key:'new-party',      icon:'➕', label:'New Party',    fn:"openPartyModal()" },
-    { key:'update-party-gps',icon:'📍',label:'Update GPS',   fn:"openPartyGpsModal()" },
+    { key: 'new-sale', icon: '', label: 'New Sale', fn: "openInvoiceModal('sale')" },
+    { key: 'payment-in', icon: '', label: 'Record Payment', fn: "openPaymentModal()" },
+    { key: 'catalog', icon: '', label: 'Catalog', fn: "navigateTo('catalog')" },
+    { key: 'salesorders', icon: '', label: 'Orders', fn: "navigateTo('salesorders')" },
+    { key: 'parties', icon: '', label: 'Parties', fn: "navigateTo('parties')" },
+    { key: 'inventory', icon: '', label: 'Inventory', fn: "navigateTo('inventory')" },
+    { key: 'invoices', icon: '', label: 'Invoices', fn: "navigateTo('invoices')" },
+    { key: 'payments', icon: '', label: 'Payments', fn: "navigateTo('payments')" },
+    { key: 'delivery', icon: '', label: 'Delivery', fn: "navigateTo('delivery')" },
+    { key: 'expenses', icon: '', label: 'Expenses', fn: "navigateTo('expenses')" },
+    { key: 'reports', icon: '', label: 'Reports', fn: "navigateTo('reports')" },
+    { key: 'packing', icon: '', label: 'Packing', fn: "navigateTo('packing')" },
+    { key: 'purchaseorders', icon: '', label: 'Purchase', fn: "navigateTo('purchaseorders')" },
+    { key: 'new-party', icon: '', label: 'New Party', fn: "openPartyModal()" },
+    { key: 'update-party-gps', icon: '', label: 'Update GPS', fn: "openPartyGpsModal()" },
 ];
 const DEFAULT_QUICK_ACTIONS = {
-    Admin:    ['new-sale','payment-in','catalog','salesorders','parties','inventory','delivery','reports','update-party-gps'],
-    Manager:  ['new-sale','payment-in','catalog','salesorders','parties','payments','update-party-gps'],
-    Salesman: ['catalog','payment-in','salesorders','parties'],
-    Packing:  ['packing','salesorders'],
-    Delivery: ['delivery','salesorders'],
+    Admin: ['new-sale', 'payment-in', 'catalog', 'salesorders', 'parties', 'inventory', 'delivery', 'reports', 'update-party-gps'],
+    Manager: ['new-sale', 'payment-in', 'catalog', 'salesorders', 'parties', 'payments', 'update-party-gps'],
+    Salesman: ['catalog', 'payment-in', 'salesorders', 'parties'],
+    Packing: ['packing', 'salesorders'],
+    Delivery: ['delivery', 'salesorders'],
 };
 function getQuickActionKeys(role) {
     const saved = DB.ls.getObj('qa_prefs_' + role);
@@ -1482,11 +1653,11 @@ function openEditQuickActions() {
     const current = getQuickActionKeys(role);
     const rows = ALL_QUICK_ACTIONS.map(a =>
         `<label style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border);cursor:pointer">
-            <input type="checkbox" id="qa-chk-${a.key}" ${current.includes(a.key)?'checked':''} style="width:18px;height:18px;accent-color:var(--primary)">
+            <input type="checkbox" id="qa-chk-${a.key}" ${current.includes(a.key) ? 'checked' : ''} style="width:18px;height:18px;accent-color:var(--primary)">
             <span style="font-size:1.1rem">${a.icon}</span>
             <span style="font-weight:600">${a.label}</span>
         </label>`).join('');
-    openModal(`✏️ Edit Quick Actions (${role})`,
+    openModal(` Edit Quick Actions (${role})`,
         `<p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:12px">Select which shortcuts appear on your dashboard.</p>${rows}`,
         `<button class="btn btn-outline" onclick="closeModal()">Cancel</button>
          <button class="btn btn-primary" onclick="
@@ -1503,7 +1674,7 @@ function showBottomNav() {
     const tabs = BOTTOM_NAV_TABS[role] || BOTTOM_NAV_TABS['Admin'];
     // Rebuild tabs using DOM API to avoid encoding/parsing issues with innerHTML
     bn.innerHTML = '';
-    tabs.forEach(function(t) {
+    tabs.forEach(function (t) {
         const a = document.createElement('a');
         a.className = 'bn-item' + (t.page && currentPage === t.page ? ' active' : '');
         if (t.fn) a.setAttribute('data-fn', t.fn);
@@ -1537,7 +1708,7 @@ function showBottomNav() {
 
     // Use event delegation on the container to guarantee click handling
     // This handles the case where individual element events are intercepted
-    bn.onclick = function(e) {
+    bn.onclick = function (e) {
         e.preventDefault();
         e.stopPropagation();
         const item = e.target.closest('.bn-item');
@@ -1570,7 +1741,7 @@ function buildMoreSheet() {
             <span class="more-sheet-icon">${it.icon}</span>
             <span class="more-sheet-label">${it.label}</span>
         </button>`).join('') + `<button class="more-sheet-item" onclick="logout()" style="border-top:1px solid var(--border)">
-            <span class="more-sheet-icon">🚪</span>
+            <span class="more-sheet-icon"></span>
             <span class="more-sheet-label" style="color:var(--danger)">Logout</span>
         </button>`;
     // Hide "More" btn if nothing to show
@@ -1601,14 +1772,14 @@ function closeMoreSheet() {
     if ($('bn-more-btn')) $('bn-more-btn').classList.remove('active');
 }
 
-// FAB — shows primary action button per page (mobile only)
+// FAB  shows primary action button per page (mobile only)
 const FAB_MAP = {
-    salesorders:    () => openSalesOrderModal(),
-    invoices:       () => openInvoiceModal('sale'),
-    payments:       () => openPaymentModal(),
-    parties:        () => openPartyModal(),
-    inventory:      () => openItemModal(),
-    expenses:       () => openExpenseModal(),
+    salesorders: () => openSalesOrderModal(),
+    invoices: () => openInvoiceModal('sale'),
+    payments: () => openPaymentModal(),
+    parties: () => openPartyModal(),
+    inventory: () => openItemModal(),
+    expenses: () => openExpenseModal(),
     purchaseorders: () => openPurchaseOrderModal(),
 };
 
@@ -1665,25 +1836,25 @@ function compressImage(file, { maxWidth = 1024, maxHeight = 1024, quality = 0.75
     });
 }
 
-function currency(n) { return '₹' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function currency(n) { return '' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function fmtDate(d) { return d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '-'; }
-function today() { 
+function today() {
     const d = new Date();
     // Correct for local timezone offset to get local YYYY-MM-DD
     const offset = d.getTimezoneOffset() * 60000;
     return new Date(d.getTime() - offset).toISOString().split('T')[0];
 }
-function isSalesman() { 
+function isSalesman() {
     const r = (currentUser?.role || '').toLowerCase();
-    return r === 'salesman'; 
+    return r === 'salesman';
 }
-function isPacker() { 
+function isPacker() {
     const r = (currentUser?.role || '').toLowerCase();
-    return r === 'packing' || r === 'packer'; 
+    return r === 'packing' || r === 'packer';
 }
-function canEdit() { 
+function canEdit() {
     const r = (currentUser?.role || '').toLowerCase();
-    return r === 'admin' || r === 'administrator' || r === 'manager'; 
+    return r === 'admin' || r === 'administrator' || r === 'manager';
 }
 
 // =============================================
@@ -1700,12 +1871,12 @@ function applyDashboardFilter() {
 
 async function renderCustReqWidget() {
     const { data: regs } = await supabaseClient.from('customer_registrations').select('*').order('submitted_at', { ascending: false }).limit(20);
-    const pending = (regs||[]).filter(r => r.status === 'pending');
-    const recent  = (regs||[]).slice(0, 5);
+    const pending = (regs || []).filter(r => r.status === 'pending');
+    const recent = (regs || []).slice(0, 5);
     return `
     <div class="card" style="margin-top:12px">
         <div class="card-header" style="display:flex;align-items:center;justify-content:space-between">
-            <h3 style="margin:0">🧑‍💼 Customer Portal Requests</h3>
+            <h3 style="margin:0"> Customer Portal Requests</h3>
             <div style="display:flex;align-items:center;gap:10px">
                 ${pending.length ? `<span class="badge badge-danger" style="font-size:0.82rem">${pending.length} Pending</span>` : '<span style="font-size:0.78rem;color:var(--text-muted)">No pending</span>'}
                 <button class="btn btn-outline btn-sm" onclick="navigateTo('customerrequests')">View All</button>
@@ -1717,12 +1888,12 @@ async function renderCustReqWidget() {
             <thead><tr><th>Business</th><th>Phone</th><th>City</th><th>Date</th><th>Status</th><th></th></tr></thead>
             <tbody>
             ${recent.map(r => `<tr>
-                <td style="font-weight:600">${r.business_name||''}</td>
-                <td>${r.phone||''}</td>
-                <td style="color:var(--text-muted)">${r.city||'-'}</td>
-                <td style="font-size:0.8rem;color:var(--text-muted)">${new Date(r.submitted_at||Date.now()).toLocaleDateString('en-IN')}</td>
-                <td><span class="badge ${r.status==='pending'?'badge-warning':r.status==='approved'?'badge-success':'badge-danger'}">${r.status}</span></td>
-                <td>${r.status==='pending' ? `<button class="btn btn-primary btn-sm" onclick="navigateTo('customerrequests')">Review</button>` : ''}</td>
+                <td style="font-weight:600">${r.business_name || ''}</td>
+                <td>${r.phone || ''}</td>
+                <td style="color:var(--text-muted)">${r.city || '-'}</td>
+                <td style="font-size:0.8rem;color:var(--text-muted)">${new Date(r.submitted_at || Date.now()).toLocaleDateString('en-IN')}</td>
+                <td><span class="badge ${r.status === 'pending' ? 'badge-warning' : r.status === 'approved' ? 'badge-success' : 'badge-danger'}">${r.status}</span></td>
+                <td>${r.status === 'pending' ? `<button class="btn btn-primary btn-sm" onclick="navigateTo('customerrequests')">Review</button>` : ''}</td>
             </tr>`).join('')}
             </tbody>
         </table></div>`}
@@ -1736,7 +1907,7 @@ function renderPartyNavWidget(parties, limit = 6) {
     return `
         <div class="card" style="margin-top:12px">
             <div class="card-header" style="display:flex;align-items:center;justify-content:space-between">
-                <h3 style="margin:0">🗺️ Navigate to Party</h3>
+                <h3 style="margin:0"> Navigate to Party</h3>
                 <span style="font-size:0.78rem;color:var(--text-muted)">${located.length} with location</span>
             </div>
             <div class="card-body" style="padding:6px 10px">
@@ -1748,9 +1919,9 @@ function renderPartyNavWidget(parties, limit = 6) {
                             <div style="font-weight:600;font-size:0.88rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(p.name)}</div>
                             <div style="font-size:0.75rem;color:var(--text-muted)">${escapeHtml(p.city || p.address || '')}</div>
                         </div>
-                        <a href="https://www.google.com/maps?q=${p.lat},${p.lng}" target="_blank" class="btn btn-outline btn-sm" style="flex-shrink:0;padding:4px 10px;font-size:0.8rem;border-color:#3b82f6;color:#3b82f6">🗺️ Go</a>
+                        <a href="https://www.google.com/maps?q=${p.lat},${p.lng}" target="_blank" class="btn btn-outline btn-sm" style="flex-shrink:0;padding:4px 10px;font-size:0.8rem;border-color:#3b82f6;color:#3b82f6"> Go</a>
                     </div>`).join('')}
-                    ${located.length > limit ? `<div style="text-align:center;padding:6px;font-size:0.8rem;color:var(--text-muted)">+ ${located.length - limit} more — go to <span style="color:var(--accent);cursor:pointer" onclick="navigateTo('parties')">Parties</span></div>` : ''}
+                    ${located.length > limit ? `<div style="text-align:center;padding:6px;font-size:0.8rem;color:var(--text-muted)">+ ${located.length - limit} more  go to <span style="color:var(--accent);cursor:pointer" onclick="navigateTo('parties')">Parties</span></div>` : ''}
                 </div>
             </div>
         </div>`;
@@ -1775,17 +1946,16 @@ async function renderDashboard() {
     ]);
 
     // ── SALESMAN DASHBOARD ──
-    // ── SALESMAN DASHBOARD ──
     if (role === 'Salesman') {
         // 1. My Orders
         const mySO = salesOrders.filter(o => o.createdBy === currentUser.userId || o.createdBy === currentUser.name);
-        
+
         // 2. Monthly Sales Performance
         const startOfMonth = today().substring(0, 8) + '01';
-        const myMonthInvoices = invoices.filter(i => 
-            i.type === 'sale' && 
-            i.status !== 'cancelled' && 
-            i.date >= startOfMonth && 
+        const myMonthInvoices = invoices.filter(i =>
+            i.type === 'sale' &&
+            i.status !== 'cancelled' &&
+            i.date >= startOfMonth &&
             (i.createdBy === currentUser.userId || i.createdBy === currentUser.name)
         );
 
@@ -1796,9 +1966,9 @@ async function renderDashboard() {
 
         // 3. Daily Collection Tracker
         const todayStr = today();
-        const myTodayPayments = payments.filter(p => 
-            p.type === 'in' && 
-            p.date === todayStr && 
+        const myTodayPayments = payments.filter(p =>
+            p.type === 'in' &&
+            p.date === todayStr &&
             (p.collectedBy === currentUser.userId || p.collectedBy === currentUser.name || p.createdBy === currentUser.userId || p.createdBy === currentUser.name)
         );
         const todayCollection = myTodayPayments.reduce((s, p) => s + p.amount, 0);
@@ -1866,17 +2036,17 @@ async function renderDashboard() {
                         <table class="data-table">
                             <thead><tr><th>Date</th><th>Order #</th><th>Party</th><th>Status</th><th>Total</th></tr></thead>
                             <tbody>${mySO.slice(-5).reverse().map(o => {
-                                const stMap = { pending: 'badge-warning', approved: 'badge-success', rejected: 'badge-danger' };
-                                const stText = o.status || 'pending';
-                                return `<tr><td>${fmtDate(o.date)}</td><td>${o.orderNo}</td><td>${o.partyName}</td><td><span class="badge ${stMap[stText]||'badge-warning'}" style="text-transform:capitalize">${stText}</span></td><td class="amount-green">${currency(o.total)}</td></tr>`;
-                            }).join('') || '<tr><td colspan="5" class="empty-state"><p>No orders yet</p><p class="empty-subtitle">Create your first sales order to get started</p></div></td></tr>'}
+            const stMap = { pending: 'badge-warning', approved: 'badge-success', rejected: 'badge-danger' };
+            const stText = o.status || 'pending';
+            return `<tr><td>${fmtDate(o.date)}</td><td>${o.orderNo}</td><td>${o.partyName}</td><td><span class="badge ${stMap[stText] || 'badge-warning'}" style="text-transform:capitalize">${stText}</span></td><td class="amount-green">${currency(o.total)}</td></tr>`;
+        }).join('') || '<tr><td colspan="5" class="empty-state"><p>No orders yet</p><p class="empty-subtitle">Create your first sales order to get started</p></div></td></tr>'}
                             </tbody>
                         </table>
                     </div>
                 </div>
             </div>
             ${renderPartyNavWidget(parties)}
-        `; 
+        `;
         return;
     }
 
@@ -1905,15 +2075,14 @@ async function renderDashboard() {
                     <tbody>${dispatched.slice(-5).reverse().map(d => `<tr><td style="font-weight:600">${d.orderNo}</td><td>${d.partyName}</td><td><span class="badge badge-info">${d.invoiceNo || '-'}</span></td><td><span class="badge badge-info">${d.status}</span></td></tr>`).join('') || '<tr><td colspan="4"><div class="empty-state"><span class="empty-icon">🚚</span><p>No active dispatches</p><p class="empty-subtitle">All deliveries are complete</p></div></td></tr>'}</tbody></table>
                 </div>
             </div></div>
-            ${renderPartyNavWidget(parties)}`; return;
+            ${renderPartyNavWidget(parties)}`;
+        return;
     }
 
     // ── PACKING DASHBOARD ──
     if (role === 'Packing') {
         const allApproved = salesOrders.filter(o => o.status === 'approved' && !o.packed && !o.cannotComplete);
-        // Packing queue = unassigned OR assigned to me
         const myQueue = allApproved.filter(o => !o.assignedPacker || o.assignedPacker === currentUser.name);
-        // Unassigned only for the table (available to self-assign)
         const unassigned = allApproved.filter(o => !o.assignedPacker);
         const myAssigned = allApproved.filter(o => o.assignedPacker === currentUser.name);
         const packed = salesOrders.filter(o => o.packed && o.packedBy === currentUser.name);
@@ -1938,11 +2107,12 @@ async function renderDashboard() {
                     <tbody>${unassigned.slice(0, 5).map(o => `<tr><td style="font-weight:600">${o.orderNo}</td><td>${o.partyName}</td><td>${o.items.length}</td><td class="amount-green">${currency(o.total)}</td></tr>`).join('')}</tbody></table>
                 </div>
             </div></div>` : (!myAssigned.length ? '<div class="card"><div class="card-body"><div class="empty-state"><span class="empty-icon">✅</span><p>All caught up!</p><p class="empty-subtitle">No orders waiting to be packed.</p></div></div></div>' : '')}
-            ${renderPartyNavWidget(parties)}`; return;
+            ${renderPartyNavWidget(parties)}`;
+        return;
     }
 
     // ── ADMIN / MANAGER DASHBOARD ──
-    const pendingSO   = salesOrders.filter(o => o.status === 'pending').length;
+    const pendingSO = salesOrders.filter(o => o.status === 'pending').length;
     const hasCancelledInvoice = (o) => o.invoiceCancelled || invoices.some(i => i.fromOrder === o.orderNo && i.status === 'cancelled');
     const approvedUnpacked = salesOrders.filter(o => o.status === 'approved' && !o.packed && !hasCancelledInvoice(o) && !o.cannotComplete).length;
     const undeliveredCount = dels.filter(d => d.status === 'Undelivered' || d.status === 'Returned').length;
@@ -1950,49 +2120,51 @@ async function renderDashboard() {
     updateNavBadges(inventory);
     const pendingCheques = payments.filter(p => p.mode === 'Cheque' && (!p.chequeStatus || p.chequeStatus === 'Pending')).length;
 
-    // Receivable / Payable from party ledger balances
-    // balance < 0 (Cr) = customer owes us = Receivable
-    // balance > 0 (Dr) = we owe them (advance/overpaid) = Payable
     const recParties = parties.filter(p => (p.balance || 0) < 0);
     const payParties = parties.filter(p => (p.balance || 0) > 0);
     const totalReceivable = recParties.reduce((s, p) => s + Math.abs(p.balance), 0);
-    const totalPayable    = payParties.reduce((s, p) => s + p.balance, 0);
+    const totalPayable = payParties.reduce((s, p) => s + p.balance, 0);
     const drParties = recParties;
     const crParties = payParties;
 
-    // Store for chart re-render
     window._dashInvoicesAll = invoices.filter(i => i.type === 'sale' && i.status !== 'cancelled');
     window._dashPeriod = window._dashPeriod || 'month';
 
-    // Quick KPI (this month)
     const thisMonthStart = today().substring(0, 8) + '01';
     const tmInvs = window._dashInvoicesAll.filter(i => i.date >= thisMonthStart);
     const tmSales = tmInvs.reduce((s, i) => s + i.total, 0);
     const tmPayIn = payments.filter(p => p.type === 'in' && p.date >= thisMonthStart).reduce((s, p) => s + p.amount, 0);
-    const tmExp   = expenses.filter(e => e.date >= thisMonthStart).reduce((s, e) => s + e.amount, 0);
+    const tmExp = expenses.filter(e => e.date >= thisMonthStart).reduce((s, e) => s + e.amount, 0);
 
-    // Slow moving (for bottom section)
     const ninetyDaysAgo = new Date(); ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
     const ninetyDaysStr = ninetyDaysAgo.toISOString().split('T')[0];
     const itemSalesMap = {}; const itemLastSoldMap = {};
+
+    // 🚀 CRITICAL BUG FIX: Ensure JSON items are parsed safely before looping
     invoices.filter(i => i.type === 'sale' && i.status !== 'cancelled').forEach(inv => {
-        inv.items.forEach(li => {
+        let invItems = [];
+        if (typeof inv.items === 'string') {
+            try { invItems = JSON.parse(inv.items); } catch (e) { invItems = []; }
+        } else {
+            invItems = inv.items || [];
+        }
+
+        invItems.forEach(li => {
             if (inv.date >= ninetyDaysStr) itemSalesMap[li.itemId] = (itemSalesMap[li.itemId] || 0) + (li.packedQty !== undefined ? li.packedQty : li.qty);
             if (!itemLastSoldMap[li.itemId] || inv.date > itemLastSoldMap[li.itemId]) itemLastSoldMap[li.itemId] = inv.date;
         });
     });
+
     const nonMovingItems = inventory.filter(i => !itemSalesMap[i.id] && i.stock > 0);
     const slowMovingItems = inventory.filter(i => itemSalesMap[i.id] && itemSalesMap[i.id] <= 5 && i.stock > 0);
 
     const tileHover = 'onmouseover="this.style.transform=\'translateY(-2px)\';this.style.boxShadow=\'0 6px 20px rgba(0,0,0,0.2)\'" onmouseout="this.style.transform=\'none\';this.style.boxShadow=\'none\'"';
 
     pageContent.innerHTML = `
-    <!-- Alert strips -->
     ${pendingSO ? `<div class="dash-alert dash-alert-amber" onclick="navigateTo('salesorders')" style="cursor:pointer">📝 <strong>${pendingSO} Pending Orders</strong> awaiting approval &nbsp;<span style="color:var(--accent)">→ Review</span></div>` : ''}
     ${approvedUnpacked ? `<div class="dash-alert dash-alert-blue" onclick="navigateTo('packing')" style="cursor:pointer">📋 <strong>${approvedUnpacked} Orders</strong> ready for packing &nbsp;<span style="color:var(--accent)">→ Pack Now</span></div>` : ''}
     ${undeliveredCount ? `<div class="dash-alert dash-alert-red" onclick="navigateTo('delivery')" style="cursor:pointer">↩️ <strong>${undeliveredCount} Undelivered / Returned</strong> need attention &nbsp;<span style="color:var(--accent)">→ Handle</span></div>` : ''}
 
-    <!-- Receivable / Payable -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
         <div class="dash-kpi-card dash-kpi-green" onclick="window._partyBalanceFilter='receivable';navigateTo('parties')" style="cursor:pointer">
             <div class="dash-kpi-label">Receivable</div>
@@ -2006,7 +2178,6 @@ async function renderDashboard() {
         </div>
     </div>
 
-    <!-- Sales Chart -->
     <div class="dash-fin-card" style="margin-bottom:14px">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px;flex-wrap:wrap;gap:8px">
             <div>
@@ -2019,14 +2190,13 @@ async function renderDashboard() {
                     <span id="dash-period-label">This Month</span> <span>▾</span>
                 </button>
                 <div id="dash-period-menu" style="display:none;position:absolute;right:0;top:36px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-md);box-shadow:0 8px 24px rgba(0,0,0,0.15);z-index:100;min-width:140px;overflow:hidden">
-                    ${[['week','This Week'],['lastmonth','Last Month'],['month','This Month'],['quarter','This Quarter'],['halfyear','Half Year'],['year','This Year']].map(([v,l])=>`<div class="dash-period-opt" data-val="${v}" onclick="selectDashPeriod('${v}','${l}')" style="padding:9px 16px;cursor:pointer;font-size:0.88rem;color:var(--text-primary)">${l}</div>`).join('')}
+                    ${[['week', 'This Week'], ['lastmonth', 'Last Month'], ['month', 'This Month'], ['quarter', 'This Quarter'], ['halfyear', 'Half Year'], ['year', 'This Year']].map(([v, l]) => `<div class="dash-period-opt" data-val="${v}" onclick="selectDashPeriod('${v}','${l}')" style="padding:9px 16px;cursor:pointer;font-size:0.88rem;color:var(--text-primary)">${l}</div>`).join('')}
                 </div>
             </div>
         </div>
         <div id="dash-chart-wrap" style="margin-top:10px;overflow:hidden"></div>
     </div>
 
-    <!-- This Month Quick Stats -->
     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px">
         <div class="dash-pulse-tile" onclick="navigateTo('payments')" style="--tile-color:#10b981;animation-delay:0.05s">
             <div class="dash-pulse-icon">💰</div>
@@ -2038,66 +2208,61 @@ async function renderDashboard() {
             <div class="dash-pulse-val dash-count" data-val="${tmExp}" style="color:#ef4444">${currency(tmExp)}</div>
             <div class="dash-pulse-lbl">Expenses</div>
         </div>
-        <div class="dash-pulse-tile${lowStock ? ' dash-pulse-alert' : ''}" onclick="navigateTo('inventory')" style="--tile-color:${lowStock?'#ef4444':'var(--text-primary)'};animation-delay:0.15s">
+        <div class="dash-pulse-tile${lowStock ? ' dash-pulse-alert' : ''}" onclick="navigateTo('inventory')" style="--tile-color:${lowStock ? '#ef4444' : 'var(--text-primary)'};animation-delay:0.15s">
             <div class="dash-pulse-icon">📦</div>
-            <div class="dash-pulse-val" style="color:${lowStock?'#ef4444':'var(--text-primary)'}">${lowStock}</div>
+            <div class="dash-pulse-val" style="color:${lowStock ? '#ef4444' : 'var(--text-primary)'}">${lowStock}</div>
             <div class="dash-pulse-lbl">Low Stock</div>
         </div>
-        <div class="dash-pulse-tile${pendingCheques ? ' dash-pulse-alert' : ''}" onclick="navigateTo('reports');setTimeout(()=>showReport('chequeregister'),200)" style="--tile-color:${pendingCheques?'#f59e0b':'var(--text-primary)'};animation-delay:0.2s">
+        <div class="dash-pulse-tile${pendingCheques ? ' dash-pulse-alert' : ''}" onclick="navigateTo('reports');setTimeout(()=>showReport('chequeregister'),200)" style="--tile-color:${pendingCheques ? '#f59e0b' : 'var(--text-primary)'};animation-delay:0.2s">
             <div class="dash-pulse-icon">🏦</div>
-            <div class="dash-pulse-val" style="color:${pendingCheques?'#f59e0b':'var(--text-primary)'}">${pendingCheques}</div>
+            <div class="dash-pulse-val" style="color:${pendingCheques ? '#f59e0b' : 'var(--text-primary)'}">${pendingCheques}</div>
             <div class="dash-pulse-lbl">Cheques</div>
         </div>
     </div>
 
-    <!-- Most Used Reports -->
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
         <span style="font-weight:600;font-size:0.95rem">Most Used Reports</span>
         <a href="#" onclick="navigateTo('reports');return false" style="font-size:0.83rem;color:var(--accent);text-decoration:none">View All →</a>
     </div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:18px">
         ${[
-            ['sales','Sale Report'],
-            ['payments','All Transactions'],
-            ['invoice-pnl','Daybook Report'],
-            ['outstanding','Party Statement']
-        ].map(([r,l])=>`<div class="dash-report-chip" onclick="navigateTo('reports');setTimeout(()=>showReport('${r}'),200)" style="cursor:pointer" ${tileHover}><span>${l}</span><span style="color:var(--accent)">›</span></div>`).join('')}
+            ['sales', 'Sale Report'],
+            ['payments', 'All Transactions'],
+            ['invoice-pnl', 'Daybook Report'],
+            ['outstanding', 'Party Statement']
+        ].map(([r, l]) => `<div class="dash-report-chip" onclick="navigateTo('reports');setTimeout(()=>showReport('${r}'),200)" style="cursor:pointer" ${tileHover}><span>${l}</span><span style="color:var(--accent)">›</span></div>`).join('')}
     </div>
 
-    <!-- Quick Actions -->
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
         <span style="font-weight:700;font-size:0.9rem;color:var(--text-secondary);letter-spacing:0.04em;text-transform:uppercase">Quick Actions</span>
         <button class="btn-icon" onclick="openEditQuickActions()" title="Edit Quick Actions" style="font-size:1rem;padding:4px 8px">✏️</button>
     </div>
     <div class="quick-actions" style="margin-bottom:18px">
-        ${getQuickActionKeys(currentUser?.role||'Admin').map(key=>{
-            const a = ALL_QUICK_ACTIONS.find(x=>x.key===key);
+        ${getQuickActionKeys(currentUser?.role || 'Admin').map(key => {
+            const a = ALL_QUICK_ACTIONS.find(x => x.key === key);
             return a ? `<button class="quick-action-btn" onclick="${a.fn}"><span class="qa-icon">${a.icon}</span><span class="qa-label">${a.label}</span></button>` : '';
         }).join('')}
     </div>
 
-    <!-- Slow / Non-Moving Items -->
     ${(nonMovingItems.length || slowMovingItems.length) ? `
     <div class="card" style="margin-bottom:14px"><div class="card-header" style="display:flex;justify-content:space-between;align-items:center"><h3>📉 Slow / Non-Moving Items</h3><span style="font-size:0.78rem;color:var(--text-muted)">Last 90 days</span></div><div class="card-body">
         ${nonMovingItems.length ? `<div style="margin-bottom:14px"><div style="font-weight:600;color:var(--danger);font-size:0.88rem;margin-bottom:8px">🚫 Non-Moving (${nonMovingItems.length}) — Zero sales in 90 days</div>
-        <table class="data-table"><thead><tr><th>Item</th><th>Stock</th><th>Last Sold</th></tr></thead><tbody>${nonMovingItems.slice(0,8).map(i=>`<tr><td style="font-weight:600">${i.name}</td><td><span class="badge badge-danger">${i.stock}</span></td><td style="color:var(--text-muted);font-size:0.82rem">${itemLastSoldMap[i.id]?fmtDate(itemLastSoldMap[i.id]):'Never'}</td></tr>`).join('')}</tbody></table></div>` : ''}
+        <table class="data-table"><thead><tr><th>Item</th><th>Stock</th><th>Last Sold</th></tr></thead><tbody>${nonMovingItems.slice(0, 8).map(i => `<tr><td style="font-weight:600">${i.name}</td><td><span class="badge badge-danger">${i.stock}</span></td><td style="color:var(--text-muted);font-size:0.82rem">${itemLastSoldMap[i.id] ? fmtDate(itemLastSoldMap[i.id]) : 'Never'}</td></tr>`).join('')}</tbody></table></div>` : ''}
         ${slowMovingItems.length ? `<div><div style="font-weight:600;color:var(--warning);font-size:0.88rem;margin-bottom:8px">🐢 Slow Moving (${slowMovingItems.length}) — ≤5 units in 90 days</div>
-        <table class="data-table"><thead><tr><th>Item</th><th>Stock</th><th>Sold (90d)</th></tr></thead><tbody>${slowMovingItems.slice(0,8).map(i=>`<tr><td style="font-weight:600">${i.name}</td><td><span class="badge badge-info">${i.stock}</span></td><td style="font-weight:600;color:var(--warning)">${itemSalesMap[i.id]||0}</td></tr>`).join('')}</tbody></table></div>` : ''}
+        <table class="data-table"><thead><tr><th>Item</th><th>Stock</th><th>Sold (90d)</th></tr></thead><tbody>${slowMovingItems.slice(0, 8).map(i => `<tr><td style="font-weight:600">${i.name}</td><td><span class="badge badge-info">${i.stock}</span></td><td style="font-weight:600;color:var(--warning)">${itemSalesMap[i.id] || 0}</td></tr>`).join('')}</tbody></table></div>` : ''}
     </div></div>` : ''}
 
-    <!-- Recent Invoices -->
     <div class="card"><div class="card-header"><h3>Recent Invoices</h3></div><div class="card-body">
         <div class="table-wrapper">
             <table class="data-table"><thead><tr><th>Date</th><th>Invoice #</th><th>Party</th><th>Type</th><th>Amount</th></tr></thead>
-            <tbody>${invoices.slice(-5).reverse().map(i=>`<tr><td>${fmtDate(i.date)}</td><td style="font-weight:600">${i.invoiceNo}</td><td>${i.partyName}</td><td><span class="badge ${i.type==='sale'?'badge-success':'badge-info'}">${i.type}</span></td><td class="${i.type==='sale'?'amount-green':'amount-red'}">${currency(i.total)}</td></tr>`).join('')||'<tr><td colspan="5"><div class="empty-state"><p>No invoices yet</p></div></td></tr>'}</tbody></table>
+            <tbody>${invoices.slice(-5).reverse().map(i => `<tr><td>${fmtDate(i.date)}</td><td style="font-weight:600">${i.invoiceNo}</td><td>${i.partyName}</td><td><span class="badge ${i.type === 'sale' ? 'badge-success' : 'badge-info'}">${i.type}</span></td><td class="${i.type === 'sale' ? 'amount-green' : 'amount-red'}">${currency(i.total)}</td></tr>`).join('') || '<tr><td colspan="5"><div class="empty-state"><p>No invoices yet</p></div></td></tr>'}</tbody></table>
         </div>
     </div></div>
     ${await renderCustReqWidget()}
     `;
 
-    // Render chart after DOM is ready
     renderDashChart();
-    // Animate counters
+
     requestAnimationFrame(() => {
         document.querySelectorAll('.dash-count[data-val]').forEach(el => {
             const target = parseFloat(el.dataset.val) || 0;
@@ -2114,186 +2279,6 @@ async function renderDashboard() {
             tick();
         });
     });
-}
-
-// ── ADMIN DASHBOARD CHART HELPERS ──
-function getDashPeriodDates(period) {
-    const now = new Date();
-    const pad = n => String(n).padStart(2,'0');
-    const fmt = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
-    const todayStr = fmt(now);
-    let from, to = todayStr;
-    if (period === 'week') {
-        const d = new Date(now); d.setDate(d.getDate() - 6); from = fmt(d);
-    } else if (period === 'lastmonth') {
-        from = fmt(new Date(now.getFullYear(), now.getMonth()-1, 1));
-        to   = fmt(new Date(now.getFullYear(), now.getMonth(), 0));
-    } else if (period === 'quarter') {
-        const d = new Date(now); d.setMonth(d.getMonth()-2); d.setDate(1); from = fmt(d);
-    } else if (period === 'halfyear') {
-        const d = new Date(now); d.setMonth(d.getMonth()-5); d.setDate(1); from = fmt(d);
-    } else if (period === 'year') {
-        from = `${now.getFullYear()}-01-01`;
-    } else { // month
-        from = `${now.getFullYear()}-${pad(now.getMonth()+1)}-01`;
-    }
-    return { from, to };
-}
-
-function buildDashChartData(invoices, from, to) {
-    // Build day-by-day totals between from and to
-    const map = {};
-    invoices.filter(i => i.date >= from && i.date <= to).forEach(i => { map[i.date] = (map[i.date]||0) + i.total; });
-    const pts = [];
-    const cur = new Date(from + 'T00:00:00');
-    const end = new Date(to   + 'T00:00:00');
-    while (cur <= end) {
-        const d = `${cur.getFullYear()}-${String(cur.getMonth()+1).padStart(2,'0')}-${String(cur.getDate()).padStart(2,'0')}`;
-        pts.push({ d, v: map[d]||0, label: `${cur.getDate()} ${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][cur.getMonth()]}` });
-        cur.setDate(cur.getDate()+1);
-    }
-    return pts;
-}
-
-function makeSalesSvg(pts) {
-    if (!pts.length) return '<div style="text-align:center;padding:40px;color:var(--text-muted);font-size:0.9rem">No sales data for this period</div>';
-    const W=700, H=200, pl=52, pr=10, pt=14, pb=36;
-    const w=W-pl-pr, h=H-pt-pb;
-    const maxV = Math.max(...pts.map(p=>p.v), 1);
-    // nice ceiling
-    const mag = Math.pow(10, Math.floor(Math.log10(maxV)));
-    const niceMax = Math.ceil(maxV/mag)*mag;
-    const xStep = pts.length > 1 ? w/(pts.length-1) : w;
-    const xy = pts.map((p,i) => [pl+i*xStep, pt+h - (p.v/niceMax)*h]);
-    const fmtY = v => v>=1e5?(v/1e5).toFixed(0)+'L':v>=1e3?(v/1e3).toFixed(0)+'k':v;
-    // gridlines
-    const grids = [0.25,0.5,0.75,1].map(f=>{
-        const y=pt+h-f*h;
-        return `<line x1="${pl}" y1="${y}" x2="${W-pr}" y2="${y}" stroke="currentColor" opacity="0.1"/>
-                <text x="${pl-5}" y="${y+4}" text-anchor="end" font-size="11" fill="currentColor" opacity="0.45">${fmtY(niceMax*f)}</text>`;
-    }).join('');
-    // x labels — show ~6 evenly
-    const step = Math.max(1,Math.ceil(pts.length/6));
-    const xlbls = pts.filter((_,i)=>i%step===0||i===pts.length-1).map(p=>{
-        const i=pts.indexOf(p);
-        return `<text x="${pl+i*xStep}" y="${H-8}" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.45">${p.label}</text>`;
-    }).join('');
-    // smooth path using cubic bezier
-    let d='', ad='';
-    xy.forEach(([x,y],i)=>{
-        if(i===0){d+=`M${x},${y}`;ad+=`M${x},${y}`;}
-        else{
-            const [px,py]=xy[i-1];
-            const cpx=(px+x)/2;
-            d+=` C${cpx},${py} ${cpx},${y} ${x},${y}`;
-            ad+=` C${cpx},${py} ${cpx},${y} ${x},${y}`;
-        }
-    });
-    ad+=` L${xy[xy.length-1][0]},${pt+h} L${pl},${pt+h} Z`;
-    return `<svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="none" style="display:block;max-height:200px">
-        <defs><linearGradient id="sg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#3b82f6" stop-opacity="0.25"/><stop offset="100%" stop-color="#3b82f6" stop-opacity="0.01"/></linearGradient></defs>
-        ${grids}
-        <path d="${ad}" fill="url(#sg)"/>
-        <path d="${d}" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-        ${xlbls}
-    </svg>`;
-}
-
-function renderDashChart() {
-    const wrap  = $('dash-chart-wrap'); if (!wrap) return;
-    const period = window._dashPeriod || 'month';
-    const { from, to } = getDashPeriodDates(period);
-    const allInv = window._dashInvoicesAll || [];
-    const pts = buildDashChartData(allInv, from, to);
-    const total = pts.reduce((s,p)=>s+p.v,0);
-
-    // Comparison vs previous equal-length period
-    const fromD = new Date(from+'T00:00:00'), toD = new Date(to+'T00:00:00');
-    const days  = Math.round((toD-fromD)/(864e5))+1;
-    const prevTo   = new Date(fromD); prevTo.setDate(prevTo.getDate()-1);
-    const prevFrom = new Date(prevTo); prevFrom.setDate(prevFrom.getDate()-days+1);
-    const pf = prevFrom.toISOString().split('T')[0], pt2 = prevTo.toISOString().split('T')[0];
-    const prevTotal = allInv.filter(i=>i.date>=pf&&i.date<=pt2).reduce((s,i)=>s+i.total,0);
-    let compareHtml = '';
-    if (prevTotal > 0) {
-        const pct = Math.abs(Math.round((total-prevTotal)/prevTotal*100));
-        const up = total >= prevTotal;
-        compareHtml = `<span style="color:${up?'#10b981':'#ef4444'};font-size:0.82rem;font-weight:600">${up?'▲':'▼'} ${pct}% ${up?'more':'less'} than previous period</span>`;
-    }
-    const totalEl   = $('dash-chart-total');
-    const compareEl = $('dash-chart-compare');
-    if (totalEl)   totalEl.textContent   = currency(total);
-    if (compareEl) compareEl.innerHTML   = compareHtml;
-    wrap.innerHTML = makeSalesSvg(pts);
-}
-
-function toggleDashPeriodMenu() {
-    const m = $('dash-period-menu');
-    if (m) m.style.display = m.style.display === 'none' ? 'block' : 'none';
-    // Close on outside click
-    setTimeout(() => {
-        const close = (e) => { if (m && !m.contains(e.target) && e.target.id !== 'dash-period-btn') { m.style.display='none'; document.removeEventListener('click',close); } };
-        document.addEventListener('click', close);
-    }, 10);
-}
-
-function selectDashPeriod(val, label) {
-    window._dashPeriod = val;
-    const btn = $('dash-period-btn'); if (btn) btn.querySelector('#dash-period-label').textContent = label;
-    const m = $('dash-period-menu'); if (m) { m.style.display='none'; m.querySelectorAll('.dash-period-opt').forEach(o=>{ o.style.background = o.dataset.val===val?'var(--primary-light, rgba(59,130,246,0.1))':''; o.style.fontWeight = o.dataset.val===val?'600':''; }); }
-    renderDashChart();
-}
-
-function openDashboardSettings() {
-    const prefs = currentUser.dashboardPrefs || {};
-    openModal('⚙️ Customize Dashboard', `
-        <p style="margin-bottom:15px;color:var(--text-secondary);font-size:0.9rem">Toggle sections on or off to personalize your dashboard layout.</p>
-        <div style="background:var(--bg-card);padding:20px;border-radius:var(--radius-md);border:1px solid var(--border)">
-            <label style="display:flex;align-items:center;gap:12px;cursor:pointer;margin-bottom:14px;font-size:0.95rem">
-                <input type="checkbox" id="pref-filters" style="width:18px;height:18px" ${!prefs.hideFilters ? 'checked' : ''}> Show Date Filters
-            </label>
-            <label style="display:flex;align-items:center;gap:12px;cursor:pointer;margin-bottom:14px;font-size:0.95rem">
-                <input type="checkbox" id="pref-top" style="width:18px;height:18px" ${!prefs.hideTopKPIs ? 'checked' : ''}> Show Top Financial KPIs
-            </label>
-            <label style="display:flex;align-items:center;gap:12px;cursor:pointer;margin-bottom:14px;font-size:0.95rem">
-                <input type="checkbox" id="pref-sec" style="width:18px;height:18px" ${!prefs.hideSecondaryKPIs ? 'checked' : ''}> Show Secondary KPIs & Stock
-            </label>
-            <label style="display:flex;align-items:center;gap:12px;cursor:pointer;margin-bottom:14px;font-size:0.95rem">
-                <input type="checkbox" id="pref-actions" style="width:18px;height:18px" ${!prefs.hideQuickActions ? 'checked' : ''}> Show Quick Actions
-            </label>
-            <label style="display:flex;align-items:center;gap:12px;cursor:pointer;margin-bottom:14px;font-size:0.95rem">
-                <input type="checkbox" id="pref-slow" style="width:18px;height:18px" ${!prefs.hideSlowItems ? 'checked' : ''}> Show Slow-Moving Items
-            </label>
-            <label style="display:flex;align-items:center;gap:12px;cursor:pointer;font-size:0.95rem">
-                <input type="checkbox" id="pref-recent" style="width:18px;height:18px" ${!prefs.hideRecentInvoices ? 'checked' : ''}> Show Recent Invoices
-            </label>
-        </div>
-        <div class="modal-actions" style="margin-top:20px">
-            <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-            <button class="btn btn-primary" onclick="saveDashboardSettings()">Save Settings</button>
-        </div>
-    `);
-}
-
-function saveDashboardSettings() {
-    const prefs = {
-        hideFilters: !$('pref-filters').checked,
-        hideTopKPIs: !$('pref-top').checked,
-        hideSecondaryKPIs: !$('pref-sec').checked,
-        hideQuickActions: !$('pref-actions').checked,
-        hideSlowItems: !$('pref-slow').checked,
-        hideRecentInvoices: !$('pref-recent').checked
-    };
-    currentUser.dashboardPrefs = prefs;
-
-    // persist dashboardPrefs in Supabase
-    if (currentUser && currentUser.id) {
-        DB.update('users', currentUser.id, { dashboardPrefs: prefs }).catch(e => console.warn('dashboardPrefs save:', e.message));
-    }
-
-    closeModal();
-    renderDashboard();
-    showToast('Dashboard layout saved successfully.', 'success');
 }
 
 // =============================================
@@ -2318,40 +2303,40 @@ async function renderParties() {
     else if (balFilter === 'payable') shown = shown.filter(p => (p.balance || 0) > 0);
 
     const balFilterBadge = balFilter ? `
-        <div style="display:flex;align-items:center;gap:8px;padding:8px 14px;background:${balFilter==='receivable'?'#d1fae5':'#fee2e2'};border-radius:8px;margin-bottom:10px;font-size:0.85rem;font-weight:600;color:${balFilter==='receivable'?'#065f46':'#991b1b'}">
-            ${balFilter==='receivable'?'🟢 Showing: Parties with Receivable Balance':'🔴 Showing: Parties with Payable Balance'}
-            <button onclick="window._partyBalanceFilter=null;renderParties()" style="margin-left:auto;background:none;border:none;cursor:pointer;font-size:1rem;padding:0;color:inherit">✕ Clear</button>
+        <div style="display:flex;align-items:center;gap:8px;padding:8px 14px;background:${balFilter === 'receivable' ? '#d1fae5' : '#fee2e2'};border-radius:8px;margin-bottom:10px;font-size:0.85rem;font-weight:600;color:${balFilter === 'receivable' ? '#065f46' : '#991b1b'}">
+            ${balFilter === 'receivable' ? ' Showing: Parties with Receivable Balance' : ' Showing: Parties with Payable Balance'}
+            <button onclick="window._partyBalanceFilter=null;renderParties()" style="margin-left:auto;background:none;border:none;cursor:pointer;font-size:1rem;padding:0;color:inherit"> Clear</button>
         </div>` : '';
 
     pageContent.innerHTML = `
         ${balFilterBadge}
         <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
-            <button class="catalog-pill ${_partyTab==='all'?'active':''}" onclick="_partyTab='all';window._partyBalanceFilter=null;renderParties()">👥 All Parties (${parties.length})</button>
-            <button class="catalog-pill ${_partyTab==='customer'?'active':''}" onclick="_partyTab='customer';window._partyBalanceFilter=null;renderParties()">🛍️ Customers (${customers.length})</button>
-            <button class="catalog-pill ${_partyTab==='supplier'?'active':''}" onclick="_partyTab='supplier';window._partyBalanceFilter=null;renderParties()">🏭 Suppliers (${suppliers.length})</button>
+            <button class="catalog-pill ${_partyTab === 'all' ? 'active' : ''}" onclick="_partyTab='all';window._partyBalanceFilter=null;renderParties()"> All Parties (${parties.length})</button>
+            <button class="catalog-pill ${_partyTab === 'customer' ? 'active' : ''}" onclick="_partyTab='customer';window._partyBalanceFilter=null;renderParties()"> Customers (${customers.length})</button>
+            <button class="catalog-pill ${_partyTab === 'supplier' ? 'active' : ''}" onclick="_partyTab='supplier';window._partyBalanceFilter=null;renderParties()"> Suppliers (${suppliers.length})</button>
         </div>
         <div class="section-toolbar">
             <input class="search-box" id="party-search" placeholder="Search parties..." oninput="filterPartyTable()">
             <div class="filter-group">
-                <button class="btn btn-outline" onclick="openColumnPersonalizer('parties','renderParties')" style="border-color:var(--accent);color:var(--accent)">⚙️ Columns</button>
-                ${!isSalesman() ? `<button class="btn btn-outline" onclick="downloadPartyTemplate()">📋 Party Template</button>
-                <button class="btn btn-outline" onclick="exportPartiesExcel()">📤 Export Parties</button>
-                <button class="btn btn-outline" onclick="importPartyExcel()">📥 Import Parties</button>
-                <button class="btn btn-outline" style="border-color:#f59e0b;color:#f59e0b" onclick="downloadOpeningBalTemplate()">📋 Opening Bal Template</button>
-                <button class="btn btn-outline" style="border-color:#f59e0b;color:#f59e0b" onclick="importOpeningBalExcel()">📥 Import Opening Bal</button>
+                <button class="btn btn-outline" onclick="openColumnPersonalizer('parties','renderParties')" style="border-color:var(--accent);color:var(--accent)"> Columns</button>
+                ${!isSalesman() ? `<button class="btn btn-outline" onclick="downloadPartyTemplate()"> Party Template</button>
+                <button class="btn btn-outline" onclick="exportPartiesExcel()"> Export Parties</button>
+                <button class="btn btn-outline" onclick="importPartyExcel()"> Import Parties</button>
+                <button class="btn btn-outline" style="border-color:#f59e0b;color:#f59e0b" onclick="downloadOpeningBalTemplate()"> Opening Bal Template</button>
+                <button class="btn btn-outline" style="border-color:#f59e0b;color:#f59e0b" onclick="importOpeningBalExcel()"> Import Opening Bal</button>
                 <button class="btn btn-primary" onclick="openPartyModal()">+ Add Party</button>` : ''}
             </div>
         </div>
         <div id="bulk-bar-par" style="display:none;align-items:center;gap:8px;background:var(--accent);color:#fff;padding:8px 12px;border-radius:8px;margin-bottom:8px;flex-wrap:wrap">
             <span id="bulk-cnt-par" style="font-weight:700;flex:1">0 selected</span>
-            <button class="btn" onclick="bulkActivateParties()" style="background:#fff;color:#10b981;padding:4px 10px;font-size:0.82rem;font-weight:600">✅ Active</button>
-            <button class="btn" onclick="bulkBlockParties()" style="background:#fff;color:#ef4444;padding:4px 10px;font-size:0.82rem;font-weight:600">🚫 Block</button>
-            <button class="btn" onclick="bulkDeleteParties()" style="background:#ef4444;color:#fff;padding:4px 10px;font-size:0.82rem;font-weight:600">🗑️ Delete</button>
-            <button class="btn" onclick="clearBulkParties()" style="background:rgba(255,255,255,0.2);color:#fff;padding:4px 10px;font-size:0.82rem">✕ Clear</button>
+            <button class="btn" onclick="bulkActivateParties()" style="background:#fff;color:#10b981;padding:4px 10px;font-size:0.82rem;font-weight:600"> Active</button>
+            <button class="btn" onclick="bulkBlockParties()" style="background:#fff;color:#ef4444;padding:4px 10px;font-size:0.82rem;font-weight:600"> Block</button>
+            <button class="btn" onclick="bulkDeleteParties()" style="background:#ef4444;color:#fff;padding:4px 10px;font-size:0.82rem;font-weight:600"> Delete</button>
+            <button class="btn" onclick="clearBulkParties()" style="background:rgba(255,255,255,0.2);color:#fff;padding:4px 10px;font-size:0.82rem"> Clear</button>
         </div>
         <div class="card"><div class="card-body">
             <div class="table-wrapper">
-                <table class="data-table" style="min-width:920px;width:100%"><thead><tr><th style="width:36px;text-align:center"><input type="checkbox" id="bulk-all-par" onchange="toggleSelectAllParties(this)" style="width:16px;height:16px;cursor:pointer"></th>${ColumnManager.get('parties').filter(c=>c.visible).map(c=>`<th>${c.label}</th>`).join('')}</tr></thead>
+                <table class="data-table" style="min-width:920px;width:100%"><thead><tr><th style="width:36px;text-align:center"><input type="checkbox" id="bulk-all-par" onchange="toggleSelectAllParties(this)" style="width:16px;height:16px;cursor:pointer"></th>${ColumnManager.get('parties').filter(c => c.visible).map(c => `<th>${c.label}</th>`).join('')}</tr></thead>
                 <tbody id="party-tbody">${renderPartyRows(shown)}</tbody></table>
             </div>
         </div></div>
@@ -2359,33 +2344,33 @@ async function renderParties() {
     initSwipeActions();
 }
 function renderPartyRows(parties) {
-    if (!parties.length) return '<tr><td colspan="8"><div class="empty-state"><span class="empty-icon">👥</span><p>No parties found</p></div></td></tr>';
+    if (!parties.length) return '<tr><td colspan="8"><div class="empty-state"><span class="empty-icon"></span><p>No parties found</p></div></td></tr>';
     const cols = ColumnManager.get('parties').filter(c => c.visible);
     return parties.map(p => {
         const cellMap = {
-            name:      `<td style="color:var(--text-primary);font-weight:600">${escapeHtml(p.name)}${p.blocked ? ' <span class="badge badge-danger" style="font-size:0.7rem;padding:2px 5px">🔒 Blocked</span>' : ''}${p.active === false ? ' <span class="badge badge-danger" style="font-size:0.7rem;padding:2px 5px">Inactive</span>' : ''}</td>`,
-            partyCode: `<td style="font-family:monospace;font-size:0.82rem;color:var(--accent)">${p.partyCode||'-'}</td>`,
-            type:    `<td><span class="badge ${p.type === 'Customer' ? 'badge-success' : 'badge-info'}">${p.type}</span></td>`,
-            phone:   `<td>${p.phone || '-'}</td>`,
-            gstin:   `<td style="font-size:0.82rem">${p.gstin || '-'}</td>`,
-            balance: `<td class="${(p.balance||0) < 0 ? 'amount-green' : 'amount-red'}">${currency(Math.abs(p.balance || 0))} ${(p.balance||0) < 0 ? '(Cr)' : '(Dr)'}</td>`,
+            name: `<td style="color:var(--text-primary);font-weight:600">${escapeHtml(p.name)}${p.blocked ? ' <span class="badge badge-danger" style="font-size:0.7rem;padding:2px 5px"> Blocked</span>' : ''}${p.active === false ? ' <span class="badge badge-danger" style="font-size:0.7rem;padding:2px 5px">Inactive</span>' : ''}</td>`,
+            partyCode: `<td style="font-family:monospace;font-size:0.82rem;color:var(--accent)">${p.partyCode || '-'}</td>`,
+            type: `<td><span class="badge ${p.type === 'Customer' ? 'badge-success' : 'badge-info'}">${p.type}</span></td>`,
+            phone: `<td>${p.phone || '-'}</td>`,
+            gstin: `<td style="font-size:0.82rem">${p.gstin || '-'}</td>`,
+            balance: `<td class="${(p.balance || 0) < 0 ? 'amount-green' : 'amount-red'}">${currency(Math.abs(p.balance || 0))} ${(p.balance || 0) < 0 ? '(Cr)' : '(Dr)'}</td>`,
             actions: `<td><div class="action-btns">
-                <button class="btn-icon" onclick="openDedicatedPartyLedger('${p.id}')" title="View Ledger">📜</button>
-                ${p.phone ? `<a href="tel:${p.phone}" class="btn-icon" title="Call party" style="text-decoration:none">📞</a>` : ''}
-                ${p.lat && p.lng ? `<button class="btn-icon" onclick="openPartyMap('${p.lat}','${p.lng}','${escapeHtml(p.name)}')" title="Navigate to party">🗺️</button>` : ''}
-                ${!isPacker() && !(p.lat && p.lng) ? `<button class="btn-icon" onclick="updatePartyLocation('${p.id}')" title="Update Location" style="color:#3b82f6">📍</button>` : ''}
-                ${canEdit() ? `<button class="btn-icon" onclick="openPartyModal('${p.id}')">✏️</button><button class="btn-icon" onclick="deleteParty('${p.id}')">🗑️</button>` : ''}
+                <button class="btn-icon" onclick="openDedicatedPartyLedger('${p.id}')" title="View Ledger"></button>
+                ${p.phone ? `<a href="tel:${p.phone}" class="btn-icon" title="Call party" style="text-decoration:none"></a>` : ''}
+                ${p.lat && p.lng ? `<button class="btn-icon" onclick="openPartyMap('${p.lat}','${p.lng}','${escapeHtml(p.name)}')" title="Navigate to party"></button>` : ''}
+                ${!isPacker() && !(p.lat && p.lng) ? `<button class="btn-icon" onclick="updatePartyLocation('${p.id}')" title="Update Location" style="color:#3b82f6"></button>` : ''}
+                ${canEdit() ? `<button class="btn-icon" onclick="openPartyModal('${p.id}')"></button><button class="btn-icon" onclick="deleteParty('${p.id}')"></button>` : ''}
             </div></td>`,
-            city:         `<td style="font-size:0.85rem">${escapeHtml(p.city || '-')}</td>`,
-            postCode:     `<td style="font-size:0.85rem">${escapeHtml(p.postCode || '-')}</td>`,
+            city: `<td style="font-size:0.85rem">${escapeHtml(p.city || '-')}</td>`,
+            postCode: `<td style="font-size:0.85rem">${escapeHtml(p.postCode || '-')}</td>`,
             paymentTerms: `<td style="font-size:0.82rem">${p.paymentTerms ? `<span class="badge badge-info" style="font-size:0.72rem">${escapeHtml(p.paymentTerms)}</span>` : '<span style="color:var(--text-muted)">-</span>'}</td>`,
-            address:      `<td style="font-size:0.82rem;color:var(--text-muted);max-width:220px;white-space:normal">${escapeHtml(p.address || '-')}</td>`,
+            address: `<td style="font-size:0.82rem;color:var(--text-muted);max-width:220px;white-space:normal">${escapeHtml(p.address || '-')}</td>`,
         };
         return `<tr class="swipe-row" data-type="${p.type}"><td style="width:36px;text-align:center"><input type="checkbox" class="bulk-chk-party" data-id="${p.id}" onchange="toggleBulkParty('${p.id}',this)" style="width:16px;height:16px;cursor:pointer" ${window._bulkParties && window._bulkParties.has(p.id) ? 'checked' : ''}></td>${cols.map(c => cellMap[c.key] || '').join('')}</tr>`;
     }).join('');
 }
 async function filterPartyTable() {
-    const search = ($('party-search')||{}).value.toLowerCase();
+    const search = ($('party-search') || {}).value.toLowerCase();
     let parties = await DB.getAll('parties');
     if (_partyTab === 'customer') parties = parties.filter(p => p.type === 'Customer');
     if (_partyTab === 'supplier') parties = parties.filter(p => p.type === 'Supplier');
@@ -2430,33 +2415,33 @@ async function openPartyModal(id) {
         </select></div></div>
         <div class="form-group"><label>Address</label><input id="f-party-addr" value="${p ? p.address || '' : ''}" placeholder="Street, Area..."></div>
         <div class="form-group">
-            <label>📍 GPS Location <small style="color:var(--text-muted)">${p && p.lat ? `Saved: ${(+p.lat).toFixed(5)}, ${(+p.lng).toFixed(5)}` : 'Not set'}</small></label>
+            <label> GPS Location <small style="color:var(--text-muted)">${p && p.lat ? `Saved: ${(+p.lat).toFixed(5)}, ${(+p.lng).toFixed(5)}` : 'Not set'}</small></label>
             <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
                 <input id="f-party-lat" type="number" step="any" placeholder="Latitude" value="${p && p.lat ? p.lat : ''}" style="flex:1">
                 <input id="f-party-lng" type="number" step="any" placeholder="Longitude" value="${p && p.lng ? p.lng : ''}" style="flex:1">
             </div>
             <div style="display:flex;gap:8px;flex-wrap:wrap">
-                <button class="btn btn-primary btn-sm" type="button" onclick="capturePartyLiveGPS()" id="btn-live-gps" style="flex:1">📍 Use My Live Location</button>
-                <button class="btn btn-outline btn-sm" type="button" onclick="capturePartyGPS()" id="btn-addr-gps" style="flex:1">🔍 Search from Address</button>
+                <button class="btn btn-primary btn-sm" type="button" onclick="capturePartyLiveGPS()" id="btn-live-gps" style="flex:1"> Use My Live Location</button>
+                <button class="btn btn-outline btn-sm" type="button" onclick="capturePartyGPS()" id="btn-addr-gps" style="flex:1"> Search from Address</button>
             </div>
-            <small style="color:var(--text-muted);display:block;margin-top:4px">💡 Go to customer location and tap "Live Location" for best accuracy</small>
-            ${p && p.lat && p.lng ? `<a href="https://www.google.com/maps?q=${p.lat},${p.lng}" target="_blank" style="font-size:0.8rem;color:var(--primary);display:inline-block;margin-top:4px">🗺️ View on Google Maps</a>` : ''}
+            <small style="color:var(--text-muted);display:block;margin-top:4px"> Go to customer location and tap "Live Location" for best accuracy</small>
+            ${p && p.lat && p.lng ? `<a href="https://www.google.com/maps?q=${p.lat},${p.lng}" target="_blank" style="font-size:0.8rem;color:var(--primary);display:inline-block;margin-top:4px"> View on Google Maps</a>` : ''}
         </div>
         ${p && p.type === 'Customer' && canEdit() ? `
         <div style="background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.25);border-radius:8px;padding:10px;margin-bottom:12px">
             <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
                 <div>
-                    <strong style="font-size:0.88rem">🔒 Block Customer</strong>
+                    <strong style="font-size:0.88rem"> Block Customer</strong>
                     <div style="font-size:0.78rem;color:var(--text-muted)">Blocked customers cannot place new Sales Orders or Invoices</div>
                 </div>
                 <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin:0;flex-shrink:0">
                     <input type="checkbox" id="f-party-blocked" ${p && p.blocked ? 'checked' : ''} style="width:18px;height:18px">
-                    <span style="font-size:0.85rem;font-weight:600">${p && p.blocked ? '🔒 Blocked' : '✅ Active'}</span>
+                    <span style="font-size:0.85rem;font-weight:600">${p && p.blocked ? ' Blocked' : ' Active'}</span>
                 </label>
             </div>
         </div>` : ''}
     `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-        ${!id ? `<button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveParty('')">＋ Save & New</button>` : ''}
+        ${!id ? `<button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveParty('')"> Save & New</button>` : ''}
         <button class="btn btn-primary" onclick="saveParty('${id || ''}')">Save Party</button>`);
 }
 async function saveParty(id) {
@@ -2486,7 +2471,7 @@ async function saveParty(id) {
         } else {
             await DB.insert('parties', { ...data, balance: 0 });
         }
-        
+
         closeModal();
         await renderParties();
         showToast('Party saved successfully', 'success');
@@ -2500,14 +2485,14 @@ async function saveParty(id) {
     }
 }
 
-// ── GPS Quick Update Feature ──
+//  GPS Quick Update Feature 
 async function openPartyGpsModal() {
     const parties = await DB.getAll('parties');
     const noGpsParties = parties.filter(p => !p.lat || !p.lng);
-    
-    openModal('📍 Update Party GPS', `
+
+    openModal(' Update Party GPS', `
         <div style="margin-bottom:12px">
-            <input type="text" id="f-gps-search" placeholder="🔍 Search missing GPS parties..." 
+            <input type="text" id="f-gps-search" placeholder=" Search missing GPS parties..." 
                    style="width:100%;padding:10px;border-radius:var(--radius-md);border:1px solid var(--border);"
                    onkeyup="filterGpsPartyList(this.value)">
         </div>
@@ -2515,22 +2500,22 @@ async function openPartyGpsModal() {
             ${renderGpsPartyList(noGpsParties)}
         </div>
     `, `<button class="btn btn-outline" onclick="closeModal()">Close</button>`);
-    
+
     // Store original list for filtering
     window._gpsPartiesData = noGpsParties;
 }
 
 function renderGpsPartyList(parties) {
-    if (!parties.length) return `<div class="empty-state"><span class="empty-icon">🎉</span><p>All Caught Up</p><p class="empty-subtitle">All parties have GPS locations saved!</p></div>`;
-    
+    if (!parties.length) return `<div class="empty-state"><span class="empty-icon"></span><p>All Caught Up</p><p class="empty-subtitle">All parties have GPS locations saved!</p></div>`;
+
     return parties.map(p => `
         <div class="card" id="gps-row-${p.id}" style="margin-bottom:10px;padding:12px;display:flex;justify-content:space-between;align-items:center;gap:10px;background:#f8fafc;border:1px solid var(--border);">
             <div style="flex:1;min-width:0;">
                 <div style="font-weight:600;font-size:0.95rem;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${p.name}</div>
-                <div style="font-size:0.8rem;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${p.phone || 'No phone'} • ${p.address || p.city || 'No address'}</div>
+                <div style="font-size:0.8rem;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${p.phone || 'No phone'}  ${p.address || p.city || 'No address'}</div>
             </div>
             <button class="btn btn-primary btn-sm" onclick="updatePartyLiveLocation('${p.id}')" style="white-space:nowrap;display:flex;align-items:center;gap:4px">
-                📍 Update
+                 Update
             </button>
         </div>
     `).join('');
@@ -2544,11 +2529,11 @@ function filterGpsPartyList(q) {
 
 async function updatePartyLiveLocation(partyId) {
     if (!navigator.geolocation) return alert('Geolocation is not supported by this browser.');
-    
+
     const row = document.getElementById('gps-row-' + partyId);
     const btn = row.querySelector('button');
     const origHtml = btn.innerHTML;
-    btn.innerHTML = '🕒 ...';
+    btn.innerHTML = ' ...';
     btn.disabled = true;
 
     navigator.geolocation.getCurrentPosition(async (pos) => {
@@ -2556,9 +2541,9 @@ async function updatePartyLiveLocation(partyId) {
             const lat = pos.coords.latitude;
             const lng = pos.coords.longitude;
             await DB.update('parties', partyId, { lat, lng });
-            
+
             showToast('GPS Updated Successfully!', 'success');
-            
+
             // Remove from list
             row.style.opacity = '0';
             setTimeout(() => {
@@ -2570,7 +2555,7 @@ async function updatePartyLiveLocation(partyId) {
                     }
                 }
             }, 300);
-            
+
         } catch (e) {
             alert('Error updating GPS: ' + e.message);
             btn.innerHTML = origHtml;
@@ -2585,19 +2570,19 @@ async function updatePartyLiveLocation(partyId) {
 function capturePartyLiveGPS() {
     if (!navigator.geolocation) return alert('Geolocation is not supported by this browser/device.');
     const btn = $('btn-live-gps');
-    if (btn) { btn.textContent = '⏳ Getting location...'; btn.disabled = true; }
+    if (btn) { btn.textContent = ' Getting location...'; btn.disabled = true; }
     navigator.geolocation.getCurrentPosition(
         pos => {
             $('f-party-lat').value = pos.coords.latitude.toFixed(6);
             $('f-party-lng').value = pos.coords.longitude.toFixed(6);
-            if (btn) { btn.textContent = '✅ Location Captured'; btn.disabled = false; }
-            showToast(`Live GPS captured: ${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)} (±${Math.round(pos.coords.accuracy)}m)`, 'success');
+            if (btn) { btn.textContent = ' Location Captured'; btn.disabled = false; }
+            showToast(`Live GPS captured: ${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)} (${Math.round(pos.coords.accuracy)}m)`, 'success');
         },
         err => {
-            if (btn) { btn.textContent = '📍 Use My Live Location'; btn.disabled = false; }
-            const msg = err.code === 1 ? '⚠️ Location permission denied — enter coordinates manually or use Search from Address.' :
-                        err.code === 2 ? '⚠️ GPS unavailable. Make sure location is on.' :
-                        '⚠️ Location timed out. Try again.';
+            if (btn) { btn.textContent = ' Use My Live Location'; btn.disabled = false; }
+            const msg = err.code === 1 ? ' Location permission denied  enter coordinates manually or use Search from Address.' :
+                err.code === 2 ? ' GPS unavailable. Make sure location is on.' :
+                    ' Location timed out. Try again.';
             showToast(msg, 'warning');
         },
         { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
@@ -2615,16 +2600,16 @@ async function updatePartyLocation(id) {
             const lat = pos.coords.latitude.toFixed(6);
             const lng = pos.coords.longitude.toFixed(6);
             const acc = Math.round(pos.coords.accuracy);
-            if (!confirm(`📍 Update location for:\n${p.name}\n\nCoordinates: ${lat}, ${lng}\nAccuracy: ±${acc}m\n\nConfirm?`)) return;
+            if (!confirm(` Update location for:\n${p.name}\n\nCoordinates: ${lat}, ${lng}\nAccuracy: ${acc}m\n\nConfirm?`)) return;
             await DB.update('parties', id, { ...p, lat, lng });
-            showToast(`Location saved for ${p.name} (±${acc}m accuracy)`, 'success');
+            showToast(`Location saved for ${p.name} (${acc}m accuracy)`, 'success');
             renderParties();
         },
         err => {
-            const msg = err.code === 1 ? 'Location permission denied — allow location access in browser settings.' :
-                        err.code === 2 ? 'GPS unavailable. Turn on location services.' :
-                        'Location timed out. Try again.';
-            alert('⚠️ ' + msg);
+            const msg = err.code === 1 ? 'Location permission denied  allow location access in browser settings.' :
+                err.code === 2 ? 'GPS unavailable. Turn on location services.' :
+                    'Location timed out. Try again.';
+            alert(' ' + msg);
         },
         { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
     );
@@ -2638,14 +2623,14 @@ async function capturePartyGPS() {
     if (!addr && !city) return alert('Enter the party\'s Address or City first.');
 
     const btn = $('btn-addr-gps');
-    if (btn) { btn.textContent = '⏳ Searching...'; btn.disabled = true; }
+    if (btn) { btn.textContent = ' Searching...'; btn.disabled = true; }
 
     try {
         const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=5&countrycodes=in&addressdetails=1`;
         const res = await fetch(url, { headers: { 'Accept-Language': 'en' } });
         const data = await res.json();
 
-        if (btn) { btn.textContent = '🔍 Search from Address'; btn.disabled = false; }
+        if (btn) { btn.textContent = ' Search from Address'; btn.disabled = false; }
 
         if (!data.length) return alert(`No location found for "${[addr, city].filter(Boolean).join(', ')}". Try a shorter or more general address.`);
 
@@ -2662,7 +2647,7 @@ async function capturePartyGPS() {
             openModal('Select Location', `<p style="margin-bottom:12px;font-size:0.85rem;color:var(--text-muted)">Multiple results found. Tap the correct one:</p>${opts}<div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button></div>`);
         }
     } catch (e) {
-        if (btn) { btn.textContent = '🔍 Search from Address'; btn.disabled = false; }
+        if (btn) { btn.textContent = ' Search from Address'; btn.disabled = false; }
         alert('Search failed: ' + e.message);
     }
 }
@@ -2687,12 +2672,12 @@ async function deleteParty(id) {
         DB.getAll('payments')
     ]);
 
-    const hasOrders   = orders.some(x => String(x.partyId) === sid);
+    const hasOrders = orders.some(x => String(x.partyId) === sid);
     const hasInvoices = invoices.some(x => String(x.partyId) === sid);
     const hasPayments = payments.some(x => String(x.partyId) === sid);
 
     if (hasOrders || hasInvoices || hasPayments) {
-        return alert('Cannot delete — this party has linked orders, invoices, or payments.');
+        return alert('Cannot delete  this party has linked orders, invoices, or payments.');
     }
 
     if (!confirm('Delete this party? This cannot be undone.')) return;
@@ -2749,18 +2734,18 @@ async function processOpeningBalImport(event) {
         const cols = parseCSVLine(lines[i]);
         const [partyCode, partyName, partyType, invoiceNo, invoiceDate, amountStr, dueDate, notes] = cols;
         if (!partyCode || !partyName || !invoiceNo || !invoiceDate || !amountStr) {
-            errors.push(`Row ${i+1}: Missing required fields (Party Code, Party Name, Invoice No, Invoice Date, Amount)`);
+            errors.push(`Row ${i + 1}: Missing required fields (Party Code, Party Name, Invoice No, Invoice Date, Amount)`);
             continue;
         }
         const amount = parseFloat(amountStr);
-        if (isNaN(amount) || amount <= 0) { errors.push(`Row ${i+1}: Invalid amount "${amountStr}"`); continue; }
+        if (isNaN(amount) || amount <= 0) { errors.push(`Row ${i + 1}: Invalid amount "${amountStr}"`); continue; }
         // Find existing party by partyCode first, then by name
         const existing = parties.find(p => p.partyCode && p.partyCode.toUpperCase() === partyCode.trim().toUpperCase())
-                      || parties.find(p => p.name.toLowerCase() === partyName.trim().toLowerCase());
+            || parties.find(p => p.name.toLowerCase() === partyName.trim().toLowerCase());
         preview.push({
             partyCode: partyCode.trim().toUpperCase(),
             partyName: partyName.trim(),
-            partyType: (partyType||'Customer').trim() || 'Customer',
+            partyType: (partyType || 'Customer').trim() || 'Customer',
             invoiceNo: invoiceNo.trim(),
             invoiceDate: invoiceDate.trim(),
             amount,
@@ -2772,7 +2757,7 @@ async function processOpeningBalImport(event) {
     }
 
     if (errors.length) {
-        const proceed = confirm(`${errors.length} error(s) found:\n${errors.slice(0,5).join('\n')}\n\nProceed with valid rows?`);
+        const proceed = confirm(`${errors.length} error(s) found:\n${errors.slice(0, 5).join('\n')}\n\nProceed with valid rows?`);
         if (!proceed) return;
     }
     if (!preview.length) return alert('No valid rows to import');
@@ -2789,21 +2774,21 @@ async function processOpeningBalImport(event) {
                 <td style="font-family:monospace">${r.invoiceNo}</td>
                 <td>${r.invoiceDate}</td>
                 <td style="font-weight:600;color:var(--accent)">${currency(r.amount)}</td>
-                <td><span class="badge ${r.action==='create'?'badge-success':'badge-info'}">${r.action.toUpperCase()}</span></td>
+                <td><span class="badge ${r.action === 'create' ? 'badge-success' : 'badge-info'}">${r.action.toUpperCase()}</span></td>
             </tr>`).join('')}</tbody>
         </table></div>
-        <input type="hidden" id="ob-rows-json" value='${JSON.stringify(preview).replace(/'/g,"&apos;")}'>`,
+        <input type="hidden" id="ob-rows-json" value='${JSON.stringify(preview).replace(/'/g, "&apos;")}'>`,
         `<button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-         <button class="btn btn-primary" onclick="confirmOpeningBalImport()">✅ Confirm Import</button>`);
+         <button class="btn btn-primary" onclick="confirmOpeningBalImport()"> Confirm Import</button>`);
 }
 
 async function confirmOpeningBalImport() {
     const el = document.getElementById('ob-rows-json');
     if (!el) return;
-    const rows = JSON.parse(el.value.replace(/&apos;/g,"'"));
+    const rows = JSON.parse(el.value.replace(/&apos;/g, "'"));
     const parties = DB.get('db_parties') || [];
     let created = 0, updated = 0, invoices = 0;
-    const partyMap = {}; // partyCode → party id
+    const partyMap = {}; // partyCode  party id
 
     // Group by partyCode
     const byParty = {};
@@ -2818,14 +2803,14 @@ async function confirmOpeningBalImport() {
         let partyId;
 
         if (info.existingParty) {
-            // Update existing — add to balance
+            // Update existing  add to balance
             partyId = info.existingParty.id;
             const newBal = (info.existingParty.balance || 0) + totalAmount;
             await DB.rawUpdate('parties', partyId, { balance: newBal, partyCode: code });
             updated++;
         } else {
             // Create new party
-            partyId = 'P' + Date.now() + Math.random().toString(36).slice(2,5);
+            partyId = 'P' + Date.now() + Math.random().toString(36).slice(2, 5);
             await DB.rawInsert('parties', {
                 id: partyId,
                 name: info.partyName,
@@ -2843,7 +2828,7 @@ async function confirmOpeningBalImport() {
         for (const r of group.invoices) {
             const runBal = r.amount; // individual entry amount
             await DB.rawInsert('party_ledger', {
-                id: 'PL' + Date.now() + Math.random().toString(36).slice(2,6),
+                id: 'PL' + Date.now() + Math.random().toString(36).slice(2, 6),
                 date: r.invoiceDate,
                 partyId,
                 partyName: info.partyName,
@@ -2927,7 +2912,7 @@ function showPartyImportPreview(errors) {
     let html = '';
     if (errors && errors.length) {
         html += `<div style="margin-bottom:14px;padding:12px;background:var(--danger-soft);border:1px solid rgba(239,68,68,0.3);border-radius:8px;font-size:0.85rem">
-            <strong style="color:var(--danger)">⚠️ ${errors.length} Errors (Rows skipped)</strong>
+            <strong style="color:var(--danger)"> ${errors.length} Errors (Rows skipped)</strong>
             <ul style="margin-top:6px;padding-left:14px;color:var(--danger);max-height:80px;overflow-y:auto">
                 ${errors.map(err => `<li>${err}</li>`).join('')}
             </ul>
@@ -2936,13 +2921,13 @@ function showPartyImportPreview(errors) {
 
     const newCount = pendingPartyImports.filter(p => !p.isUpdate).length;
     const updCount = pendingPartyImports.filter(p => p.isUpdate).length;
-    html += `<div style="margin-bottom:10px;font-weight:600">✅ ${pendingPartyImports.length} Valid Parties <span style="font-size:0.8rem;color:var(--text-muted)">(${newCount} New, ${updCount} Update)</span></div>`;
+    html += `<div style="margin-bottom:10px;font-weight:600"> ${pendingPartyImports.length} Valid Parties <span style="font-size:0.8rem;color:var(--text-muted)">(${newCount} New, ${updCount} Update)</span></div>`;
 
     if (pendingPartyImports.length) {
         html += `<div style="max-height:350px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius-sm)">
             <table class="data-table" style="font-size:0.85rem"><thead><tr><th>Code</th><th>Name</th><th>Type</th><th>Phone</th><th>City</th><th>GSTIN</th><th>Address</th><th>Status</th><th></th></tr></thead>
             <tbody>${pendingPartyImports.map((p, idx) => `<tr id="pi-row-${idx}">
-                <td><input value="${p.partyCode||''}" onchange="pendingPartyImports[${idx}].partyCode=this.value.toUpperCase()" style="width:70px;background:var(--bg-input);border:1px solid var(--border);border-radius:4px;padding:4px 6px;color:var(--text-primary);font-size:0.82rem;font-family:monospace"></td>
+                <td><input value="${p.partyCode || ''}" onchange="pendingPartyImports[${idx}].partyCode=this.value.toUpperCase()" style="width:70px;background:var(--bg-input);border:1px solid var(--border);border-radius:4px;padding:4px 6px;color:var(--text-primary);font-size:0.82rem;font-family:monospace"></td>
                 <td><input value="${p.name}" onchange="pendingPartyImports[${idx}].name=this.value" style="width:100%;background:var(--bg-input);border:1px solid var(--border);border-radius:4px;padding:4px 6px;color:var(--text-primary);font-size:0.85rem"></td>
                 <td><select onchange="pendingPartyImports[${idx}].type=this.value" style="background:var(--bg-input);border:1px solid var(--border);border-radius:4px;padding:4px;color:var(--text-primary);font-size:0.85rem">
                     <option value="Customer" ${p.type === 'Customer' ? 'selected' : ''}>Customer</option>
@@ -2953,14 +2938,14 @@ function showPartyImportPreview(errors) {
                 <td><input value="${p.gstin}" onchange="pendingPartyImports[${idx}].gstin=this.value" style="width:100px;background:var(--bg-input);border:1px solid var(--border);border-radius:4px;padding:4px 6px;color:var(--text-primary);font-size:0.85rem"></td>
                 <td><input value="${p.address}" onchange="pendingPartyImports[${idx}].address=this.value" style="width:100px;background:var(--bg-input);border:1px solid var(--border);border-radius:4px;padding:4px 6px;color:var(--text-primary);font-size:0.85rem"></td>
                 <td><span class="badge ${p.isUpdate ? 'badge-warning' : 'badge-success'}">${p.isUpdate ? 'Update' : 'New'}</span></td>
-                <td><button class="btn-icon" onclick="pendingPartyImports.splice(${idx},1);showPartyImportPreview()" title="Remove">🗑️</button></td>
+                <td><button class="btn-icon" onclick="pendingPartyImports.splice(${idx},1);showPartyImportPreview()" title="Remove"></button></td>
             </tr>`).join('')}</tbody></table>
         </div>`;
     }
 
     html += `<div class="modal-actions">
         <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-        <button class="btn btn-primary" onclick="commitPartyImport()" ${pendingPartyImports.length === 0 ? 'disabled' : ''}>💾 Confirm & Import ${pendingPartyImports.length} Parties</button>
+        <button class="btn btn-primary" onclick="commitPartyImport()" ${pendingPartyImports.length === 0 ? 'disabled' : ''}> Confirm & Import ${pendingPartyImports.length} Parties</button>
     </div>`;
 
     openModal('Import Parties Preview', html);
@@ -2977,7 +2962,7 @@ async function commitPartyImport() {
                 await DB.update('parties', id, data);
                 updated++;
             } else {
-                await DB.insert('parties', data); // no id — Supabase auto-generates UUID
+                await DB.insert('parties', data); // no id  Supabase auto-generates UUID
                 added++;
             }
         }
@@ -3000,9 +2985,9 @@ async function renderCategories() {
     const container = $('inv-setup-content') || pageContent;
     container.innerHTML = `
         <div class="section-toolbar">
-            <h3 style="font-size:1rem">🏷️ Categories</h3>
+            <h3 style="font-size:1rem"> Categories</h3>
             <div class="filter-group">
-                <button class="btn btn-outline" onclick="triggerCategorizeExcelImport()">📥 Import</button>
+                <button class="btn btn-outline" onclick="triggerCategorizeExcelImport()"> Import</button>
                 <input type="file" id="f-cat-import" accept=".xlsx, .xls" style="display:none" onchange="importCategoriesExcel(event)">
                 <button class="btn btn-primary" onclick="openCategoryModal()">+ Add Category</button>
             </div>
@@ -3013,8 +2998,8 @@ async function renderCategories() {
                 <tbody>${cats.length ? cats.map(c => `<tr>
                     <td style="font-weight:600">${c.name}</td>
                     <td>${(c.subCategories || []).join(', ') || '-'}</td>
-                    <td><div class="action-btns"><button class="btn-icon" onclick="openCategoryModal('${c.id}')" title="Edit">✏️</button><button class="btn-icon" onclick="deleteCategory('${c.id}')" title="Delete">🗑️</button></div></td>
-                </tr>`).join('') : '<tr><td colspan="3"><div class="empty-state"><span class="empty-icon">🏷️</span><p>No categories defined</p><p class="empty-subtitle">Add your first category above</p></div></td></tr>'}</tbody></table>
+                    <td><div class="action-btns"><button class="btn-icon" onclick="openCategoryModal('${c.id}')" title="Edit"></button><button class="btn-icon" onclick="deleteCategory('${c.id}')" title="Delete"></button></div></td>
+                </tr>`).join('') : '<tr><td colspan="3"><div class="empty-state"><span class="empty-icon"></span><p>No categories defined</p><p class="empty-subtitle">Add your first category above</p></div></td></tr>'}</tbody></table>
             </div>
         </div></div>`;
 }
@@ -3025,7 +3010,7 @@ async function openCategoryModal(id) {
     openModal(c ? 'Edit Category' : 'Add Category', `
         <div class="form-group"><label>Category Name *</label><input id="f-cat-name" value="${c ? c.name : ''}"></div>
         <div class="form-group"><label>Sub-Categories (comma separated)</label><input id="f-cat-subs" value="${c ? (c.subCategories || []).join(', ') : ''}" placeholder="e.g. Mobile, Laptop, Tablet"></div>
-        <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button>${!id ? `<button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveCategory('')">＋ Save & New</button>` : ''}<button class="btn btn-primary" onclick="saveCategory('${id || ''}')">Save Category</button></div>
+        <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button>${!id ? `<button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveCategory('')"> Save & New</button>` : ''}<button class="btn btn-primary" onclick="saveCategory('${id || ''}')">Save Category</button></div>
     `);
 }
 
@@ -3075,7 +3060,7 @@ async function importCategoriesExcel(e) {
         const data = await new Promise((resolve, reject) => {
             const reader = new FileReader();
             reader.onload = (e) => {
-                const workbook = XLSX.read(e.target.result, {type: 'binary'});
+                const workbook = XLSX.read(e.target.result, { type: 'binary' });
                 const firstSheet = workbook.SheetNames[0];
                 const excelRows = XLSX.utils.sheet_to_row_object_array(workbook.Sheets[firstSheet]);
                 resolve(excelRows);
@@ -3085,7 +3070,7 @@ async function importCategoriesExcel(e) {
         });
 
         if (!data || data.length === 0) return alert('No data found in the Excel file.');
-        
+
         const existingCats = await DB.getAll('categories');
         let added = 0;
         let updated = 0;
@@ -3159,7 +3144,7 @@ function getAvailableStock(item) {
 //  INVENTORY (BC-Style with Ledger & Adjustments)
 // =============================================
 function updateNavBadges(inventory) {
-    const lowCount = (inventory||[]).filter(i => (i.stock||0) <= (i.lowStockAlert||5)).length;
+    const lowCount = (inventory || []).filter(i => (i.stock || 0) <= (i.lowStockAlert || 5)).length;
     const badge = document.getElementById('nav-badge-inventory');
     if (badge) { badge.textContent = lowCount; badge.style.display = lowCount > 0 ? '' : 'none'; }
 }
@@ -3194,50 +3179,50 @@ async function renderInventory() {
     pageContent.innerHTML = `
         <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px">
             <div class="dash-pulse-tile" style="--tile-color:#3b82f6;animation-delay:0.04s">
-                <div class="dash-pulse-icon">📦</div>
+                <div class="dash-pulse-icon"></div>
                 <div class="dash-pulse-val dash-count" data-val="${totalItems}" style="color:#3b82f6">${totalItems}</div>
                 <div class="dash-pulse-lbl">Total Items</div>
             </div>
             <div class="dash-pulse-tile" style="--tile-color:#10b981;animation-delay:0.08s">
-                <div class="dash-pulse-icon">📊</div>
+                <div class="dash-pulse-icon"></div>
                 <div class="dash-pulse-val dash-count" data-val="${totalStock}" style="color:#10b981">${totalStock}</div>
                 <div class="dash-pulse-lbl">Stock Qty</div>
             </div>
             <div class="dash-pulse-tile" style="--tile-color:#f59e0b;animation-delay:0.12s">
-                <div class="dash-pulse-icon">💰</div>
+                <div class="dash-pulse-icon"></div>
                 <div class="dash-pulse-val" style="color:#f59e0b;font-size:0.7rem">${currency(totalValue)}</div>
                 <div class="dash-pulse-lbl">Stock Value</div>
             </div>
-            <div class="dash-pulse-tile${lowStock ? ' dash-pulse-alert' : ''}" onclick="document.getElementById('inv-search')&&(document.getElementById('inv-cat-filter').value='__low__',filterInvTable())" style="--tile-color:${lowStock?'#ef4444':'#10b981'};animation-delay:0.16s;cursor:${lowStock?'pointer':'default'}">
-                <div class="dash-pulse-icon">⚠️</div>
-                <div class="dash-pulse-val" style="color:${lowStock?'#ef4444':'#10b981'}">${lowStock}</div>
+            <div class="dash-pulse-tile${lowStock ? ' dash-pulse-alert' : ''}" onclick="document.getElementById('inv-search')&&(document.getElementById('inv-cat-filter').value='__low__',filterInvTable())" style="--tile-color:${lowStock ? '#ef4444' : '#10b981'};animation-delay:0.16s;cursor:${lowStock ? 'pointer' : 'default'}">
+                <div class="dash-pulse-icon"></div>
+                <div class="dash-pulse-val" style="color:${lowStock ? '#ef4444' : '#10b981'}">${lowStock}</div>
                 <div class="dash-pulse-lbl">Low Stock</div>
             </div>
         </div>
         <div class="section-toolbar">
             <input class="search-box" id="inv-search" placeholder="Search items..." oninput="filterInvTable()">
             <div class="filter-group" style="flex-wrap:wrap">
-                <button class="btn btn-outline" onclick="openColumnPersonalizer('inventory','renderInventory')" style="border-color:var(--accent);color:var(--accent)">⚙️ Columns</button>
+                <button class="btn btn-outline" onclick="openColumnPersonalizer('inventory','renderInventory')" style="border-color:var(--accent);color:var(--accent)"> Columns</button>
                 ${canEdit() ? `<button class="btn btn-primary" onclick="openItemModal()">+ Add Item</button>
-                <button class="btn btn-outline" style="border-color:var(--primary);color:var(--primary)" onclick="showReport('indent')">📑 Generate Indent</button>
-                <button class="btn btn-outline" onclick="openStockAdjustmentModal()">🔧 Stock Adjustment</button>
-                <button class="btn btn-outline" onclick="exportInventoryExcel()">📤 Export Excel</button>
-                <button class="btn btn-outline" style="border-color:var(--primary);color:var(--primary)" onclick="downloadItemTemplate()">📋 Item Template</button>
-                <button class="btn btn-outline" style="border-color:var(--primary);color:var(--primary)" onclick="importItemExcel()">📥 Import Items</button>
-                <button class="btn btn-outline" onclick="downloadStockTemplate()">📋 Stock Template</button>
-                <button class="btn btn-outline" onclick="importStockExcel()">📥 Import Stock</button>` : ''}
+                <button class="btn btn-outline" style="border-color:var(--primary);color:var(--primary)" onclick="showReport('indent')"> Generate Indent</button>
+                <button class="btn btn-outline" onclick="openStockAdjustmentModal()"> Stock Adjustment</button>
+                <button class="btn btn-outline" onclick="exportInventoryExcel()"> Export Excel</button>
+                <button class="btn btn-outline" style="border-color:var(--primary);color:var(--primary)" onclick="downloadItemTemplate()"> Item Template</button>
+                <button class="btn btn-outline" style="border-color:var(--primary);color:var(--primary)" onclick="importItemExcel()"> Import Items</button>
+                <button class="btn btn-outline" onclick="downloadStockTemplate()"> Stock Template</button>
+                <button class="btn btn-outline" onclick="importStockExcel()"> Import Stock</button>` : ''}
             </div>
         </div>
         <div id="bulk-bar-inv" style="display:none;align-items:center;gap:8px;background:var(--accent);color:#fff;padding:8px 12px;border-radius:8px;margin-bottom:8px;flex-wrap:wrap">
             <span id="bulk-cnt-inv" style="font-weight:700;flex:1">0 selected</span>
-            <button class="btn" onclick="bulkActivateItems()" style="background:#fff;color:#10b981;padding:4px 10px;font-size:0.82rem;font-weight:600">✅ Activate</button>
-            <button class="btn" onclick="bulkDeactivateItems()" style="background:#fff;color:#f59e0b;padding:4px 10px;font-size:0.82rem;font-weight:600">⏸ Deactivate</button>
-            <button class="btn" onclick="bulkDeleteItems()" style="background:#ef4444;color:#fff;padding:4px 10px;font-size:0.82rem;font-weight:600">🗑️ Delete</button>
-            <button class="btn" onclick="clearBulkItems()" style="background:rgba(255,255,255,0.2);color:#fff;padding:4px 10px;font-size:0.82rem">✕ Clear</button>
+            <button class="btn" onclick="bulkActivateItems()" style="background:#fff;color:#10b981;padding:4px 10px;font-size:0.82rem;font-weight:600"> Activate</button>
+            <button class="btn" onclick="bulkDeactivateItems()" style="background:#fff;color:#f59e0b;padding:4px 10px;font-size:0.82rem;font-weight:600"> Deactivate</button>
+            <button class="btn" onclick="bulkDeleteItems()" style="background:#ef4444;color:#fff;padding:4px 10px;font-size:0.82rem;font-weight:600"> Delete</button>
+            <button class="btn" onclick="clearBulkItems()" style="background:rgba(255,255,255,0.2);color:#fff;padding:4px 10px;font-size:0.82rem"> Clear</button>
         </div>
         <div class="card"><div class="card-body">
             <div class="table-wrapper">
-                <table class="data-table" id="inv-table" style="min-width:900px"><thead><tr><th style="width:36px;text-align:center"><input type="checkbox" id="bulk-all-inv" onchange="toggleSelectAllItems(this)" style="width:16px;height:16px;cursor:pointer"></th>${ColumnManager.get('inventory').filter(c=>c.visible).map(c=>`<th>${c.label}</th>`).join('')}</tr></thead>
+                <table class="data-table" id="inv-table" style="min-width:900px"><thead><tr><th style="width:36px;text-align:center"><input type="checkbox" id="bulk-all-inv" onchange="toggleSelectAllItems(this)" style="width:16px;height:16px;cursor:pointer"></th>${ColumnManager.get('inventory').filter(c => c.visible).map(c => `<th>${c.label}</th>`).join('')}</tr></thead>
                 <tbody id="inv-tbody">${renderInvRows(items, reservedMap, getABCAnalysis(items))}</tbody></table>
             </div>
         </div></div>
@@ -3249,16 +3234,16 @@ async function renderInventory() {
             if (!target) return;
             const dur = 600, start = Date.now();
             const tick = () => {
-                const p = Math.min((Date.now()-start)/dur,1), e=1-Math.pow(1-p,3);
-                el.textContent = Math.round(target*e);
-                if(p<1) requestAnimationFrame(tick);
+                const p = Math.min((Date.now() - start) / dur, 1), e = 1 - Math.pow(1 - p, 3);
+                el.textContent = Math.round(target * e);
+                if (p < 1) requestAnimationFrame(tick);
             }; tick();
         });
     });
 }
 
 function renderInvRows(items, reservedMap = {}, abcMap = {}) {
-    if (!items.length) return '<tr><td colspan="13"><div class="empty-state"><div class="empty-icon">📦</div><p>No items yet</p></div></td></tr>';
+    if (!items.length) return '<tr><td colspan="13"><div class="empty-state"><div class="empty-icon"></div><p>No items yet</p></div></td></tr>';
     const cols = ColumnManager.get('inventory').filter(c => c.visible);
     return items.map(i => {
         const reserved = reservedMap[i.id] || 0;
@@ -3266,19 +3251,19 @@ function renderInvRows(items, reservedMap = {}, abcMap = {}) {
         const abc = abcMap[i.id] || 'C';
         const abcClass = abc === 'A' ? 'badge-primary' : abc === 'B' ? 'badge-info' : 'badge-outline';
         const cellMap = {
-            name:          `<td><div style="display:flex;align-items:center;gap:8px">${(i.imageUrl || i.photo) ? `<img src="${i.imageUrl || i.photo}" style="width:32px;height:32px;border-radius:6px;object-fit:cover;flex-shrink:0">` : ''}<div><div style="color:var(--text-primary);font-weight:600">${i.name}${i.active === false ? ' <span class="badge badge-danger" style="font-size:0.7rem;padding:2px 5px">Inactive</span>' : ''}</div>${i.itemCode ? `<div style="font-size:0.75rem;color:var(--text-muted)">Code: ${i.itemCode}</div>` : ''}</div></div></td>`,
-            abc:           `<td><span class="badge ${abcClass}" style="width:24px;text-align:center">${abc}</span></td>`,
-            warehouse:     `<td style="font-size:0.85rem;color:var(--text-muted)">${i.warehouse || 'Main Warehouse'}</td>`,
-            hsn:           `<td>${i.hsn || '-'}</td>`,
-            unit:          `<td>${i.unit || 'Pcs'}${i.secUom ? `<br><span style="font-size:0.75rem;color:var(--text-muted)">1 ${i.unit} = ${i.secUomRatio || 0} ${i.secUom}</span>` : ''}</td>`,
+            name: `<td><div style="display:flex;align-items:center;gap:8px">${(i.imageUrl || i.photo) ? `<img src="${i.imageUrl || i.photo}" style="width:32px;height:32px;border-radius:6px;object-fit:cover;flex-shrink:0">` : ''}<div><div style="color:var(--text-primary);font-weight:600">${i.name}${i.active === false ? ' <span class="badge badge-danger" style="font-size:0.7rem;padding:2px 5px">Inactive</span>' : ''}</div>${i.itemCode ? `<div style="font-size:0.75rem;color:var(--text-muted)">Code: ${i.itemCode}</div>` : ''}</div></div></td>`,
+            abc: `<td><span class="badge ${abcClass}" style="width:24px;text-align:center">${abc}</span></td>`,
+            warehouse: `<td style="font-size:0.85rem;color:var(--text-muted)">${i.warehouse || 'Main Warehouse'}</td>`,
+            hsn: `<td>${i.hsn || '-'}</td>`,
+            unit: `<td>${i.unit || 'Pcs'}${i.secUom ? `<br><span style="font-size:0.75rem;color:var(--text-muted)">1 ${i.unit} = ${i.secUomRatio || 0} ${i.secUom}</span>` : ''}</td>`,
             purchasePrice: `<td>${currency(i.purchasePrice)}${(() => { const nb = getLastActiveBatch(i); return nb && nb.purchasePrice !== i.purchasePrice ? `<br><span style="font-size:0.7rem;color:var(--text-muted)">Latest batch</span>` : ''; })()}</td>`,
-            salePrice:     `<td>${currency(i.salePrice)}${(() => { const fb = getFifoBatch(i); return fb && (fb.qty||0) > 0 ? `<br><span style="font-size:0.7rem;color:var(--accent)">MRP ₹${fb.mrp}</span>` : ''; })()}</td>`,
-            mrp:           `<td>${(() => { const fb = getFifoBatch(i); return fb ? currency(fb.mrp) : (i.mrp ? currency(i.mrp) : '-'); })()}${i.batches && i.batches.filter(b=>b.isActive!==false).length > 1 ? `<br><span style="font-size:0.7rem;color:var(--text-muted)">${i.batches.filter(b=>b.isActive!==false).length} batches</span>` : ''}</td>`,
-            stock:         `<td>${i.stock}</td>`,
-            reserved:      `<td>${reserved > 0 ? `<span style="color:var(--danger);font-weight:600">${reserved}</span>` : '0'}</td>`,
-            avail:         `<td><span class="badge ${available <= (i.lowStockAlert || 5) ? 'badge-danger' : 'badge-success'}">${available}</span></td>`,
-            value:         `<td>${currency(i.stock * i.purchasePrice)}</td>`,
-            actions:       `<td><div class="action-btns">${canEdit() ? `<button class="btn-icon" onclick="openStockAdjustmentModal('${i.id}')" title="Adjust Stock">🔧</button>` : ''}<button class="btn-icon" onclick="viewItemLedger('${i.id}')" title="View Ledger">📜</button>${canEdit() ? `<button class="btn-icon" onclick="openItemModal('${i.id}')" title="Edit">✏️</button><button class="btn-icon" onclick="deleteItem('${i.id}')" title="Delete">🗑️</button>` : ''}</div></td>`,
+            salePrice: `<td>${currency(i.salePrice)}${(() => { const fb = getFifoBatch(i); return fb && (fb.qty || 0) > 0 ? `<br><span style="font-size:0.7rem;color:var(--accent)">MRP ${fb.mrp}</span>` : ''; })()}</td>`,
+            mrp: `<td>${(() => { const fb = getFifoBatch(i); return fb ? currency(fb.mrp) : (i.mrp ? currency(i.mrp) : '-'); })()}${i.batches && i.batches.filter(b => b.isActive !== false).length > 1 ? `<br><span style="font-size:0.7rem;color:var(--text-muted)">${i.batches.filter(b => b.isActive !== false).length} batches</span>` : ''}</td>`,
+            stock: `<td>${i.stock}</td>`,
+            reserved: `<td>${reserved > 0 ? `<span style="color:var(--danger);font-weight:600">${reserved}</span>` : '0'}</td>`,
+            avail: `<td><span class="badge ${available <= (i.lowStockAlert || 5) ? 'badge-danger' : 'badge-success'}">${available}</span></td>`,
+            value: `<td>${currency(i.stock * i.purchasePrice)}</td>`,
+            actions: `<td><div class="action-btns">${canEdit() ? `<button class="btn-icon" onclick="openStockAdjustmentModal('${i.id}')" title="Adjust Stock"></button>` : ''}<button class="btn-icon" onclick="viewItemLedger('${i.id}')" title="View Ledger"></button>${canEdit() ? `<button class="btn-icon" onclick="openItemModal('${i.id}')" title="Edit"></button><button class="btn-icon" onclick="deleteItem('${i.id}')" title="Delete"></button>` : ''}</div></td>`,
         };
         return `<tr><td style="width:36px;text-align:center"><input type="checkbox" class="bulk-chk-item" data-id="${i.id}" onchange="toggleBulkItem('${i.id}',this)" style="width:16px;height:16px;cursor:pointer" ${window._bulkItems && window._bulkItems.has(i.id) ? 'checked' : ''}></td>${cols.map(c => cellMap[c.key] || '').join('')}</tr>`;
     }).join('');
@@ -3292,9 +3277,9 @@ function filterInvTable() {
 let currentItemTiers = [];
 let currentItemBatches = [];
 
-// ── Batch / MRP Helpers ──
+//  Batch / MRP Helpers 
 function getActiveBatches(item) {
-    return (item.batches || []).filter(b => b.isActive !== false).sort((a,b) => (a.receivedDate||'') < (b.receivedDate||'') ? -1 : 1);
+    return (item.batches || []).filter(b => b.isActive !== false).sort((a, b) => (a.receivedDate || '') < (b.receivedDate || '') ? -1 : 1);
 }
 function getLastBatch(item) {
     const bs = item.batches || [];
@@ -3311,11 +3296,11 @@ function getFifoBatch(item) {
 }
 // Sync item prices using FIFO logic: salePrice/mrp from oldest with stock, purchasePrice from newest
 function syncItemPricesFromBatches(batches) {
-    const active = batches.filter(b => b.isActive !== false).sort((a,b) => (a.receivedDate||'') < (b.receivedDate||'') ? -1 : 1);
-    const fifo   = active.find(b => (b.qty||0) > 0) || active[0];
+    const active = batches.filter(b => b.isActive !== false).sort((a, b) => (a.receivedDate || '') < (b.receivedDate || '') ? -1 : 1);
+    const fifo = active.find(b => (b.qty || 0) > 0) || active[0];
     const newest = active[active.length - 1];
     const update = {};
-    if (fifo)   { update.mrp = fifo.mrp; update.salePrice = fifo.salePrice; }
+    if (fifo) { update.mrp = fifo.mrp; update.salePrice = fifo.salePrice; }
     if (newest) { update.purchasePrice = newest.purchasePrice; }
     return update;
 }
@@ -3323,7 +3308,7 @@ function syncItemPricesFromBatches(batches) {
 function deductBatchQtyFifo(item, qtyToDeduct) {
     if (!item.batches || !item.batches.length) return { updatedBatches: null, priceSync: {} };
     const batches = JSON.parse(JSON.stringify(item.batches));
-    const active  = batches.filter(b => b.isActive !== false).sort((a,b) => (a.receivedDate||'') < (b.receivedDate||'') ? -1 : 1);
+    const active = batches.filter(b => b.isActive !== false).sort((a, b) => (a.receivedDate || '') < (b.receivedDate || '') ? -1 : 1);
     let remaining = qtyToDeduct;
     for (const b of active) {
         if (remaining <= 0) break;
@@ -3344,8 +3329,8 @@ function openItemModal(id) {
     const cats = DB.get('db_categories') || [];
     const uomList = DB.get('db_uom') || [];
     const uomOpts = uomList.length ? uomList.map(u => `<option value="${u.name}">`).join('') : '<option value="Pcs"><option value="Kg"><option value="Ltr"><option value="Box"><option value="Pack"><option value="Bag">';
-    const taxCfg  = DB.ls.getObj('db_tax_settings') || {};
-    const gstSlabs = Array.isArray(taxCfg.gstSlabs) && taxCfg.gstSlabs.length ? taxCfg.gstSlabs : [0,5,12,18,28];
+    const taxCfg = DB.ls.getObj('db_tax_settings') || {};
+    const gstSlabs = Array.isArray(taxCfg.gstSlabs) && taxCfg.gstSlabs.length ? taxCfg.gstSlabs : [0, 5, 12, 18, 28];
     const selCatOpts = cats.map(c => `<option value="${c.name}" ${i && i.category === c.name ? 'selected' : ''}>${c.name}</option>`).join('');
 
     // Pre-determine sub-categories for selected or first category
@@ -3358,13 +3343,13 @@ function openItemModal(id) {
     openModal(i ? 'Edit Item' : 'Add Item', `
         <div style="margin-bottom:14px;display:flex;align-items:center;gap:14px">
             <div id="item-photo-preview" style="width:70px;height:70px;border-radius:10px;border:2px dashed var(--border);display:flex;align-items:center;justify-content:center;overflow:hidden;cursor:pointer;flex-shrink:0;background:var(--bg-body)" onclick="document.getElementById('f-item-photo').click()">
-                ${i && (i.imageUrl || i.photo) ? `<img src="${i.imageUrl || i.photo}" style="width:100%;height:100%;object-fit:cover">` : '<span style="font-size:1.5rem">📷</span>'}
+                ${i && (i.imageUrl || i.photo) ? `<img src="${i.imageUrl || i.photo}" style="width:100%;height:100%;object-fit:cover">` : '<span style="font-size:1.5rem"></span>'}
             </div>
             <div style="flex:1">
                 <div style="font-size:0.82rem;color:var(--text-muted);margin-bottom:4px">Item Photo (optional)</div>
                 <input type="file" id="f-item-photo" accept="image/*" style="display:none" onchange="previewItemPhoto(event)">
-                <button class="btn btn-outline btn-sm" onclick="document.getElementById('f-item-photo').click()" style="font-size:0.78rem">📷 Upload Photo</button>
-                ${i && (i.imageUrl || i.photo) ? ' <button class="btn btn-outline btn-sm" onclick="removeItemPhoto()" style="font-size:0.78rem">✕ Remove</button>' : ''}
+                <button class="btn btn-outline btn-sm" onclick="document.getElementById('f-item-photo').click()" style="font-size:0.78rem"> Upload Photo</button>
+                ${i && (i.imageUrl || i.photo) ? ' <button class="btn btn-outline btn-sm" onclick="removeItemPhoto()" style="font-size:0.78rem"> Remove</button>' : ''}
             </div>
             <input type="hidden" id="f-item-existing-url" value="${i && i.imageUrl ? i.imageUrl : (i && i.photo ? i.photo : '')}">
         </div>
@@ -3381,7 +3366,7 @@ function openItemModal(id) {
             <div class="form-group">
                 <label>GST Rate %</label>
                 <select id="f-item-gstrate">
-                    ${gstSlabs.map(r=>`<option value="${r}" ${(i ? +(i.gstRate||0) : 0)===r?'selected':''}>${r}%</option>`).join('')}
+                    ${gstSlabs.map(r => `<option value="${r}" ${(i ? +(i.gstRate || 0) : 0) === r ? 'selected' : ''}>${r}%</option>`).join('')}
                 </select>
             </div>
             <div class="form-group"><label>Primary Unit</label>
@@ -3422,13 +3407,13 @@ function openItemModal(id) {
         </div>
         <div style="background:var(--bg-body);padding:10px;border-radius:6px;border:1px solid var(--border);margin-bottom:12px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-                <span style="font-weight:600;font-size:0.85rem">📦 MRP / Batch Stock</span>
+                <span style="font-weight:600;font-size:0.85rem"> MRP / Batch Stock</span>
                 <button class="btn btn-outline btn-sm" onclick="openAddBatchForm()" style="padding:4px 8px;font-size:0.75rem">+ Add MRP Batch</button>
             </div>
             <div id="item-batches-container"></div>
         </div>
         <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-        ${!id ? `<button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveItem('')">＋ Save & New</button>` : ''}
+        ${!id ? `<button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveItem('')"> Save & New</button>` : ''}
         <button class="btn btn-primary" onclick="saveItem('${id || ''}')">Save Item</button></div>`);
 
     renderPriceTiers();
@@ -3448,7 +3433,7 @@ function previewItemPhoto(event) {
 function removeItemPhoto() {
     window._itemPhotoFile = null;
     const preview = $('item-photo-preview');
-    if (preview) preview.innerHTML = '<span style="font-size:1.5rem">📷</span>';
+    if (preview) preview.innerHTML = '<span style="font-size:1.5rem"></span>';
     const existing = $('f-item-existing-url');
     if (existing) existing.value = '__remove__';
 }
@@ -3487,8 +3472,8 @@ function renderPriceTiers() {
     el.innerHTML = currentItemTiers.map((t, i) => `
         <div style="display:flex;gap:10px;align-items:center;margin-bottom:6px;">
             <div><span style="font-size:0.8rem">Min Qty:</span> <input type="number" style="width:70px;padding:4px;font-size:0.9rem;border-radius:4px;border:1px solid var(--border)" value="${t.minQty}" onchange="updatePriceTier(${i}, 'minQty', this.value)"></div>
-            <div><span style="font-size:0.8rem">Price ₹:</span> <input type="number" style="width:90px;padding:4px;font-size:0.9rem;border-radius:4px;border:1px solid var(--border)" value="${t.price}" onchange="updatePriceTier(${i}, 'price', this.value)"></div>
-            <button class="btn-icon" style="color:var(--danger);margin-top:14px" onclick="removePriceTier(${i})">✕</button>
+            <div><span style="font-size:0.8rem">Price :</span> <input type="number" style="width:90px;padding:4px;font-size:0.9rem;border-radius:4px;border:1px solid var(--border)" value="${t.price}" onchange="updatePriceTier(${i}, 'price', this.value)"></div>
+            <button class="btn-icon" style="color:var(--danger);margin-top:14px" onclick="removePriceTier(${i})"></button>
         </div>
     `).join('');
 }
@@ -3503,26 +3488,26 @@ function renderItemBatches() {
     el.innerHTML = `<table style="width:100%;font-size:0.82rem;border-collapse:collapse">
         <thead><tr style="border-bottom:1px solid var(--border)">
             <th style="padding:4px 6px;text-align:left">MRP</th>
-            <th style="padding:4px 6px;text-align:left">Purchase ₹</th>
-            <th style="padding:4px 6px;text-align:left">Sale ₹</th>
+            <th style="padding:4px 6px;text-align:left">Purchase </th>
+            <th style="padding:4px 6px;text-align:left">Sale </th>
             <th style="padding:4px 6px;text-align:center">Avail Qty</th>
             <th style="padding:4px 6px;text-align:left">Date</th>
             <th style="padding:4px 6px;text-align:center">Status</th>
             <th style="padding:4px 6px;text-align:center">Actions</th>
         </tr></thead>
-        <tbody>${currentItemBatches.map((b,idx) => `
-            <tr style="border-bottom:1px solid var(--border);opacity:${b.isActive===false?0.5:1}">
-                <td style="padding:5px 6px;font-weight:600">₹${b.mrp}</td>
-                <td style="padding:5px 6px">₹${b.purchasePrice}</td>
-                <td style="padding:5px 6px">₹${b.salePrice}</td>
-                <td style="padding:5px 6px;text-align:center">${b.qty||0}</td>
-                <td style="padding:5px 6px;color:var(--text-muted)">${b.receivedDate||'-'}</td>
+        <tbody>${currentItemBatches.map((b, idx) => `
+            <tr style="border-bottom:1px solid var(--border);opacity:${b.isActive === false ? 0.5 : 1}">
+                <td style="padding:5px 6px;font-weight:600">${b.mrp}</td>
+                <td style="padding:5px 6px">${b.purchasePrice}</td>
+                <td style="padding:5px 6px">${b.salePrice}</td>
+                <td style="padding:5px 6px;text-align:center">${b.qty || 0}</td>
+                <td style="padding:5px 6px;color:var(--text-muted)">${b.receivedDate || '-'}</td>
                 <td style="padding:5px 6px;text-align:center">
-                    <span class="badge ${b.isActive===false?'badge-danger':'badge-success'}">${b.isActive===false?'Inactive':'Active'}</span>
+                    <span class="badge ${b.isActive === false ? 'badge-danger' : 'badge-success'}">${b.isActive === false ? 'Inactive' : 'Active'}</span>
                 </td>
                 <td style="padding:5px 6px;text-align:center">
-                    <button class="btn btn-outline btn-sm" onclick="toggleItemBatchActive(${idx})" style="padding:2px 6px;font-size:0.75rem">${b.isActive===false?'Activate':'Deactivate'}</button>
-                    <button class="btn-icon" onclick="deleteItemBatch(${idx})" style="color:var(--danger);margin-left:4px">✕</button>
+                    <button class="btn btn-outline btn-sm" onclick="toggleItemBatchActive(${idx})" style="padding:2px 6px;font-size:0.75rem">${b.isActive === false ? 'Activate' : 'Deactivate'}</button>
+                    <button class="btn-icon" onclick="deleteItemBatch(${idx})" style="color:var(--danger);margin-left:4px"></button>
                 </td>
             </tr>`).join('')}
         </tbody></table>`;
@@ -3532,9 +3517,9 @@ function toggleItemBatchActive(idx) {
     currentItemBatches[idx].isActive = currentItemBatches[idx].isActive === false ? true : false;
     // Resync item prices after changing active status
     const sync = syncItemPricesFromBatches(currentItemBatches);
-    if (sync.mrp)           { const el = $('f-item-mrp');  if (el) el.value = sync.mrp; }
-    if (sync.salePrice)     { const el = $('f-item-sp');   if (el) el.value = sync.salePrice; }
-    if (sync.purchasePrice) { const el = $('f-item-pp');   if (el) el.value = sync.purchasePrice; }
+    if (sync.mrp) { const el = $('f-item-mrp'); if (el) el.value = sync.mrp; }
+    if (sync.salePrice) { const el = $('f-item-sp'); if (el) el.value = sync.salePrice; }
+    if (sync.purchasePrice) { const el = $('f-item-pp'); if (el) el.value = sync.purchasePrice; }
     renderItemBatches();
 }
 
@@ -3543,25 +3528,25 @@ function deleteItemBatch(idx) {
     currentItemBatches.splice(idx, 1);
     // Resync item prices after deleting a batch
     const sync = syncItemPricesFromBatches(currentItemBatches);
-    if (sync.mrp)           { const el = $('f-item-mrp');  if (el) el.value = sync.mrp; }
-    if (sync.salePrice)     { const el = $('f-item-sp');   if (el) el.value = sync.salePrice; }
-    if (sync.purchasePrice) { const el = $('f-item-pp');   if (el) el.value = sync.purchasePrice; }
+    if (sync.mrp) { const el = $('f-item-mrp'); if (el) el.value = sync.mrp; }
+    if (sync.salePrice) { const el = $('f-item-sp'); if (el) el.value = sync.salePrice; }
+    if (sync.purchasePrice) { const el = $('f-item-pp'); if (el) el.value = sync.purchasePrice; }
     renderItemBatches();
 }
 
 function openAddBatchForm() {
-    const today = new Date().toISOString().substring(0,10);
+    const today = new Date().toISOString().substring(0, 10);
     openModal('Add MRP Batch', `
         <div style="background:rgba(249,115,22,0.08);border:1px solid rgba(249,115,22,0.3);border-radius:8px;padding:10px;margin-bottom:14px;font-size:0.83rem">
-            ℹ️ When a new MRP is received, add it as a new batch. Purchase Price and Sale Price are mandatory.
+             When a new MRP is received, add it as a new batch. Purchase Price and Sale Price are mandatory.
         </div>
         <div class="form-row">
-            <div class="form-group"><label>MRP ₹ *</label><input type="number" id="f-batch-mrp" placeholder="Max Retail Price" oninput="onBatchMrpChange()"></div>
+            <div class="form-group"><label>MRP  *</label><input type="number" id="f-batch-mrp" placeholder="Max Retail Price" oninput="onBatchMrpChange()"></div>
             <div class="form-group"><label>Date Received</label><input type="date" id="f-batch-date" value="${today}"></div>
         </div>
         <div class="form-row">
-            <div class="form-group"><label>Purchase Price ₹ *</label><input type="number" id="f-batch-pp" placeholder="Your cost price" step="0.01"></div>
-            <div class="form-group"><label>Sale Price ₹ *</label><input type="number" id="f-batch-sp" placeholder="Price to customer" step="0.01"></div>
+            <div class="form-group"><label>Purchase Price  *</label><input type="number" id="f-batch-pp" placeholder="Your cost price" step="0.01"></div>
+            <div class="form-group"><label>Sale Price  *</label><input type="number" id="f-batch-sp" placeholder="Price to customer" step="0.01"></div>
         </div>
         <div class="form-group"><label>Opening Qty (this batch)</label><input type="number" id="f-batch-qty" value="0" min="0"></div>
         <div class="modal-actions">
@@ -3575,14 +3560,14 @@ function onBatchMrpChange() {
 }
 
 function saveItemBatch() {
-    const mrp = +($('f-batch-mrp')||{}).value;
-    const pp  = +($('f-batch-pp')||{}).value;
-    const sp  = +($('f-batch-sp')||{}).value;
-    const qty = +($('f-batch-qty')||{}).value||0;
-    const date = ($('f-batch-date')||{}).value||'';
+    const mrp = +($('f-batch-mrp') || {}).value;
+    const pp = +($('f-batch-pp') || {}).value;
+    const sp = +($('f-batch-sp') || {}).value;
+    const qty = +($('f-batch-qty') || {}).value || 0;
+    const date = ($('f-batch-date') || {}).value || '';
     if (!mrp) return alert('MRP is required');
-    if (!pp)  return alert('Purchase Price is mandatory for a new MRP batch');
-    if (!sp)  return alert('Sale Price is mandatory for a new MRP batch');
+    if (!pp) return alert('Purchase Price is mandatory for a new MRP batch');
+    if (!sp) return alert('Sale Price is mandatory for a new MRP batch');
     currentItemBatches.push({ id: 'b_' + Date.now().toString(36), mrp, purchasePrice: pp, salePrice: sp, qty, receivedDate: date, isActive: true });
     // Sync main form fields to new batch
     if ($('f-item-mrp')) $('f-item-mrp').value = mrp;
@@ -3631,7 +3616,7 @@ async function saveItem(id) {
     if (window._itemPhotoFile) {
         try {
             const ext = window._itemPhotoFile.name.split('.').pop() || 'jpg';
-            const fileName = `item_${Date.now()}_${Math.random().toString(36).substr(2,6)}.${ext}`;
+            const fileName = `item_${Date.now()}_${Math.random().toString(36).substr(2, 6)}.${ext}`;
             const { data: upData, error: upErr } = await supabaseClient.storage
                 .from('item-images')
                 .upload(fileName, window._itemPhotoFile, { upsert: true });
@@ -3681,8 +3666,8 @@ async function saveItem(id) {
         alert('Error saving item: ' + err.message);
     }
 }
-// ─── Bulk Management ──────────────────────────────────────────────────────────
-window._bulkItems   = new Set();
+//  Bulk Management 
+window._bulkItems = new Set();
 window._bulkParties = new Set();
 
 function toggleBulkItem(id, chk) {
@@ -3741,12 +3726,12 @@ async function bulkDeleteItems() {
     const blocked = [], toDelete = [];
     const matchItem = (li, id) => String(li.itemId || li.item_id || '') === String(id);
     for (const id of window._bulkItems) {
-        const hasInv = invoices.some(x => (x.items||[]).some(li => matchItem(li, id)));
-        const hasOrd = orders.some(x => (x.items||[]).some(li => matchItem(li, id)));
+        const hasInv = invoices.some(x => (x.items || []).some(li => matchItem(li, id)));
+        const hasOrd = orders.some(x => (x.items || []).some(li => matchItem(li, id)));
         const hasLed = stockLedger.some(x => String(x.itemId || x.item_id || '') === String(id));
         if (hasInv || hasOrd || hasLed) blocked.push(id); else toDelete.push(id);
     }
-    if (blocked.length) showToast(blocked.length + ' item(s) skipped — have transactions. Use Deactivate instead.', 'error');
+    if (blocked.length) showToast(blocked.length + ' item(s) skipped  have transactions. Use Deactivate instead.', 'error');
     if (!toDelete.length) return;
     if (!confirm('Delete ' + toDelete.length + ' item(s)? Cannot be undone.')) return;
     for (const id of toDelete) await DB.delete('inventory', id);
@@ -3800,7 +3785,7 @@ async function bulkBlockParties() {
         const p = parties.find(x => x.id === id);
         if (p) await DB.update('parties', id, { ...p, active: false, blocked: true });
     }
-    showToast(window._bulkParties.size + ' parties blocked 🚫', 'warning');
+    showToast(window._bulkParties.size + ' parties blocked ', 'warning');
     window._bulkParties.clear();
     renderParties();
 }
@@ -3813,11 +3798,11 @@ async function bulkDeleteParties() {
     for (const id of window._bulkParties) {
         const sid = String(id);
         const hasTx = orders.some(x => String(x.partyId) === sid) ||
-                      invoices.some(x => String(x.partyId) === sid) ||
-                      payments.some(x => String(x.partyId) === sid);
+            invoices.some(x => String(x.partyId) === sid) ||
+            payments.some(x => String(x.partyId) === sid);
         if (hasTx) blocked.push(id); else toDelete.push(id);
     }
-    if (blocked.length) showToast(blocked.length + ' party(ies) skipped — have transactions. Use Block instead.', 'error');
+    if (blocked.length) showToast(blocked.length + ' party(ies) skipped  have transactions. Use Block instead.', 'error');
     if (!toDelete.length) return;
     if (!confirm('Delete ' + toDelete.length + ' party(ies)? Cannot be undone.')) return;
     for (const id of toDelete) await DB.delete('parties', id);
@@ -3833,10 +3818,10 @@ async function deleteItem(id) {
     const sid = String(id);
     // JSONB items array uses snake_case item_id; top-level stock_ledger uses camelCase itemId
     const matchItem = li => String(li.itemId || li.item_id || '') === sid;
-    const hasInv = invoices.some(x => (x.items||[]).some(matchItem));
-    const hasOrd = orders.some(x => (x.items||[]).some(matchItem));
+    const hasInv = invoices.some(x => (x.items || []).some(matchItem));
+    const hasOrd = orders.some(x => (x.items || []).some(matchItem));
     const hasLed = stockLedger.some(x => String(x.itemId || x.item_id || '') === sid);
-    if (hasInv || hasOrd || hasLed) return alert('Cannot delete — this item has transactions. Use Deactivate instead.');
+    if (hasInv || hasOrd || hasLed) return alert('Cannot delete  this item has transactions. Use Deactivate instead.');
     if (!confirm('Delete item? This cannot be undone.')) return;
     try {
         await DB.delete('inventory', id);
@@ -3854,7 +3839,7 @@ async function openStockAdjustmentModal(itemId) {
     const adjNo = 'ADJ-' + Date.now().toString(36).toUpperCase().substr(-6);
     openModal('Stock Adjustment Journal', `
         <div style="margin-bottom:14px;padding:10px;background:rgba(0,212,170,0.08);border:1px solid rgba(0,212,170,0.2);border-radius:8px;font-size:0.85rem">
-            <strong>📋 Document:</strong> ${adjNo} | <strong>Date:</strong> ${today()}
+            <strong> Document:</strong> ${adjNo} | <strong>Date:</strong> ${today()}
         </div>
         <div class="form-group"><label for="f-adj-item-input">Item *</label>
             <input id="f-adj-item-input" placeholder="Type item name or code..." autocomplete="off" value="${item ? item.name + (item.itemCode ? ' [' + item.itemCode + ']' : '') : ''}">
@@ -3864,22 +3849,22 @@ async function openStockAdjustmentModal(itemId) {
             ${item ? `<strong>Current Stock:</strong> <span class="badge badge-info">${item.stock} ${item.unit || 'Pcs'}</span>` : ''}
         </div>
         <div class="form-row">
-            <div class="form-group"><label for="f-adj-mrp">MRP ₹ <small style="color:var(--text-muted)">(from last transaction — edit if new MRP)</small></label>
-                <input type="number" id="f-adj-mrp" value="${item ? ((getLastActiveBatch(item)||getLastBatch(item)||{}).mrp||item.mrp||'') : ''}" placeholder="MRP for this lot" step="0.01" oninput="onAdjMrpChange()">
+            <div class="form-group"><label for="f-adj-mrp">MRP  <small style="color:var(--text-muted)">(from last transaction  edit if new MRP)</small></label>
+                <input type="number" id="f-adj-mrp" value="${item ? ((getLastActiveBatch(item) || getLastBatch(item) || {}).mrp || item.mrp || '') : ''}" placeholder="MRP for this lot" step="0.01" oninput="onAdjMrpChange()">
             </div>
         </div>
         <div id="adj-new-mrp-section" style="display:none;background:rgba(249,115,22,0.08);border:1px solid rgba(249,115,22,0.3);border-radius:8px;padding:12px;margin-bottom:12px">
-            <div style="font-size:0.83rem;font-weight:600;color:var(--warning);margin-bottom:10px">🆕 New MRP detected — Purchase Price &amp; Sale Price are mandatory</div>
+            <div style="font-size:0.83rem;font-weight:600;color:var(--warning);margin-bottom:10px"> New MRP detected  Purchase Price &amp; Sale Price are mandatory</div>
             <div class="form-row">
-                <div class="form-group"><label for="f-adj-pp">Purchase Price ₹ *</label><input type="number" id="f-adj-pp" placeholder="Your cost" step="0.01"></div>
-                <div class="form-group"><label for="f-adj-sp">Sale Price ₹ *</label><input type="number" id="f-adj-sp" placeholder="Customer price" step="0.01"></div>
+                <div class="form-group"><label for="f-adj-pp">Purchase Price  *</label><input type="number" id="f-adj-pp" placeholder="Your cost" step="0.01"></div>
+                <div class="form-group"><label for="f-adj-sp">Sale Price  *</label><input type="number" id="f-adj-sp" placeholder="Customer price" step="0.01"></div>
             </div>
         </div>
         <div class="form-row">
             <div class="form-group"><label for="f-adj-type">Adjustment Type *</label>
                 <select id="f-adj-type">
-                    <option value="Positive Adj">➕ Increase (Positive)</option>
-                    <option value="Negative Adj">➖ Decrease (Negative)</option>
+                    <option value="Positive Adj"> Increase (Positive)</option>
+                    <option value="Negative Adj"> Decrease (Negative)</option>
                 </select>
             </div>
             <div class="form-group"><label for="f-adj-qty">Quantity *</label><input type="number" id="f-adj-qty" min="1" value="1"></div>
@@ -3893,7 +3878,7 @@ async function openStockAdjustmentModal(itemId) {
         <div class="form-group"><label for="f-adj-notes">Notes</label><input id="f-adj-notes" placeholder="Additional details..."></div>
         <input type="hidden" id="f-adj-docno" value="${adjNo}">
         <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-        <button class="btn btn-primary" onclick="saveStockAdjustment()">✅ Post Adjustment</button></div>`);
+        <button class="btn btn-primary" onclick="saveStockAdjustment()"> Post Adjustment</button></div>`);
 
     initSearchDropdown('f-adj-item-input', buildItemSearchList(inv), (selectedItem) => {
         $('f-adj-item').value = selectedItem.id || '';
@@ -3902,7 +3887,7 @@ async function openStockAdjustmentModal(itemId) {
     if (item) onAdjItemChange();
 }
 function onAdjItemChange() {
-    const itemId = ($('f-adj-item')||{}).value;
+    const itemId = ($('f-adj-item') || {}).value;
     const el = $('adj-current-stock');
     if (!itemId) { if (el) el.innerHTML = ''; return; }
     const item = (DB.get('db_inventory') || []).find(x => x.id === itemId);
@@ -3914,8 +3899,8 @@ function onAdjItemChange() {
     onAdjMrpChange();
 }
 function onAdjMrpChange() {
-    const itemId = ($('f-adj-item')||{}).value;
-    const mrp = +($('f-adj-mrp')||{}).value;
+    const itemId = ($('f-adj-item') || {}).value;
+    const mrp = +($('f-adj-mrp') || {}).value;
     const section = $('adj-new-mrp-section');
     if (!section || !itemId || !mrp) { if (section) section.style.display = 'none'; return; }
     const item = (DB.get('db_inventory') || []).find(x => x.id === itemId);
@@ -3931,9 +3916,9 @@ async function saveStockAdjustment() {
     if (!qty || qty <= 0) return alert('Enter a valid quantity');
     const type = $('f-adj-type').value;
     const adjDate = $('f-adj-date').value;
-    const reason = $('f-adj-reason').value + ($('f-adj-notes').value.trim() ? ' — ' + $('f-adj-notes').value.trim() : '');
+    const reason = $('f-adj-reason').value + ($('f-adj-notes').value.trim() ? '  ' + $('f-adj-notes').value.trim() : '');
     const docNo = $('f-adj-docno').value;
-    const mrp = +($('f-adj-mrp')||{}).value || 0;
+    const mrp = +($('f-adj-mrp') || {}).value || 0;
 
     try {
         const items = await DB.getAll('inventory');
@@ -3952,16 +3937,16 @@ async function saveStockAdjustment() {
             const existingBatch = batches.find(b => +b.mrp === mrp);
 
             if (existingBatch) {
-                // MRP already exists — just update qty on that batch
+                // MRP already exists  just update qty on that batch
                 existingBatch.qty = (existingBatch.qty || 0) + actualQty;
                 if (existingBatch.qty < 0) existingBatch.qty = 0;
             } else if (!batches.length && +item.mrp === mrp) {
-                // No batches yet and MRP matches item default — silently create first batch from existing item prices
+                // No batches yet and MRP matches item default  silently create first batch from existing item prices
                 batches.push({ id: 'b_' + Date.now().toString(36), mrp, purchasePrice: item.purchasePrice || 0, salePrice: item.salePrice || 0, qty: Math.max(0, newStock), receivedDate: adjDate, isActive: true });
             } else {
-                // Genuinely new MRP — purchase price and sale price are mandatory
-                const pp = +($('f-adj-pp')||{}).value;
-                const sp = +($('f-adj-sp')||{}).value;
+                // Genuinely new MRP  purchase price and sale price are mandatory
+                const pp = +($('f-adj-pp') || {}).value;
+                const sp = +($('f-adj-sp') || {}).value;
                 if (!pp) return alert('Purchase Price is mandatory for a new MRP batch');
                 if (!sp) return alert('Sale Price is mandatory for a new MRP batch');
                 batches.push({
@@ -3977,11 +3962,11 @@ async function saveStockAdjustment() {
         }
 
         await DB.update('inventory', itemId, updateData);
-        await addLedgerEntry(item.id, item.name, type, actualQty, docNo, reason + (mrp ? ` | MRP ₹${mrp}` : ''));
+        await addLedgerEntry(item.id, item.name, type, actualQty, docNo, reason + (mrp ? ` | MRP ${mrp}` : ''));
 
         closeModal();
         await renderInventory();
-        showToast(`Stock adjusted! ${item.name}: ${actualQty > 0 ? '+' : ''}${actualQty} → New stock: ${newStock}${mrp ? ` | MRP ₹${mrp}` : ''}`, 'success');
+        showToast(`Stock adjusted! ${item.name}: ${actualQty > 0 ? '+' : ''}${actualQty}  New stock: ${newStock}${mrp ? ` | MRP ${mrp}` : ''}`, 'success');
     } catch (err) {
         alert('Error adjusting stock: ' + err.message);
     }
@@ -3999,20 +3984,20 @@ async function viewItemLedger(itemId) {
     const rows = itemLedger.slice().reverse();
 
     function extractMrp(e) {
-        if (e.mrp) return '₹' + e.mrp;
-        const m = (e.reason || '').match(/MRP\s*₹?\s*(\d+\.?\d*)/i);
-        return m ? '₹' + m[1] : '-';
+        if (e.mrp) return '' + e.mrp;
+        const m = (e.reason || '').match(/MRP\s*?\s*(\d+\.?\d*)/i);
+        return m ? '' + m[1] : '-';
     }
     function cleanReason(reason) {
-        return (reason || '').replace(/\s*\|\s*MRP\s*₹?\s*\d+\.?\d*/i, '').trim() || '-';
+        return (reason || '').replace(/\s*\|\s*MRP\s*?\s*\d+\.?\d*/i, '').trim() || '-';
     }
 
-    openModal(`📜 ${item.name} — Ledger`, `
+    openModal(` ${item.name}  Ledger`, `
         <div class="stats-grid-sm" style="margin-bottom:14px">
-            <div class="stat-card blue"><div class="stat-icon">📦</div><div class="stat-value">${item.stock}</div><div class="stat-label">Current Stock</div></div>
-            <div class="stat-card green"><div class="stat-icon">📋</div><div class="stat-value">${itemLedger.length}</div><div class="stat-label">Total Entries</div></div>
-            ${item.mrp ? `<div class="stat-card amber"><div class="stat-icon">🏷️</div><div class="stat-value">₹${item.mrp}</div><div class="stat-label">Current MRP</div></div>` : ''}
-            ${item.batches && item.batches.length ? `<div class="stat-card"><div class="stat-icon">🗂️</div><div class="stat-value">${item.batches.filter(b=>b.isActive!==false).length}</div><div class="stat-label">Active Batches</div></div>` : ''}
+            <div class="stat-card blue"><div class="stat-icon"></div><div class="stat-value">${item.stock}</div><div class="stat-label">Current Stock</div></div>
+            <div class="stat-card green"><div class="stat-icon"></div><div class="stat-value">${itemLedger.length}</div><div class="stat-label">Total Entries</div></div>
+            ${item.mrp ? `<div class="stat-card amber"><div class="stat-icon"></div><div class="stat-value">${item.mrp}</div><div class="stat-label">Current MRP</div></div>` : ''}
+            ${item.batches && item.batches.length ? `<div class="stat-card"><div class="stat-icon"></div><div class="stat-value">${item.batches.filter(b => b.isActive !== false).length}</div><div class="stat-label">Active Batches</div></div>` : ''}
         </div>
         ${rows.length ? `<div style="overflow-x:auto">
         <table class="data-table" style="min-width:680px"><thead><tr>
@@ -4028,9 +4013,9 @@ async function viewItemLedger(itemId) {
             <td style="font-size:0.82rem;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(cleanReason(e.reason))}">${cleanReason(e.reason)}</td>
             <td style="font-size:0.78rem;white-space:nowrap">${e.createdBy || '-'}</td>
         </tr>`).join('')}</tbody></table></div>`
-        : '<div class="empty-state" style="padding:30px"><div class="empty-icon">📜</div><p>No ledger entries yet.</p></div>'}`,
+            : '<div class="empty-state" style="padding:30px"><div class="empty-icon"></div><p>No ledger entries yet.</p></div>'}`,
         `<button class="btn btn-outline" onclick="closeModal()">Close</button>
-        ${canEdit() ? `<button class="btn btn-primary" onclick="closeModal();openStockAdjustmentModal('${itemId}')">🔧 Adjust Stock</button>` : ''}`);
+        ${canEdit() ? `<button class="btn btn-primary" onclick="closeModal();openStockAdjustmentModal('${itemId}')"> Adjust Stock</button>` : ''}`);
 }
 
 // --- CSV Download Helper ---
@@ -4133,10 +4118,10 @@ function processStockImport(event) {
             pendingStockImports.push({ item, actualQty, adjDate, entryType: isIncrease ? 'Positive Adj' : 'Negative Adj', reason: (reason || 'Excel Import') + ' (imported)' });
         }
         let html = '';
-        if (errors.length) html += `<div style="margin-bottom:14px;padding:12px;background:var(--danger-soft);border:1px solid rgba(239,68,68,0.3);border-radius:8px;font-size:0.85rem"><strong style="color:var(--danger)">⚠️ ${errors.length} Errors Found (Rows skipped)</strong><ul style="margin-top:6px;padding-left:14px;color:var(--danger);max-height:100px;overflow-y:auto">${errors.map(err => `<li>${err}</li>`).join('')}</ul></div>`;
-        html += `<div style="margin-bottom:10px;font-weight:600">✅ ${pendingStockImports.length} Valid Adjustments Preview</div>`;
+        if (errors.length) html += `<div style="margin-bottom:14px;padding:12px;background:var(--danger-soft);border:1px solid rgba(239,68,68,0.3);border-radius:8px;font-size:0.85rem"><strong style="color:var(--danger)"> ${errors.length} Errors Found (Rows skipped)</strong><ul style="margin-top:6px;padding-left:14px;color:var(--danger);max-height:100px;overflow-y:auto">${errors.map(err => `<li>${err}</li>`).join('')}</ul></div>`;
+        html += `<div style="margin-bottom:10px;font-weight:600"> ${pendingStockImports.length} Valid Adjustments Preview</div>`;
         if (pendingStockImports.length) html += `<div style="max-height:300px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius-sm)"><table class="data-table"><thead><tr><th>Date</th><th>Item</th><th>Type</th><th>Qty</th><th>New Stock</th></tr></thead><tbody>${pendingStockImports.map(p => `<tr><td>${fmtDate(p.adjDate)}</td><td>${p.item.name}</td><td><span class="badge ${p.actualQty > 0 ? 'badge-success' : 'badge-danger'}">${p.entryType}</span></td><td style="font-weight:700;color:${p.actualQty > 0 ? 'var(--success)' : 'var(--danger)'}">${p.actualQty > 0 ? '+' : ''}${p.actualQty}</td><td>${p.item.stock + p.actualQty}</td></tr>`).join('')}</tbody></table></div>`;
-        html += `<div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="commitStockImport()" ${pendingStockImports.length === 0 ? 'disabled' : ''}>💾 Confirm & Apply Adjustments</button></div>`;
+        html += `<div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="commitStockImport()" ${pendingStockImports.length === 0 ? 'disabled' : ''}> Confirm & Apply Adjustments</button></div>`;
         openModal('Import Excel Preview', html);
         event.target.value = '';
     }
@@ -4162,7 +4147,7 @@ async function commitStockImport() {
             if (item) {
                 const newStock = item.stock + p.actualQty;
                 await DB.update('inventory', item.id, { stock: newStock });
-                
+
                 // Update local item object for next iteration if same item exists in import
                 item.stock = newStock;
 
@@ -4258,14 +4243,14 @@ function processItemImport(event) {
             pendingItemImports.push(entry);
         }
         let html = '';
-        if (errors.length) html += `<div style="margin-bottom:14px;padding:12px;background:var(--danger-soft);border:1px solid rgba(239,68,68,0.3);border-radius:8px;font-size:0.85rem"><strong style="color:var(--danger)">⚠️ ${errors.length} Errors (Rows skipped)</strong><ul style="margin-top:6px;padding-left:14px;color:var(--danger);max-height:100px;overflow-y:auto">${errors.map(e => `<li>${e}</li>`).join('')}</ul></div>`;
+        if (errors.length) html += `<div style="margin-bottom:14px;padding:12px;background:var(--danger-soft);border:1px solid rgba(239,68,68,0.3);border-radius:8px;font-size:0.85rem"><strong style="color:var(--danger)"> ${errors.length} Errors (Rows skipped)</strong><ul style="margin-top:6px;padding-left:14px;color:var(--danger);max-height:100px;overflow-y:auto">${errors.map(e => `<li>${e}</li>`).join('')}</ul></div>`;
         const newCount = pendingItemImports.filter(p => !p.isUpdate).length;
         const updCount = pendingItemImports.filter(p => p.isUpdate).length;
-        html += `<div style="margin-bottom:10px;font-weight:600">✅ ${pendingItemImports.length} Valid Items <span style="font-size:0.8rem;color:var(--text-muted)">(${newCount} New, ${updCount} Update)</span></div>`;
+        html += `<div style="margin-bottom:10px;font-weight:600"> ${pendingItemImports.length} Valid Items <span style="font-size:0.8rem;color:var(--text-muted)">(${newCount} New, ${updCount} Update)</span></div>`;
         const newCats = pendingItemImports.filter(p => p._catNeedsCreation).length;
-        if (newCats > 0) html += `<div style="margin-bottom:10px;font-size:0.85rem;color:var(--warning)">Note: ${newCats} items have missing Category/Sub-Category — will be created automatically.</div>`;
-        if (pendingItemImports.length) html += `<div style="max-height:300px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius-sm)"><table class="data-table"><thead><tr><th>Name</th><th>Cat / Sub</th><th>Sale ₹</th><th>Action</th></tr></thead><tbody>${pendingItemImports.map(p => `<tr><td>${p.name}</td><td>${p.category} > ${p.subCategory}</td><td>${currency(p.salePrice)}</td><td><span class="badge ${p.isUpdate ? 'badge-warning' : 'badge-success'}">${p.isUpdate ? 'Update' : 'New'}</span></td></tr>`).join('')}</tbody></table></div>`;
-        html += `<div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="commitItemImport()" ${pendingItemImports.length === 0 ? 'disabled' : ''}>💾 Confirm & Import Items</button></div>`;
+        if (newCats > 0) html += `<div style="margin-bottom:10px;font-size:0.85rem;color:var(--warning)">Note: ${newCats} items have missing Category/Sub-Category  will be created automatically.</div>`;
+        if (pendingItemImports.length) html += `<div style="max-height:300px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius-sm)"><table class="data-table"><thead><tr><th>Name</th><th>Cat / Sub</th><th>Sale </th><th>Action</th></tr></thead><tbody>${pendingItemImports.map(p => `<tr><td>${p.name}</td><td>${p.category} > ${p.subCategory}</td><td>${currency(p.salePrice)}</td><td><span class="badge ${p.isUpdate ? 'badge-warning' : 'badge-success'}">${p.isUpdate ? 'Update' : 'New'}</span></td></tr>`).join('')}</tbody></table></div>`;
+        html += `<div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="commitItemImport()" ${pendingItemImports.length === 0 ? 'disabled' : ''}> Confirm & Import Items</button></div>`;
         openModal('Import Items Preview', html);
         event.target.value = '';
     }
@@ -4305,7 +4290,7 @@ async function commitItemImport() {
             const itemId = p.id;
             delete p._catNeedsCreation;
             delete p.isUpdate;
-            delete p.id; 
+            delete p.id;
 
             if (isUpdate) {
                 const existing = inventory.find(it => it.id === itemId);
@@ -4321,7 +4306,7 @@ async function commitItemImport() {
                 added++;
                 if (p.stock > 0) {
                     // Update the inserted object's stock state for the ledger entry
-                    inserted.stock = p.stock; 
+                    inserted.stock = p.stock;
                     await addLedgerEntry(inserted.id, p.name, 'Opening', p.stock, 'OPEN-IMP', 'Bulk Excel Import');
                 }
             }
@@ -4337,17 +4322,17 @@ async function commitItemImport() {
 }
 
 // =============================================
-//  SALES ORDERS (Approval — no invoice on approve)
+//  SALES ORDERS (Approval  no invoice on approve)
 // =============================================
 let soItems = [];
 async function renderSalesOrders() {
     const orders = await DB.getAll('salesorders');
     const soStatusRank = o => {
-        if (o.status === 'pending')   return 0;
+        if (o.status === 'pending') return 0;
         if (o.status === 'approved' && !o.packed && !o.invoiceNo) return 1;
         if (o.packed && !o.invoiceNo) return 2;
-        if (o.invoiceNo)              return 3;
-        if (o.status === 'rejected')  return 4;
+        if (o.invoiceNo) return 3;
+        if (o.status === 'rejected') return 4;
         if (o.status === 'cancelled') return 5;
         return 6;
     };
@@ -4356,24 +4341,24 @@ async function renderSalesOrders() {
     const p = orders.filter(o => o.status === 'pending'), a = orders.filter(o => o.status === 'approved'), r = orders.filter(o => o.status === 'rejected');
     pageContent.innerHTML = `
         <div class="stats-grid" style="margin-bottom:18px">
-            <div class="stat-card amber"><div class="stat-icon">⏳</div><div class="stat-value">${p.length}</div><div class="stat-label">Pending</div></div>
-            <div class="stat-card green"><div class="stat-icon">✅</div><div class="stat-value">${a.length}</div><div class="stat-label">Approved</div></div>
-            <div class="stat-card red"><div class="stat-icon">❌</div><div class="stat-value">${r.length}</div><div class="stat-label">Rejected</div></div>
+            <div class="stat-card amber"><div class="stat-icon"></div><div class="stat-value">${p.length}</div><div class="stat-label">Pending</div></div>
+            <div class="stat-card green"><div class="stat-icon"></div><div class="stat-value">${a.length}</div><div class="stat-label">Approved</div></div>
+            <div class="stat-card red"><div class="stat-icon"></div><div class="stat-value">${r.length}</div><div class="stat-label">Rejected</div></div>
         </div>
         <div class="section-toolbar">
             <div class="filter-group"><select id="so-status-filter" onchange="filterSOTable()"><option value="">All</option><option value="pending">Pending</option><option value="approved">Approved</option><option value="rejected">Rejected</option></select>
             <select id="so-priority-filter" onchange="filterSOTable()"><option value="">All Priority</option><option value="Urgent">Urgent</option><option value="Normal">Normal</option></select>
-            <select id="so-sort" onchange="filterSOTable()"><option value="date-desc">Date ↓</option><option value="date-asc">Date ↑</option><option value="delivery-asc">Delivery ↑</option><option value="delivery-desc">Delivery ↓</option></select>
+            <select id="so-sort" onchange="filterSOTable()"><option value="date-desc">Date </option><option value="date-asc">Date </option><option value="delivery-asc">Delivery </option><option value="delivery-desc">Delivery </option></select>
             <input class="search-box" id="so-search" placeholder="Search..." oninput="filterSOTable()" style="width:200px">
-            <button class="btn btn-outline" onclick="openColumnPersonalizer('salesorders','renderSalesOrders')" style="border-color:var(--accent);color:var(--accent)">⚙️ Columns</button></div>
+            <button class="btn btn-outline" onclick="openColumnPersonalizer('salesorders','renderSalesOrders')" style="border-color:var(--accent);color:var(--accent)"> Columns</button></div>
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-                ${isApprover && p.length > 0 ? `<button class="btn btn-success" id="btn-bulk-approve" onclick="bulkApproveOrders()" style="display:none">✅ Approve Selected (<span id="bulk-approve-count">0</span>)</button>` : ''}
+                ${isApprover && p.length > 0 ? `<button class="btn btn-success" id="btn-bulk-approve" onclick="bulkApproveOrders()" style="display:none"> Approve Selected (<span id="bulk-approve-count">0</span>)</button>` : ''}
                 <button class="btn btn-primary" onclick="openSalesOrderModal()">+ New Sales Order</button>
             </div>
         </div>
         <div class="card"><div class="card-body">
             <div class="table-wrapper">
-                <table class="data-table"><thead><tr>${isApprover ? `<th style="width:36px"><input type="checkbox" id="so-select-all" title="Select all pending" onchange="soToggleAll(this.checked)"></th>` : '<th style="width:36px"></th>'}${ColumnManager.get('salesorders').filter(c=>c.visible).map(c=>`<th>${c.label}</th>`).join('')}</tr></thead>
+                <table class="data-table"><thead><tr>${isApprover ? `<th style="width:36px"><input type="checkbox" id="so-select-all" title="Select all pending" onchange="soToggleAll(this.checked)"></th>` : '<th style="width:36px"></th>'}${ColumnManager.get('salesorders').filter(c => c.visible).map(c => `<th>${c.label}</th>`).join('')}</tr></thead>
                 <tbody id="so-tbody">${renderSORows(orders, isApprover)}</tbody></table>
             </div>
         </div></div>`;
@@ -4444,19 +4429,19 @@ function renderSORows(orders, isApprover) {
         const delDate = o.expectedDeliveryDate ? `<span style="font-size:0.8rem;color:${new Date(o.expectedDeliveryDate) < new Date() && o.status !== 'delivered' ? 'var(--danger)' : 'var(--text-muted)'}">${fmtDate(o.expectedDeliveryDate)}</span>` : '-';
         const chkTd = isApprover ? `<td><input type="checkbox" class="so-select-chk" data-id="${o.id}" onchange="soUpdateBulkBtn()" style="width:16px;height:16px"></td>` : '<td></td>';
         const cellMap = {
-            date:     `<td>${fmtDate(o.date)}</td>`,
-            orderNo:  `<td style="font-weight:600">${o.orderNo}${isUrgent ? ' <span class="badge badge-danger" style="font-size:0.6rem">🔥</span>' : ''}</td>`,
-            party:    `<td>${escapeHtml(o.partyName)}</td>`,
+            date: `<td>${fmtDate(o.date)}</td>`,
+            orderNo: `<td style="font-weight:600">${o.orderNo}${isUrgent ? ' <span class="badge badge-danger" style="font-size:0.6rem"></span>' : ''}</td>`,
+            party: `<td>${escapeHtml(o.partyName)}</td>`,
             delivery: `<td>${delDate}</td>`,
-            items:    `<td>${o.items.length}</td>`,
-            total:    `<td class="amount-green">${currency(o.total)}</td>`,
-            by:       `<td style="font-size:0.82rem">${o.createdBy || '-'}</td>`,
-            status:   `<td><span class="badge ${disp.class}" style="text-transform:capitalize">${disp.text}</span></td>`,
-            actions:  `<td><div class="action-btns">
-                <button class="btn-icon" onclick="viewSalesOrder('${o.id}')">👁️</button>
-                <button class="btn-icon" onclick="duplicateSalesOrder('${o.id}')" title="Duplicate">📋</button>
-                ${o.status === 'pending' && isApprover ? `<button class="btn-icon" style="color:var(--success)" onclick="approveSalesOrder('${o.id}')">✅</button><button class="btn-icon" style="color:var(--danger)" onclick="rejectSalesOrder('${o.id}')">❌</button>` : ''}
-                ${o.status === 'pending' && canEdit() ? `<button class="btn-icon" onclick="deleteSalesOrder('${o.id}')">🗑️</button>` : ''}
+            items: `<td>${o.items.length}</td>`,
+            total: `<td class="amount-green">${currency(o.total)}</td>`,
+            by: `<td style="font-size:0.82rem">${o.createdBy || '-'}</td>`,
+            status: `<td><span class="badge ${disp.class}" style="text-transform:capitalize">${disp.text}</span></td>`,
+            actions: `<td><div class="action-btns">
+                <button class="btn-icon" onclick="viewSalesOrder('${o.id}')"></button>
+                <button class="btn-icon" onclick="duplicateSalesOrder('${o.id}')" title="Duplicate"></button>
+                ${o.status === 'pending' && isApprover ? `<button class="btn-icon" style="color:var(--success)" onclick="approveSalesOrder('${o.id}')"></button><button class="btn-icon" style="color:var(--danger)" onclick="rejectSalesOrder('${o.id}')"></button>` : ''}
+                ${o.status === 'pending' && canEdit() ? `<button class="btn-icon" onclick="deleteSalesOrder('${o.id}')"></button>` : ''}
             </div></td>`,
         };
         return `<tr${isUrgent ? ' style="background:rgba(239,68,68,0.06);border-left:3px solid var(--danger)"' : ''}>${chkTd}${cols.map(c => cellMap[c.key] || '').join('')}</tr>`;
@@ -4496,11 +4481,11 @@ async function filterSOTable() {
     if (pf) orders = orders.filter(o => (o.priority || 'Normal') === pf);
     // Sorting
     const statusRank = o => {
-        if (o.status === 'pending')   return 0;
+        if (o.status === 'pending') return 0;
         if (o.status === 'approved' && !o.packed && !o.invoiceNo) return 1;
         if (o.packed && !o.invoiceNo) return 2;
-        if (o.invoiceNo)              return 3;
-        if (o.status === 'rejected')  return 4;
+        if (o.invoiceNo) return 3;
+        if (o.status === 'rejected') return 4;
         if (o.status === 'cancelled') return 5;
         return 6;
     };
@@ -4520,7 +4505,7 @@ async function filterSOTable() {
 async function openSalesOrderModal() {
     soItems = [];
 
-    
+
     const [parties, inv, categories] = await Promise.all([
         DB.getAll('parties'),
         DB.getAll('inventory'),
@@ -4531,14 +4516,14 @@ async function openSalesOrderModal() {
 
     openModal('Create Sales Order', `
         <div class="form-row"><div class="form-group"><label>Order #</label><input id="f-so-no" value="${orderNo}" readonly></div><div class="form-group"><label>Date</label><input type="date" id="f-so-date" value="${today()}"></div></div>
-        <div class="form-row"><div class="form-group"><label>Expected Delivery</label><input type="date" id="f-so-delivery" value=""></div><div class="form-group"><label>Priority</label><select id="f-so-priority"><option value="Normal">Normal</option><option value="Urgent">🔥 Urgent</option></select></div></div>
+        <div class="form-row"><div class="form-group"><label>Expected Delivery</label><input type="date" id="f-so-delivery" value=""></div><div class="form-group"><label>Priority</label><select id="f-so-priority"><option value="Normal">Normal</option><option value="Urgent"> Urgent</option></select></div></div>
         <div class="form-group"><label>Customer * <small style="color:var(--text-muted)">(new name = auto-created)</small></label>
             <input id="f-so-party" placeholder="Type customer name or mobile...">
         </div>
         
         <hr style="border-color:var(--border);margin:16px 0"><h4 style="margin-bottom:10px;font-size:0.9rem">Items</h4>
         
-        <button class="btn btn-outline btn-block" onclick="openSoItemSubModal()" style="margin-bottom:16px;border-style:dashed;color:var(--primary);border-color:var(--primary);height:44px;font-weight:600">＋ Add Item(s)</button>
+        <button class="btn btn-outline btn-block" onclick="openSoItemSubModal()" style="margin-bottom:16px;border-style:dashed;color:var(--primary);border-color:var(--primary);height:44px;font-weight:600"> Add Item(s)</button>
         
         <div class="table-wrapper"><div id="so-lines-list"></div></div>
         
@@ -4548,16 +4533,16 @@ async function openSalesOrderModal() {
                 <input type="number" id="f-so-disc-pct" value="0" min="0" max="100" step="0.01" oninput="onSoDiscPctChange()">
             </div>
             <div class="form-group" style="width:100px; margin-bottom:0">
-                <label style="font-size:0.7rem">Discount ₹</label>
+                <label style="font-size:0.7rem">Discount </label>
                 <input type="number" id="f-so-disc-amt" value="0" min="0" step="0.01" oninput="onSoDiscAmtChange()">
             </div>
-            <div style="text-align:right; font-size:1.15rem; font-weight:800; color:var(--accent)" id="so-total-display">Total: ₹0.00</div>
+            <div style="text-align:right; font-size:1.15rem; font-weight:800; color:var(--accent)" id="so-total-display">Total: 0.00</div>
         </div>
         
         <div id="so-item-sub-modal" class="sub-modal">
             <div class="sub-modal-header">
                 <h3>Add Item to Order</h3>
-                <button class="btn-icon" onclick="closeSoItemSubModal()">✕</button>
+                <button class="btn-icon" onclick="closeSoItemSubModal()"></button>
             </div>
             <div class="sub-modal-body">
                 <div class="form-row" style="margin-bottom:8px">
@@ -4585,14 +4570,14 @@ async function openSalesOrderModal() {
                         <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">UOM</label><select id="f-so-uom" onchange="onSOUomChange()" style="background:#fff"><option value="">--</option></select></div>
                     </div>
                     <div style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end">
-                        <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">Price ₹</label><input type="number" id="f-so-price" value="" min="0" step="0.01" placeholder="Listed" style="background:#fff"></div>
+                        <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">Price </label><input type="number" id="f-so-price" value="" min="0" step="0.01" placeholder="Listed" style="background:#fff"></div>
                         <button class="btn btn-primary" onclick="addSOLine()" style="height:38px;padding:0 20px">Add</button>
                     </div>
                 </div>
                 <button class="btn btn-outline btn-block" onclick="closeSoItemSubModal()" style="margin-top:10px">Done Adding</button>
             </div>
         </div>
-    `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveSalesOrder()">＋ Save & New</button><button class="btn btn-primary" onclick="saveSalesOrder()">✅ Submit Order</button>`, true);
+    `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveSalesOrder()"> Save & New</button><button class="btn btn-primary" onclick="saveSalesOrder()"> Submit Order</button>`, true);
 
     // Fetch fresh GPS and then init the search dropdown
     const sortedParties = await getFreshLocationAndSort(customers, 'party');
@@ -4806,12 +4791,12 @@ function addSOLine() {
 
     // Add the new line with listedPrice for comparison
     const roundedPrice = +price.toFixed(2);
-    soItems.push({ 
-        itemId, name: itemObj.name, qty, price: roundedPrice, 
-        listedPrice: +unitListedPrice.toFixed(2), 
+    soItems.push({
+        itemId, name: itemObj.name, qty, price: roundedPrice,
+        listedPrice: +unitListedPrice.toFixed(2),
         purchasePrice: +unitPurchasePrice.toFixed(2),
         discountAmt: 0, discountPct: 0,
-        amount: +(qty * roundedPrice).toFixed(2), unit, primaryQty 
+        amount: +(qty * roundedPrice).toFixed(2), unit, primaryQty
     });
 
     // Retroactively update existing lines for the same item if the price tier changed
@@ -4857,24 +4842,24 @@ function updateSOLine(idx, field, value) {
             }
         }
         li.qty = newQty;
-        if (li.discountPct > 0) li.discountAmt = +( (li.qty * li.price) * (li.discountPct / 100) ).toFixed(2);
+        if (li.discountPct > 0) li.discountAmt = +((li.qty * li.price) * (li.discountPct / 100)).toFixed(2);
     }
-    if (field === 'price') { 
-        li.price = Math.max(0, +value || 0); 
-        if (li.discountPct > 0) li.discountAmt = +( (li.qty * li.price) * (li.discountPct / 100) ).toFixed(2);
+    if (field === 'price') {
+        li.price = Math.max(0, +value || 0);
+        if (li.discountPct > 0) li.discountAmt = +((li.qty * li.price) * (li.discountPct / 100)).toFixed(2);
     }
     if (field === 'discountPct') {
         li.discountPct = Math.max(0, +value || 0);
-        li.discountAmt = +( (li.qty * li.price) * (li.discountPct / 100) ).toFixed(2);
+        li.discountAmt = +((li.qty * li.price) * (li.discountPct / 100)).toFixed(2);
     }
     if (field === 'discountAmt') {
         li.discountAmt = Math.max(0, +value || 0);
         const lineVal = li.qty * li.price;
-        li.discountPct = lineVal > 0 ? +( (li.discountAmt / lineVal) * 100 ).toFixed(2) : 0;
+        li.discountPct = lineVal > 0 ? +((li.discountAmt / lineVal) * 100).toFixed(2) : 0;
     }
 
-    li.amount = +( (li.qty * li.price) - (li.discountAmt || 0) ).toFixed(2);
-    
+    li.amount = +((li.qty * li.price) - (li.discountAmt || 0)).toFixed(2);
+
     // Price Alert Logic
     const unitPrice = li.qty > 0 ? li.amount / li.qty : 0;
     li._priceAlert = (unitPrice < (li.purchasePrice || 0) - 0.01);
@@ -4902,21 +4887,21 @@ function onSoDiscAmtChange() {
     }
     window.updateSoTotal();
 }
-window.updateSoTotal = function() {
+window.updateSoTotal = function () {
     const subtotal = soItems.reduce((s, l) => s + l.amount, 0);
     const pct = +(($('f-so-disc-pct') || {}).value || 0);
     let discAmt = +(($('f-so-disc-amt') || {}).value || 0);
-    
+
     // Dynamically recalculate discount amount if percentage is set, so it updates when items are added
     if (pct > 0) {
         discAmt = +(subtotal * pct / 100).toFixed(2);
         const amtEl = $('f-so-disc-amt');
         if (amtEl) amtEl.value = discAmt;
     }
-    
+
     const totalDiscount = discAmt;
     let finalTotal = subtotal - totalDiscount;
-    
+
     const el = $('so-total-display');
     if (el) {
         el.innerHTML = `
@@ -4931,7 +4916,7 @@ window.updateSoTotal = function() {
 
 function renderSOLines() {
     const el = $('so-lines-list'); if (!el) return;
-    
+
     const header = `<div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:2px solid var(--border);font-size:0.7rem;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px;width:100%">
         <span style="width:20px;text-align:center">#</span>
         <span style="flex:1">Item</span>
@@ -4939,7 +4924,7 @@ function renderSOLines() {
         <span style="width:25px;text-align:center">UOM</span>
         <span style="width:65px;text-align:right">Price</span>
         <span style="width:40px;text-align:center">Dis%</span>
-        <span style="width:50px;text-align:center">Dis₹</span>
+        <span style="width:50px;text-align:center">Dis</span>
         <span style="width:75px;text-align:right">Amount</span>
         <span style="width:24px"></span>
     </div>`;
@@ -4947,23 +4932,23 @@ function renderSOLines() {
     el.innerHTML = header + soItems.map((li, i) => {
         const edited = li.listedPrice !== undefined && Math.abs(li.price - li.listedPrice) > 0.01;
         const alertStyle = li._priceAlert ? 'background:rgba(239, 68, 68, 0.05); border-left:3px solid var(--danger); padding-left:5px' : (edited ? 'background:rgba(245,158,11,0.05); border-left:3px solid var(--warning); padding-left:5px' : '');
-        
+
         return `<div style="display:flex;align-items:center;gap:6px;padding:6px 0;border-bottom:1px solid var(--border);${alertStyle};width:100%">
             <span style="width:20px;text-align:center;font-size:0.75rem;color:var(--text-muted)">${i + 1}</span>
             <div style="flex:1;min-width:140px;max-width:300px">
                 <div style="font-size:0.8rem;font-weight:600;white-space:normal;word-break:break-word;line-height:1.2">${li.name}</div>
-                ${li._priceAlert ? `<div style="font-size:0.6rem;color:var(--danger);font-weight:700">⚠️ < ${currency(li.purchasePrice)}</div>` : ''}
+                ${li._priceAlert ? `<div style="font-size:0.6rem;color:var(--danger);font-weight:700"> < ${currency(li.purchasePrice)}</div>` : ''}
             </div>
             <input type="number" value="${li.qty}" min="1" style="width:45px;padding:4px 2px;border-radius:4px;border:1px solid var(--border);text-align:center;font-size:0.75rem" onchange="updateSOLine(${i},'qty',this.value)">
             <span style="font-size:0.7rem;color:var(--text-muted);width:25px;text-align:center">${li.unit || 'Pcs'}</span>
             <div style="width:65px;text-align:right">
                 ${edited ? `<div style="font-size:0.55rem;text-decoration:line-through;color:var(--text-muted)">${currency(li.listedPrice)}</div>` : ''}
-                <input type="number" value="${(+li.price).toFixed(2)}" min="0" step="0.01" style="width:65px;padding:4px 2px;border-radius:4px;border:1px solid ${edited ? 'var(--warning)' : 'var(--border)'};text-align:right;font-size:0.75rem;${edited?'color:var(--warning);font-weight:600':''}" onchange="updateSOLine(${i},'price',this.value)">
+                <input type="number" value="${(+li.price).toFixed(2)}" min="0" step="0.01" style="width:65px;padding:4px 2px;border-radius:4px;border:1px solid ${edited ? 'var(--warning)' : 'var(--border)'};text-align:right;font-size:0.75rem;${edited ? 'color:var(--warning);font-weight:600' : ''}" onchange="updateSOLine(${i},'price',this.value)">
             </div>
-            <input type="number" value="${li.discountPct||0}" min="0" max="100" step="0.01" style="width:40px;padding:4px 2px;border-radius:4px;border:1px solid var(--border);text-align:center;font-size:0.75rem" onchange="updateSOLine(${i},'discountPct',this.value)">
-            <input type="number" value="${li.discountAmt||0}" min="0" step="0.01" style="width:50px;padding:4px 2px;border-radius:4px;border:1px solid var(--border);text-align:center;font-size:0.75rem" onchange="updateSOLine(${i},'discountAmt',this.value)">
-            <span style="width:75px;text-align:right;font-weight:700;font-size:0.8rem;color:${li._priceAlert?'var(--danger)':'inherit'}">${currency(li.amount)}</span>
-            <button class="btn-icon" onclick="removeSOLine(${i})" style="flex-shrink:0;color:var(--danger);width:24px">✕</button>
+            <input type="number" value="${li.discountPct || 0}" min="0" max="100" step="0.01" style="width:40px;padding:4px 2px;border-radius:4px;border:1px solid var(--border);text-align:center;font-size:0.75rem" onchange="updateSOLine(${i},'discountPct',this.value)">
+            <input type="number" value="${li.discountAmt || 0}" min="0" step="0.01" style="width:50px;padding:4px 2px;border-radius:4px;border:1px solid var(--border);text-align:center;font-size:0.75rem" onchange="updateSOLine(${i},'discountAmt',this.value)">
+            <span style="width:75px;text-align:right;font-weight:700;font-size:0.8rem;color:${li._priceAlert ? 'var(--danger)' : 'inherit'}">${currency(li.amount)}</span>
+            <button class="btn-icon" onclick="removeSOLine(${i})" style="flex-shrink:0;color:var(--danger);width:24px"></button>
         </div>`;
     }).join('');
 
@@ -4992,7 +4977,7 @@ async function saveSalesOrder(id) {
     const pe = $('f-so-party'); if (!pe.value) { endSave(); return alert('Select customer'); } if (!soItems.length) { endSave(); return alert('Add items'); }
 
     const parties = await DB.getAll('parties');
-    // dataset values are always strings; Supabase IDs may be integers — use loose match
+    // dataset values are always strings; Supabase IDs may be integers  use loose match
     const storedId = pe.dataset.selectedId || '';
     let matched = storedId
         ? parties.find(x => String(x.id) === storedId)
@@ -5034,7 +5019,7 @@ async function saveSalesOrder(id) {
     };
 
     // Blocked customer check
-    if (matched.blocked) return alert(`❌ "${matched.name}" is blocked. Cannot create a Sales Order for a blocked customer. Contact admin to unblock.`);
+    if (matched.blocked) return alert(` "${matched.name}" is blocked. Cannot create a Sales Order for a blocked customer. Contact admin to unblock.`);
 
     // Credit Limit Check
     const party = parties.find(p => p.id === partyId);
@@ -5072,7 +5057,7 @@ async function saveSalesOrder(id) {
             // IMPORTANT: Wait for full sync so catalog shows correct reserved/avail qty
             try {
                 await Promise.all([DB.getAll('sales_orders'), DB.getAll('inventory')]);
-            } catch(e) { console.warn('Catalog post-save sync error:', e); }
+            } catch (e) { console.warn('Catalog post-save sync error:', e); }
             await renderCatalog();
         } else {
             await renderSalesOrders();
@@ -5093,18 +5078,18 @@ async function viewSalesOrder(id) {
     const parties = DB.cache['parties'] || [];
     const soParty = parties.find(x => String(x.id) === String(o.partyId));
     const soMapBtn = soParty && soParty.lat && soParty.lng
-        ? `<button class="btn btn-outline btn-sm" onclick="openPartyMap('${soParty.lat}','${soParty.lng}','${escapeHtml(soParty.name)}')" style="margin-left:8px;font-size:0.75rem;padding:2px 8px">🗺️ Navigate</button>`
+        ? `<button class="btn btn-outline btn-sm" onclick="openPartyMap('${soParty.lat}','${soParty.lng}','${escapeHtml(soParty.name)}')" style="margin-left:8px;font-size:0.75rem;padding:2px 8px"> Navigate</button>`
         : '';
 
     openModal(`Order ${o.orderNo}`, `
-        <div style="margin-bottom:14px"><strong>Date:</strong> ${fmtDate(o.date)} | <strong>Customer:</strong> ${o.partyName}${soMapBtn} | <strong>Status:</strong> <span class="badge ${disp.class}" style="text-transform: capitalize">${disp.text}</span>${o.priority === 'Urgent' ? ' <span class="badge badge-danger">🔥 URGENT</span>' : ''}</div>
+        <div style="margin-bottom:14px"><strong>Date:</strong> ${fmtDate(o.date)} | <strong>Customer:</strong> ${o.partyName}${soMapBtn} | <strong>Status:</strong> <span class="badge ${disp.class}" style="text-transform: capitalize">${disp.text}</span>${o.priority === 'Urgent' ? ' <span class="badge badge-danger"> URGENT</span>' : ''}</div>
         <div style="margin-bottom:10px;font-size:0.85rem;color:var(--text-secondary)"><strong>By:</strong> ${o.createdBy}${o.expectedDeliveryDate ? ` | <strong>Expected Delivery:</strong> ${fmtDate(o.expectedDeliveryDate)}` : ''} ${o.approvedBy ? ` | <strong>${o.status === 'approved' ? 'Approved' : 'Rejected'} by:</strong> ${o.approvedBy}` : ''} ${o.rejectReason ? `<br><strong>Reason:</strong> ${o.rejectReason}` : ''}</div>
         
         ${o.invoiceNo ? `<div style="margin-bottom:10px;font-size:0.85rem;background:var(--bg-card);padding:8px;border:1px solid var(--border);border-radius:4px;color:var(--text-primary)">
             <strong>Linked Invoice:</strong> ${o.invoiceNo} ${o.packedBy ? `| <strong>Packed By:</strong> ${o.packedBy}` : ''}
         </div>` : ''}
 
-        <table class="data-table"><thead><tr><th>SL</th><th>Item</th><th>Qty</th><th>Listed</th><th>Rate</th><th>Dis%</th><th>Dis₹</th><th>Amount</th></tr></thead>
+        <table class="data-table"><thead><tr><th>SL</th><th>Item</th><th>Qty</th><th>Listed</th><th>Rate</th><th>Dis%</th><th>Dis</th><th>Amount</th></tr></thead>
         <tbody>${o.items.map((l, idx) => {
         const edited = l.listedPrice !== undefined && l.price !== l.listedPrice;
         return `<tr${edited ? ' style="background:rgba(245,158,11,0.06)"' : ''}><td>${idx + 1}</td><td>${l.name}</td><td>${l.qty} <span style="font-size:0.75rem;color:var(--text-muted)">${l.unit || 'Pcs'}</span>${l.packedQty !== undefined && l.packedQty !== l.qty ? ` <span style="color:var(--danger);font-size:0.8rem">(Packed: ${l.packedQty})</span>` : ''}</td>
@@ -5117,9 +5102,9 @@ async function viewSalesOrder(id) {
         <tr style="font-weight:700"><td colspan="7" style="text-align:right;color:var(--accent)">Total</td><td style="color:var(--accent)">${currency(o.total)}</td></tr></tbody></table>
         ${o.notes ? `<div style="margin-top:12px;padding:10px;background:var(--bg-input);border-radius:var(--radius-sm);font-size:0.85rem"><strong>Notes:</strong> ${o.notes}</div>` : ''}
         ${o.status === 'pending' && isA ? `<div class="modal-actions">
-            <button class="btn btn-danger" onclick="rejectSalesOrder('${o.id}')">❌ Reject</button>
-            <button class="btn btn-outline" onclick="editSalesOrder('${o.id}')">✏️ Edit</button>
-            <button class="btn btn-primary" onclick="approveSalesOrder('${o.id}')">✅ Approve</button></div>` : ''}`);
+            <button class="btn btn-danger" onclick="rejectSalesOrder('${o.id}')"> Reject</button>
+            <button class="btn btn-outline" onclick="editSalesOrder('${o.id}')"> Edit</button>
+            <button class="btn btn-primary" onclick="approveSalesOrder('${o.id}')"> Approve</button></div>` : ''}`);
 }
 async function editSalesOrder(id) {
     const orders = await DB.getAll('salesorders');
@@ -5131,16 +5116,16 @@ async function editSalesOrder(id) {
         const latestListed = item ? item.salePrice : li.listedPrice || li.price;
         const discountAmt = li.discountAmt || 0;
         const discountPct = li.discountPct || 0;
-        return { 
-            itemId: li.itemId, 
-            name: li.name, 
-            qty: li.qty, 
-            price: li.price, 
-            listedPrice: latestListed, 
-            discountAmt, 
-            discountPct, 
-            amount: +( (li.qty * li.price) - discountAmt ).toFixed(2), 
-            unit: li.unit || (item ? item.unit : 'Pcs'), 
+        return {
+            itemId: li.itemId,
+            name: li.name,
+            qty: li.qty,
+            price: li.price,
+            listedPrice: latestListed,
+            discountAmt,
+            discountPct,
+            amount: +((li.qty * li.price) - discountAmt).toFixed(2),
+            unit: li.unit || (item ? item.unit : 'Pcs'),
             purchasePrice: li.purchasePrice || (item ? item.purchasePrice : 0)
         };
     });
@@ -5151,7 +5136,7 @@ async function editSalesOrder(id) {
     openModal(`Edit Order ${orig.orderNo}`, `
         <input type="hidden" id="f-so-edit-id" value="${orig.id}">
         <div class="form-row"><div class="form-group"><label>Order #</label><input id="f-so-no" value="${orig.orderNo}" readonly style="opacity:0.6"></div><div class="form-group"><label>Date</label><input type="date" id="f-so-date" value="${orig.date}"></div></div>
-        <div class="form-row"><div class="form-group"><label>Expected Delivery</label><input type="date" id="f-so-delivery" value="${orig.expectedDeliveryDate || ''}"></div><div class="form-group"><label>Priority</label><select id="f-so-priority"><option value="Normal" ${(orig.priority || 'Normal') === 'Normal' ? 'selected' : ''}>Normal</option><option value="Urgent" ${orig.priority === 'Urgent' ? 'selected' : ''}>🔥 Urgent</option></select></div></div>
+        <div class="form-row"><div class="form-group"><label>Expected Delivery</label><input type="date" id="f-so-delivery" value="${orig.expectedDeliveryDate || ''}"></div><div class="form-group"><label>Priority</label><select id="f-so-priority"><option value="Normal" ${(orig.priority || 'Normal') === 'Normal' ? 'selected' : ''}>Normal</option><option value="Urgent" ${orig.priority === 'Urgent' ? 'selected' : ''}> Urgent</option></select></div></div>
         <div class="form-group"><label>Customer *</label>
             <input id="f-so-party" value="${orig.partyName}" data-selected-id="${orig.partyId}" placeholder="Type customer name or mobile...">
         </div>
@@ -5161,10 +5146,10 @@ async function editSalesOrder(id) {
         </div>
         <div class="form-group"><label>Qty</label><input type="number" id="f-so-qty" value="1" min="1"></div>
         <div class="form-group"><label>UOM</label><select id="f-so-uom" onchange="onSOUomChange()"><option value="">--</option></select></div>
-        <div class="form-group"><label>Price ₹</label><input type="number" id="f-so-price" value="" min="0" step="0.01" placeholder="Listed"></div>
+        <div class="form-group"><label>Price </label><input type="number" id="f-so-price" value="" min="0" step="0.01" placeholder="Listed"></div>
         <div class="form-group"><label>&nbsp;</label><button class="btn btn-primary btn-block" onclick="addSOLine()">Add</button></div></div>
         <div id="so-lines-list"></div>
-        <div style="text-align:right;font-size:1.1rem;font-weight:700;color:var(--accent)" id="so-total-display">Total: ₹0.00</div>
+        <div style="text-align:right;font-size:1.1rem;font-weight:700;color:var(--accent)" id="so-total-display">Total: 0.00</div>
         <div class="form-group" style="margin-top:12px"><label>Notes</label><input id="f-so-notes" value="${orig.notes ? escapeHtml(orig.notes) : ''}"></div>
         <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="saveSalesOrder()">Save Changes</button></div>`);
     initSearchDropdown('f-so-party', buildPartySearchList(customers));
@@ -5217,15 +5202,15 @@ async function duplicateSalesOrder(id) {
         const latestPrice = item ? item.salePrice : li.price;
         const discountAmt = li.discountAmt || 0;
         const discountPct = li.discountPct || 0;
-        return { 
-            itemId: li.itemId, 
-            name: li.name, 
-            qty: li.qty, 
-            price: latestPrice, 
-            listedPrice: latestPrice, 
-            discountAmt, 
-            discountPct, 
-            amount: +( (li.qty * latestPrice) - discountAmt ).toFixed(2), 
+        return {
+            itemId: li.itemId,
+            name: li.name,
+            qty: li.qty,
+            price: latestPrice,
+            listedPrice: latestPrice,
+            discountAmt,
+            discountPct,
+            amount: +((li.qty * latestPrice) - discountAmt).toFixed(2),
             unit: li.unit || (item ? item.unit : 'Pcs'),
             purchasePrice: li.purchasePrice || (item ? item.purchasePrice : 0)
         };
@@ -5236,7 +5221,7 @@ async function duplicateSalesOrder(id) {
 
     openModal('Duplicate Sales Order', `
         <div class="form-row"><div class="form-group"><label>Order #</label><input id="f-so-no" value="${orderNo}"></div><div class="form-group"><label>Date</label><input type="date" id="f-so-date" value="${today()}"></div></div>
-        <div class="form-row"><div class="form-group"><label>Expected Delivery</label><input type="date" id="f-so-delivery" value="${orig.expectedDeliveryDate || ''}"></div><div class="form-group"><label>Priority</label><select id="f-so-priority"><option value="Normal" ${(orig.priority || 'Normal') === 'Normal' ? 'selected' : ''}>Normal</option><option value="Urgent" ${orig.priority === 'Urgent' ? 'selected' : ''}>🔥 Urgent</option></select></div></div>
+        <div class="form-row"><div class="form-group"><label>Expected Delivery</label><input type="date" id="f-so-delivery" value="${orig.expectedDeliveryDate || ''}"></div><div class="form-group"><label>Priority</label><select id="f-so-priority"><option value="Normal" ${(orig.priority || 'Normal') === 'Normal' ? 'selected' : ''}>Normal</option><option value="Urgent" ${orig.priority === 'Urgent' ? 'selected' : ''}> Urgent</option></select></div></div>
         <div class="form-group"><label>Customer *</label>
             <input id="f-so-party" value="${orig.partyName}" data-selected-id="${orig.partyId}" placeholder="Type customer name or mobile...">
         </div>
@@ -5266,15 +5251,15 @@ async function duplicateSalesOrder(id) {
             </div>
             <div class="form-group"><label>Qty</label><input type="number" id="f-so-qty" value="1" min="1"></div>
             <div class="form-group"><label>UOM</label><select id="f-so-uom"><option value="">--</option></select></div>
-            <div class="form-group"><label>Price ₹</label><input type="number" id="f-so-price" value="" min="0" step="0.01" placeholder="Listed"></div>
+            <div class="form-group"><label>Price </label><input type="number" id="f-so-price" value="" min="0" step="0.01" placeholder="Listed"></div>
             <div class="form-group"><label>&nbsp;</label><button class="btn btn-primary btn-block" onclick="addSOLine()">Add</button></div>
         </div>
         
         <div id="so-lines-list"></div>
-        <div style="text-align:right;font-size:1.1rem;font-weight:700;color:var(--accent)" id="so-total-display">Total: ₹0.00</div>
+        <div style="text-align:right;font-size:1.1rem;font-weight:700;color:var(--accent)" id="so-total-display">Total: 0.00</div>
         
         <div class="form-group" style="margin-top:12px"><label>Notes</label><input id="f-so-notes" value="${orig.notes ? escapeHtml(orig.notes) : ''}"></div>
-    `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveSalesOrder()">＋ Save & New</button><button class="btn btn-primary" onclick="saveSalesOrder()">✅ Submit Order</button>`);
+    `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveSalesOrder()"> Save & New</button><button class="btn btn-primary" onclick="saveSalesOrder()"> Submit Order</button>`);
     initSearchDropdown('f-so-party', buildPartySearchList(customers));
     renderSOLines();
 }
@@ -5288,24 +5273,24 @@ async function renderPurchaseOrders() {
     const p = orders.filter(o => o.status === 'pending'), r = orders.filter(o => o.status === 'received'), c = orders.filter(o => o.status === 'cancelled');
     pageContent.innerHTML = `
         <div class="stats-grid-sm" style="margin-bottom:14px">
-            <div class="stat-card amber"><div class="stat-icon">⏳</div><div class="stat-value">${p.length}</div><div class="stat-label">Pending PO</div></div>
-            <div class="stat-card green"><div class="stat-icon">📥</div><div class="stat-value">${r.length}</div><div class="stat-label">Received</div></div>
-            <div class="stat-card red"><div class="stat-icon">❌</div><div class="stat-value">${c.length}</div><div class="stat-label">Cancelled</div></div>
+            <div class="stat-card amber"><div class="stat-icon"></div><div class="stat-value">${p.length}</div><div class="stat-label">Pending PO</div></div>
+            <div class="stat-card green"><div class="stat-icon"></div><div class="stat-value">${r.length}</div><div class="stat-label">Received</div></div>
+            <div class="stat-card red"><div class="stat-icon"></div><div class="stat-value">${c.length}</div><div class="stat-label">Cancelled</div></div>
         </div>
         <div style="display:flex;gap:8px;margin-bottom:14px">
-            <button class="catalog-pill active" onclick="renderPurchaseOrders()" style="font-size:0.85rem">🛒 Purchase Orders</button>
-            <button class="catalog-pill" onclick="renderPurchaseInvoices()" style="font-size:0.85rem">🧾 Purchase Invoices</button>
+            <button class="catalog-pill active" onclick="renderPurchaseOrders()" style="font-size:0.85rem"> Purchase Orders</button>
+            <button class="catalog-pill" onclick="renderPurchaseInvoices()" style="font-size:0.85rem"> Purchase Invoices</button>
         </div>
         <div class="section-toolbar">
             <div class="filter-group">
-                <button class="btn btn-outline" onclick="openColumnPersonalizer('purchaseorders','renderPurchaseOrders')" style="border-color:var(--accent);color:var(--accent)">⚙️ Columns</button>
+                <button class="btn btn-outline" onclick="openColumnPersonalizer('purchaseorders','renderPurchaseOrders')" style="border-color:var(--accent);color:var(--accent)"> Columns</button>
                 <select id="po-status-filter" onchange="filterPOTable()"><option value="">All Status</option><option value="pending">Pending</option><option value="received">Received</option><option value="cancelled">Cancelled</option></select>
                 <input class="search-box" id="po-search" placeholder="Search PO or Supplier..." oninput="filterPOTable()" style="width:200px">
             </div>
             <button class="btn btn-primary" onclick="openPurchaseOrderModal()">+ New Purchase Order</button>
         </div>
         <div class="card"><div class="card-body" style="overflow-x:auto">
-            <table class="data-table" style="min-width:700px"><thead><tr>${ColumnManager.get('purchaseorders').filter(c=>c.visible).map(c=>`<th>${c.label}</th>`).join('')}</tr></thead>
+            <table class="data-table" style="min-width:700px"><thead><tr>${ColumnManager.get('purchaseorders').filter(c => c.visible).map(c => `<th>${c.label}</th>`).join('')}</tr></thead>
             <tbody id="po-tbody">${await renderPORows(orders)}</tbody></table>
         </div></div>`;
 }
@@ -5315,16 +5300,16 @@ async function renderPORows(orders) {
     const cols = ColumnManager.get('purchaseorders').filter(c => c.visible);
     return orders.slice().reverse().map(o => {
         const cellMap = {
-            date:    `<td>${fmtDate(o.date)}</td>`,
-            poNo:    `<td style="font-weight:600">${o.poNo}</td>`,
-            party:   `<td>${escapeHtml(o.partyName)}</td>`,
-            items:   `<td>${o.items.length}</td>`,
-            total:   `<td class="amount-green">${currency(o.total)}</td>`,
-            status:  `<td><span class="badge ${o.status === 'received' ? 'badge-success' : o.status === 'cancelled' ? 'badge-danger' : 'badge-warning'}">${o.status}</span></td>`,
+            date: `<td>${fmtDate(o.date)}</td>`,
+            poNo: `<td style="font-weight:600">${o.poNo}</td>`,
+            party: `<td>${escapeHtml(o.partyName)}</td>`,
+            items: `<td>${o.items.length}</td>`,
+            total: `<td class="amount-green">${currency(o.total)}</td>`,
+            status: `<td><span class="badge ${o.status === 'received' ? 'badge-success' : o.status === 'cancelled' ? 'badge-danger' : 'badge-warning'}">${o.status}</span></td>`,
             actions: `<td><div class="action-btns">
-                <button class="btn-icon" onclick="viewPurchaseOrder('${o.id}')">👁️</button>
-                ${o.status === 'pending' ? `<button class="btn-icon" style="color:var(--success)" onclick="receivePO('${o.id}')" title="Receive Goods">📥</button>` : ''}
-                ${o.status === 'pending' ? `<button class="btn-icon" onclick="deletePO('${o.id}')">🗑️</button>` : ''}
+                <button class="btn-icon" onclick="viewPurchaseOrder('${o.id}')"></button>
+                ${o.status === 'pending' ? `<button class="btn-icon" style="color:var(--success)" onclick="receivePO('${o.id}')" title="Receive Goods"></button>` : ''}
+                ${o.status === 'pending' ? `<button class="btn-icon" onclick="deletePO('${o.id}')"></button>` : ''}
             </div></td>`,
         };
         return `<tr>${cols.map(c => cellMap[c.key] || '').join('')}</tr>`;
@@ -5350,18 +5335,18 @@ async function renderPurchaseInvoices() {
 
     pageContent.innerHTML = `
         <div class="stats-grid-sm" style="margin-bottom:14px">
-            <div class="stat-card blue"><div class="stat-icon">🧾</div><div class="stat-value">${pinvs.length}</div><div class="stat-label">Total Invoices</div></div>
-            <div class="stat-card red"><div class="stat-icon">💸</div><div class="stat-value">${currency(totalAmt)}</div><div class="stat-label">Total Purchase</div></div>
-            <div class="stat-card green"><div class="stat-icon">✅</div><div class="stat-value">${activeCount}</div><div class="stat-label">Active</div></div>
+            <div class="stat-card blue"><div class="stat-icon"></div><div class="stat-value">${pinvs.length}</div><div class="stat-label">Total Invoices</div></div>
+            <div class="stat-card red"><div class="stat-icon"></div><div class="stat-value">${currency(totalAmt)}</div><div class="stat-label">Total Purchase</div></div>
+            <div class="stat-card green"><div class="stat-icon"></div><div class="stat-value">${activeCount}</div><div class="stat-label">Active</div></div>
         </div>
         <div style="display:flex;gap:8px;margin-bottom:14px">
-            <button class="catalog-pill" onclick="renderPurchaseOrders()" style="font-size:0.85rem">🛒 Purchase Orders</button>
-            <button class="catalog-pill active" onclick="renderPurchaseInvoices()" style="font-size:0.85rem">🧾 Purchase Invoices</button>
+            <button class="catalog-pill" onclick="renderPurchaseOrders()" style="font-size:0.85rem"> Purchase Orders</button>
+            <button class="catalog-pill active" onclick="renderPurchaseInvoices()" style="font-size:0.85rem"> Purchase Invoices</button>
         </div>
         <div class="section-toolbar">
             <div class="filter-group">
                 <input class="search-box" id="pinv-search" placeholder="Search invoice or supplier..." oninput="filterPInvTable()" style="width:220px">
-                <select id="pinv-supplier" onchange="filterPInvTable()"><option value="">All Suppliers</option>${suppliers.map(s=>`<option value="${s.name}">${s.name}</option>`).join('')}</select>
+                <select id="pinv-supplier" onchange="filterPInvTable()"><option value="">All Suppliers</option>${suppliers.map(s => `<option value="${s.name}">${s.name}</option>`).join('')}</select>
                 <input type="date" id="pinv-from" onchange="filterPInvTable()" placeholder="From">
                 <input type="date" id="pinv-to" onchange="filterPInvTable()" placeholder="To">
             </div>
@@ -5382,28 +5367,28 @@ function renderPInvRows(invs) {
     return invs.map(i => `<tr>
         <td>${fmtDate(i.date)}</td>
         <td style="font-weight:600">${i.invoiceNo}</td>
-        <td>${escapeHtml(i.partyName||'')}</td>
-        <td style="font-size:0.82rem;color:var(--text-muted)">${i.fromOrder||'-'}</td>
-        <td>${(i.items||[]).length}</td>
+        <td>${escapeHtml(i.partyName || '')}</td>
+        <td style="font-size:0.82rem;color:var(--text-muted)">${i.fromOrder || '-'}</td>
+        <td>${(i.items || []).length}</td>
         <td class="amount-red" style="text-align:right">${currency(i.total)}</td>
-        <td><span class="badge ${i.status==='cancelled'?'badge-danger':'badge-success'}">${i.status||'active'}</span></td>
+        <td><span class="badge ${i.status === 'cancelled' ? 'badge-danger' : 'badge-success'}">${i.status || 'active'}</span></td>
         <td><div class="action-btns">
-            <button class="btn-icon" onclick="viewPurchaseInvoice('${i.id}')">👁️</button>
-            ${i.status !== 'cancelled' && canEdit() ? `<button class="btn-icon" style="color:var(--danger)" onclick="cancelPurchaseInvoice('${i.id}')">✕</button>` : ''}
+            <button class="btn-icon" onclick="viewPurchaseInvoice('${i.id}')"></button>
+            ${i.status !== 'cancelled' && canEdit() ? `<button class="btn-icon" style="color:var(--danger)" onclick="cancelPurchaseInvoice('${i.id}')"></button>` : ''}
         </div></td>
     </tr>`).join('');
 }
 
 function filterPInvTable() {
-    const s = ($('pinv-search')||{}).value.toLowerCase();
-    const sup = ($('pinv-supplier')||{}).value;
-    const from = ($('pinv-from')||{}).value;
-    const to = ($('pinv-to')||{}).value;
-    let invs = (window._pinvsAll||[]).slice();
-    if (s) invs = invs.filter(i => (i.invoiceNo||'').toLowerCase().includes(s) || (i.partyName||'').toLowerCase().includes(s));
+    const s = ($('pinv-search') || {}).value.toLowerCase();
+    const sup = ($('pinv-supplier') || {}).value;
+    const from = ($('pinv-from') || {}).value;
+    const to = ($('pinv-to') || {}).value;
+    let invs = (window._pinvsAll || []).slice();
+    if (s) invs = invs.filter(i => (i.invoiceNo || '').toLowerCase().includes(s) || (i.partyName || '').toLowerCase().includes(s));
     if (sup) invs = invs.filter(i => i.partyName === sup);
     if (from) invs = invs.filter(i => i.date >= from);
-    if (to)   invs = invs.filter(i => i.date <= to);
+    if (to) invs = invs.filter(i => i.date <= to);
     $('pinv-tbody').innerHTML = renderPInvRows(invs);
 }
 
@@ -5414,13 +5399,13 @@ async function viewPurchaseInvoice(id) {
         <div style="margin-bottom:14px;display:flex;gap:16px;flex-wrap:wrap;font-size:0.9rem">
             <div><strong>Date:</strong> ${fmtDate(inv.date)}</div>
             <div><strong>Supplier:</strong> ${inv.partyName}</div>
-            <div><strong>From PO:</strong> ${inv.fromOrder||'-'}</div>
-            <div><strong>Status:</strong> <span class="badge ${inv.status==='cancelled'?'badge-danger':'badge-success'}">${inv.status||'active'}</span></div>
+            <div><strong>From PO:</strong> ${inv.fromOrder || '-'}</div>
+            <div><strong>Status:</strong> <span class="badge ${inv.status === 'cancelled' ? 'badge-danger' : 'badge-success'}">${inv.status || 'active'}</span></div>
         </div>
         <div class="card-body" style="overflow-x:auto">
         <table class="data-table" style="min-width:500px">
             <thead><tr><th>Item</th><th>Qty</th><th>Rate</th><th style="text-align:right">Amount</th></tr></thead>
-            <tbody>${(inv.items||[]).map(l=>`<tr><td>${escapeHtml(l.name||'')}</td><td>${l.qty}</td><td>${currency(l.price||0)}</td><td style="text-align:right">${currency(l.amount||0)}</td></tr>`).join('')}
+            <tbody>${(inv.items || []).map(l => `<tr><td>${escapeHtml(l.name || '')}</td><td>${l.qty}</td><td>${currency(l.price || 0)}</td><td style="text-align:right">${currency(l.amount || 0)}</td></tr>`).join('')}
             <tr style="font-weight:700"><td colspan="3" style="text-align:right">Total</td><td style="text-align:right">${currency(inv.total)}</td></tr></tbody>
         </table></div>
         <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Close</button></div>
@@ -5454,13 +5439,13 @@ async function openDirectPurchaseInvoiceModal() {
         <h4 style="font-size:0.9rem;margin-bottom:10px">Add Items</h4>
         <div class="form-row" style="gap:8px">
             <div class="form-group" style="flex:2"><label>Item</label><input id="f-di-item-input" placeholder="Type item name..."></div>
-            <div class="form-group"><label>MRP ₹</label><input type="number" id="f-di-mrp" step="0.01" placeholder="MRP"></div>
+            <div class="form-group"><label>MRP </label><input type="number" id="f-di-mrp" step="0.01" placeholder="MRP"></div>
             <div class="form-group"><label>Qty</label><input type="number" id="f-di-qty" value="1" min="1"></div>
-            <div class="form-group"><label>Rate ₹</label><input type="number" id="f-di-price" step="0.01"></div>
+            <div class="form-group"><label>Rate </label><input type="number" id="f-di-price" step="0.01"></div>
             <div class="form-group" style="flex:0"><label>&nbsp;</label><button class="btn btn-primary" onclick="addDIPOLine()">Add</button></div>
         </div>
         <div id="di-lines-list" style="margin-top:10px"></div>
-        <div style="text-align:right;font-size:1.1rem;font-weight:700;color:var(--accent);margin-top:15px" id="di-total-display">Total: ₹0.00</div>
+        <div style="text-align:right;font-size:1.1rem;font-weight:700;color:var(--accent);margin-top:15px" id="di-total-display">Total: 0.00</div>
         <div class="form-group" style="margin-top:12px"><label>Notes</label><textarea id="f-di-notes" rows="2" placeholder="Optional notes..." style="width:100%;resize:vertical;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px;color:var(--text-primary)"></textarea></div>
         <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="saveDirectPurchaseInvoice()">Save Invoice</button></div>
     `);
@@ -5481,7 +5466,7 @@ function addDIPOLine() {
     if (!itemId) return alert('Please select an item from the list');
     const qty = +$('f-di-qty').value;
     const price = +$('f-di-price').value;
-    const mrp = +($('f-di-mrp')||{}).value || 0;
+    const mrp = +($('f-di-mrp') || {}).value || 0;
     poItems.push({ itemId, name: inp.value, qty, price, mrp, amount: qty * price, unit: 'Pcs' });
     renderDILines();
     inp.value = ''; inp.dataset.selectedId = ''; $('f-di-qty').value = 1; $('f-di-price').value = ''; if ($('f-di-mrp')) $('f-di-mrp').value = ''; inp.focus();
@@ -5495,13 +5480,13 @@ function renderDILines() {
             <span style="width:60px;text-align:center">${li.qty}</span>
             <span style="width:90px;text-align:right">@ ${currency(li.price)}</span>
             <span style="width:90px;text-align:right;font-weight:600;color:var(--accent)">${currency(li.amount)}</span>
-            <button class="btn-icon" onclick="poItems.splice(${i},1);renderDILines()" style="color:var(--danger)">✕</button>
+            <button class="btn-icon" onclick="poItems.splice(${i},1);renderDILines()" style="color:var(--danger)"></button>
         </div>`).join('');
     if ($('di-total-display')) $('di-total-display').textContent = `Total: ${currency(poItems.reduce((s, l) => s + l.amount, 0))}`;
 }
 
 async function saveDirectPurchaseInvoice() {
-    const partyId = ($('f-di-party-id')||{}).value||'';
+    const partyId = ($('f-di-party-id') || {}).value || '';
     if (!partyId) return alert('Please select a supplier');
     if (!poItems.length) return alert('Add at least one item');
     try {
@@ -5510,7 +5495,7 @@ async function saveDirectPurchaseInvoice() {
         if (!party) return alert('Supplier not found. Please re-select.');
         const invNo = $('f-di-no').value;
         const invDate = $('f-di-date').value;
-        const notes = ($('f-di-notes')||{}).value||'';
+        const notes = ($('f-di-notes') || {}).value || '';
         const total = poItems.reduce((s, l) => s + l.amount, 0);
         const inv = {
             invoiceNo: invNo, date: invDate, type: 'purchase',
@@ -5536,7 +5521,7 @@ async function saveDirectPurchaseInvoice() {
                     itemUpdate.purchasePrice = li.price || item.purchasePrice;
                 }
                 await DB.update('inventory', item.id, itemUpdate);
-                await addLedgerEntry(item.id, item.name, 'Purchase', li.qty, invNo, `Direct purchase invoice${li.mrp ? ` | MRP ₹${li.mrp}` : ''}`);
+                await addLedgerEntry(item.id, item.name, 'Purchase', li.qty, invNo, `Direct purchase invoice${li.mrp ? ` | MRP ${li.mrp}` : ''}`);
             }
         }
         // Update supplier ledger
@@ -5568,14 +5553,14 @@ async function openPurchaseOrderModal() {
                 <input id="f-po-item-input" placeholder="Type item name or code...">
                 <div id="po-item-hint" style="display:none;font-size:0.75rem;color:var(--accent);margin-top:3px"></div>
             </div>
-            <div class="form-group"><label>MRP ₹</label><input type="number" id="f-po-mrp" step="0.01" placeholder="MRP"></div>
+            <div class="form-group"><label>MRP </label><input type="number" id="f-po-mrp" step="0.01" placeholder="MRP"></div>
             <div class="form-group"><label>Qty</label><input type="number" id="f-po-qty" value="1" min="1"></div>
-            <div class="form-group"><label>Rate ₹</label><input type="number" id="f-po-price" step="0.01"></div>
+            <div class="form-group"><label>Rate </label><input type="number" id="f-po-price" step="0.01"></div>
             <div class="form-group" style="flex:0"><label>&nbsp;</label><button class="btn btn-primary" onclick="addPOLine()">Add</button></div>
         </div>
         <div id="po-lines-list" style="margin-top:10px"></div>
-        <div style="text-align:right;font-size:1.1rem;font-weight:700;color:var(--accent);margin-top:15px" id="po-total-display">Total: ₹0.00</div>
-    `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;savePurchaseOrder()">＋ Save & New</button><button class="btn btn-primary" onclick="savePurchaseOrder()">Save Purchase Order</button>`);
+        <div style="text-align:right;font-size:1.1rem;font-weight:700;color:var(--accent);margin-top:15px" id="po-total-display">Total: 0.00</div>
+    `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;savePurchaseOrder()"> Save & New</button><button class="btn btn-primary" onclick="savePurchaseOrder()">Save Purchase Order</button>`);
 
     initSearchDropdown('f-po-party', buildPartySearchList(suppliers), (party) => {
         if ($('f-po-party-id')) $('f-po-party-id').value = party.id || '';
@@ -5587,7 +5572,7 @@ async function openPurchaseOrderModal() {
         // Show hint: current stock + last batch info
         const hintEl = $('po-item-hint');
         if (hintEl) {
-            const batchInfo = lb ? ` | Last MRP ₹${lb.mrp}, PP ₹${lb.purchasePrice}` : '';
+            const batchInfo = lb ? ` | Last MRP ${lb.mrp}, PP ${lb.purchasePrice}` : '';
             hintEl.textContent = `Current stock: ${item.stock || 0} ${item.unit || ''}${batchInfo}`;
             hintEl.style.display = '';
         }
@@ -5615,7 +5600,7 @@ function renderPOLines() {
             <span style="width:70px;text-align:center">${li.qty} ${li.unit || ''}</span>
             <span style="width:100px;text-align:right">@ ${currency(li.price)}</span>
             <span style="width:100px;text-align:right;font-weight:600;color:var(--accent)">${currency(li.amount)}</span>
-            <button class="btn-icon" onclick="poItems.splice(${i},1);renderPOLines()" style="color:var(--danger)">✕</button>
+            <button class="btn-icon" onclick="poItems.splice(${i},1);renderPOLines()" style="color:var(--danger)"></button>
         </div>`).join('');
     $('po-total-display').textContent = `Total: ${currency(poItems.reduce((s, l) => s + l.amount, 0))}`;
 }
@@ -5656,7 +5641,7 @@ async function viewPurchaseOrder(id) {
         <tbody>${o.items.map(l => `<tr><td>${l.name}</td><td>${l.qty}</td><td>${currency(l.price)}</td><td>${currency(l.amount)}</td></tr>`).join('')}
         <tr style="font-weight:700"><td colspan="3" style="text-align:right">Total</td><td>${currency(o.total)}</td></tr></tbody></table>
         <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Close</button>
-        ${o.status === 'pending' ? `<button class="btn btn-primary" onclick="receivePO('${o.id}')">📥 Receive Goods</button>` : ''}</div>
+        ${o.status === 'pending' ? `<button class="btn btn-primary" onclick="receivePO('${o.id}')"> Receive Goods</button>` : ''}</div>
     `);
 }
 
@@ -5723,7 +5708,7 @@ async function deletePO(id) {
 }
 
 // =============================================
-//  INVOICES (Sale & Purchase — purchase adds stock)
+//  INVOICES (Sale & Purchase  purchase adds stock)
 // =============================================
 let invoiceItems = [];
 async function renderInvoices() {
@@ -5736,15 +5721,15 @@ async function renderInvoices() {
     const sales = validInvoices.filter(i => i.type === 'sale'), purchases = validInvoices.filter(i => i.type === 'purchase');
     pageContent.innerHTML = `
         <div class="stats-grid" style="margin-bottom:18px">
-            <div class="stat-card green"><div class="stat-icon">💹</div><div class="stat-value">${currency(sales.reduce((s, i) => s + i.total, 0))}</div><div class="stat-label">Total Sales</div></div>
-            <div class="stat-card blue"><div class="stat-icon">🛒</div><div class="stat-value">${currency(purchases.reduce((s, i) => s + i.total, 0))}</div><div class="stat-label">Total Purchases</div></div>
+            <div class="stat-card green"><div class="stat-icon"></div><div class="stat-value">${currency(sales.reduce((s, i) => s + i.total, 0))}</div><div class="stat-label">Total Sales</div></div>
+            <div class="stat-card blue"><div class="stat-icon"></div><div class="stat-value">${currency(purchases.reduce((s, i) => s + i.total, 0))}</div><div class="stat-label">Total Purchases</div></div>
         </div>
         <div class="section-toolbar">
             <div class="filter-group"><select id="inv-type-filter" onchange="filterInvTable2()"><option value="">All</option><option value="sale">Sale</option><option value="purchase">Purchase</option></select>
             <input class="search-box" id="inv-search2" placeholder="Search..." oninput="filterInvTable2()" style="width:200px">
-            <button class="btn btn-outline" onclick="DB.exportToExcel('tbl-invoices', 'invoices')" style="border-color:#16a34a;color:#16a34a">📊 Export</button>
-            <button class="detailed-view-btn ${window._detailedInvoices ? 'active' : ''}" onclick="toggleDetailedInvoices()">🔍 Detailed View</button>
-            <button class="btn btn-outline" onclick="openColumnPersonalizer('invoices','renderInvoices')" style="border-color:var(--accent);color:var(--accent)">⚙️ Columns</button></div>
+            <button class="btn btn-outline" onclick="DB.exportToExcel('tbl-invoices', 'invoices')" style="border-color:#16a34a;color:#16a34a"> Export</button>
+            <button class="detailed-view-btn ${window._detailedInvoices ? 'active' : ''}" onclick="toggleDetailedInvoices()"> Detailed View</button>
+            <button class="btn btn-outline" onclick="openColumnPersonalizer('invoices','renderInvoices')" style="border-color:var(--accent);color:var(--accent)"> Columns</button></div>
             <div class="filter-group">
                 <button class="btn btn-primary" onclick="openInvoiceModal('sale')">+ Sale Invoice</button>
                 <button class="btn btn-primary" style="background:var(--info)" onclick="openInvoiceModal('purchase')">+ Purchase / Stock In</button>
@@ -5752,11 +5737,11 @@ async function renderInvoices() {
         </div>
         <div class="card"><div class="card-body">
             <div class="table-wrapper">
-                <table class="data-table" id="tbl-invoices"><thead><tr>${ColumnManager.get('invoices').filter(c=>c.visible).map(c=>`<th>${c.label}</th>`).join('')}</tr></thead>
+                <table class="data-table" id="tbl-invoices"><thead><tr>${ColumnManager.get('invoices').filter(c => c.visible).map(c => `<th>${c.label}</th>`).join('')}</tr></thead>
                 <tbody id="invoice-tbody">${renderInvoiceRows(visibleInvoices)}</tbody></table>
             </div>
         </div></div>`;
-    
+
     initSwipeActions();
 }
 async function getInvoicePaidAmount(invNo) {
@@ -5784,23 +5769,23 @@ function renderInvoiceRows(invs) {
     return invs.map(i => {
         let detailedRow = '';
         if (window._detailedInvoices && i.items && i.items.length) {
-            const itemNames = i.items.map(li => `• ${li.name}`).join(' ');
+            const itemNames = i.items.map(li => ` ${li.name}`).join(' ');
             detailedRow = `<tr class="detailed-info-row"><td colspan="${cols.length}" style="font-size:0.75rem;padding:4px 18px;color:var(--text-muted);background:#fafafa">${itemNames}</td></tr>`;
         }
         const cellMap = {
-            date:      `<td>${fmtDate(i.date)}</td>`,
-            invoiceNo: `<td style="font-weight:600;text-decoration:${i.status === 'cancelled' ? 'line-through' : 'none'}">${i.invoiceNo}${i.vyaparInvoiceNo ? `<br><span style="font-size:0.7rem;font-weight:500;color:var(--primary)">V: ${escapeHtml(i.vyaparInvoiceNo)}</span>` : ''}${i.assignedTo ? `<br><span style="font-size:0.68rem;color:var(--info);font-weight:600">👤 ${escapeHtml(i.assignedTo)}${i.handoverDate ? ' · ' + fmtDate(i.handoverDate) : ''}</span>` : ''}</td>`,
-            party:     `<td>${escapeHtml(i.partyName)}</td>`,
-            type:      `<td><span class="badge ${i.type === 'sale' ? 'badge-success' : 'badge-info'}">${i.type}</span></td>`,
-            status:    `<td>${i.status === 'cancelled' ? '<span class="badge badge-danger">Cancelled</span>' : '<span class="badge badge-success">Active</span>'}</td>`,
-            items:     `<td>${(i.items||[]).length}</td>`,
-            total:     `<td class="${i.type === 'sale' ? 'amount-green' : 'amount-red'}">${currency(i.total)}</td>`,
-            actions:   `<td><div class="action-btns">
-                <button class="btn-icon" onclick="viewInvoice('${i.id}')">👁️</button>
-                ${canEdit() && i.type === 'sale' && i.status !== 'cancelled' ? `<button class="btn-icon" style="color:var(--info)" onclick="openAssignInvoiceModal('${i.id}')" title="Assign to Salesman">👤</button>` : ''}
-                ${canPay ? `<button class="btn-icon" style="color:var(--success)" onclick="openReceivePaymentForInvoice('${i.id}')" title="Record Payment">💰</button>` : ''}
-                ${canEdit() && i.status !== 'cancelled' ? `<button class="btn-icon" style="color:var(--danger)" onclick="cancelInvoiceDirectly('${i.id}')" title="Cancel Invoice">❌</button>` : ''}
-                ${canEdit() ? `<button class="btn-icon" onclick="deleteInvoice('${i.id}')">🗑️</button>` : ''}
+            date: `<td>${fmtDate(i.date)}</td>`,
+            invoiceNo: `<td style="font-weight:600;text-decoration:${i.status === 'cancelled' ? 'line-through' : 'none'}">${i.invoiceNo}${i.vyaparInvoiceNo ? `<br><span style="font-size:0.7rem;font-weight:500;color:var(--primary)">V: ${escapeHtml(i.vyaparInvoiceNo)}</span>` : ''}${i.assignedTo ? `<br><span style="font-size:0.68rem;color:var(--info);font-weight:600"> ${escapeHtml(i.assignedTo)}${i.handoverDate ? '  ' + fmtDate(i.handoverDate) : ''}</span>` : ''}</td>`,
+            party: `<td>${escapeHtml(i.partyName)}</td>`,
+            type: `<td><span class="badge ${i.type === 'sale' ? 'badge-success' : 'badge-info'}">${i.type}</span></td>`,
+            status: `<td>${i.status === 'cancelled' ? '<span class="badge badge-danger">Cancelled</span>' : '<span class="badge badge-success">Active</span>'}</td>`,
+            items: `<td>${(i.items || []).length}</td>`,
+            total: `<td class="${i.type === 'sale' ? 'amount-green' : 'amount-red'}">${currency(i.total)}</td>`,
+            actions: `<td><div class="action-btns">
+                <button class="btn-icon" onclick="viewInvoice('${i.id}')"></button>
+                ${canEdit() && i.type === 'sale' && i.status !== 'cancelled' ? `<button class="btn-icon" style="color:var(--info)" onclick="openAssignInvoiceModal('${i.id}')" title="Assign to Salesman"></button>` : ''}
+                ${canPay ? `<button class="btn-icon" style="color:var(--success)" onclick="openReceivePaymentForInvoice('${i.id}')" title="Record Payment"></button>` : ''}
+                ${canEdit() && i.status !== 'cancelled' ? `<button class="btn-icon" style="color:var(--danger)" onclick="cancelInvoiceDirectly('${i.id}')" title="Cancel Invoice"></button>` : ''}
+                ${canEdit() ? `<button class="btn-icon" onclick="deleteInvoice('${i.id}')"></button>` : ''}
             </div></td>`,
         };
         return `<tr data-type="${i.type}">${cols.map(c => cellMap[c.key] || '').join('')}</tr>`;
@@ -5925,10 +5910,10 @@ function updateInvDueDate(party) {
     d.setDate(d.getDate() + (term.days || 0));
     dueDateEl.value = d.toISOString().split('T')[0];
     dueDateEl.style.color = 'var(--accent)';
-    dueDateEl.title = `${termName} — ${term.days} days from invoice date`;
+    dueDateEl.title = `${termName}  ${term.days} days from invoice date`;
 }
-async function openInvoiceModal(type = 'sale') {
-    invoiceItems = [];
+async function openInvoiceModal(type = 'sale', preserveItems = false) {
+    if (!preserveItems) invoiceItems = [];
     await ensureGeolocation();
     const ptype = type === 'sale' ? 'Customer' : 'Supplier';
     const [parties, inv, categories] = await Promise.all([
@@ -5943,12 +5928,13 @@ async function openInvoiceModal(type = 'sale') {
     openModal(type === 'sale' ? 'Create Sale Invoice' : 'Create Purchase / Stock In', `
         <div class="form-row"><div class="form-group"><label>Invoice #</label><input id="f-inv-no" value="${invNo}"></div><div class="form-group"><label>Date</label><input type="date" id="f-inv-date" value="${today()}" onchange="updateInvDueDate()"></div><div class="form-group"><label>Due Date <span style="font-size:0.7rem;color:var(--text-muted)">auto from terms</span></label><input type="date" id="f-inv-due-date" placeholder="Select party..."></div></div>
         <input type="hidden" id="f-inv-type" value="${type}">
+        <input type="hidden" id="f-inv-from-order" value="">
         ${type === 'sale' ? `
         <div class="form-group">
             <label>Vyapar Invoice No. <span style="color:var(--error,#ef4444)">*</span> <span style="font-size:0.72rem;color:var(--text-muted)">(auto-increments on save)</span></label>
             <div class="vyapar-inv-row">
                 <input id="f-vyapar-inv-no" value="${escapeHtml(vyaparNo)}" placeholder="e.g. PT-NS-1">
-                <button class="vyapar-gear-btn" onclick="openVyaparInvoiceNoModal()" title="Change prefix / number">⚙️</button>
+                <button class="vyapar-gear-btn" onclick="openVyaparInvoiceNoModal()" title="Change prefix / number"></button>
             </div>
         </div>` : ''}
         <div class="form-group"><label>${ptype} *</label>
@@ -5957,7 +5943,7 @@ async function openInvoiceModal(type = 'sale') {
         
         <hr style="border-color:var(--border);margin:16px 0"><h4 style="margin-bottom:10px;font-size:0.9rem">Items</h4>
         
-        <button class="btn btn-outline btn-block" onclick="openInvItemSubModal()" style="margin-bottom:16px;border-style:dashed;color:var(--primary);border-color:var(--primary);height:44px;font-weight:600">＋ Add Item(s)</button>
+        <button class="btn btn-outline btn-block" onclick="openInvItemSubModal()" style="margin-bottom:16px;border-style:dashed;color:var(--primary);border-color:var(--primary);height:44px;font-weight:600"> Add Item(s)</button>
         
         <div class="table-wrapper"><div id="inv-lines-list"></div></div>
         
@@ -5971,28 +5957,28 @@ async function openInvoiceModal(type = 'sale') {
                 <input type="number" id="f-inv-disc-pct" value="0" min="0" max="100" step="0.1" oninput="onInvDiscPctChange()">
             </div>
             <div class="form-group" style="min-width:70px;margin-bottom:0;flex:1">
-                <label style="font-size:0.75rem">Disc ₹</label>
+                <label style="font-size:0.75rem">Disc </label>
                 <input type="number" id="f-inv-disc-amt" value="0" min="0" step="0.01" placeholder="0.00" oninput="onInvDiscAmtChange()">
             </div>
         </div>
         
         <div style="display:flex;gap:10px;align-items:end;margin-top:10px;justify-content:space-between">
             <div class="form-group" style="width:140px;margin-bottom:0">
-                <label style="font-size:0.75rem">Round Off ₹</label>
+                <label style="font-size:0.75rem">Round Off </label>
                 <div style="display:flex;gap:4px">
                     <input type="number" id="f-inv-roundoff" value="0" step="0.01" placeholder="0.00" oninput="updateInvoiceTotal()">
-                    <button class="btn btn-outline btn-sm" onclick="autoRoundOff()" title="Auto" style="padding:0 8px">⟳</button>
+                    <button class="btn btn-outline btn-sm" onclick="autoRoundOff()" title="Auto" style="padding:0 8px"></button>
                 </div>
             </div>
         </div>
         
-        <div id="inv-total-display" style="text-align:right;font-size:1rem;color:var(--text-secondary);font-weight:600;margin-top:4px">Total: ₹0.00</div>
+        <div id="inv-total-display" style="text-align:right;font-size:1rem;color:var(--text-secondary);font-weight:600;margin-top:4px">Total: 0.00</div>
         
         <div id="inv-advance-section" style="margin-top:10px"></div>
         <div id="inv-item-sub-modal" class="sub-modal">
             <div class="sub-modal-header">
                 <h3>Add Item</h3>
-                <button class="btn-icon" onclick="closeInvItemSubModal()">✕</button>
+                <button class="btn-icon" onclick="closeInvItemSubModal()"></button>
             </div>
             <div class="sub-modal-body">
                 <div class="form-row" style="margin-bottom:8px">
@@ -6020,14 +6006,14 @@ async function openInvoiceModal(type = 'sale') {
                         <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">UOM</label><select id="f-inv-uom" onchange="onInvUomChange()" style="background:#fff"><option value="">--</option></select></div>
                     </div>
                     <div style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end">
-                        <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">Price ₹</label><input type="number" id="f-inv-price" value="" min="0" step="0.01" placeholder="Listed" style="background:#fff"></div>
+                        <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">Price </label><input type="number" id="f-inv-price" value="" min="0" step="0.01" placeholder="Listed" style="background:#fff"></div>
                         <button class="btn btn-primary" onclick="addInvoiceLine()" style="height:38px;padding:0 20px">Add</button>
                     </div>
                 </div>
                 <button class="btn btn-outline btn-block" onclick="closeInvItemSubModal()" style="margin-top:10px">Done Adding</button>
             </div>
         </div>
-    `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveInvoice()">＋ Save & New</button><button class="btn btn-primary" onclick="saveInvoice()">💾 Save Invoice</button>`, true);
+    `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveInvoice()"> Save & New</button><button class="btn btn-primary" onclick="saveInvoice()"> Save Invoice</button>`, true);
 
     // Init custom searchable dropdowns
     initSearchDropdown('f-inv-party', buildPartySearchList(filteredParties), function (party) {
@@ -6075,7 +6061,7 @@ async function loadAvailableAdvances(partyId) {
     let html = `<div style="background:var(--bg-card);padding:10px;border:1px solid var(--border);border-radius:6px;margin-bottom:10px">
         <label style="color:var(--accent);font-weight:600;margin-bottom:8px;display:block">Adjust from Advance</label>
         <table class="data-table" style="font-size:0.85rem;margin:0">
-            <thead style="background:var(--bg-input)"><tr><th>Date</th><th>Available ₹</th><th>Apply ₹</th></tr></thead>
+            <thead style="background:var(--bg-input)"><tr><th>Date</th><th>Available </th><th>Apply </th></tr></thead>
             <tbody>`;
 
     advances.forEach(a => {
@@ -6092,7 +6078,7 @@ async function loadAvailableAdvances(partyId) {
     });
 
     html += `</tbody></table>
-        <div style="text-align:right;margin-top:8px;font-size:0.85rem;font-weight:600">Total Applied: <span id="lbl-inv-total-adv" style="color:var(--success)">₹0.00</span></div>
+        <div style="text-align:right;margin-top:8px;font-size:0.85rem;font-weight:600">Total Applied: <span id="lbl-inv-total-adv" style="color:var(--success)">0.00</span></div>
     </div>`;
 
     invSec.innerHTML = html;
@@ -6102,31 +6088,31 @@ window.calcAppliedAdvance = function () {
     let tot = 0;
     document.querySelectorAll('.inv-apply-adv-input').forEach(inp => tot += (+inp.value || 0));
     const lbl = document.getElementById('lbl-inv-total-adv');
-    if (lbl) lbl.innerText = '₹' + tot.toFixed(2);
+    if (lbl) lbl.innerText = '' + tot.toFixed(2);
 };
 
-window.toggleAdvanceApply = function(chk, payId, maxAvail) {
+window.toggleAdvanceApply = function (chk, payId, maxAvail) {
     const inp = document.getElementById('f-adv-amt-' + payId);
     if (!inp) return;
-    
+
     if (chk.checked) {
         // Calculate how much we still need to pay off
-        const sub      = invoiceItems.reduce((s, li) => s + li.amount, 0);
-        const gst      = +(($('f-inv-gst')      || {}).value || 0);
+        const sub = invoiceItems.reduce((s, li) => s + li.amount, 0);
+        const gst = +(($('f-inv-gst') || {}).value || 0);
         const roundoff = +(($('f-inv-roundoff') || {}).value || 0);
-        const discAmt  = +(($('f-inv-disc-amt') || {}).value || 0);
+        const discAmt = +(($('f-inv-disc-amt') || {}).value || 0);
         let total = sub + roundoff - discAmt;
         total = Math.max(0, total);
-        
+
         // Find existing applied amounts EXCLUDING the current input
         let alreadyApplied = 0;
         document.querySelectorAll('.inv-apply-adv-input').forEach(el => {
             if (el.id !== 'f-adv-amt-' + payId) alreadyApplied += (+el.value || 0);
         });
-        
+
         let need = total - alreadyApplied;
         if (need < 0) need = 0;
-        
+
         const applyAmt = Math.min(need, maxAvail);
         inp.value = applyAmt > 0 ? applyAmt.toFixed(2) : '';
     } else {
@@ -6279,19 +6265,19 @@ async function addInvoiceLine() {
     const price = customPrice !== '' ? +customPrice : unitListedPrice;
 
     const itemGstRate = +(itemObj.gstRate || 0);
-    const lineAmount  = qty * price;
-    const lineBase    = itemGstRate > 0 ? +(lineAmount / (1 + itemGstRate / 100)).toFixed(2) : lineAmount;
-    const lineTax     = +(lineAmount - lineBase).toFixed(2);
-    invoiceItems.push({ 
-        itemId, name: itemObj.name, qty, price, 
-        listedPrice: +unitListedPrice.toFixed(2), 
+    const lineAmount = qty * price;
+    const lineBase = itemGstRate > 0 ? +(lineAmount / (1 + itemGstRate / 100)).toFixed(2) : lineAmount;
+    const lineTax = +(lineAmount - lineBase).toFixed(2);
+    invoiceItems.push({
+        itemId, name: itemObj.name, qty, price,
+        listedPrice: +unitListedPrice.toFixed(2),
         purchasePrice: +unitPurchasePrice.toFixed(2),
         discountAmt: 0, discountPct: 0,
-        amount: lineAmount, unit, primaryQty, gstRate: itemGstRate, 
-        baseAmount: lineBase, taxAmount: lineTax 
+        amount: lineAmount, unit, primaryQty, gstRate: itemGstRate,
+        baseAmount: lineBase, taxAmount: lineTax
     });
 
-    // Sync GST% field from item rates — if all items share one rate, show it; else leave as-is
+    // Sync GST% field from item rates  if all items share one rate, show it; else leave as-is
     const activeRates = [...new Set(invoiceItems.map(li => li.gstRate || 0).filter(r => r > 0))];
     const gstFld = $('f-inv-gst');
     if (gstFld) {
@@ -6354,24 +6340,24 @@ function updateInvoiceLine(idx, field, value) {
             }
         }
         li.qty = newQty;
-        if (li.discountPct > 0) li.discountAmt = +( (li.qty * li.price) * (li.discountPct / 100) ).toFixed(2);
+        if (li.discountPct > 0) li.discountAmt = +((li.qty * li.price) * (li.discountPct / 100)).toFixed(2);
     }
-    if (field === 'price') { 
-        li.price = Math.max(0, +value || 0); 
-        if (li.discountPct > 0) li.discountAmt = +( (li.qty * li.price) * (li.discountPct / 100) ).toFixed(2);
+    if (field === 'price') {
+        li.price = Math.max(0, +value || 0);
+        if (li.discountPct > 0) li.discountAmt = +((li.qty * li.price) * (li.discountPct / 100)).toFixed(2);
     }
     if (field === 'discountPct') {
         li.discountPct = Math.max(0, +value || 0);
-        li.discountAmt = +( (li.qty * li.price) * (li.discountPct / 100) ).toFixed(2);
+        li.discountAmt = +((li.qty * li.price) * (li.discountPct / 100)).toFixed(2);
     }
     if (field === 'discountAmt') {
         li.discountAmt = Math.max(0, +value || 0);
         const lineVal = li.qty * li.price;
-        li.discountPct = lineVal > 0 ? +( (li.discountAmt / lineVal) * 100 ).toFixed(2) : 0;
+        li.discountPct = lineVal > 0 ? +((li.discountAmt / lineVal) * 100).toFixed(2) : 0;
     }
 
-    li.amount = +( (li.qty * li.price) - (li.discountAmt || 0) ).toFixed(2);
-    
+    li.amount = +((li.qty * li.price) - (li.discountAmt || 0)).toFixed(2);
+
     // Recalculate GST for the line
     const gstRate = +(li.gstRate || 0);
     li.baseAmount = gstRate > 0 ? +(li.amount / (1 + gstRate / 100)).toFixed(2) : li.amount;
@@ -6385,7 +6371,7 @@ function updateInvoiceLine(idx, field, value) {
 }
 function renderInvoiceLines() {
     const el = $('inv-lines-list'); if (!el) return;
-    const invType = ($('f-inv-type')||{}).value;
+    const invType = ($('f-inv-type') || {}).value;
 
     const header = `<div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:2px solid var(--border);font-size:0.7rem;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px;width:100%">
         <span style="width:20px;text-align:center">#</span>
@@ -6394,33 +6380,33 @@ function renderInvoiceLines() {
         <span style="width:25px;text-align:center">UOM</span>
         <span style="width:65px;text-align:right">Price</span>
         <span style="width:40px;text-align:center">Dis%</span>
-        <span style="width:50px;text-align:center">Dis₹</span>
+        <span style="width:50px;text-align:center">Dis</span>
         <span style="width:75px;text-align:right">Amount</span>
         <span style="width:24px"></span>
     </div>`;
 
     el.innerHTML = header + invoiceItems.map((li, i) => {
-        const edited   = li.listedPrice !== undefined && Math.abs(li.price - li.listedPrice) > 0.01;
-        const gstLabel = li.gstRate ? `<span style="font-size:0.7rem;color:var(--text-muted)">Base ${currency(li.baseAmount||li.amount)} + GST ${li.gstRate}%: ${currency(li.taxAmount||0)}</span>` : '';
+        const edited = li.listedPrice !== undefined && Math.abs(li.price - li.listedPrice) > 0.01;
+        const gstLabel = li.gstRate ? `<span style="font-size:0.7rem;color:var(--text-muted)">Base ${currency(li.baseAmount || li.amount)} + GST ${li.gstRate}%: ${currency(li.taxAmount || 0)}</span>` : '';
         const alertStyle = li._priceAlert ? 'background:rgba(239, 68, 68, 0.05); border-left:3px solid var(--danger); padding-left:5px' : (edited ? 'background:rgba(245,158,11,0.05); border-left:3px solid var(--warning); padding-left:5px' : '');
 
         return `<div style="padding:6px 0;border-bottom:1px solid var(--border);${alertStyle}">
             <div style="display:flex;align-items:center;gap:6px;width:100%">
-                <span style="width:20px;text-align:center;font-size:0.75rem;color:var(--text-muted)">${i+1}</span>
+                <span style="width:20px;text-align:center;font-size:0.75rem;color:var(--text-muted)">${i + 1}</span>
                 <div style="flex:1;min-width:140px;max-width:300px">
                     <div style="font-size:0.8rem;font-weight:600;white-space:normal;word-break:break-word;line-height:1.2">${li.name}</div>
-                    ${li._priceAlert ? `<div style="font-size:0.6rem;color:var(--danger);font-weight:700">⚠️ < ${currency(li.purchasePrice)}</div>` : ''}
+                    ${li._priceAlert ? `<div style="font-size:0.6rem;color:var(--danger);font-weight:700"> < ${currency(li.purchasePrice)}</div>` : ''}
                 </div>
                 <input type="number" value="${li.qty}" min="0.001" step="any" style="width:45px;padding:4px 2px;border-radius:4px;border:1px solid var(--border);text-align:center;font-size:0.75rem" onchange="updateInvoiceLine(${i},'qty',this.value)">
-                <span style="font-size:0.7rem;color:var(--text-muted);width:25px;text-align:center">${li.unit||'Pcs'}</span>
+                <span style="font-size:0.7rem;color:var(--text-muted);width:25px;text-align:center">${li.unit || 'Pcs'}</span>
                 <div style="width:65px;text-align:right">
                     ${edited ? `<div style="font-size:0.55rem;text-decoration:line-through;color:var(--text-muted)">${currency(li.listedPrice)}</div>` : ''}
-                    <input type="number" value="${(+li.price).toFixed(2)}" min="0" step="0.01" style="width:65px;padding:4px 2px;border-radius:4px;border:1px solid ${edited ? 'var(--warning)' : 'var(--border)'};text-align:right;font-size:0.75rem;${edited?'color:var(--warning);font-weight:600':''}" onchange="updateInvoiceLine(${i},'price',this.value)">
+                    <input type="number" value="${(+li.price).toFixed(2)}" min="0" step="0.01" style="width:65px;padding:4px 2px;border-radius:4px;border:1px solid ${edited ? 'var(--warning)' : 'var(--border)'};text-align:right;font-size:0.75rem;${edited ? 'color:var(--warning);font-weight:600' : ''}" onchange="updateInvoiceLine(${i},'price',this.value)">
                 </div>
-                <input type="number" value="${li.discountPct||0}" min="0" max="100" step="0.01" placeholder="%" title="Discount %" style="width:40px;padding:4px 2px;border-radius:4px;border:1px solid var(--border);text-align:center;font-size:0.75rem" onchange="updateInvoiceLine(${i},'discountPct',this.value)">
-                <input type="number" value="${li.discountAmt||0}" min="0" step="0.01" placeholder="₹" title="Discount ₹" style="width:50px;padding:4px 2px;border-radius:4px;border:1px solid var(--border);text-align:center;font-size:0.75rem" onchange="updateInvoiceLine(${i},'discountAmt',this.value)">
-                <span style="width:75px;text-align:right;font-weight:700;font-size:0.8rem;color:${li._priceAlert?'var(--danger)':'inherit'}">${currency(li.amount)}</span>
-                <button class="btn-icon" onclick="removeInvoiceLine(${i})" style="flex-shrink:0;color:var(--danger);width:24px">✕</button>
+                <input type="number" value="${li.discountPct || 0}" min="0" max="100" step="0.01" placeholder="%" title="Discount %" style="width:40px;padding:4px 2px;border-radius:4px;border:1px solid var(--border);text-align:center;font-size:0.75rem" onchange="updateInvoiceLine(${i},'discountPct',this.value)">
+                <input type="number" value="${li.discountAmt || 0}" min="0" step="0.01" placeholder="" title="Discount " style="width:50px;padding:4px 2px;border-radius:4px;border:1px solid var(--border);text-align:center;font-size:0.75rem" onchange="updateInvoiceLine(${i},'discountAmt',this.value)">
+                <span style="width:75px;text-align:right;font-weight:700;font-size:0.8rem;color:${li._priceAlert ? 'var(--danger)' : 'inherit'}">${currency(li.amount)}</span>
+                <button class="btn-icon" onclick="removeInvoiceLine(${i})" style="flex-shrink:0;color:var(--danger);width:24px"></button>
             </div>
             ${gstLabel ? `<div style="padding-left:32px;margin-top:2px">${gstLabel}</div>` : ''}
         </div>`;
@@ -6428,7 +6414,7 @@ function renderInvoiceLines() {
     // Auto round-off for sale invoices on every line change
     const invTypeEl = $('f-inv-type');
     if (invTypeEl && invTypeEl.value === 'sale') {
-        const sub  = invoiceItems.reduce((s, li) => s + li.amount, 0);
+        const sub = invoiceItems.reduce((s, li) => s + li.amount, 0);
         const roEl = $('f-inv-roundoff');
         if (roEl) roEl.value = +(Math.round(sub) - sub).toFixed(2);
     }
@@ -6455,12 +6441,12 @@ function onInvDiscAmtChange() {
     updateInvoiceTotal();
 }
 function updateInvoiceTotal() {
-    const sub      = invoiceItems.reduce((s, li) => s + li.amount, 0);
-    const gst      = +(($('f-inv-gst')      || {}).value || 0);
+    const sub = invoiceItems.reduce((s, li) => s + li.amount, 0);
+    const gst = +(($('f-inv-gst') || {}).value || 0);
     const roundoff = +(($('f-inv-roundoff') || {}).value || 0);
-    const pct      = +(($('f-inv-disc-pct') || {}).value || 0);
-    let discAmt    = +(($('f-inv-disc-amt') || {}).value || 0);
-    
+    const pct = +(($('f-inv-disc-pct') || {}).value || 0);
+    let discAmt = +(($('f-inv-disc-amt') || {}).value || 0);
+
     // Dynamically recalculate discount amount if percentage is set, so it updates when items are added
     if (pct > 0) {
         discAmt = +(sub * pct / 100).toFixed(2);
@@ -6481,50 +6467,47 @@ function updateInvoiceTotal() {
     let taxableAmt, totalTax, rateLines;
     if (hasItemGst) {
         taxableAmt = invoiceItems.reduce((s, li) => s + (li.baseAmount || li.amount), 0);
-        totalTax   = invoiceItems.reduce((s, li) => s + (li.taxAmount  || 0), 0);
+        totalTax = invoiceItems.reduce((s, li) => s + (li.taxAmount || 0), 0);
         const rateMap = {};
         invoiceItems.forEach(li => {
             if (li.gstRate > 0) rateMap[li.gstRate] = (rateMap[li.gstRate] || 0) + (li.taxAmount || 0);
         });
-        rateLines = Object.entries(rateMap).sort((a,b)=>+a[0]-+b[0])
+        rateLines = Object.entries(rateMap).sort((a, b) => +a[0] - +b[0])
             .map(([r, amt]) => `<span style="color:var(--text-muted)">GST ${r}% <i>(Incl.)</i>: <b>${currency(amt)}</b></span>`).join('');
     } else if (gst > 0) {
-        // Global GST% — price is inclusive, so back-calculate
+        // Global GST%  price is inclusive, so back-calculate
         taxableAmt = +(sub / (1 + gst / 100)).toFixed(2);
-        totalTax   = +(sub - taxableAmt).toFixed(2);
-        rateLines  = `<span style="color:var(--text-muted)">GST ${gst}% <i>(Incl.)</i>: <b>${currency(totalTax)}</b></span>`;
+        totalTax = +(sub - taxableAmt).toFixed(2);
+        rateLines = `<span style="color:var(--text-muted)">GST ${gst}% <i>(Incl.)</i>: <b>${currency(totalTax)}</b></span>`;
     }
 
     el.innerHTML = `
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;font-size:0.82rem;width:100%;text-align:right">
             ${taxableAmt !== undefined ? `<span style="color:var(--text-muted)">Taxable Amount: <b>${currency(taxableAmt)}</b></span>` : ''}
             ${rateLines || ''}
-            ${totalTax  ? `<span style="color:var(--text-muted)">Total GST <i>(Included)</i>: <b>${currency(totalTax)}</b></span>` : ''}
-            <span style="color:var(--text-muted);${(taxableAmt !== undefined)?'border-top:1px dashed var(--border);padding-top:3px;margin-top:2px;width:100%':''}">Subtotal: <b>${currency(sub)}</b></span>
+            ${totalTax ? `<span style="color:var(--text-muted)">Total GST <i>(Included)</i>: <b>${currency(totalTax)}</b></span>` : ''}
+            <span style="color:var(--text-muted);${(taxableAmt !== undefined) ? 'border-top:1px dashed var(--border);padding-top:3px;margin-top:2px;width:100%' : ''}">Subtotal: <b>${currency(sub)}</b></span>
             ${totalDiscount ? `<span style="color:var(--danger)">Discount: <b>-${currency(totalDiscount)}</b></span>` : ''}
-            ${roundoff ? `<span style="color:var(--text-muted)">Round Off: <b style="color:${roundoff<0?'#ef4444':'#10b981'}">${roundoff>0?'+':''}${currency(roundoff)}</b></span>` : ''}
+            ${roundoff ? `<span style="color:var(--text-muted)">Round Off: <b style="color:${roundoff < 0 ? '#ef4444' : '#10b981'}">${roundoff > 0 ? '+' : ''}${currency(roundoff)}</b></span>` : ''}
             <span style="color:var(--text-muted);border-top:1px dashed var(--border);padding-top:3px;margin-top:2px;width:100%"></span>
             <span style="font-size:1.15rem;font-weight:800;color:var(--accent)">Total: ${currency(total)}</span>
         </div>`;
 }
 function autoRoundOff() {
     // Prices are GST-inclusive; round off on subtotal directly
-    const sub  = invoiceItems.reduce((s, li) => s + li.amount, 0);
+    const sub = invoiceItems.reduce((s, li) => s + li.amount, 0);
     const diff = +(Math.round(sub) - sub).toFixed(2);
-    const el   = $('f-inv-roundoff'); if (el) el.value = diff;
+    const el = $('f-inv-roundoff'); if (el) el.value = diff;
     updateInvoiceTotal();
 }
 async function saveInvoice(id) {
-    // 1. Security Check
     if (id && !DB.canEdit()) {
-        return alert("Access Denied: You do not have permission to edit invoices. Please contact Admin.");
+        return alert("Access Denied: You do not have permission to edit invoices.");
     }
 
     if (!beginSave()) return;
-
     const dateVal = $('f-inv-date').value;
 
-    // 2. Back-date Restriction
     if (currentUser.role !== 'Admin' && !DB.canPostBackDate(dateVal)) {
         endSave();
         return alert("Access Denied: Only Admin can post invoices for a past date.");
@@ -6534,7 +6517,6 @@ async function saveInvoice(id) {
     if (!pe.value) { endSave(); return alert('Select a party'); }
     if (!invoiceItems.length) { endSave(); return alert('Add items'); }
 
-    // Resolve Party
     const parties = await DB.getAll('parties');
     const storedId = pe.dataset.selectedId || '';
     let matched = storedId
@@ -6550,20 +6532,18 @@ async function saveInvoice(id) {
     const partyName = matched.name;
     const invType = ($('f-inv-type') || {}).value;
 
-    // Blocked check
     if (invType === 'sale' && matched.blocked) {
         endSave();
-        return alert(`❌ "${partyName}" is blocked. Cannot create a sale invoice. Contact admin.`);
+        return alert(` "${partyName}" is blocked.`);
     }
 
-    // Prepare Totals
+    // DISCOUNTS: Using the local variables defined here
     const sub = invoiceItems.reduce((s, li) => s + li.amount, 0);
     const gst = +($('f-inv-gst')?.value || 0);
     const discPct = +($('f-inv-disc-pct')?.value || 0);
     const discAmt = +($('f-inv-disc-amt')?.value || 0);
     let roundoff = +(($('f-inv-roundoff') || {}).value || 0);
 
-    // Auto-calculate roundoff if it's a new sale and currently 0
     if (invType === 'sale' && roundoff === 0) {
         let tempTotal = sub - discAmt;
         tempTotal = Math.max(0, tempTotal);
@@ -6573,16 +6553,6 @@ async function saveInvoice(id) {
     let total = +(sub + roundoff - discAmt).toFixed(2);
     total = Math.max(0, total);
 
-    // Credit Limit Check
-    if (invType === 'sale' && matched.creditLimit > 0) {
-        if (((matched.balance || 0) + total) > matched.creditLimit) {
-            if (!confirm(`⚠️ Credit limit exceeded!\nLimit: ${currency(matched.creditLimit)}\nCurrent Bal: ${currency(matched.balance)}\nThis Inv: ${currency(total)}\n\nProceed?`)) { 
-                endSave(); 
-                return; 
-            }
-        }
-    }
-
     const invNo = $('f-inv-no').value.trim();
     const vyaparInvNo = invType === 'sale' ? ($('f-vyapar-inv-no')?.value.trim() || '') : '';
     if (invType === 'sale' && !vyaparInvNo) { endSave(); return alert('Vyapar Invoice No. is mandatory.'); }
@@ -6591,108 +6561,63 @@ async function saveInvoice(id) {
 
     try {
         const inventory = await DB.getAll('inventory');
+        const orders = await DB.getAll('sales_orders');
         const ops = [];
 
-        // 3. Process Items (Stock & Ledger)
         for (const li of invoiceItems) {
             const item = inventory.find(x => x.id === li.itemId);
             if (!item) continue;
-
             const qtyChange = invType === 'sale' ? -li.qty : li.qty;
             const newStock = (item.stock || 0) + qtyChange;
-            const itemUpdate = { stock: newStock };
 
-            if (invType === 'sale' && item.batches && item.batches.length) {
-                const { updatedBatches, priceSync } = deductBatchQtyFifo(item, li.qty);
-                if (updatedBatches) { itemUpdate.batches = updatedBatches; Object.assign(itemUpdate, priceSync); }
-            }
-
-            ops.push(DB.rawUpdate('inventory', item.id, itemUpdate));
+            ops.push(DB.rawUpdate('inventory', item.id, { stock: newStock }));
             ops.push(DB.rawInsert('stock_ledger', {
-                date: dateVal,
-                item_id: item.id,
-                item_name: item.name,
+                date: dateVal, item_id: item.id, item_name: item.name,
                 entry_type: invType === 'sale' ? 'Sale' : 'Purchase',
-                qty: qtyChange,
-                running_stock: newStock,
-                document_no: invNo,
+                qty: qtyChange, running_stock: newStock, document_no: invNo,
                 reason: invType === 'sale' ? 'Sale Invoice' : 'Purchase Invoice',
                 created_by: currentUser.userId
             }));
         }
 
-        // 4. Handle Discount Expense
         if (discAmt > 0 && invType === 'sale') {
             ops.push(DB.rawInsert('expenses', {
-                date: dateVal,
-                category: 'Sales Discount',
-                amount: discAmt,
-                party_id: partyId,
-                party_name: partyName,
-                doc_no: invNo,
-                description: `Discount on ${invNo}`,
-                created_by: currentUser.userId
+                date: dateVal, category: 'Sales Discount', amount: discAmt,
+                party_id: partyId, party_name: partyName, doc_no: invNo,
+                description: `Discount on ${invNo}`, created_by: currentUser.userId
             }));
         }
 
-        // 5. Update Party Balance & Ledger
         const balChange = invType === 'sale' ? total : -total;
         const newBal = +((matched.balance || 0) + balChange).toFixed(2);
         ops.push(DB.rawUpdate('parties', partyId, { balance: newBal }));
         ops.push(DB.rawInsert('party_ledger', {
-            date: dateVal,
-            party_id: partyId,
-            party_name: partyName,
+            date: dateVal, party_id: partyId, party_name: partyName,
             type: invType === 'sale' ? 'Sale Invoice' : 'Purchase Invoice',
-            amount: balChange,
-            balance: newBal,
-            doc_no: invNo,
-            notes: invType === 'sale' ? 'Sale' : 'Purchase',
-            created_by: currentUser.userId
+            amount: balChange, balance: newBal, doc_no: invNo,
+            notes: invType === 'sale' ? 'Sale' : 'Purchase', created_by: currentUser.userId
         }));
 
-        // 6. Save Invoice Record
-        const dueDateVal = $('f-inv-due-date')?.value || null;
         const invData = {
-            invoice_no: invNo,
-            date: dateVal,
-            due_date: dueDateVal,
-            type: invType,
-            party_id: partyId,
-            party_name: partyName,
-            items: JSON.stringify(invoiceItems),
-            subtotal: sub,
-            gst: gst,
-            round_off: roundoff,
-            total: total,
-            discount_pct: discPct,
-            discount_amt: discAmt,
-            status: fromOrderId ? 'from-packing' : 'created',
-            created_by: currentUser.userId,
-            vyapar_invoice_no: vyaparInvNo,
-            from_order: fromOrderId ? (DB.get('sales_orders').find(o => o.id === fromOrderId)?.orderNo || '') : null
+            invoice_no: invNo, date: dateVal, due_date: $('f-inv-due-date')?.value || null,
+            type: invType, party_id: partyId, party_name: partyName,
+            items: [...invoiceItems], // 🚀 FIX: Removed JSON.stringify so it saves as an array
+            subtotal: sub, gst: gst,
+            round_off: roundoff, total: total, discount_pct: discPct, discount_amt: discAmt,
+            status: fromOrderId ? 'from-packing' : 'created', created_by: currentUser.userId,
+            vyapar_invoice_no: vyaparInvNo, from_order: fromOrderId ? (orders.find(o => o.id === fromOrderId)?.orderNo || '') : null
         };
 
         ops.push(DB.rawInsert('invoices', invData));
         if (fromOrderId) ops.push(DB.rawUpdate('sales_orders', fromOrderId, { invoice_no: invNo }));
 
-        // 7. Commit to Database
         await Promise.all(ops);
         await DB.refreshTables(['invoices', 'inventory', 'parties', 'sales_orders']);
-
         if (invType === 'sale' && vyaparInvNo) incrementVyaparNo();
-
-        const andNew = window._saveAndNew; window._saveAndNew = false;
         closeModal();
-        
-        if (fromOrderId) await renderPacking();
-        else await renderInvoices();
-
+        fromOrderId ? await renderPacking() : await renderInvoices();
         showToast(`Invoice ${invNo} saved!`, 'success');
-        if (andNew) openInvoiceModal(invType);
-
     } catch (err) {
-        window._saveAndNew = false;
         endSave();
         alert('Error saving invoice: ' + err.message);
     }
@@ -6700,7 +6625,7 @@ async function saveInvoice(id) {
 async function openAssignInvoiceModal(invId) {
     const [invoices, users] = await Promise.all([DB.getAll('invoices'), DB.getAll('users')]);
     const inv = invoices.find(i => i.id === invId); if (!inv) return;
-    const salesmen = users.filter(u => ['Salesman','Manager','Admin'].includes(u.role));
+    const salesmen = users.filter(u => ['Salesman', 'Manager', 'Admin'].includes(u.role));
     openModal(`Assign Invoice ${inv.invoiceNo}`, `
         <div class="form-group">
             <label>Assigned To (Salesman / Collector)</label>
@@ -6729,7 +6654,7 @@ async function saveAssignInvoice(invId) {
         closeModal();
         await renderInvoices();
         showToast(`Invoice assigned to ${assignedTo}`, 'success');
-    } catch(e) { alert('Error: ' + e.message); }
+    } catch (e) { alert('Error: ' + e.message); }
 }
 
 async function viewInvoice(id) {
@@ -6754,7 +6679,7 @@ async function viewInvoice(id) {
         <tr style="font-weight:700"><td colspan="4" style="text-align:right;color:var(--accent)">Total</td><td style="color:var(--accent)">${currency(i.total)}</td></tr></table>
         
         ${relatedPayments.length ? `<div style="margin-top:20px;padding-top:15px;border-top:1px dashed var(--border)">
-                <h4 style="margin-bottom:10px;font-size:0.95rem;color:var(--text-primary)">💰 Payment History</h4>
+                <h4 style="margin-bottom:10px;font-size:0.95rem;color:var(--text-primary)"> Payment History</h4>
                 <table class="data-table" style="font-size:0.85rem">
                     <thead style="background:var(--bg-input)"><tr><th>Date</th><th>Voucher #</th><th>Mode</th><th>Note</th><th>Amount</th></tr></thead>
                     <tbody>${relatedPayments.map(p => `<tr>
@@ -6782,7 +6707,7 @@ async function viewInvoice(id) {
                 if (rem > 0) availAdvance += rem;
             });
 
-            const advanceHtml = availAdvance > 0 ? `<button class="btn btn-outline btn-sm" onclick="allocateAdvanceToInvoice('${i.id}')" style="margin-top:6px;font-size:0.8rem">🔗 Adjust Advance Amount (${currency(availAdvance)} available)</button>` : '';
+            const advanceHtml = availAdvance > 0 ? `<button class="btn btn-outline btn-sm" onclick="allocateAdvanceToInvoice('${i.id}')" style="margin-top:6px;font-size:0.8rem"> Adjust Advance Amount (${currency(availAdvance)} available)</button>` : '';
 
             return `<div style="margin-top:15px;padding:12px;background:var(--bg-body);border-radius:6px;border:1px solid var(--border)">
                 <div style="display:flex;justify-content:space-between;align-items:center;">
@@ -6790,20 +6715,20 @@ async function viewInvoice(id) {
                     ${i.allocatedTo ? `<div style="font-size:0.8rem;color:var(--text-muted);margin-top:4px">Assigned to: <b style="color:var(--warning)">${escapeHtml(i.allocatedTo)}</b></div>` : ''}
                     </div>
                     <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">
-                        <button class="btn btn-outline btn-sm" onclick="openAssignCollectorModal('${i.id}')" style="font-size:0.8rem">👤 Assign Collector</button>
+                        <button class="btn btn-outline btn-sm" onclick="openAssignCollectorModal('${i.id}')" style="font-size:0.8rem"> Assign Collector</button>
                         ${advanceHtml}
                     </div>
                 </div>
             </div>`;
         })()}
         </div>
-        <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Close</button><button class="btn btn-primary" onclick="printInvoice()">🖨️ Print</button></div>`);
+        <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Close</button><button class="btn btn-primary" onclick="printInvoice()"> Print</button></div>`);
 }
 
 async function openAssignCollectorModal(invId) {
     const users = await DB.getAll('users');
-    const collectors = users.filter(u => ['Admin','Manager','Salesman'].includes(u.role));
-    
+    const collectors = users.filter(u => ['Admin', 'Manager', 'Salesman'].includes(u.role));
+
     openModal('Assign Collector', `
         <div class="form-group" style="margin-bottom:20px">
             <label>Select Staff / Salesman</label>
@@ -6824,16 +6749,16 @@ async function executeAssignCollector(invId) {
     const invoices = await DB.getAll('invoices');
     const inv = invoices.find(i => i.id === invId);
     if (!inv) return;
-    
+
     const historyEntry = {
         date: new Date().toISOString(),
         assignedTo: collector || 'Unassigned',
         assignedBy: currentUser ? currentUser.name : 'System'
     };
-    
+
     const allocationHistory = Array.isArray(inv.allocationHistory) ? inv.allocationHistory : [];
     allocationHistory.push(historyEntry);
-    
+
     await DB.update('invoices', invId, { allocatedTo: collector || null, allocationHistory });
     showToast(collector ? 'Invoice assigned to ' + collector : 'Assignment removed', 'success');
     closeModal();
@@ -6858,7 +6783,7 @@ function cancelInvoiceDirectly(id) {
         </div>
         <p style="margin-bottom:16px;font-size:0.9rem">Cancel this invoice? Stock will be restored and party balance adjusted.</p>
         <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Keep Invoice</button>
-        <button class="btn btn-danger" onclick="executeCancelInvoice('${id}')">❌ Cancel Invoice</button></div>`);
+        <button class="btn btn-danger" onclick="executeCancelInvoice('${id}')"> Cancel Invoice</button></div>`);
 }
 async function executeCancelInvoice(id) {
     const invoices = await DB.getAll('invoices');
@@ -6881,7 +6806,7 @@ async function executeCancelInvoice(id) {
                 if (inv.type === 'sale' && item.batches && item.batches.length) {
                     const batches = JSON.parse(JSON.stringify(item.batches));
                     // Add back to the newest active batch (or last batch)
-                    const active = batches.filter(b => b.isActive !== false).sort((a, b) => (a.receivedDate||'') < (b.receivedDate||'') ? -1 : 1);
+                    const active = batches.filter(b => b.isActive !== false).sort((a, b) => (a.receivedDate || '') < (b.receivedDate || '') ? -1 : 1);
                     const target = active[active.length - 1] || batches[batches.length - 1];
                     if (target) target.qty = (target.qty || 0) + effectiveQty;
                     itemUpdate.batches = batches;
@@ -6902,8 +6827,12 @@ async function executeCancelInvoice(id) {
             await addPartyLedgerEntry(party.id, party.name, inv.type === 'sale' ? 'Sale Cancel' : 'Purchase Cancel', balChange, inv.invoiceNo, 'Invoice Cancelled');
         }
 
-        // Mark invoice as cancelled
-        await DB.update('invoices', inv.id, { status: 'cancelled', cancelledAt: today() });
+        // Clean up Sales Discount from Expenses to fix P&L
+        if (inv.discountAmt > 0 && inv.type === 'sale') {
+            const expenses = await DB.getAll('expenses');
+            const exp = expenses.find(e => e.category === 'Sales Discount' && e.docNo === inv.invoiceNo);
+            if (exp) await DB.delete('expenses', exp.id);
+        }
 
         // Reset associated sales order
         if (inv.fromOrder) {
@@ -6955,18 +6884,194 @@ async function deleteInvoice(id) {
 }
 
 // --- Print Invoice ---
-function printInvoice() {
-    const printArea = document.getElementById('invoice-print-area');
-    if (!printArea) return;
-    const printWindow = window.open('', '_blank', 'width=800,height=600');
-    // BUG-022 fix: force white background and dark text so dark-mode elements print correctly
-    printWindow.document.write(`<html><head><title>Print Invoice</title>
-        <style>*{background:#fff!important;color:#000!important;border-color:#ccc!important;box-shadow:none!important}body{font-family:Inter,Arial,sans-serif;padding:30px}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{border:1px solid #ddd!important;padding:8px 12px;text-align:left;font-size:0.9rem}th{background:#f0f0f0!important;font-weight:600}tr:last-child td{font-weight:700}.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:0.8rem;background:#eee!important}h3{margin:0 0 4px 0}.amount-green{color:#16a34a!important}.amount-red{color:#dc2626!important}@media print{body{padding:20px}}</style>
-    </head><body>${printArea.innerHTML}</body></html>`);
-    printWindow.document.close();
-    printWindow.focus();
-    setTimeout(() => { printWindow.print(); printWindow.close(); }, 400);
+function numberToWords(num) {
+    const a = ['', 'One ', 'Two ', 'Three ', 'Four ', 'Five ', 'Six ', 'Seven ', 'Eight ', 'Nine ', 'Ten ', 'Eleven ', 'Twelve ', 'Thirteen ', 'Fourteen ', 'Fifteen ', 'Sixteen ', 'Seventeen ', 'Eighteen ', 'Nineteen '];
+    const b = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+    function convert(n) {
+        if (n < 20) return a[n];
+        if (n < 100) return b[Math.floor(n / 10)] + (n % 10 !== 0 ? ' ' + a[n % 10] : '');
+        if (n < 1000) return a[Math.floor(n / 100)] + 'Hundred ' + (n % 100 !== 0 ? 'and ' + convert(n % 100) : '');
+        if (n < 100000) return convert(Math.floor(n / 1000)) + 'Thousand ' + (n % 1000 !== 0 ? convert(n % 1000) : '');
+        if (n < 10000000) return convert(Math.floor(n / 100000)) + 'Lakh ' + (n % 100000 !== 0 ? convert(n % 100000) : '');
+        return convert(Math.floor(n / 10000000)) + 'Crore ' + (n % 10000000 !== 0 ? convert(n % 10000000) : '');
+    }
+    const dec = Math.round((num % 1) * 100);
+    const intPart = Math.floor(num);
+    if (intPart === 0 && dec === 0) return 'Zero';
+    let res = intPart > 0 ? 'Rupees ' + convert(intPart) : '';
+    if (dec > 0) res += (res ? 'and ' : '') + convert(dec) + 'Paise ';
+    return res.trim() + ' Only';
 }
+
+async function printInvoice(id) {
+    const [invoices, co, parties, orders] = await Promise.all([
+        DB.getAll('invoices'),
+        DB.getObj('db_company'),
+        DB.getAll('parties'),
+        DB.getAll('sales_orders')
+    ]);
+    const inv = invoices.find(x => x.id === id);
+    if (!inv) return alert('Invoice not found');
+    const party = parties.find(p => p.id === inv.partyId) || {};
+    const order = orders.find(o => o.orderNo === inv.fromOrder) || {};
+
+    const items = typeof inv.items === 'string' ? JSON.parse(inv.items) : (inv.items || []);
+    const coStateCode = (co.gstin || '').substring(0, 2);
+    const paStateCode = (party.gstin || '').substring(0, 2);
+    const isSameState = coStateCode === paStateCode && coStateCode.length === 2;
+
+    const total = inv.total || 0;
+    const taxable = +(total / 1.05).toFixed(2);
+    const taxAmt = +(total - taxable).toFixed(2);
+    const cgst = isSameState ? +(taxAmt / 2).toFixed(2) : 0;
+    const sgst = isSameState ? +(taxAmt / 2).toFixed(2) : 0;
+    const igst = !isSameState ? taxAmt : 0;
+
+    const upiLink = co.upi ? `upi://pay?pa=${co.upi}&pn=${encodeURIComponent(co.name)}&am=${inv.total}&cu=INR` : '';
+    let qrUrl = '';
+    if (upiLink && typeof QRCode !== 'undefined') {
+        const div = document.createElement('div');
+        new QRCode(div, { text: upiLink, width: 100, height: 100, correctLevel: QRCode.CorrectLevel.M });
+        const obj = div.querySelector('canvas') || div.querySelector('img');
+        if (obj) qrUrl = obj.toDataURL ? obj.toDataURL() : obj.src;
+    }
+
+    const printWindow = window.open('', '_blank', 'width=900,height=800');
+    const html = `<!DOCTYPE html><html><head><title>Invoice ${inv.invoiceNo}</title>
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+    body { font-family: 'Inter', sans-serif; color: #1a1a1a; margin: 0; padding: 20px; font-size: 10pt; line-height: 1.3; background: #fff; }
+    .page { width: 210mm; min-height: 297mm; padding: 10mm; margin: 0 auto; background: white; box-sizing: border-box; position: relative; border: 1px solid #eee; }
+    .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #000; padding-bottom: 10px; margin-bottom: 15px; }
+    .co-info h1 { margin: 0; font-size: 1.5rem; color: #000; font-weight: 800; text-transform: uppercase; letter-spacing: -0.5px; }
+    .co-info p { margin: 1px 0; font-size: 0.8rem; color: #333; }
+    .invoice-title { text-align: center; font-size: 1.2rem; font-weight: 800; border: 1.5px solid #000; padding: 4px 20px; display: inline-block; margin-bottom: 15px; text-transform: uppercase; background: #f0f0f0; }
+    .grid-2 { display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 0; border: 1px solid #000; margin-bottom: 15px; }
+    .grid-cell { padding: 10px; border-right: 1px solid #000; }
+    .grid-cell:last-child { border-right: none; }
+    .label { font-size: 0.7rem; color: #555; font-weight: 600; text-transform: uppercase; margin-bottom: 2px; }
+    .value { font-weight: 700; font-size: 0.9rem; }
+    table { width: 100%; border-collapse: collapse; border: 1px solid #000; table-layout: fixed; }
+    th { background: #f0f0f0; color: #000; padding: 8px 5px; font-size: 0.75rem; text-transform: uppercase; text-align: left; border: 1px solid #000; }
+    td { padding: 8px 5px; border: 1px solid #000; font-size: 9pt; overflow: hidden; text-overflow: ellipsis; }
+    .text-right { text-align: right; }
+    .tot-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border: 1px solid #000; margin-top: -1px; }
+    .tax-box { border-right: 1px solid #000; padding: 10px; }
+    .tot-box { padding: 0; }
+    .tot-row { display: flex; justify-content: space-between; padding: 5px 10px; border-bottom: 0.5px solid #ccc; font-size: 0.85rem; }
+    .tot-row:last-child { border-bottom: none; }
+    .tot-row.grand { background: #f0f0f0; color: #000; font-weight: 800; font-size: 1.1rem; border-top: 1px solid #000; }
+    .footer { margin-top: 30px; display: flex; justify-content: space-between; align-items: flex-end; }
+    .sign-box { border-top: 1px solid #000; width: 220px; text-align: center; padding-top: 8px; font-weight: 700; font-size: 0.8rem; }
+    @media print {
+        body { padding: 0; }
+        .page { border: none; padding: 5mm; width: 100%; }
+    }
+</style>
+</head><body>
+<div class="page">
+    <div style="text-align:right; font-size: 0.65rem; color: #666; font-weight: 600; margin-bottom: 5px;">TAX INVOICE - ORIGINAL FOR RECIPIENT</div>
+    <div class="header">
+        ${co.logo ? `<img src="${co.logo}" style="max-height:70px; max-width:200px; object-fit:contain">` : '<div></div>'}
+        <div class="co-info" style="text-align:right">
+            <h1>${escapeHtml(co.name || 'Company Name')}</h1>
+            <p>${escapeHtml(co.address || '')}</p>
+            <p>Phone: ${escapeHtml(co.phone || '')} | GSTIN: <strong>${escapeHtml(co.gstin || 'N/A')}</strong></p>
+            <p>State: ${escapeHtml(co.state || '')} (${coStateCode})</p>
+        </div>
+    </div>
+
+    <div style="text-align:center"><div class="invoice-title">Sales Invoice</div></div>
+
+    <div class="grid-2">
+        <div class="grid-cell">
+            <div class="label">Bill To</div>
+            <div class="value" style="font-size: 1rem; color: #000">${escapeHtml(inv.partyName)}</div>
+            <div style="font-size: 0.8rem; margin-top: 4px;">
+                ${party.address ? `<div>${escapeHtml(party.address)}</div>` : ''}
+                ${party.city ? `<div>${escapeHtml(party.city)}</div>` : ''}
+                <div style="margin-top: 4px;"><b>GSTIN:</b> ${escapeHtml(inv.gstin || party.gstin || 'URD')}</div>
+                <div style="margin-top: 8px; display: flex; gap: 15px;">
+                    <div><b style="color: #6366f1">Party Code:</b> ${escapeHtml(party.partyCode || 'N/A')}</div>
+                    <div><b>State:</b> ${paStateCode}</div>
+                </div>
+            </div>
+        </div>
+        <div class="grid-cell">
+            <div class="tot-row"><span class="label">Invoice No</span> <span class="value">${escapeHtml(inv.invoiceNo)}</span></div>
+            <div class="tot-row"><span class="label">Date</span> <span class="value">${fmtDate(inv.date)}</span></div>
+            ${inv.dueDate ? `<div class="tot-row"><span class="label">Due Date</span> <span class="value">${fmtDate(inv.dueDate)}</span></div>` : ''}
+            <div class="tot-row"><span class="label">Order Ref</span> <span class="value">${escapeHtml(inv.fromOrder || '-')}</span></div>
+            <div class="tot-row"><span class="label">Order Date</span> <span class="value">${order.date ? fmtDate(order.date) : '-'}</span></div>
+        </div>
+    </div>
+
+    <div class="table-wrapper">
+        <table>
+            <thead><tr><th width="30">S.N</th><th width="240">Description of Goods</th><th class="text-right" width="60">Qty</th><th width="60">Unit</th><th class="text-right" width="80">Rate</th><th class="text-right" width="100">Amount</th></tr></thead>
+            <tbody>
+                ${items.map((it, idx) => `
+                <tr>
+                    <td style="text-align:center">${idx + 1}</td>
+                    <td style="font-weight:600">${escapeHtml(it.name)}</td>
+                    <td class="text-right">${it.qty}</td>
+                    <td>${it.unit || 'PCS'}</td>
+                    <td class="text-right">${currency(it.price).replace('', '')}</td>
+                    <td class="text-right" style="font-weight:600">${currency(it.amount).replace('', '')}</td>
+                </tr>`).join('')}
+                ${Array.from({ length: Math.max(0, 10 - items.length) }).map(() => `<tr><td style="color:transparent">.</td><td></td><td></td><td></td><td></td><td></td></tr>`).join('')}
+            </tbody>
+        </table>
+    </div>
+
+    <div class="tot-grid">
+        <div class="tax-box">
+            <div class="label" style="margin-bottom:5px; border-bottom: 1px solid #777; display: inline-block">GST Analysis (Inclusive 5%)</div>
+            <table style="border:none; font-size: 0.8rem; width: 100%">
+                <tr style="background:none"><td style="padding:2px;border:none">Taxable Amount</td><td class="text-right" style="padding:2px;border:none">${currency(taxable)}</td></tr>
+                ${isSameState ? `
+                <tr style="background:none"><td style="padding:2px;border:none">CGST (2.5%)</td><td class="text-right" style="padding:2px;border:none">${currency(cgst)}</td></tr>
+                <tr style="background:none"><td style="padding:2px;border:none">SGST (2.5%)</td><td class="text-right" style="padding:2px;border:none">${currency(sgst)}</td></tr>
+                ` : `
+                <tr style="background:none"><td style="padding:2px;border:none">IGST (5.0%)</td><td class="text-right" style="padding:2px;border:none">${currency(igst)}</td></tr>
+                `}
+                <tr style="background:none; border-top: 1px solid #ccc"><td style="padding:2px;border:none"><b>Total Tax</b></td><td class="text-right" style="padding:2px;border:none"><b>${currency(taxAmt)}</b></td></tr>
+            </table>
+            <div style="margin-top:12px; padding-top:8px; border-top: 1px dashed #000">
+                <div class="label">Amount in Words</div>
+                <div class="value" style="font-size:0.8rem; text-transform: capitalize">${numberToWords(inv.total)}</div>
+            </div>
+        </div>
+        <div class="tot-box">
+            <div class="tot-row"><span class="label">Sub Total</span> <span class="value">${currency(inv.subtotal || inv.total)}</span></div>
+            <div class="tot-row"><span class="label">Discount</span> <span class="value">${currency(inv.discountAmt || 0)}</span></div>
+            <div class="tot-row"><span class="label">Round Off</span> <span class="value">${currency(inv.roundOff || 0)}</span></div>
+            <div class="tot-row grand"><span>Total Amount</span> <span>${currency(inv.total)}</span></div>
+            <div class="tot-row" style="background:#fefce8; padding: 8px 10px"><span class="label" style="color:#854d0e">Outstanding Balance</span> <span class="value" style="color:#854d0e">${currency(party.balance || 0)}</span></div>
+            <div style="padding: 10px; text-align: center">
+                ${qrUrl ? `<img src="${qrUrl}" style="margin-bottom:4px"><br><span style="font-size:0.6rem; color:#666">Pay via UPI</span>` : ''}
+            </div>
+        </div>
+    </div>
+
+    <div class="footer">
+        <div style="font-size: 0.75rem; color: #555">
+            <b>Terms & Conditions:</b><br>
+            1. Goods once sold will not be taken back.<br>
+            2. Subject to local jurisdiction.
+        </div>
+        <div style="text-align:right">
+            <div style="font-size:0.75rem; margin-bottom:35px">For <strong>${escapeHtml(co.name || 'Company Name')}</strong></div>
+            <div class="sign-box">Authorized Signatory</div>
+        </div>
+    </div>
+</div>
+</body></html>`;
+    printWindow.document.write(html);
+    printWindow.document.close();
+    setTimeout(() => { printWindow.print(); }, 800);
+}
+
 
 // =============================================
 //  PAYMENTS
@@ -6995,37 +7100,42 @@ async function renderPayments() {
 
     pageContent.innerHTML = `
         <div class="stats-grid" style="margin-bottom:14px" id="pay-stat-tiles">
-            <div class="stat-card green"><div class="stat-icon">📥</div><div class="stat-value" id="pay-stat-in">${currency(totalIn)}</div><div class="stat-label">Payment In</div></div>
-            ${!isSalesman ? `<div class="stat-card red"><div class="stat-icon">📤</div><div class="stat-value" id="pay-stat-out">${currency(totalOut)}</div><div class="stat-label">Payment Out</div></div>` : ''}
+            <div class="stat-card green"><div class="stat-icon"></div><div class="stat-value" id="pay-stat-in">${currency(totalIn)}</div><div class="stat-label">Payment In</div></div>
+            ${!isSalesman ? `<div class="stat-card red"><div class="stat-icon"></div><div class="stat-value" id="pay-stat-out">${currency(totalOut)}</div><div class="stat-label">Payment Out</div></div>` : ''}
         </div>
-        <div class="pay-toolbar-compact">
-            <div class="pay-breakup-section">
-                <div style="flex-shrink:0">
-                    <div style="font-size:0.65rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">Mode Breakup (In)</div>
-                    <div style="font-size:1.1rem;font-weight:800;color:var(--primary)">${currency(totalIn)}</div>
+        
+        <div id="pay-mode-bar-wrap">
+            <div class="pay-summary-bar">
+                <div class="pay-summary-total">
+                    <span class="pay-sum-label">Mode Breakup (In)</span>
+                    <span class="pay-sum-value" id="pay-mode-total">${currency(totalIn)}</span>
                 </div>
-                <div id="pay-mode-chips" style="display:flex;gap:6px">${modeChips}</div>
+                <div class="pay-summary-modes" id="pay-mode-chips">${modeChips}</div>
             </div>
+        </div>
+
+        <div class="pay-toolbar-compact">
             <div class="pay-filters-section">
                 <div class="pay-filter-group"><label>From</label><input type="date" id="pay-f-from" value="${monthStart}" onchange="filterPayTable()"></div>
                 <div class="pay-filter-group"><label>To</label><input type="date" id="pay-f-to" value="${today1}" onchange="filterPayTable()"></div>
                 <div class="pay-filter-group" style="flex:1.5;min-width:180px"><label>Search</label><input id="pay-search" placeholder="Search parties/receipts..." oninput="filterPayTable()" class="search-box" style="margin:0"></div>
                 <div class="pay-filter-group"><label>Type</label><select id="pay-type-filter" onchange="filterPayTable()"><option value="">All Types</option><option value="in">Payment In</option><option value="out">Payment Out</option></select></div>
                 <div class="pay-filter-group"><label>Mode</label><select id="pay-mode-filter" onchange="filterPayTable()"><option value="">All Modes</option><option>Cash</option><option>UPI</option><option>Cheque</option><option>Bank Transfer</option></select></div>
-                ${!isSalesman ? `<div class="pay-filter-group"><label>Collector</label><select id="pay-collector-filter" onchange="filterPayTable()"><option value="">All</option>${[...new Set(visiblePayments.map(p=>p.collectedBy||p.createdBy).filter(Boolean))].map(n=>`<option>${n}</option>`).join('')}</select></div>` : ''}
+                ${!isSalesman ? `<div class="pay-filter-group"><label>Collector</label><select id="pay-collector-filter" onchange="filterPayTable()"><option value="">All</option>${[...new Set(visiblePayments.map(p => p.collectedBy || p.createdBy).filter(Boolean))].map(n => `<option>${n}</option>`).join('')}</select></div>` : ''}
                 <div style="display:flex;gap:6px;align-items:center;padding-top:14px">
-                    <button class="btn btn-outline btn-sm" onclick="DB.exportToExcel('tbl-payments', 'payments')" title="Export Excel" style="border-color:#16a34a;color:#16a34a">📊</button>
-                    <button class="btn btn-outline btn-sm" onclick="openColumnPersonalizer('payments','renderPayments')" title="Column Config" style="border-color:var(--accent);color:var(--accent)">⚙️</button>
-                    <button class="btn btn-primary" onclick="openPaymentModal()" style="white-space:nowrap;padding:8px 16px">${isSalesman ? '+ Record' : '+ Record'}</button>
+                    <button class="btn btn-outline btn-sm" onclick="DB.exportToExcel('tbl-payments', 'payments')" title="Export Excel" style="border-color:#16a34a;color:#16a34a"></button>
+                    <button class="btn btn-outline btn-sm" onclick="openColumnPersonalizer('payments','renderPayments')" title="Column Config" style="border-color:var(--accent);color:var(--accent)"></button>
+                    <button class="btn btn-primary" onclick="openPaymentModal()" style="white-space:nowrap;padding:8px 16px">+ Record</button>
                 </div>
             </div>
         </div>
         <div class="card" style="margin-top:12px"><div class="card-body">
             <div class="table-wrapper">
-                <table class="data-table" id="tbl-payments"><thead><tr>${ColumnManager.get('payments').filter(c=>c.visible).map(c=>`<th>${c.label}</th>`).join('')}</tr></thead>
+                <table class="data-table" id="tbl-payments"><thead><tr>${ColumnManager.get('payments').filter(c => c.visible).map(c => `<th>${c.label}</th>`).join('')}</tr></thead>
                 <tbody id="pay-tbody">${renderPayRows(visiblePayments)}</tbody></table>
             </div>
         </div></div>`;
+    filterPayTable();
 }
 function buildPayInvoiceCell(p) {
     if (p.allocations && Object.keys(p.allocations).length > 0) {
@@ -7039,17 +7149,17 @@ function renderPayRows(pays) {
     if (!pays.length) return '<tr><td colspan="8" class="empty-state"><p>No payments found</p></td></tr>';
     const cols = ColumnManager.get('payments').filter(c => c.visible);
     return pays.map(p => {
-        const editBtn = canEdit() ? `<button class="btn-icon" onclick="openEditPaymentModal('${p.id}')" title="Edit">✏️</button>` : '';
+        const editBtn = canEdit() ? `<button class="btn-icon" onclick="openEditPaymentModal('${p.id}')" title="Edit"></button>` : '';
         const cellMap = {
-            date:        `<td>${fmtDate(p.date)}</td>`,
-            receiptNo:   `<td style="font-weight:600;color:var(--accent)">${p.payNo || (p.id ? p.id.substring(0,8) : '-')}</td>`,
-            party:       `<td style="font-weight:600">${escapeHtml(p.partyName)}</td>`,
-            type:        `<td><span class="badge ${p.type === 'in' ? 'badge-success' : 'badge-danger'}">${p.type === 'in' ? 'Payment In' : 'Payment Out'}</span></td>`,
-            invoiceNo:   `<td>${buildPayInvoiceCell(p)}</td>`,
-            mode:        `<td>${p.mode || 'Cash'}${p.mode === 'Cheque' && p.chequeNo ? `<br><span style="font-size:0.75rem;color:var(--text-muted)">#${p.chequeNo} | ${p.chequeBank || ''}</span><br><span class="badge ${p.chequeStatus === 'Cleared' ? 'badge-success' : p.chequeStatus === 'Deposited' ? 'badge-warning' : 'badge-danger'}" style="font-size:0.65rem">${p.chequeStatus || 'Pending'}</span>` : ''}</td>`,
+            date: `<td>${fmtDate(p.date)}</td>`,
+            receiptNo: `<td style="font-weight:600;color:var(--accent)">${p.payNo || (p.id ? p.id.substring(0, 8) : '-')}</td>`,
+            party: `<td style="font-weight:600">${escapeHtml(p.partyName)}</td>`,
+            type: `<td><span class="badge ${p.type === 'in' ? 'badge-success' : 'badge-danger'}">${p.type === 'in' ? 'Payment In' : 'Payment Out'}</span></td>`,
+            invoiceNo: `<td>${buildPayInvoiceCell(p)}</td>`,
+            mode: `<td>${p.mode || 'Cash'}${p.mode === 'Cheque' && p.chequeNo ? `<br><span style="font-size:0.75rem;color:var(--text-muted)">#${p.chequeNo} | ${p.chequeBank || ''}</span><br><span class="badge ${p.chequeStatus === 'Cleared' ? 'badge-success' : p.chequeStatus === 'Deposited' ? 'badge-warning' : 'badge-danger'}" style="font-size:0.65rem">${p.chequeStatus || 'Pending'}</span>` : ''}</td>`,
             collectedBy: `<td style="font-size:0.82rem;color:var(--text-secondary)">${escapeHtml(p.collectedBy || p.createdBy || '-')}</td>`,
-            amount:      `<td class="${p.type === 'in' ? 'amount-green' : 'amount-red'}">${currency(p.amount)}</td>`,
-            actions:     `<td><div class="action-btns">${editBtn}${canEdit() ? `<button class="btn-icon" onclick="deletePayment('${p.id}')" title="Delete Payment">🗑️</button>` : '—'}</div></td>`,
+            amount: `<td class="${p.type === 'in' ? 'amount-green' : 'amount-red'}">${currency(p.amount)}</td>`,
+            actions: `<td><div class="action-btns">${editBtn}${canEdit() ? `<button class="btn-icon" onclick="deletePayment('${p.id}')" title="Delete Payment"></button>` : ''}</div></td>`,
         };
         return `<tr>${cols.map(c => cellMap[c.key] || '').join('')}</tr>`;
     }).join('');
@@ -7067,9 +7177,9 @@ async function filterPayTable() {
     }
     if (from) pays = pays.filter(p => p.date >= from);
     if (to) pays = pays.filter(p => p.date <= to);
-    if (s) pays = pays.filter(p => (p.partyName||'').toLowerCase().includes(s) || (p.note||'').toLowerCase().includes(s) || (p.invoiceNo||'').toLowerCase().includes(s));
+    if (s) pays = pays.filter(p => (p.partyName || '').toLowerCase().includes(s) || (p.note || '').toLowerCase().includes(s) || (p.invoiceNo || '').toLowerCase().includes(s));
     if (t) pays = pays.filter(p => p.type === t);
-    if (modeF) pays = pays.filter(p => (p.mode||'Cash') === modeF);
+    if (modeF) pays = pays.filter(p => (p.mode || 'Cash') === modeF);
     if (collF) pays = pays.filter(p => (p.collectedBy || p.createdBy) === collF);
     $('pay-tbody').innerHTML = renderPayRows(pays);
 
@@ -7121,24 +7231,24 @@ async function viewPaymentDetails(id) {
                 <tr style="border-bottom:1px dashed var(--border)"><td style="padding:8px 0;color:var(--text-secondary)">Amount</td><td style="padding:8px 0;text-align:right;font-weight:700;font-size:1.1rem;color:${p.type === 'in' ? 'var(--success)' : 'var(--danger)'}">${currency(p.amount)}</td></tr>
                 <tr style="border-bottom:1px dashed var(--border)"><td style="padding:8px 0;color:var(--text-secondary);vertical-align:top">Invoice(s)</td><td style="padding:8px 0;text-align:right">
                     ${p.allocations && Object.keys(p.allocations).length > 0
-                        ? `<table style="width:100%;font-size:0.82rem;border-collapse:collapse">
+            ? `<table style="width:100%;font-size:0.82rem;border-collapse:collapse">
                             ${Object.entries(p.allocations).map(([inv, amt]) => `
                             <tr>
                                 <td style="padding:2px 0"><a href="#" onclick="viewInvoiceByNo('${inv}');return false" style="color:var(--primary);font-weight:600">${escapeHtml(inv)}</a></td>
-                                <td style="text-align:right;font-weight:700;color:var(--success)">₹${(+amt).toFixed(2)}</td>
+                                <td style="text-align:right;font-weight:700;color:var(--success)">${(+amt).toFixed(2)}</td>
                             </tr>`).join('')}
-                            ${(() => { const used = Object.values(p.allocations).reduce((s,v)=>s+(+v),0); const rem = p.amount - used; return rem > 0.01 ? `<tr><td style="padding:2px 0;color:var(--text-muted)">Unallocated</td><td style="text-align:right;color:var(--accent);font-weight:700">₹${rem.toFixed(2)}</td></tr>` : ''; })()}
+                            ${(() => { const used = Object.values(p.allocations).reduce((s, v) => s + (+v), 0); const rem = p.amount - used; return rem > 0.01 ? `<tr><td style="padding:2px 0;color:var(--text-muted)">Unallocated</td><td style="text-align:right;color:var(--accent);font-weight:700">${rem.toFixed(2)}</td></tr>` : ''; })()}
                           </table>`
-                        : (p.invoiceNo && p.invoiceNo !== 'Advance'
-                            ? `<a href="#" onclick="viewInvoiceByNo('${p.invoiceNo}');return false" style="color:var(--accent);text-decoration:underline">${escapeHtml(p.invoiceNo)}</a>`
-                            : `<span style="color:var(--text-muted)">${p.invoiceNo === 'Advance' ? 'Advance' : 'Unlinked'}</span>`)}
+            : (p.invoiceNo && p.invoiceNo !== 'Advance'
+                ? `<a href="#" onclick="viewInvoiceByNo('${p.invoiceNo}');return false" style="color:var(--accent);text-decoration:underline">${escapeHtml(p.invoiceNo)}</a>`
+                : `<span style="color:var(--text-muted)">${p.invoiceNo === 'Advance' ? 'Advance' : 'Unlinked'}</span>`)}
                 </td></tr>
                 <tr><td style="padding:8px 0;color:var(--text-secondary)">Note</td><td style="padding:8px 0;text-align:right">${p.note || '-'}</td></tr>
             </table>
         </div>
         <div class="modal-actions">
             <button class="btn btn-outline" onclick="closeModal()">Close</button>
-            <button class="btn btn-primary" onclick="printPaymentReceipt()">🖨️ Print Receipt</button>
+            <button class="btn btn-primary" onclick="printPaymentReceipt()"> Print Receipt</button>
         </div>
     `);
 }
@@ -7146,15 +7256,15 @@ function printPaymentReceipt() {
     const area = document.querySelector('#modal-body');
     if (!area) return;
     const co = DB.getObj('db_company') || {};
-    const header = co.name ? `<div style="text-align:center;margin-bottom:12px"><h2 style="margin:0">${escapeHtml(co.name)}</h2>${co.address?`<div style="font-size:0.85rem">${escapeHtml(co.address)}${co.city?', '+escapeHtml(co.city):''}</div>`:''}${co.phone?`<div style="font-size:0.85rem">Ph: ${escapeHtml(co.phone)}</div>`:''}</div><hr>` : '';
+    const header = co.name ? `<div style="text-align:center;margin-bottom:12px"><h2 style="margin:0">${escapeHtml(co.name)}</h2>${co.address ? `<div style="font-size:0.85rem">${escapeHtml(co.address)}${co.city ? ', ' + escapeHtml(co.city) : ''}</div>` : ''}${co.phone ? `<div style="font-size:0.85rem">Ph: ${escapeHtml(co.phone)}</div>` : ''}</div><hr>` : '';
     const w = window.open('', '_blank');
-    w.document.write(`<!DOCTYPE html><html><head><title>Payment Receipt</title><style>body{font-family:sans-serif;padding:20px;max-width:400px;margin:0 auto}table{width:100%;border-collapse:collapse}td{padding:8px 4px;border-bottom:1px dashed #eee}hr{border:none;border-top:1px solid #ccc}@media print{button{display:none}}</style></head><body>${header}${area.innerHTML}<button onclick="window.print()" style="margin-top:16px;padding:8px 20px;background:#f97316;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:1rem">🖨️ Print</button></body></html>`);
+    w.document.write(`<!DOCTYPE html><html><head><title>Payment Receipt</title><style>body{font-family:sans-serif;padding:20px;max-width:400px;margin:0 auto}table{width:100%;border-collapse:collapse}td{padding:8px 4px;border-bottom:1px dashed #eee}hr{border:none;border-top:1px solid #ccc}@media print{button{display:none}}</style></head><body>${header}${area.innerHTML}<button onclick="window.print()" style="margin-top:16px;padding:8px 20px;background:#f97316;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:1rem"> Print</button></body></html>`);
     w.document.close();
 }
 
 
 async function openPaymentModal(prefillPartyId) {
-    // Hide FAB — full-page form has its own footer buttons
+    // Hide FAB  full-page form has its own footer buttons
     const fab = $('app-fab');
     if (fab) fab.classList.add('hidden');
 
@@ -7167,14 +7277,14 @@ async function openPaymentModal(prefillPartyId) {
     pageContent.innerHTML = `
         <!-- Sticky top bar -->
         <div class="pay-page-header">
-            <button class="btn-icon pay-back-btn" onclick="renderPayments()">←</button>
+            <button class="btn-icon pay-back-btn" onclick="renderPayments()"></button>
             <div style="flex:1">
                 <div style="font-size:1rem;font-weight:700;color:var(--text-primary)">Record Payment</div>
                 <div style="font-size:0.75rem;color:var(--text-muted)" id="pay-co-name">${escapeHtml(co.name || '')}</div>
             </div>
             <div style="display:flex;gap:6px">
                 <button class="btn btn-outline btn-sm" style="padding:6px 10px" onclick="onPayTypeChange()" id="pay-type-toggle-btn" title="Switch type">
-                    <span id="pay-type-label">💰 Payment In</span>
+                    <span id="pay-type-label"> Payment In</span>
                 </button>
             </div>
         </div>
@@ -7189,7 +7299,7 @@ async function openPaymentModal(prefillPartyId) {
             <div style="font-size:0.72rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px">PARTY</div>
             <div id="pay-party-balance-row" style="display:none;margin-bottom:10px;padding:10px 14px;background:rgba(16,185,129,0.07);border:1px solid rgba(16,185,129,0.2);border-radius:10px;justify-content:space-between;align-items:center">
                 <span style="font-size:0.82rem;color:var(--text-muted)">Party Balance</span>
-                <span style="font-size:1rem;font-weight:700" id="pay-party-balance-val">₹0.00</span>
+                <span style="font-size:1rem;font-weight:700" id="pay-party-balance-val">0.00</span>
             </div>
             <div class="form-group" style="margin-bottom:0">
                 <input id="f-pay-party" placeholder="Search customer name..." autocomplete="off" style="font-size:1rem;font-weight:500">
@@ -7203,7 +7313,7 @@ async function openPaymentModal(prefillPartyId) {
             <div id="pay-modes-container" style="margin-bottom:12px">
                 <div class="pay-mode-row" style="display:grid;grid-template-columns:1fr 120px 40px;gap:8px;margin-bottom:8px;align-items:end">
                     <div class="form-group" style="margin-bottom:0">
-                        <label style="font-size:0.75rem">Amount ₹</label>
+                        <label style="font-size:0.75rem">Amount </label>
                         <input type="number" class="f-pay-row-amount" placeholder="0.00" oninput="onPayAmountChange()">
                     </div>
                     <div class="form-group" style="margin-bottom:0">
@@ -7216,18 +7326,18 @@ async function openPaymentModal(prefillPartyId) {
             <button class="btn btn-outline btn-sm" onclick="addPaymentModeRow()" style="margin-bottom:14px;width:100%;border-style:dashed">+ Add Another Mode (Split Payment)</button>
 
             <div style="margin-bottom:14px">
-                <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:6px">Total Discount ₹</div>
+                <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:6px">Total Discount </div>
                 <input type="number" id="f-pay-discount" min="0" placeholder="0.00"
                     style="font-size:1.2rem;font-weight:600;color:var(--text-secondary);border:none;border-bottom:1px solid var(--border);background:transparent;width:100%;padding:4px 0;outline:none"
                     oninput="onPayAmountChange()">
             </div>
             <div style="margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-top:1px dashed var(--border)">
                 <span style="font-size:0.9rem;font-weight:700;color:var(--text-muted)">Total Received:</span>
-                <span style="font-size:1.2rem;font-weight:800;color:var(--primary)" id="pay-total-received-display">₹0.00</span>
+                <span style="font-size:1.2rem;font-weight:800;color:var(--primary)" id="pay-total-received-display">0.00</span>
             </div>
             <div style="margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;padding-top:4px">
                 <span style="font-size:0.9rem;font-weight:700;color:var(--text-muted)">Total Balance Reduction:</span>
-                <span style="font-size:1.2rem;font-weight:800;color:var(--success)" id="pay-total-display">₹0.00</span>
+                <span style="font-size:1.2rem;font-weight:800;color:var(--success)" id="pay-total-display">0.00</span>
             </div>
             <div id="pay-qr-box" style="text-align:center;margin:10px 0;display:none;"></div>
             <div id="pay-cheque-fields" style="display:none;">
@@ -7264,8 +7374,8 @@ async function openPaymentModal(prefillPartyId) {
         <!-- Sticky save footer -->
         <div class="pay-page-footer">
             ${!isSalesmanRole ? `<button class="btn btn-outline" style="flex:1;min-height:48px" onclick="renderPayments()">Cancel</button>` : ''}
-            <button class="btn btn-outline btn-save-new" id="btn-save-new" onclick="window._saveAndNew=true;savePayment()">＋ Save & New</button>
-            <button class="btn btn-primary" id="btn-save-payment" style="flex:2;min-height:48px;font-size:1rem;font-weight:700" onclick="savePayment()">💾 Save Payment</button>
+            <button class="btn btn-outline btn-save-new" id="btn-save-new" onclick="window._saveAndNew=true;savePayment()"> Save & New</button>
+            <button class="btn btn-primary" id="btn-save-payment" style="flex:2;min-height:48px;font-size:1rem;font-weight:700" onclick="savePayment()"> Save Payment</button>
         </div>
     `;
 
@@ -7281,17 +7391,17 @@ async function openPaymentModal(prefillPartyId) {
             const parties = await DB.getAll('parties');
             const ptType = $('f-pay-party-type')?.value || 'Customer';
             const customers = parties.filter(p => p.type === ptType);
-            
+
             // Get fresh GPS and build the sorted list
             const sortedParties = await getFreshLocationAndSort(customers, 'party');
-            
+
             initSearchDropdown('f-pay-party', sortedParties, (party) => {
                 if ($('f-pay-party-id')) $('f-pay-party-id').value = party.id || '';
                 onPayPartyChange();
             });
-            
+
             partyInput.dataset.initDone = "true";
-            
+
             // Re-open the dropdown if focus was lost during the async GPS fetch
             if (document.activeElement === partyInput) {
                 const dd = document.getElementById('f-pay-party-dropdown');
@@ -7327,7 +7437,7 @@ async function openPaymentModal(prefillPartyId) {
 }
 
 // Payment Mode Row Helpers
-window.addPaymentModeRow = function() {
+window.addPaymentModeRow = function () {
     const container = $('pay-modes-container');
     const div = document.createElement('div');
     div.className = 'pay-mode-row';
@@ -7339,12 +7449,12 @@ window.addPaymentModeRow = function() {
         <div class="form-group" style="margin-bottom:0">
             <select class="f-pay-row-mode" onchange="onPayModeChange()"><option>Cash</option><option>UPI</option><option>Bank Transfer</option><option>Cheque</option></select>
         </div>
-        <button class="btn-icon" onclick="this.parentNode.remove();onPayAmountChange()" style="height:38px;color:var(--danger)">🗑️</button>
+        <button class="btn-icon" onclick="this.parentNode.remove();onPayAmountChange()" style="height:38px;color:var(--danger)"></button>
     `;
     container.appendChild(div);
 };
 
-window.onPayAmountChange = function() {
+window.onPayAmountChange = function () {
     let totalReceived = 0;
     document.querySelectorAll('.f-pay-row-amount').forEach(inp => totalReceived += (+inp.value || 0));
     const disc = +($('f-pay-discount')?.value) || 0;
@@ -7361,7 +7471,7 @@ window.onPayAmountChange = function() {
 };
 
 // Mode chip selector (legacy support, but we now use dropdowns in rows)
-window.selectPayMode = function(mode) {
+window.selectPayMode = function (mode) {
     // For single mode logic, we'll just update the first row's mode
     const firstSelect = document.querySelector('.f-pay-row-mode');
     if (firstSelect) {
@@ -7375,8 +7485,8 @@ function onPayTypeChange() {
     inp.value = newType;
     // Update toggle button label
     const lbl = $('pay-type-label');
-    if (lbl) lbl.textContent = newType === 'in' ? '💰 Payment In' : '💸 Payment Out';
-    // Auto-set party type: Payment In → Customer, Payment Out → Supplier
+    if (lbl) lbl.textContent = newType === 'in' ? ' Payment In' : ' Payment Out';
+    // Auto-set party type: Payment In  Customer, Payment Out  Supplier
     const ptInp = $('f-pay-party-type');
     if (ptInp) ptInp.value = newType === 'in' ? 'Customer' : 'Supplier';
     // Clear party selection and reload dropdown
@@ -7391,15 +7501,15 @@ async function onPayPartyTypeChange() {
     // Clear current selection
     if ($('f-pay-party')) $('f-pay-party').value = '';
     if ($('f-pay-party-id')) $('f-pay-party-id').value = '';
-    
+
     const customers = parties.filter(p => p.type === ptype);
     const sortedParties = await getFreshLocationAndSort(customers, 'party');
-    
+
     initSearchDropdown('f-pay-party', sortedParties, (party) => {
         if ($('f-pay-party-id')) $('f-pay-party-id').value = party.id || '';
         onPayPartyChange();
     });
-    
+
     onPayPartyChange();
 }
 async function onPayPartyChange() {
@@ -7448,7 +7558,7 @@ async function onPayPartyChange() {
     }
 
     const cards = pending.map(inv => `
-        <div class="pay-alloc-card" id="pac-${inv.invoiceNo.replace(/[^a-z0-9]/gi,'_')}">
+        <div class="pay-alloc-card" id="pac-${inv.invoiceNo.replace(/[^a-z0-9]/gi, '_')}">
             <input type="checkbox" class="pay-alloc-chk" data-inv="${inv.invoiceNo}" data-max="${inv.remaining}"
                 checked style="width:20px;height:20px;accent-color:var(--primary);flex-shrink:0;cursor:pointer;margin-top:2px"
                 onchange="togglePayAllocInv()">
@@ -7463,7 +7573,7 @@ async function onPayPartyChange() {
                         <div style="font-weight:700;color:var(--danger);font-size:0.95rem">${currency(inv.remaining)}</div>
                     </div>
                     <div style="text-align:right">
-                        <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:2px">Allocate ₹</div>
+                        <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:2px">Allocate </div>
                         <input type="number" step="0.01" min="0" max="${inv.remaining}"
                             class="pay-alloc-input" data-inv="${inv.invoiceNo}"
                             style="width:110px;text-align:right;font-weight:700;font-size:0.95rem;border:none;border-bottom:2px solid var(--primary);background:transparent;padding:2px 4px;outline:none;color:var(--text-primary)"
@@ -7476,11 +7586,11 @@ async function onPayPartyChange() {
     invSec.innerHTML = `
         <div style="font-size:0.72rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px">INVOICES</div>
         <div style="font-size:0.82rem;color:var(--text-muted);margin-bottom:10px">
-            Allocate Payment to Invoices <span style="color:var(--accent)">(Optional)</span> — uncheck to skip an invoice
+            Allocate Payment to Invoices <span style="color:var(--accent)">(Optional)</span>  uncheck to skip an invoice
         </div>
         <div id="pay-alloc-cards">${cards}</div>
         <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 4px;margin-top:6px;border-top:1px solid var(--border)">
-            <span style="font-size:0.85rem;color:var(--text-muted)">Total Allocated: <strong id="lbl-total-alloc" style="color:var(--success)">₹0.00</strong></span>
+            <span style="font-size:0.85rem;color:var(--text-muted)">Total Allocated: <strong id="lbl-total-alloc" style="color:var(--success)">0.00</strong></span>
             <span id="lbl-unused-alloc" style="font-size:0.82rem;font-weight:600"></span>
         </div>`;
 
@@ -7536,12 +7646,12 @@ window.updatePayAllocSummary = function () {
     const totalReduction = amt + disc;
     const unused = +(totalReduction - allocated).toFixed(2);
 
-    const lblAlloc  = document.getElementById('lbl-total-alloc');
+    const lblAlloc = document.getElementById('lbl-total-alloc');
     const lblUnused = document.getElementById('lbl-unused-alloc');
-    if (lblAlloc)  lblAlloc.textContent  = currency(allocated);
+    if (lblAlloc) lblAlloc.textContent = currency(allocated);
     if (lblUnused) {
-        lblUnused.textContent  = unused > 0.01 ? `Unused: ${currency(unused)}` : allocated > 0 ? '✅ Fully allocated' : '';
-        lblUnused.style.color  = unused > 0.01 ? 'var(--warning)' : 'var(--success)';
+        lblUnused.textContent = unused > 0.01 ? `Unused: ${currency(unused)}` : allocated > 0 ? ' Fully allocated' : '';
+        lblUnused.style.color = unused > 0.01 ? 'var(--warning)' : 'var(--success)';
     }
     calcTotalAllocation();
 };
@@ -7581,11 +7691,19 @@ window.updatePaymentQR = function () {
         if (partyName) noteParts.push(partyName + (userName ? ' - ' + userName : ''));
         if (tn) noteParts.push('Inv:' + tn);
         if (noteParts.length) upiString += `&tn=${encodeURIComponent(noteParts.join(' | '))}`;
-        const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(upiString)}`;
+
+        let qrImgHtml = '';
+        if (typeof QRCode !== 'undefined') {
+            const div = document.createElement('div');
+            new QRCode(div, { text: upiString, width: 180, height: 180, correctLevel: QRCode.CorrectLevel.M });
+            const obj = div.querySelector('canvas') || div.querySelector('img');
+            if (obj) qrImgHtml = `<img src="${obj.toDataURL ? obj.toDataURL() : obj.src}" alt="Scan to pay via UPI" style="display:block;margin:0 auto;border:1px solid var(--border);border-radius:8px;padding:8px;background:#fff;max-width:180px;width:180px;">`;
+        }
+
         const noteDisplay = [];
         if (tn) noteDisplay.push('<span style="color:var(--accent)">Invoice: ' + tn + '</span>');
         if (partyName) noteDisplay.push('<span style="color:var(--text-primary);font-weight:600">' + partyName + (userName ? ' - ' + userName : '') + '</span>');
-        box.innerHTML = `<img src="${qrUrl}" alt="Scan to pay via UPI" style="display:block;margin:0 auto;border:1px solid var(--border);border-radius:8px;padding:8px;background:#fff;max-width:180px;width:180px;">
+        box.innerHTML = `${qrImgHtml}
         <div style="font-size:0.8rem;color:var(--text-secondary);margin-top:4px;text-align:center;">Scan with any UPI App${noteDisplay.length ? '<br>' + noteDisplay.join('<br>') : ''}</div>`;
     } else {
         box.style.display = 'none';
@@ -7610,14 +7728,14 @@ window.calcTotalAllocation = function () {
     let tot = 0;
     document.querySelectorAll('.pay-alloc-input').forEach(inp => tot += (+inp.value || 0));
     const lbl = document.getElementById('lbl-total-alloc');
-    if (lbl) lbl.innerText = '₹' + tot.toFixed(2);
+    if (lbl) lbl.innerText = '' + tot.toFixed(2);
 };
 async function savePayment(id) {
     // 1. Security & Permission Check
     if (id && !DB.canEdit()) {
         return alert("Access Denied: You do not have permission to edit payments. Please contact Admin.");
     }
-    
+
     if (!beginSave()) return;
 
     const dateVal = $('f-pay-date').value;
@@ -7627,13 +7745,13 @@ async function savePayment(id) {
         endSave();
         return alert("Access Denied: Only Admin can post payments for a past date.");
     }
-    
+
     const payPartyId = ($('f-pay-party-id') || {}).value || '';
     const payPartyName = ($('f-pay-party') || {}).value?.trim() || '';
-    
-    if (!payPartyId) { 
-        endSave(); 
-        return alert('Please select a party from the dropdown'); 
+
+    if (!payPartyId) {
+        endSave();
+        return alert('Please select a party from the dropdown');
     }
 
     // 3. Collect All Payment Modes (Split Payment Logic)
@@ -7644,9 +7762,9 @@ async function savePayment(id) {
         if (a > 0) payRows.push({ mode: m, amount: a });
     });
 
-    if (payRows.length === 0) { 
-        endSave(); 
-        return alert('Enter at least one payment amount'); 
+    if (payRows.length === 0) {
+        endSave();
+        return alert('Enter at least one payment amount');
     }
 
     const disc = +($('f-pay-discount')?.value) || 0;
@@ -7664,9 +7782,9 @@ async function savePayment(id) {
         }
     });
 
-    if (totalAlloc > totalReduction + 0.01) { 
-        endSave(); 
-        return alert('Allocation exceeds total reduction (Received + Discount).'); 
+    if (totalAlloc > totalReduction + 0.01) {
+        endSave();
+        return alert('Allocation exceeds total reduction (Received + Discount).');
     }
 
     const payType = $('f-pay-type').value; // 'in' or 'out'
@@ -7680,7 +7798,7 @@ async function savePayment(id) {
         for (let i = 0; i < payRows.length; i++) {
             const row = payRows[i];
             const rowDisc = i === 0 ? disc : 0; // Only attach discount to the first row to avoid double counting
-            
+
             const payData = {
                 pay_no: payRefNo,
                 date: dateVal,
@@ -7704,13 +7822,13 @@ async function savePayment(id) {
         // 6. Update Party Balance
         const parties = await DB.getAll('parties');
         const party = parties.find(p => p.id === payPartyId);
-        
+
         if (party) {
             const balChange = payType === 'in' ? -totalReduction : totalReduction;
             const newBal = +((party.balance || 0) + balChange).toFixed(2);
-            
+
             ops.push(DB.rawUpdate('parties', party.id, { balance: newBal }));
-            
+
             // Add Unified Ledger Entry
             ops.push(DB.rawInsert('party_ledger', {
                 date: dateVal,
@@ -7743,12 +7861,12 @@ async function savePayment(id) {
         await Promise.all(ops);
         incrementPayNo();
 
-        const andNew = window._saveAndNew; 
+        const andNew = window._saveAndNew;
         window._saveAndNew = false;
-        
+
         await renderPayments();
         showToast(`Payment ${payRefNo} saved successfully!`, 'success');
-        
+
         if (andNew) {
             openPaymentModal();
         }
@@ -7772,7 +7890,7 @@ async function openLinkInvoiceModal(payId) {
         const paid = await getInvoicePaidAmount(i.invoiceNo);
         const adjPaid = pay.invoiceNo === i.invoiceNo ? paid - pay.amount : paid;
         const remaining = i.total - adjPaid;
-        if (remaining > 0.01) options += `<option value="${i.invoiceNo}">${i.invoiceNo} — Due: ${currency(remaining)}</option>`;
+        if (remaining > 0.01) options += `<option value="${i.invoiceNo}">${i.invoiceNo}  Due: ${currency(remaining)}</option>`;
     }
 
     openModal('Link Payment to Invoice', `
@@ -7781,7 +7899,7 @@ async function openLinkInvoiceModal(payId) {
             <select id="f-link-invoice"><option value="">Select</option>${options}</select>
         </div>
         <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-        <button class="btn btn-primary" onclick="linkPaymentToInvoice('${payId}')">🔗 Link</button></div>`);
+        <button class="btn btn-primary" onclick="linkPaymentToInvoice('${payId}')"> Link</button></div>`);
 }
 
 async function openReceivePaymentForInvoice(invoiceId) {
@@ -7811,8 +7929,8 @@ async function openReceivePaymentForInvoice(invoiceId) {
         </div>
         
         <div class="form-row">
-            <div class="form-group"><label>Amount Received ₹ *</label><input type="number" step="0.01" id="f-pay-amount" value="${due.toFixed(2)}" oninput="onDirectPayAmountChange()"></div>
-            <div class="form-group"><label>Discount ₹</label><input type="number" step="0.01" id="f-pay-discount" value="0.00" oninput="onDirectPayAmountChange()"></div>
+            <div class="form-group"><label>Amount Received  *</label><input type="number" step="0.01" id="f-pay-amount" value="${due.toFixed(2)}" oninput="onDirectPayAmountChange()"></div>
+            <div class="form-group"><label>Discount </label><input type="number" step="0.01" id="f-pay-discount" value="0.00" oninput="onDirectPayAmountChange()"></div>
         </div>
 
         <div style="margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;padding:10px;background:rgba(16,185,129,0.05);border-radius:8px">
@@ -7833,7 +7951,7 @@ async function openReceivePaymentForInvoice(invoiceId) {
         </div>
     `);
 
-    window.onDirectPayAmountChange = function() {
+    window.onDirectPayAmountChange = function () {
         const amt = +($('f-pay-amount').value) || 0;
         const disc = +($('f-pay-discount').value) || 0;
         $('direct-pay-total-display').textContent = currency(amt + disc);
@@ -7845,7 +7963,7 @@ async function saveDirectPayment() {
     const invoices = await DB.getAll('invoices');
     const inv = invoices.find(i => i.id === invId);
     if (!inv) return alert('Invoice not found');
-    
+
     const amt = +$('f-pay-amount').value;
     const disc = +($('f-pay-discount')?.value) || 0;
     if (!amt || amt <= 0) return alert('Enter a valid amount');
@@ -8036,7 +8154,7 @@ async function openEditPaymentModal(id) {
 
     let rows = '';
     for (const i of invoices) {
-        // allocation already attributed to this instance — we attribute the FULL reduction (Amt+Disc)
+        // allocation already attributed to this instance  we attribute the FULL reduction (Amt+Disc)
         let alreadyAllocatedHere = (pay.allocations && pay.allocations[i.invoiceNo]) ? pay.allocations[i.invoiceNo] : 0;
         let totalPaidBefore = (await getInvoicePaidAmount(i.invoiceNo)) - alreadyAllocatedHere;
         let remaining = i.total - totalPaidBefore;
@@ -8056,11 +8174,11 @@ async function openEditPaymentModal(id) {
             <label style="font-size:0.8rem;font-weight:700;color:var(--text-muted)">ALLOCATION BY INVOICE</label>
             <div style="max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;margin-top:5px">
                 <table class="data-table" style="margin:0;font-size:0.85rem">
-                    <thead style="background:var(--bg-input)"><tr><th>Invoice #</th><th>Due</th><th>Allocate ₹</th></tr></thead>
+                    <thead style="background:var(--bg-input)"><tr><th>Invoice #</th><th>Due</th><th>Allocate </th></tr></thead>
                     <tbody>${rows}</tbody>
                 </table>
             </div>
-            <div style="text-align:right;margin-top:8px;font-size:0.85rem;font-weight:700">Allocated: <span id="lbl-edit-alloc-total" style="color:var(--success)">₹0.00</span></div>
+            <div style="text-align:right;margin-top:8px;font-size:0.85rem;font-weight:700">Allocated: <span id="lbl-edit-alloc-total" style="color:var(--success)">0.00</span></div>
         </div>
     ` : `<div style="margin:10px 0;font-size:0.85rem;color:var(--text-muted)">No pending invoices for this party.</div>`;
 
@@ -8076,13 +8194,13 @@ async function openEditPaymentModal(id) {
         </div>
         
         <div class="form-row">
-            <div class="form-group"><label>Amount ₹</label><input type="number" id="f-pay-amount" min="0" value="${pay.amount}" oninput="onEditPayAmountChange()"></div>
-            <div class="form-group"><label>Discount ₹</label><input type="number" id="f-pay-discount" min="0" value="${pay.discount || 0}" oninput="onEditPayAmountChange()"></div>
+            <div class="form-group"><label>Amount </label><input type="number" id="f-pay-amount" min="0" value="${pay.amount}" oninput="onEditPayAmountChange()"></div>
+            <div class="form-group"><label>Discount </label><input type="number" id="f-pay-discount" min="0" value="${pay.discount || 0}" oninput="onEditPayAmountChange()"></div>
         </div>
         
         <div style="margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;padding:10px;background:rgba(59,130,246,0.05);border-radius:8px">
             <span style="font-size:0.9rem;font-weight:700;color:var(--text-muted)">Balance Reduction:</span>
-            <span style="font-size:1.1rem;font-weight:800;color:var(--primary)" id="edit-pay-total-display">${currency((pay.amount||0) + (pay.discount||0))}</span>
+            <span style="font-size:1.1rem;font-weight:800;color:var(--primary)" id="edit-pay-total-display">${currency((pay.amount || 0) + (pay.discount || 0))}</span>
         </div>
 
         <div id="pay-edit-invoice-section">${invSecHtml}</div>
@@ -8097,13 +8215,13 @@ async function openEditPaymentModal(id) {
         <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="saveEditedPayment('${pay.id}')">Save Changes</button></div>
     `);
 
-    window.onEditPayAmountChange = function() {
+    window.onEditPayAmountChange = function () {
         const amt = +($('f-pay-amount').value) || 0;
         const disc = +($('f-pay-discount').value) || 0;
         $('edit-pay-total-display').textContent = currency(amt + disc);
     };
 
-    window.updateEditAllocTotal = function() {
+    window.updateEditAllocTotal = function () {
         let tot = 0;
         document.querySelectorAll('.pay-alloc-input').forEach(inp => tot += (+inp.value || 0));
         const lbl = $('lbl-edit-alloc-total');
@@ -8145,11 +8263,11 @@ window.saveEditedPayment = async function (id) {
             // Revert old reduction: if it was "in", we add it back to balance.
             const revBalChange = oldPay.type === 'in' ? oldTotalReduction : -oldTotalReduction;
             const tempBal = (party.balance || 0) + revBalChange;
-            
+
             // Apply new reduction
             const newBalChange = oldPay.type === 'in' ? -totalReduction : totalReduction;
             const finalBal = tempBal + newBalChange;
-            
+
             await DB.update('parties', party.id, { balance: finalBal });
             await addPartyLedgerEntry(party.id, party.name, oldPay.type === 'in' ? 'Payment Edited' : 'Payment Out Edited', newBalChange, id, `Mode: ${$('f-pay-mode').value}`);
         }
@@ -8157,7 +8275,7 @@ window.saveEditedPayment = async function (id) {
         // Manage Expense Entry for Discount
         if (oldPay.type === 'in') {
             const expenses = await DB.getAll('expenses');
-            const payRefNo = oldPay.payNo || oldPay.id.substring(0,8);
+            const payRefNo = oldPay.payNo || oldPay.id.substring(0, 8);
             const discExp = expenses.find(e => e.category === 'Payment Discount' && e.description && e.description.includes(`(${payRefNo})`));
 
             if (disc > 0) {
@@ -8213,23 +8331,23 @@ function renderExpRows(expenses) {
         const partyDisplay = e.partyName
             ? `<div style="font-weight:600;font-size:0.85rem">${escapeHtml(e.partyName)}</div>${partyCode ? `<div style="font-size:0.75rem;color:var(--text-muted)">${escapeHtml(partyCode)}</div>` : ''}`
             : `<span style="color:var(--text-muted)">-</span>`;
-        // Doc link — navigate to invoice or payment
+        // Doc link  navigate to invoice or payment
         let docLink = '-';
         if (e.docNo) {
             const isPayment = e.docNo.startsWith('PAY-');
-            docLink = `<button class="btn-link" style="font-weight:600;color:var(--accent);background:none;border:none;cursor:pointer;padding:0;font-size:0.85rem" onclick="viewExpenseDoc('${escapeHtml(e.docNo)}','${isPayment?'payment':'invoice'}')">${escapeHtml(e.docNo)}</button>`;
+            docLink = `<button class="btn-link" style="font-weight:600;color:var(--accent);background:none;border:none;cursor:pointer;padding:0;font-size:0.85rem" onclick="viewExpenseDoc('${escapeHtml(e.docNo)}','${isPayment ? 'payment' : 'invoice'}')">${escapeHtml(e.docNo)}</button>`;
         }
         const cellMap = {
-            date:     `<td style="white-space:nowrap">${fmtDate(e.date)}</td>`,
-            category: `<td><span class="badge ${e.category==='Sales Discount'?'badge-warning':e.category==='Payment Discount'?'badge-info':'badge-success'}" style="font-size:0.75rem">${escapeHtml(e.category || '')}</span></td>`,
-            party:    `<td>${partyDisplay}</td>`,
-            docNo:    `<td>${docLink}</td>`,
-            amount:   `<td class="amount-red" style="font-weight:700">${currency(e.amount)}</td>`,
-            addedBy:  `<td style="font-size:0.82rem;color:var(--text-muted)">${escapeHtml(e.createdBy || '-')}</td>`,
-            actions:  `<td><div class="action-btns">
-                ${isAdm && e.docNo ? `<button class="btn-icon" title="View Document" onclick="viewExpenseDoc('${escapeHtml(e.docNo)}','${e.docNo.startsWith('PAY-')?'payment':'invoice'}')">👁️</button>` : ''}
-                ${!e.docNo && canEdit() ? `<button class="btn-icon" onclick="openEditExpenseModal('${e.id}')">✏️</button>` : ''}
-                ${canEdit() ? `<button class="btn-icon" onclick="deleteExpense('${e.id}')">🗑️</button>` : ''}
+            date: `<td style="white-space:nowrap">${fmtDate(e.date)}</td>`,
+            category: `<td><span class="badge ${e.category === 'Sales Discount' ? 'badge-warning' : e.category === 'Payment Discount' ? 'badge-info' : 'badge-success'}" style="font-size:0.75rem">${escapeHtml(e.category || '')}</span></td>`,
+            party: `<td>${partyDisplay}</td>`,
+            docNo: `<td>${docLink}</td>`,
+            amount: `<td class="amount-red" style="font-weight:700">${currency(e.amount)}</td>`,
+            addedBy: `<td style="font-size:0.82rem;color:var(--text-muted)">${escapeHtml(e.createdBy || '-')}</td>`,
+            actions: `<td><div class="action-btns">
+                ${isAdm && e.docNo ? `<button class="btn-icon" title="View Document" onclick="viewExpenseDoc('${escapeHtml(e.docNo)}','${e.docNo.startsWith('PAY-') ? 'payment' : 'invoice'}')"></button>` : ''}
+                ${!e.docNo && canEdit() ? `<button class="btn-icon" onclick="openEditExpenseModal('${e.id}')"></button>` : ''}
+                ${canEdit() ? `<button class="btn-icon" onclick="deleteExpense('${e.id}')"></button>` : ''}
             </div></td>`,
         };
         return `<tr>${cols.map(c => cellMap[c.key] || '').join('')}</tr>`;
@@ -8269,7 +8387,7 @@ function openEditExpenseModal(id) {
         </div>
         <div class="form-group"><label>Amount *</label><input type="number" id="f-exp-amt" min="0" step="0.01" value="${e.amount || 0}"></div>
         <div class="form-group"><label>Description</label><input id="f-exp-desc" value="${escapeHtml(e.description || e.note || '')}" placeholder="Details..."></div>
-    `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="saveEditedExpense('${id}')">💾 Save</button>`);
+    `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="saveEditedExpense('${id}')"> Save</button>`);
 }
 
 async function saveEditedExpense(id) {
@@ -8284,15 +8402,15 @@ async function saveEditedExpense(id) {
         closeModal();
         await renderExpenses();
         showToast('Expense updated', 'success');
-    } catch(err) { alert('Error: ' + err.message); }
+    } catch (err) { alert('Error: ' + err.message); }
 }
 
 async function renderExpenses() {
     const expenses = await DB.getAll('expenses');
     window._allExpenses = expenses;
-    const salDisc   = expenses.filter(e => e.category === 'Sales Discount').reduce((s, e) => s + (e.amount || 0), 0);
-    const payDisc   = expenses.filter(e => e.category === 'Payment Discount').reduce((s, e) => s + (e.amount || 0), 0);
-    const total     = expenses.reduce((s, e) => s + (e.amount || 0), 0);
+    const salDisc = expenses.filter(e => e.category === 'Sales Discount').reduce((s, e) => s + (e.amount || 0), 0);
+    const payDisc = expenses.filter(e => e.category === 'Payment Discount').reduce((s, e) => s + (e.amount || 0), 0);
+    const total = expenses.reduce((s, e) => s + (e.amount || 0), 0);
     // Build category options
     const cats = [...new Set(expenses.map(e => e.category).filter(Boolean))].sort();
     pageContent.innerHTML = `
@@ -8305,42 +8423,42 @@ async function renderExpenses() {
             <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end">
                 <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:0.72rem;font-weight:600;color:var(--text-muted)">FROM</label><input type="date" id="exp-f-from" class="form-control" style="width:130px;padding:5px 8px;font-size:0.82rem" onchange="filterExpTable()"></div>
                 <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:0.72rem;font-weight:600;color:var(--text-muted)">TO</label><input type="date" id="exp-f-to" class="form-control" style="width:130px;padding:5px 8px;font-size:0.82rem" onchange="filterExpTable()"></div>
-                <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:0.72rem;font-weight:600;color:var(--text-muted)">CATEGORY</label><select id="exp-f-cat" class="form-control" style="width:160px;padding:5px 8px;font-size:0.82rem" onchange="filterExpTable()"><option value="">All Categories</option>${cats.map(c=>`<option>${escapeHtml(c)}</option>`).join('')}</select></div>
+                <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:0.72rem;font-weight:600;color:var(--text-muted)">CATEGORY</label><select id="exp-f-cat" class="form-control" style="width:160px;padding:5px 8px;font-size:0.82rem" onchange="filterExpTable()"><option value="">All Categories</option>${cats.map(c => `<option>${escapeHtml(c)}</option>`).join('')}</select></div>
                 <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:0.72rem;font-weight:600;color:var(--text-muted)">PARTY</label><input type="text" id="exp-f-party" class="form-control" placeholder="Party name..." style="width:150px;padding:5px 8px;font-size:0.82rem" oninput="filterExpTable()"></div>
                 <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:0.72rem;font-weight:600;color:var(--text-muted)">DOC NO</label><input type="text" id="exp-f-doc" class="form-control" placeholder="INV-0001..." style="width:130px;padding:5px 8px;font-size:0.82rem" oninput="filterExpTable()"></div>
-                <button class="btn btn-outline btn-sm" onclick="clearExpFilters()" style="align-self:flex-end">✕ Clear</button>
+                <button class="btn btn-outline btn-sm" onclick="clearExpFilters()" style="align-self:flex-end"> Clear</button>
                 <div style="margin-left:auto;align-self:flex-end;display:flex;gap:8px">
-                    <button class="btn btn-outline" onclick="openColumnPersonalizer('expenses','renderExpenses')" style="border-color:var(--accent);color:var(--accent)">⚙️ Columns</button>
+                    <button class="btn btn-outline" onclick="openColumnPersonalizer('expenses','renderExpenses')" style="border-color:var(--accent);color:var(--accent)"> Columns</button>
                     <button class="btn btn-primary" onclick="openExpenseModal()">+ Add Expense</button>
                 </div>
             </div>
         </div></div>
         <div class="card"><div class="card-body" style="padding:0">
             <div class="table-wrapper"><table class="data-table">
-                <thead><tr>${ColumnManager.get('expenses').filter(c=>c.visible).map(c=>`<th>${c.label}</th>`).join('')}</tr></thead>
+                <thead><tr>${ColumnManager.get('expenses').filter(c => c.visible).map(c => `<th>${c.label}</th>`).join('')}</tr></thead>
                 <tbody id="exp-tbody">${renderExpRows(expenses)}</tbody>
             </table></div>
         </div></div>`;
 }
 
 function clearExpFilters() {
-    ['exp-f-from','exp-f-to','exp-f-party','exp-f-doc'].forEach(id => { const el = $(id); if (el) el.value = ''; });
+    ['exp-f-from', 'exp-f-to', 'exp-f-party', 'exp-f-doc'].forEach(id => { const el = $(id); if (el) el.value = ''; });
     const cat = $('exp-f-cat'); if (cat) cat.value = '';
     filterExpTable();
 }
 
 async function filterExpTable() {
     let exps = window._allExpenses || await DB.getAll('expenses');
-    const from  = ($('exp-f-from') || {}).value || '';
-    const to    = ($('exp-f-to') || {}).value || '';
-    const cat   = (($('exp-f-cat') || {}).value || '').toLowerCase();
+    const from = ($('exp-f-from') || {}).value || '';
+    const to = ($('exp-f-to') || {}).value || '';
+    const cat = (($('exp-f-cat') || {}).value || '').toLowerCase();
     const party = (($('exp-f-party') || {}).value || '').toLowerCase();
-    const doc   = (($('exp-f-doc') || {}).value || '').toLowerCase();
-    if (from)  exps = exps.filter(e => (e.date || '') >= from);
-    if (to)    exps = exps.filter(e => (e.date || '') <= to);
-    if (cat)   exps = exps.filter(e => (e.category || '').toLowerCase().includes(cat));
+    const doc = (($('exp-f-doc') || {}).value || '').toLowerCase();
+    if (from) exps = exps.filter(e => (e.date || '') >= from);
+    if (to) exps = exps.filter(e => (e.date || '') <= to);
+    if (cat) exps = exps.filter(e => (e.category || '').toLowerCase().includes(cat));
     if (party) exps = exps.filter(e => (e.partyName || '').toLowerCase().includes(party));
-    if (doc)   exps = exps.filter(e => (e.docNo || '').toLowerCase().includes(doc));
+    if (doc) exps = exps.filter(e => (e.docNo || '').toLowerCase().includes(doc));
     const tbody = $('exp-tbody');
     if (tbody) tbody.innerHTML = renderExpRows(exps);
 }
@@ -8353,7 +8471,7 @@ function openExpenseModal() {
         </div>
         <div class="form-group"><label>Amount *</label><input type="number" id="f-exp-amt" min="0" step="0.01" placeholder="0.00"></div>
         <div class="form-group"><label>Description</label><input id="f-exp-desc" placeholder="Details..."></div>
-    `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveExpense()">＋ Save & New</button><button class="btn btn-primary" onclick="saveExpense()">💾 Save Expense</button>`);
+    `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveExpense()"> Save & New</button><button class="btn btn-primary" onclick="saveExpense()"> Save Expense</button>`);
 }
 
 async function saveExpense(id) {
@@ -8392,7 +8510,7 @@ async function deleteExpense(id) {
 }
 
 // =============================================
-//  PACKING (Shows approved orders → Pack → Admin/Manager generates invoice)
+//  PACKING (Shows approved orders  Pack  Admin/Manager generates invoice)
 // =============================================
 function renderPacking() {
     const orders = DB.cache['sales_orders'] || DB.cache['db_salesorders'] || [];
@@ -8406,7 +8524,7 @@ function renderPacking() {
     // Cannot complete orders (flagged, not yet re-approved)
     const cannotCompleteOrders = orders.filter(o => o.cannotComplete && !o.packed && o.status === 'approved');
 
-    // Filter ready to pack — exclude cannot-complete flagged ones
+    // Filter ready to pack  exclude cannot-complete flagged ones
     let readyToPackRows = orders.filter(o => o.status === 'approved' && !o.packed && !hasCancelledInvoice(o) && !o.cannotComplete);
     if (!isAdmin) {
         readyToPackRows = readyToPackRows.filter(o => !o.assignedPacker || o.assignedPacker === currentUser.name);
@@ -8429,43 +8547,43 @@ function renderPacking() {
 
     pageContent.innerHTML = `
         <div class="stats-grid" style="margin-bottom:18px">
-            <div class="stat-card amber"><div class="stat-icon">📋</div><div class="stat-value">${readyToPackRows.length}</div><div class="stat-label">Ready to Pack</div></div>
-            <div class="stat-card blue"><div class="stat-icon">📦</div><div class="stat-value">${packedNoInvoice.length}</div><div class="stat-label">Awaiting Invoice</div></div>
-            <div class="stat-card green"><div class="stat-icon">✅</div><div class="stat-value">${packedWithInvoice.length}</div><div class="stat-label">Packed History</div></div>
-            <div class="stat-card red"><div class="stat-icon">❌</div><div class="stat-value">${cannotCompleteOrders.length}</div><div class="stat-label">Cannot Complete</div></div>
+            <div class="stat-card amber"><div class="stat-icon"></div><div class="stat-value">${readyToPackRows.length}</div><div class="stat-label">Ready to Pack</div></div>
+            <div class="stat-card blue"><div class="stat-icon"></div><div class="stat-value">${packedNoInvoice.length}</div><div class="stat-label">Awaiting Invoice</div></div>
+            <div class="stat-card green"><div class="stat-icon"></div><div class="stat-value">${packedWithInvoice.length}</div><div class="stat-label">Packed History</div></div>
+            <div class="stat-card red"><div class="stat-icon"></div><div class="stat-value">${cannotCompleteOrders.length}</div><div class="stat-label">Cannot Complete</div></div>
         </div>
-        <h3 style="margin-bottom:14px;font-size:1rem">🔶 Orders Ready for Packing</h3>
-        <div class="section-toolbar" style="margin-bottom:8px"><div class="filter-group"><button class="btn btn-outline" onclick="openColumnPersonalizer('packing','renderPacking')" style="border-color:var(--accent);color:var(--accent)">⚙️ Columns</button></div></div>
+        <h3 style="margin-bottom:14px;font-size:1rem"> Orders Ready for Packing</h3>
+        <div class="section-toolbar" style="margin-bottom:8px"><div class="filter-group"><button class="btn btn-outline" onclick="openColumnPersonalizer('packing','renderPacking')" style="border-color:var(--accent);color:var(--accent)"> Columns</button></div></div>
         <div class="card" style="margin-bottom:24px"><div class="card-body">
             <div class="table-wrapper">
-                <table class="data-table"><thead><tr>${ColumnManager.get('packing').filter(c=>c.visible).map(c=>`<th>${c.label}</th>`).join('')}</tr></thead>
+                <table class="data-table"><thead><tr>${ColumnManager.get('packing').filter(c => c.visible).map(c => `<th>${c.label}</th>`).join('')}</tr></thead>
                 <tbody>${readyToPackRows.length ? readyToPackRows.map(o => {
-                    const packCols = ColumnManager.get('packing').filter(c => c.visible);
-                    const cellMap = {
-                        orderNo:    `<td style="font-weight:600">${o.orderNo}</td>`,
-                        date:       `<td>${fmtDate(o.date)}</td>`,
-                        party:      `<td>${escapeHtml(o.partyName)}</td>`,
-                        items:      `<td>${o.items.length}</td>`,
-                        total:      `<td class="amount-green">${currency(o.total)}</td>`,
-                        assignedTo: `<td>${o.assignedPacker ? `<span class="badge badge-info">${o.assignedPacker}</span>` : '<span class="badge badge-warning">Unassigned</span>'}</td>`,
-                        actions:    `<td><div class="action-btns">
-                            ${!o.assignedPacker && isAdmin ? `<button class="btn btn-outline btn-sm" onclick="openAssignPackerModal('${o.id}')">👤 Assign</button>` : ''}
-                            ${!o.assignedPacker && !isAdmin ? `<button class="btn btn-outline btn-sm" onclick="selfAssign('${o.id}')">✋ Self Assign</button>` : ''}
-                            ${o.assignedPacker === currentUser.name || isAdmin ? `<button class="btn btn-primary btn-sm" onclick="startPacking('${o.id}')">▶️ Start Packing</button>` : ''}
+        const packCols = ColumnManager.get('packing').filter(c => c.visible);
+        const cellMap = {
+            orderNo: `<td style="font-weight:600">${o.orderNo}</td>`,
+            date: `<td>${fmtDate(o.date)}</td>`,
+            party: `<td>${escapeHtml(o.partyName)}</td>`,
+            items: `<td>${o.items.length}</td>`,
+            total: `<td class="amount-green">${currency(o.total)}</td>`,
+            assignedTo: `<td>${o.assignedPacker ? `<span class="badge badge-info">${o.assignedPacker}</span>` : '<span class="badge badge-warning">Unassigned</span>'}</td>`,
+            actions: `<td><div class="action-btns">
+                            ${!o.assignedPacker && isAdmin ? `<button class="btn btn-outline btn-sm" onclick="openAssignPackerModal('${o.id}')"> Assign</button>` : ''}
+                            ${!o.assignedPacker && !isAdmin ? `<button class="btn btn-outline btn-sm" onclick="selfAssign('${o.id}')"> Self Assign</button>` : ''}
+                            ${o.assignedPacker === currentUser.name || isAdmin ? `<button class="btn btn-primary btn-sm" onclick="startPacking('${o.id}')"> Start Packing</button>` : ''}
                         </div></td>`,
-                    };
-                    return `<tr>${packCols.map(c => cellMap[c.key] || '').join('')}</tr>`;
-                }).join('') : '<tr><td colspan="7" class="empty-state"><p>No orders waiting</p></td></tr>'}</tbody></table>
+        };
+        return `<tr>${packCols.map(c => cellMap[c.key] || '').join('')}</tr>`;
+    }).join('') : '<tr><td colspan="7" class="empty-state"><p>No orders waiting</p></td></tr>'}</tbody></table>
             </div>
         </div></div>
-        ${cannotCompleteOrders.length ? `<h3 style="margin-bottom:14px;font-size:1rem">❌ Cannot Complete — Needs Admin Review</h3>
+        ${cannotCompleteOrders.length ? `<h3 style="margin-bottom:14px;font-size:1rem"> Cannot Complete  Needs Admin Review</h3>
         <div class="card" style="margin-bottom:24px;border:1px solid rgba(239,68,68,0.3)"><div class="card-body">
             <div class="table-wrapper">
                 <table class="data-table"><thead><tr><th>Order #</th><th>Party</th><th>Flagged By</th><th>Reason</th><th>Notes</th><th>Line Status</th>${isAdmin ? '<th>Actions</th>' : ''}</tr></thead>
                 <tbody>${cannotCompleteOrders.map(o => {
-            const lines = o.cannotCompleteLines || o.items.map(li => ({ ...li, pickedQty: 0, picked: false }));
-            const linesSummary = lines.map((li, i) => `<div style="font-size:0.78rem;padding:2px 0">${i + 1}. ${li.name}: <strong style="color:${li.picked ? 'var(--success)' : 'var(--danger)'}">${li.pickedQty}/${li.qty}</strong> ${li.picked ? '✅' : '🔴'}</div>`).join('');
-            return `<tr>
+        const lines = o.cannotCompleteLines || o.items.map(li => ({ ...li, pickedQty: 0, picked: false }));
+        const linesSummary = lines.map((li, i) => `<div style="font-size:0.78rem;padding:2px 0">${i + 1}. ${li.name}: <strong style="color:${li.picked ? 'var(--success)' : 'var(--danger)'}">${li.pickedQty}/${li.qty}</strong> ${li.picked ? '' : ''}</div>`).join('');
+        return `<tr>
                         <td style="font-weight:600">${o.orderNo}</td>
                         <td>${o.partyName}</td>
                         <td><span class="badge badge-info">${o.cannotCompleteBy || '-'}</span></td>
@@ -8473,17 +8591,17 @@ function renderPacking() {
                         <td style="font-size:0.82rem;color:var(--text-secondary)">${o.cannotCompleteNotes || '-'}</td>
                         <td style="max-width:200px">${linesSummary}</td>
                         ${isAdmin ? `<td><div class="action-btns">
-                            <button class="btn btn-outline btn-sm" onclick="clearCannotComplete('${o.id}')">🔄 Retry</button>
-                            <button class="btn btn-danger btn-sm" onclick="cancelOrderFromPacking('${o.id}')">❌ Cancel Order</button>
+                            <button class="btn btn-outline btn-sm" onclick="clearCannotComplete('${o.id}')"> Retry</button>
+                            <button class="btn btn-danger btn-sm" onclick="cancelOrderFromPacking('${o.id}')"> Cancel Order</button>
                         </div></td>` : ''}
                     </tr>`;
-        }).join('')}
+    }).join('')}
                 </tbody></table>
             </div>
         </div></div>` : ''}
         ${packedNoInvoice.length ? `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
-            <h3 style="font-size:1rem;margin:0">📦 Packed — Awaiting Invoice</h3>
-            ${isAdmin ? `<button class="btn btn-primary btn-sm" onclick="bulkGenerateInvoicesFromPacked()">🧾 Bulk Generate Invoices</button>` : ''}
+            <h3 style="font-size:1rem;margin:0"> Packed  Awaiting Invoice</h3>
+            ${isAdmin ? `<button class="btn btn-primary btn-sm" onclick="bulkGenerateInvoicesFromPacked()"> Bulk Generate Invoices</button>` : ''}
         </div>
         <div class="card" style="margin-bottom:24px"><div class="card-body">
             <div class="table-wrapper">
@@ -8497,12 +8615,12 @@ function renderPacking() {
                     <td style="font-size:0.8rem">${o.packingDurationMins !== undefined ? o.packingDurationMins + ' min' : '-'}</td>
                     <td style="font-size:0.8rem">${o.boxCount ? o.boxCount + ' Boxes<br><span style="color:var(--text-muted);font-size:0.75rem">' + (o.packageNumbers || []).join() + '</span>' : '-'}</td>
                     <td class="amount-green">${currency(o.packedTotal || o.total)}</td>
-                    <td>${isAdmin ? `<button class="btn btn-outline btn-sm" onclick="generateInvoiceFromPacked('${o.id}')">🧾 Generate</button>` : '<span class="badge badge-warning">Awaiting Admin</span>'}</td>
+                    <td>${isAdmin ? `<button class="btn btn-outline btn-sm" onclick="generateInvoiceFromPacked('${o.id}')"> Generate</button>` : '<span class="badge badge-warning">Awaiting Admin</span>'}</td>
                 </tr>`).join('')}</tbody></table>
             </div>
         </div></div>` : ''}
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:14px">
-            <h3 style="font-size:1rem;margin:0">📋 Packed History</h3>
+            <h3 style="font-size:1rem;margin:0"> Packed History</h3>
             <div class="filter-group">
                 <input type="date" id="pack-hist-from" value="${savedFrom}" onchange="window._packHistFrom=this.value;renderPacking()" style="width:140px">
                 <input type="date" id="pack-hist-to" value="${savedTo}" onchange="window._packHistTo=this.value;renderPacking()" style="width:140px">
@@ -8514,7 +8632,7 @@ function renderPacking() {
                 <tbody>${filteredHistory.length ? filteredHistory.map(o => `<tr>
                     <td style="font-weight:600">${o.orderNo}</td><td>${o.partyName}</td><td>${o.packedBy || '-'}</td>
                     <td style="font-size:0.8rem">${o.packingDurationMins !== undefined ? o.packingDurationMins + ' min' : '-'}</td>
-                    <td style="font-size:0.8rem">${(o.packageNumbers||[]).length ? (o.packageNumbers||[]).length + ' pkg<br><span style="color:var(--text-muted);font-size:0.75rem">' + (o.packageNumbers||[]).join(', ') + '</span>' : '-'}</td>
+                    <td style="font-size:0.8rem">${(o.packageNumbers || []).length ? (o.packageNumbers || []).length + ' pkg<br><span style="color:var(--text-muted);font-size:0.75rem">' + (o.packageNumbers || []).join(', ') + '</span>' : '-'}</td>
                     <td><span class="badge badge-success">${o.invoiceNo || '-'}</span></td><td class="amount-green">${currency(o.total)}</td>
                 </tr>`).join('') : '<tr><td colspan="7" class="empty-state"><p>No packed history for selected range</p></td></tr>'}</tbody></table>
             </div>
@@ -8530,7 +8648,7 @@ async function clearCannotComplete(orderId) {
         });
         renderPacking();
         showToast('Order moved back to packing queue', 'info');
-    } catch(err) { alert('Error: ' + err.message); }
+    } catch (err) { alert('Error: ' + err.message); }
 }
 
 async function cancelOrderFromPacking(orderId) {
@@ -8544,7 +8662,7 @@ async function cancelOrderFromPacking(orderId) {
         });
         renderPacking();
         showToast('Order cancelled', 'error');
-    } catch(err) { alert('Error: ' + err.message); }
+    } catch (err) { alert('Error: ' + err.message); }
 }
 
 async function selfAssign(orderId) {
@@ -8552,7 +8670,7 @@ async function selfAssign(orderId) {
         await DB.update('salesorders', orderId, { assignedPacker: currentUser.name });
         renderPacking();
         showToast('Order assigned to you', 'success');
-    } catch(err) { alert('Error: ' + err.message); }
+    } catch (err) { alert('Error: ' + err.message); }
 }
 
 function openAssignPackerModal(orderId) {
@@ -8560,7 +8678,7 @@ function openAssignPackerModal(orderId) {
     const o = orders.find(x => x.id === orderId);
     if (!o) return;
 
-    // Show all users — Admin can assign to anyone
+    // Show all users  Admin can assign to anyone
     const allUsers = DB.cache['users'] || DB.cache['db_users'] || [];
     const packingUsers = allUsers.map(u => u.name).filter(Boolean);
 
@@ -8569,9 +8687,9 @@ function openAssignPackerModal(orderId) {
         <div class="form-group"><label>Select Packer (Uses from Users list) *</label>
             <select id="f-assign-packer"><option value="">Select Packer</option>${packingUsers.map(p => `<option value="${p}">${p}</option>`).join('')}</select>
         </div>
-        ${!packingUsers.length ? '<div style="font-size:0.8rem;color:var(--warning);margin-bottom:10px">⚠️ No packing users found.</div>' : ''}
+        ${!packingUsers.length ? '<div style="font-size:0.8rem;color:var(--warning);margin-bottom:10px"> No packing users found.</div>' : ''}
         <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-        <button class="btn btn-primary" onclick="executeAssignPacker('${orderId}')">✅ Assign</button></div>`);
+        <button class="btn btn-primary" onclick="executeAssignPacker('${orderId}')"> Assign</button></div>`);
 }
 
 async function executeAssignPacker(orderId) {
@@ -8604,15 +8722,27 @@ async function renderPackOrderPage() {
     // Record packing start time
     if (!window._packingStartTimes) window._packingStartTimes = {};
     if (!window._packingStartTimes[orderId]) window._packingStartTimes[orderId] = new Date().toISOString();
-    
+
     const inv = DB.get('db_inventory');
     const assignedName = o.assignedPacker || currentUser.name;
+
+    window._packScanMap = new Map();
+    o.items.forEach((li, idx) => {
+        const item = inv.find(x => x.id === li.itemId);
+        if (item) {
+            const codeClean = (item.itemCode || '').trim().toLowerCase();
+            const nameClean = (item.name || '').trim().toLowerCase();
+            if (codeClean) window._packScanMap.set(codeClean, { idx, li });
+            if (nameClean) window._packScanMap.set(nameClean, { idx, li });
+            window._packScanMap.set(li.itemId.toLowerCase(), { idx, li });
+        }
+    });
 
     pageContent.innerHTML = `
         <div class="pack-workbench">
             <div class="pack-header">
                 <div class="pack-meta">
-                    <span class="pack-back" onclick="navigateTo('packing')">← Back</span>
+                    <span class="pack-back" onclick="navigateTo('packing')"> Back</span>
                     <h2 class="pack-title">Order ${o.orderNo}</h2>
                     <p class="pack-party">${escapeHtml(o.partyName)} | Total: ${currency(o.total)}</p>
                 </div>
@@ -8623,29 +8753,29 @@ async function renderPackOrderPage() {
 
             <div class="pack-items-list">
                 ${o.items.map((li, idx) => {
-                    const item = inv.find(x => x.id === li.itemId);
-                    const displayStock = item ? item.stock : 0;
-                    const currentUom = li.selectedUom || li.uom || (item ? item.unit : 'Pcs');
-                    const uomList = item ? [{ name: item.unit || 'Pcs', factor: 1, price: li.price || item.salePrice || 0 }, ...(item.uoms || [])] : [];
-                    
-                    // MRP Logic
-                    const activeBatches = item ? getActiveBatches(item) : [];
-                    let mrpHtml = '';
-                    if (activeBatches.length > 1) {
-                        mrpHtml = `
-                            <select id="pack-mrp-${idx}" onchange="packMrpSelected(${idx})" class="pack-mrp-select">
-                                <option value="">⚠️ Confirm MRP</option>
-                                ${activeBatches.map(b => `<option value="${b.salePrice}" data-mrp="${b.mrp}">MRP ₹${b.mrp} (Qty:${b.qty})</option>`).join('')}
-                            </select>`;
-                    } else if (activeBatches.length === 1) {
-                        mrpHtml = `<span class="pack-mrp-fixed">MRP ₹${activeBatches[0].mrp}</span>
-                                 <input type="hidden" id="pack-mrp-${idx}" value="${activeBatches[0].salePrice}" data-confirmed="1">`;
-                    }
+        const item = inv.find(x => x.id === li.itemId);
+        const displayStock = item ? item.stock : 0;
+        const currentUom = li.selectedUom || li.uom || (item ? item.unit : 'Pcs');
+        const uomList = item ? [{ name: item.unit || 'Pcs', factor: 1, price: li.price || item.salePrice || 0 }, ...(item.uoms || [])] : [];
 
-                    return `
+        // MRP Logic
+        const activeBatches = item ? getActiveBatches(item) : [];
+        let mrpHtml = '';
+        if (activeBatches.length > 1) {
+            mrpHtml = `
+                            <select id="pack-mrp-${idx}" onchange="packMrpSelected(${idx})" class="pack-mrp-select">
+                                <option value=""> Confirm MRP</option>
+                                ${activeBatches.map(b => `<option value="${b.salePrice}" data-mrp="${b.mrp}">MRP ${b.mrp} (Qty:${b.qty})</option>`).join('')}
+                            </select>`;
+        } else if (activeBatches.length === 1) {
+            mrpHtml = `<span class="pack-mrp-fixed">MRP ${activeBatches[0].mrp}</span>
+                                 <input type="hidden" id="pack-mrp-${idx}" value="${activeBatches[0].salePrice}" data-confirmed="1">`;
+        }
+
+        return `
                         <div class="pack-card" id="pack-row-${idx}">
                             <div class="pack-card-photo" onclick="packViewPhoto('${li.itemId}','${escapeHtml(li.name)}','${o.id}')">
-                                ${item && item.photo ? `<img src="${item.photo}">` : '📷'}
+                                ${item && item.photo ? `<img src="${item.photo}">` : ''}
                             </div>
                             <div class="pack-card-info">
                                 <div class="pack-card-name">${escapeHtml(li.name)}</div>
@@ -8669,20 +8799,20 @@ async function renderPackOrderPage() {
                                     <input type="checkbox" id="pack-picked-${idx}" onchange="checkAllPicked(${o.items.length})">
                                     <span class="checkmark"></span>
                                 </label>
-                                <span id="pack-status-${idx}" class="pack-dot">🔴</span>
+                                <span id="pack-status-${idx}" class="pack-dot"></span>
                             </div>
                             <input type="hidden" id="pack-price-${idx}" value="${li.price}">
                             <input type="hidden" id="pack-discount-pct-${idx}" value="${li.discountPct || 0}">
                             <input type="hidden" id="pack-discount-amt-${idx}" value="${li.discountAmt || 0}">
                         </div>`;
-                }).join('')}
+    }).join('')}
             </div>
 
             <div class="pack-footer">
-                <button class="btn btn-outline" onclick="markAllPicked(${o.items.length})">☑️ All Picked</button>
-                <button class="btn btn-outline" onclick="showBarcodeScanner('${orderId}')">📷 Scan</button>
-                <button class="btn btn-danger" onclick="cannotCompletePacking('${orderId}')">❌ Fail</button>
-                <button class="btn btn-primary" id="btn-complete-packing" disabled onclick="completePacking('${orderId}')">✅ Complete</button>
+                <button class="btn btn-outline" onclick="markAllPicked(${o.items.length})"> All Picked</button>
+                <button class="btn btn-outline" onclick="showBarcodeScanner('${orderId}')"> Scan</button>
+                <button class="btn btn-danger" onclick="cannotCompletePacking('${orderId}')"> Fail</button>
+                <button class="btn btn-primary" id="btn-complete-packing" disabled onclick="completePacking('${orderId}')"> Complete</button>
             </div>
         </div>
     `;
@@ -8707,7 +8837,7 @@ function packViewPhoto(itemId, itemName, orderId) {
         <div style="text-align:center;padding:8px">
             <img src="${item.photo}" style="max-width:100%;max-height:70vh;border-radius:10px;object-fit:contain">
         </div>
-        <div class="modal-actions"><button class="btn btn-outline" onclick="${orderId ? `openPackModal('${orderId}')` : 'closeModal()'}">← Back to Order</button></div>`);
+        <div class="modal-actions"><button class="btn btn-outline" onclick="${orderId ? `openPackModal('${orderId}')` : 'closeModal()'}"> Back to Order</button></div>`);
 }
 
 function packAddItemPhoto(itemId, rowIdx) {
@@ -8718,31 +8848,31 @@ function packAddItemPhoto(itemId, rowIdx) {
     input.capture = 'environment'; // prefer rear camera on mobile
     input.style.display = 'none';
     document.body.appendChild(input);
-        input.onchange = async function () {
-            const file = input.files[0];
-            document.body.removeChild(input);
-            if (!file) return;
+    input.onchange = async function () {
+        const file = input.files[0];
+        document.body.removeChild(input);
+        if (!file) return;
 
-            showToast('Processing photo...', 'info');
-            try {
-                const dataUrl = await compressImage(file, { maxWidth: 1024, quality: 0.75 });
-                await DB.update('inventory', itemId, { photo: dataUrl });
-                // Replace placeholder cell in packing table in-place
-                const cell = document.getElementById('pack-photo-' + rowIdx);
-                if (cell) {
-                    const inv2 = DB.get('db_inventory');
-                    const item = inv2.find(x => x.id === itemId);
-                    const name = item ? item.name : '';
-                    cell.outerHTML = `<img src="${dataUrl}" id="pack-photo-${rowIdx}"
+        showToast('Processing photo...', 'info');
+        try {
+            const dataUrl = await compressImage(file, { maxWidth: 1024, quality: 0.75 });
+            await DB.update('inventory', itemId, { photo: dataUrl });
+            // Replace placeholder cell in packing table in-place
+            const cell = document.getElementById('pack-photo-' + rowIdx);
+            if (cell) {
+                const inv2 = DB.get('db_inventory');
+                const item = inv2.find(x => x.id === itemId);
+                const name = item ? item.name : '';
+                cell.outerHTML = `<img src="${dataUrl}" id="pack-photo-${rowIdx}"
                         style="width:52px;height:52px;object-fit:cover;border-radius:6px;cursor:pointer;border:2px solid var(--success)"
                         onclick="packViewPhoto('${itemId}','${escapeHtml(name)}','')" title="Click to enlarge">`;
-                }
-                showToast('Photo saved!', 'success');
-            } catch (err) {
-                console.error('Image compression/save error:', err);
-                showToast('Failed to save photo: ' + err.message, 'error');
             }
-        };
+            showToast('Photo saved!', 'success');
+        } catch (err) {
+            console.error('Image compression/save error:', err);
+            showToast('Failed to save photo: ' + err.message, 'error');
+        }
+    };
     input.oncancel = () => { document.body.removeChild(input); };
     input.click();
 }
@@ -8752,14 +8882,14 @@ function showBarcodeScanner(orderId) {
     const readerHtml = `
         <div style="text-align:center;padding:20px">
             <div style="width:100%;height:240px;background:rgba(0,0,0,0.05);border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;border:2px dashed var(--border);margin-bottom:20px;position:relative;overflow:hidden">
-                <span style="font-size:3rem;margin-bottom:10px">📷</span>
+                <span style="font-size:3rem;margin-bottom:10px"></span>
                 <p style="color:var(--text-secondary);font-weight:500">Camera view would appear here</p>
                 <div style="width:100%;height:3px;background:var(--accent);position:absolute;top:0;left:0;box-shadow:0 0 15px var(--accent);animation:scan-line 3s infinite linear;z-index:2"></div>
             </div>
             <p style="font-size:0.9rem;margin-bottom:16px;color:var(--text-muted)">Point your camera at the item barcode or SKU to verify the pack quantity.</p>
-            <div class="form-group"><input id="f-barcode-manual" placeholder="Or enter manual SKU/Barcode..." style="text-align:center;letter-spacing:1px;font-weight:600"></div>
+            <div class="form-group"><input id="f-barcode-manual" onkeypress="if(event.key==='Enter') verifyBarcode(this.value, '${orderId}')" placeholder="Or enter manual SKU/Barcode..." style="text-align:center;letter-spacing:1px;font-weight:600"></div>
             <div class="modal-actions">
-                <button class="btn btn-outline" onclick="openPackModal('${orderId}')">Cancel</button>
+                <button class="btn btn-outline" onclick="closeModal()">Close</button>
                 <button class="btn btn-primary" onclick="verifyBarcode($('f-barcode-manual').value, '${orderId}')">Verify & Add</button>
             </div>
         </div>
@@ -8772,21 +8902,41 @@ function showBarcodeScanner(orderId) {
             }
         </style>`;
     openModal('Barcode / SKU Verification', readerHtml);
-    setTimeout(() => $('f-barcode-manual').focus(), 100);
+    setTimeout(() => { const inp = $('f-barcode-manual'); if (inp) inp.focus(); }, 100);
 }
 
 async function verifyBarcode(code, orderId) {
     if (!code) return;
-    const inv = await DB.getAll('inventory');
     const codeClean = code.trim().toLowerCase();
-    const item = inv.find(i => (i.itemCode || '').toLowerCase() === codeClean || i.name.toLowerCase().includes(codeClean));
-    
-    if (item) {
-        showToast(`Verified: ${item.name}`, 'success');
-        // Re-open packing modal (ideally would scroll to the item or highlight it)
-        openPackModal(orderId);
+
+    // BUG-020: O(1) Hash Map lookup for blazing fast barcode validation
+    const itemMap = window._packScanMap || new Map();
+    const match = itemMap.get(codeClean);
+
+    if (match) {
+        showToast(`Verified: ${match.li.name}`, 'success');
+
+        // Auto-check the picked checkbox
+        const cb = document.getElementById(`pack-picked-${match.idx}`);
+        if (cb && !cb.checked) {
+            cb.checked = true;
+            const orders = DB.get('db_salesorders');
+            const o = orders.find(x => x.id === orderId);
+            if (o) checkAllPicked(o.items.length);
+        }
+
+        // Keep scanner focused for continuous checking
+        const input = $('f-barcode-manual');
+        if (input) {
+            input.value = '';
+            input.focus();
+        } else {
+            closeModal();
+        }
     } else {
-        showToast('Item not found or invalid barcode', 'error');
+        showToast('Item not found in this order or invalid barcode. Must scan another.', 'error');
+        const input = $('f-barcode-manual');
+        if (input) input.select();
     }
 }
 
@@ -8847,14 +8997,14 @@ function checkAllPicked(rowCount) {
         if (qty > 0) {
             anyToBePacked = true;
             if (pickedCtrl.checked) {
-                if (statusBadge) { statusBadge.textContent = '🟢'; statusBadge.title = 'Picked ✅'; }
+                if (statusBadge) { statusBadge.textContent = ''; statusBadge.title = 'Picked '; }
             } else {
                 allValid = false;
-                if (statusBadge) { statusBadge.textContent = '🟡'; statusBadge.title = 'Qty set — tick Picked checkbox to confirm'; }
+                if (statusBadge) { statusBadge.textContent = ''; statusBadge.title = 'Qty set  tick Picked checkbox to confirm'; }
             }
         } else {
             pickedCtrl.checked = false;
-            if (statusBadge) { statusBadge.textContent = '🔴'; statusBadge.title = 'Not Picked / Short qty'; }
+            if (statusBadge) { statusBadge.textContent = ''; statusBadge.title = 'Not Picked / Short qty'; }
         }
     }
     const btn = $('btn-complete-packing');
@@ -8898,7 +9048,7 @@ function cannotCompletePacking(orderId) {
                     <td>${li.name}</td>
                     <td>${li.qty} ${li.uom || ''}</td>
                     <td><strong style="color:${li.pickedQty < li.qty ? 'var(--danger)' : 'var(--success)'}">${li.pickedQty}</strong></td>
-                    <td>${li.picked ? '<span class="badge badge-success">✅ Yes</span>' : '<span class="badge badge-danger">❌ No</span>'}</td>
+                    <td>${li.picked ? '<span class="badge badge-success"> Yes</span>' : '<span class="badge badge-danger"> No</span>'}</td>
                 </tr>`).join('')}
                 </tbody>
             </table>
@@ -8917,10 +9067,10 @@ function cannotCompletePacking(orderId) {
             <input id="f-cannot-notes" placeholder="Additional details...">
         </div>
         <div class="modal-actions">
-            <button class="btn btn-outline" onclick="startPacking('${orderId}')">← Back</button>
-            <button class="btn btn-danger" onclick="confirmCannotComplete('${orderId}', ${JSON.stringify(lineStatus).replace(/"/g, '&quot;')})">❌ Mark as Cannot Complete</button>
+            <button class="btn btn-outline" onclick="startPacking('${orderId}')"> Back</button>
+            <button class="btn btn-danger" onclick="confirmCannotComplete('${orderId}', ${JSON.stringify(lineStatus).replace(/"/g, '&quot;')})"> Mark as Cannot Complete</button>
         </div>`;
-    openModal(`Cannot Complete — Order ${o.orderNo}`, reasonHtml);
+    openModal(`Cannot Complete  Order ${o.orderNo}`, reasonHtml);
 }
 
 async function confirmCannotComplete(orderId, lineStatus) {
@@ -8934,8 +9084,8 @@ async function confirmCannotComplete(orderId, lineStatus) {
             cannotCompleteLines: lineStatus
         });
         closeModal(); renderPacking();
-        showToast(`Order flagged as Cannot Complete — ${reason}`, 'warning', 4000);
-    } catch(err) { alert('Error: ' + err.message); }
+        showToast(`Order flagged as Cannot Complete  ${reason}`, 'warning', 4000);
+    } catch (err) { alert('Error: ' + err.message); }
 }
 
 function completePacking(orderId) {
@@ -8955,10 +9105,10 @@ function completePacking(orderId) {
         const price = priceInput ? parseFloat(priceInput.value) : li.price;
         const discountPct = dPctInput ? parseFloat(dPctInput.value) || 0 : (li.discountPct || 0);
         const discountAmt = dAmtInput ? parseFloat(dAmtInput.value) || 0 : (li.discountAmt || 0);
-        
+
         const factor = uomSelInput && uomSelInput.options.length ? parseFloat(uomSelInput.options[uomSelInput.selectedIndex].dataset.factor) : 1;
         // Total amount for the line = (Qty * Price) - Discount
-        const amount = +( (packedQty * price) - discountAmt ).toFixed(2);
+        const amount = +((packedQty * price) - discountAmt).toFixed(2);
 
         return { ...li, packedQty, selectedUom, uom: selectedUom, price, discountPct, discountAmt, amount, factor };
     }).filter(li => li.packedQty > 0);
@@ -9055,7 +9205,7 @@ function syncPkgInputRows(type, count) {
             div.style.cssText = 'display:flex;gap:8px;margin-bottom:8px;align-items:center';
             div.innerHTML = `<span style="min-width:24px;color:var(--text-muted);font-size:0.85rem">${rowNum}.</span>
                 <input type="text" id="${className}-${rowNum}" name="${className}-${rowNum}" class="${className}" value="" placeholder="${type === 'box' ? 'Box' : 'Crate'} number (required)" required style="flex:1">
-                <button type="button" class="btn-icon" onclick="removePkgInputRow(this,'${type}')" style="color:var(--danger)">🗑️</button>`;
+                <button type="button" class="btn-icon" onclick="removePkgInputRow(this,'${type}')" style="color:var(--danger)"></button>`;
             container.appendChild(div);
         }
     } else if (count < currentCount) {
@@ -9142,7 +9292,7 @@ async function finalizePacking() {
         });
         closeModal();
         renderPacking();
-        showToast(`Order ${o.orderNo} packed — ${totalBoxes} box(es), ${totalCrates} crate(s)!`, 'success');
+        showToast(`Order ${o.orderNo} packed  ${totalBoxes} box(es), ${totalCrates} crate(s)!`, 'success');
     } catch (err) {
         alert('Error saving packing: ' + (err.message || JSON.stringify(err)));
     }
@@ -9152,122 +9302,43 @@ async function finalizePacking() {
 
 async function generateInvoiceFromPacked(orderId) {
     try {
-        const orders = await DB.getAll('salesorders');
+        const orders = await DB.getAll('sales_orders');
         const o = orders.find(x => x.id === orderId);
         if (!o) return alert('Order not found');
-        if (!o.packed) return alert('Order is not packed yet');
-        if (o.invoiceNo) return alert('Invoice already generated: ' + o.invoiceNo);
 
-        const packedItems = o.packedItems && o.packedItems.length ? o.packedItems : o.items;
+        const packedItems = o.packedItems || o.items;
         const [parties, inv] = await Promise.all([DB.getAll('parties'), DB.getAll('inventory')]);
-        const invNo = await nextNumber('INV-');
-        const vyaparNo = buildVyaparInvoiceNo();
 
-        // Pre-fill global invoiceItems from packed order lines
-        invoiceItems = packedItems.map(li => {
-            const qty = li.packedQty !== undefined ? li.packedQty : li.qty;
-            const price = li.price || li.salePrice || 0;
-            const discountAmt = li.discountAmt || 0;
-            const discountPct = li.discountPct || 0;
-            return {
-                itemId: li.itemId,
-                name: li.name,
-                qty,
-                price,
-                listedPrice: price,
-                discountAmt,
-                discountPct,
-                amount: +( (qty * price) - discountAmt ).toFixed(2),
-                unit: li.uom || li.unit || 'Pcs',
-                primaryQty: qty
-            };
-        });
+        // Populate global items
+        invoiceItems = packedItems.map(li => ({
+            itemId: li.itemId,
+            name: li.name,
+            qty: li.packedQty || li.qty,
+            price: li.price || li.salePrice || 0,
+            listedPrice: li.price || li.salePrice || 0,
+            discountAmt: li.discountAmt || 0,
+            discountPct: li.discountPct || 0,
+            amount: li.amount,
+            unit: li.uom || li.unit || 'Pcs',
+            primaryQty: li.packedQty || li.qty
+        }));
 
-        const filteredParties = parties.filter(p => p.type === 'Customer');
-        const party = parties.find(p => String(p.id) === String(o.partyId));
-        const partyValue = party ? party.name : (o.partyName || '');
+        await openInvoiceModal('sale', true);
 
-        openModal('Sale Invoice — Verify & Post', `
-            <div style="background:rgba(249,115,22,0.1);border:1px solid var(--warning);border-radius:6px;padding:8px 12px;margin-bottom:14px;font-size:0.85rem">
-                📦 Pre-filled from packing <strong>${escapeHtml(o.orderNo)}</strong> — verify details then click <strong>Save Invoice</strong>.
-            </div>
-            <div class="form-row">
-                <div class="form-group"><label>Invoice #</label><input id="f-inv-no" value="${escapeHtml(invNo)}"></div>
-                <div class="form-group"><label>Date</label><input type="date" id="f-inv-date" value="${today()}"></div>
-            </div>
-            <input type="hidden" id="f-inv-type" value="sale">
-            <input type="hidden" id="f-inv-from-order" value="${orderId}">
-            <div class="form-group">
-                <label>Vyapar Invoice No. <span style="color:var(--error,#ef4444)">*</span></label>
-                <div class="vyapar-inv-row">
-                    <input id="f-vyapar-inv-no" value="${escapeHtml(vyaparNo)}" placeholder="e.g. PT-NS-1">
-                    <button class="vyapar-gear-btn" onclick="openVyaparInvoiceNoModal()" title="Change prefix / number">⚙️</button>
-                </div>
-            </div>
-            <div class="form-group"><label>Customer *</label>
-                <input id="f-inv-party" value="${escapeHtml(partyValue)}" placeholder="Type name or mobile...">
-            </div>
-            <hr style="border-color:var(--border);margin:14px 0">
-            <h4 style="margin-bottom:10px;font-size:0.9rem">Items</h4>
-            <div class="form-row-3" style="margin-bottom:8px">
-                <div class="form-group"><label>Item</label><input id="f-inv-item-input" placeholder="Type item name or code..."></div>
-                <div class="form-group"><label>Qty</label><input type="number" id="f-inv-qty" value="1" min="1"></div>
-                <div class="form-group"><label>UOM</label><select id="f-inv-uom" onchange="onInvUomChange()"><option value="">--</option></select></div>
-                <div class="form-group"><label>Price ₹</label><input type="number" id="f-inv-price" value="" min="0" step="0.01" placeholder="Listed"></div>
-                <div class="form-group"><label>&nbsp;</label><button class="btn btn-primary btn-block" onclick="addInvoiceLine()">Add</button></div>
-            </div>
-            <div id="inv-lines-list"></div>
-            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:8px">
-                <div class="form-group" style="min-width:100px">
-                    <label>GST %</label>
-                    <input type="number" id="f-inv-gst" value="0" min="0" step="0.1" onchange="updateInvoiceTotal()">
-                </div>
-                <div class="form-group" style="min-width:100px">
-                    <label>Round Off ₹</label>
-                    <input type="number" id="f-inv-roundoff" value="0" step="0.01" placeholder="0.00" oninput="updateInvoiceTotal()">
-                </div>
-                <div class="form-group" style="align-self:flex-end">
-                    <button class="btn btn-outline btn-sm" onclick="autoRoundOff()">⟳ Auto</button>
-                </div>
-            </div>
-            <div id="inv-total-display" style="text-align:right;font-size:1rem;color:var(--text-secondary);font-weight:600;margin-top:4px">Total: ₹0.00</div>
-            
-            <div style="display:flex; justify-content:flex-end; gap:12px; align-items:flex-end; margin-top:8px; flex-wrap:wrap">
-                <div class="form-group" style="width:90px; margin-bottom:0">
-                    <label style="font-size:0.65rem">Disc %</label>
-                    <input type="number" id="f-inv-disc-pct" value="0" min="0" max="100" step="0.01" oninput="onInvDiscPctChange()">
-                </div>
-                <div class="form-group" style="width:90px; margin-bottom:0">
-                    <label style="font-size:0.65rem">Disc ₹</label>
-                    <input type="number" id="f-inv-disc-amt" value="0" min="0" step="0.01" oninput="onInvDiscAmtChange()">
-                </div>
-            </div>
-            
-            <div id="inv-advance-section" style="margin-top:10px"></div>
-            <div class="modal-actions">
-                <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-                <button class="btn btn-primary" onclick="saveInvoice()">Save Invoice</button>
-            </div>
-        `);
+        // Link the Party
+        const party = parties.find(p => p.id === o.partyId);
+        if (party) {
+            const inp = $('f-inv-party');
+            inp.value = party.name;
+            inp.dataset.selectedId = party.id;
+            loadAvailableAdvances(party.id);
+        }
 
-        initSearchDropdown('f-inv-party', buildPartySearchList(filteredParties), function(p) {
-            loadAvailableAdvances(p.id);
-        });
-        // Restore pre-filled value after dropdown init
-        const partyEl = $('f-inv-party');
-        if (partyEl && partyValue) partyEl.value = partyValue;
-
-        _invItemDropdown = initSearchDropdown('f-inv-item-input', buildItemSearchList(inv), function(item) {
-            $('f-inv-price').value = item.salePrice || '';
-            const uomSel = $('f-inv-uom');
-            if (uomSel) {
-                uomSel.innerHTML = '<option value="' + (item.unit || 'Pcs') + '">' + (item.unit || 'Pcs') + '</option>';
-                if (item.secUom) uomSel.innerHTML += '<option value="' + item.secUom + '">' + item.secUom + '</option>';
-            }
-        });
+        // Link the Order ID
+        const refEl = $('f-inv-from-order');
+        if (refEl) refEl.value = orderId;
 
         renderInvoiceLines();
-        if (party) loadAvailableAdvances(party.id);
     } catch (err) {
         alert('Error: ' + err.message);
     }
@@ -9291,7 +9362,7 @@ async function bulkGenerateInvoicesFromPacked() {
         let startVyaparNumber = parseInt((buildVyaparInvoiceNo()).split('-').pop()) || 1;
         const autoPrefix = buildVyaparInvoiceNo().substring(0, buildVyaparInvoiceNo().lastIndexOf('-') + 1) || 'PT-NS-';
 
-        // Build preview list — skip already invoiced / no stock
+        // Build preview list  skip already invoiced / no stock
         const rows = [];
         let skipCount = 0;
         for (const box of selectedBoxes) {
@@ -9318,7 +9389,7 @@ async function bulkGenerateInvoicesFromPacked() {
 
         if (!rows.length) return alert('No eligible orders found (check stock or already invoiced).');
 
-        const skipNote = skipCount ? `<p style="color:#ef4444;font-size:0.8rem;margin-bottom:10px">⚠️ ${skipCount} order(s) skipped (already invoiced or insufficient stock).</p>` : '';
+        const skipNote = skipCount ? `<p style="color:#ef4444;font-size:0.8rem;margin-bottom:10px"> ${skipCount} order(s) skipped (already invoiced or insufficient stock).</p>` : '';
 
         openModal('Verify Bulk Invoices', `
         ${skipNote}
@@ -9333,7 +9404,7 @@ async function bulkGenerateInvoicesFromPacked() {
             </tr></thead>
             <tbody>
             ${rows.map((r, i) => `<tr>
-                <td style="color:var(--text-muted)">${i+1}</td>
+                <td style="color:var(--text-muted)">${i + 1}</td>
                 <td><strong>${r.orderNo}</strong></td>
                 <td style="font-size:0.78rem">${r.partyName}</td>
                 <td><span style="font-weight:700;color:var(--accent)">${r.invNo}</span></td>
@@ -9346,7 +9417,7 @@ async function bulkGenerateInvoicesFromPacked() {
         <input type="hidden" id="bv-rows-json" value="${encodeURIComponent(JSON.stringify(rows))}">
         <div class="modal-actions" style="margin-top:16px">
             <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-            <button class="btn btn-primary" onclick="confirmBulkInvoices()">✅ Confirm & Generate (${rows.length})</button>
+            <button class="btn btn-primary" onclick="confirmBulkInvoices()"> Confirm & Generate (${rows.length})</button>
         </div>`);
 
     } catch (err) {
@@ -9366,7 +9437,7 @@ async function confirmBulkInvoices() {
     });
 
     closeModal();
-    showToast('Generating invoices…', 'info');
+    showToast('Generating invoices', 'info');
 
     try {
         const [orders, parties, inventory] = await Promise.all([
@@ -9395,17 +9466,17 @@ async function confirmBulkInvoices() {
                 const price = li.price || li.salePrice || 0;
                 const discountAmt = li.discountAmt || 0;
                 const discountPct = li.discountPct || 0;
-                return { 
-                    itemId: li.itemId, 
-                    name: li.name, 
-                    qty, 
-                    price, 
-                    listedPrice: price, 
+                return {
+                    itemId: li.itemId,
+                    name: li.name,
+                    qty,
+                    price,
+                    listedPrice: price,
                     discountAmt,
                     discountPct,
-                    amount: +( (qty * price) - discountAmt ).toFixed(2), 
-                    unit: li.uom || li.unit || 'Pcs', 
-                    primaryQty: qty 
+                    amount: +((qty * price) - discountAmt).toFixed(2),
+                    unit: li.uom || li.unit || 'Pcs',
+                    primaryQty: qty
                 };
             });
 
@@ -9451,7 +9522,7 @@ async function confirmBulkInvoices() {
 
         await DB.refreshTables(['invoices', 'inventory', 'parties', 'sales_orders']);
         renderPacking();
-        showToast(`✅ ${successCount} invoice(s) generated successfully!`, 'success');
+        showToast(` ${successCount} invoice(s) generated successfully!`, 'success');
     } catch (err) {
         alert('Bulk Error: ' + err.message);
     }
@@ -9493,15 +9564,15 @@ async function renderDelivery() {
 
     pageContent.innerHTML = `
         <div class="stats-grid" style="margin-bottom:18px">
-            ${canEdit() ? `<div class="stat-card amber"><div class="stat-icon">📦</div><div class="stat-value">${readyToDispatch.length}</div><div class="stat-label">Ready to Dispatch</div></div>` : ''}
-            <div class="stat-card blue"><div class="stat-icon">🚚</div><div class="stat-value">${dispatched.length}</div><div class="stat-label">In Transit</div></div>
-            <div class="stat-card green"><div class="stat-icon">✅</div><div class="stat-value">${delivered.length}</div><div class="stat-label">Delivered</div></div>
-            <div class="stat-card red"><div class="stat-icon">↩️</div><div class="stat-value">${undelivered.length + returned.length}</div><div class="stat-label">Undelivered / Returned</div></div>
+            ${canEdit() ? `<div class="stat-card amber"><div class="stat-icon"></div><div class="stat-value">${readyToDispatch.length}</div><div class="stat-label">Ready to Dispatch</div></div>` : ''}
+            <div class="stat-card blue"><div class="stat-icon"></div><div class="stat-value">${dispatched.length}</div><div class="stat-label">In Transit</div></div>
+            <div class="stat-card green"><div class="stat-icon"></div><div class="stat-value">${delivered.length}</div><div class="stat-label">Delivered</div></div>
+            <div class="stat-card red"><div class="stat-icon"></div><div class="stat-value">${undelivered.length + returned.length}</div><div class="stat-label">Undelivered / Returned</div></div>
         </div>
         ${(readyToDispatch.length && canEdit()) ? `
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-            <h3 style="font-size:1rem;margin:0">📦 Ready to Dispatch (${readyToDispatch.length})</h3>
-            <button class="btn btn-primary btn-sm" onclick="openBulkDispatchModal()">🚚 Bulk Dispatch</button>
+            <h3 style="font-size:1rem;margin:0"> Ready to Dispatch (${readyToDispatch.length})</h3>
+            <button class="btn btn-primary btn-sm" onclick="openBulkDispatchModal()"> Bulk Dispatch</button>
         </div>
         <div class="card" style="margin-bottom:24px"><div class="card-body">
             <div class="table-wrapper">
@@ -9515,20 +9586,20 @@ async function renderDelivery() {
                     <td><span class="badge badge-success">${o.invoiceNo || '-'}</span></td>
                     <td>${o.partyName}</td>
                     <td class="amount-green">${currency(o.total)}</td>
-                    <td><button class="btn btn-primary btn-sm" onclick="openDispatchModalUnified('${o.id}','${o.source}')">🚚 Dispatch</button></td>
+                    <td><button class="btn btn-primary btn-sm" onclick="openDispatchModalUnified('${o.id}','${o.source}')"> Dispatch</button></td>
                 </tr>`).join('')}</tbody></table>
             </div>
         </div></div>` : ''}
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
-            <h3 style="font-size:1rem;margin:0">🚚 All Deliveries</h3>
-            <button class="btn btn-outline btn-sm" onclick="printDeliveryRouteSheet()">🖨️ Print Route Sheet</button>
+            <h3 style="font-size:1rem;margin:0"> All Deliveries</h3>
+            <button class="btn btn-outline btn-sm" onclick="printDeliveryRouteSheet()"> Print Route Sheet</button>
         </div>
         <div class="section-toolbar" style="margin-bottom:12px">
-            <div class="filter-group"><button class="btn btn-outline" onclick="openColumnPersonalizer('delivery','renderDelivery')" style="border-color:var(--accent);color:var(--accent)">⚙️ Columns</button><select id="del-status-filter" onchange="filterDelTable()"><option value="">All Statuses</option><option value="Dispatched">In Transit</option><option value="Delivered">Delivered</option><option value="Undelivered">Undelivered</option><option value="Returned">Returned</option><option value="Cancelled">Cancelled</option></select></div>
+            <div class="filter-group"><button class="btn btn-outline" onclick="openColumnPersonalizer('delivery','renderDelivery')" style="border-color:var(--accent);color:var(--accent)"> Columns</button><select id="del-status-filter" onchange="filterDelTable()"><option value="">All Statuses</option><option value="Dispatched">In Transit</option><option value="Delivered">Delivered</option><option value="Undelivered">Undelivered</option><option value="Returned">Returned</option><option value="Cancelled">Cancelled</option></select></div>
         </div>
         <div class="card"><div class="card-body">
             <div class="table-wrapper">
-                <table class="data-table"><thead><tr>${ColumnManager.get('delivery').filter(c=>c.visible).map(c=>`<th>${c.label}</th>`).join('')}</tr></thead>
+                <table class="data-table"><thead><tr>${ColumnManager.get('delivery').filter(c => c.visible).map(c => `<th>${c.label}</th>`).join('')}</tr></thead>
                 <tbody id="del-tbody">${renderDelRows(dels, allParties)}</tbody></table>
             </div>
         </div></div>`;
@@ -9537,15 +9608,15 @@ function renderDelRows(dels, parties) {
     if (!dels.length) return '<tr><td colspan="9"><div class="empty-state"><p>No deliveries found</p></div></td></tr>';
     const cols = ColumnManager.get('delivery').filter(c => c.visible);
     return dels.map(d => {
-        const party = (parties||[]).find(p => String(p.id) === String(d.partyId));
+        const party = (parties || []).find(p => String(p.id) === String(d.partyId));
         const statusBadge = d.status === 'Delivered' ? 'badge-success' : d.status === 'Returned' ? 'badge-danger' : 'badge-warning';
         const pkgNums = d.packageNumbers || [];
-        const pkgDisplay = pkgNums.slice(0,3).map(n=>`<span class="badge badge-outline" style="font-size:0.68rem">${n}</span>`).join(' ') + (pkgNums.length>3?` +${pkgNums.length-3}`:'');
-        const gpsBtn = party && party.lat && party.lng ? `<button class="btn-icon" onclick="openPartyMap('${party.lat}','${party.lng}','${escapeHtml(d.partyName)}')" title="Navigate" style="font-size:0.8rem">🗺️</button>` : '';
+        const pkgDisplay = pkgNums.slice(0, 3).map(n => `<span class="badge badge-outline" style="font-size:0.68rem">${n}</span>`).join(' ') + (pkgNums.length > 3 ? ` +${pkgNums.length - 3}` : '');
+        const gpsBtn = party && party.lat && party.lng ? `<button class="btn-icon" onclick="openPartyMap('${party.lat}','${party.lng}','${escapeHtml(d.partyName)}')" title="Navigate" style="font-size:0.8rem"></button>` : '';
         const actions = `<div class="action-btns">
-            <button class="btn-icon" onclick="viewDeliveryDetail('${d.id}')">👁️</button>
-            ${d.status !== 'Delivered' ? `<button class="btn btn-primary btn-sm" onclick="markDelivered('${d.id}')">✅ Delivered</button>` : ''}
-            ${d.status !== 'Returned' && d.status !== 'Delivered' ? `<button class="btn btn-outline btn-sm" onclick="openUndeliveredModal('${d.id}')">↩ Return</button>` : ''}
+            <button class="btn-icon" onclick="viewDeliveryDetail('${d.id}')"></button>
+            ${d.status !== 'Delivered' ? `<button class="btn btn-primary btn-sm" onclick="markDelivered('${d.id}')"> Delivered</button>` : ''}
+            ${d.status !== 'Returned' && d.status !== 'Delivered' ? `<button class="btn btn-outline btn-sm" onclick="openUndeliveredModal('${d.id}')"> Return</button>` : ''}
         </div>`;
         const partyPhone = party ? (party.phone || '') : '';
         // Location cell: show address/city from party, with delivery confirmation note if delivered
@@ -9553,11 +9624,11 @@ function renderDelRows(dels, parties) {
         const locationCell = (() => {
             const addrLine = partyAddr ? `<div style="font-size:0.8rem;color:var(--text-muted);max-width:140px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(partyAddr)}</div>` : '';
             const gpsLine = party && party.lat && party.lng
-                ? `<a href="https://www.google.com/maps?q=${party.lat},${party.lng}&z=16" target="_blank" style="font-size:0.72rem;color:var(--accent);text-decoration:none;white-space:nowrap">🗺️ Navigate</a>`
+                ? `<a href="https://www.google.com/maps?q=${party.lat},${party.lng}&z=16" target="_blank" style="font-size:0.72rem;color:var(--accent);text-decoration:none;white-space:nowrap"> Navigate</a>`
                 : '';
             const delLocLine = d.deliveryLocation
-                ? `<div style="font-size:0.72rem;color:var(--success);margin-top:2px;max-width:140px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${escapeHtml(d.deliveryLocation)}">✅ ${escapeHtml(d.deliveryLocation)}</div>`
-                : (d.deliveryLat ? `<div style="font-size:0.72rem;color:var(--success)"><a href="https://www.google.com/maps?q=${d.deliveryLat},${d.deliveryLng}&z=16" target="_blank" style="color:var(--success);text-decoration:none">✅ GPS Confirmed</a></div>` : '');
+                ? `<div style="font-size:0.72rem;color:var(--success);margin-top:2px;max-width:140px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${escapeHtml(d.deliveryLocation)}"> ${escapeHtml(d.deliveryLocation)}</div>`
+                : (d.deliveryLat ? `<div style="font-size:0.72rem;color:var(--success)"><a href="https://www.google.com/maps?q=${d.deliveryLat},${d.deliveryLng}&z=16" target="_blank" style="color:var(--success);text-decoration:none"> GPS Confirmed</a></div>` : '');
             return `<td>${addrLine}${gpsLine}${delLocLine}</td>`;
         })();
 
@@ -9565,25 +9636,25 @@ function renderDelRows(dels, parties) {
         const canChangePerson = currentUser && (currentUser.role === 'Admin' || currentUser.role === 'Manager') && d.status !== 'Delivered' && d.status !== 'Cancelled';
         const personCell = `<td>
             <div style="font-weight:600;font-size:0.85rem">${d.deliveryPerson || '-'}</div>
-            ${canChangePerson ? `<button class="btn-link" style="font-size:0.72rem;color:var(--accent);background:none;border:none;cursor:pointer;padding:0;margin-top:2px" onclick="openChangeDeliveryPerson('${d.id}')">✏️ Change</button>` : ''}
+            ${canChangePerson ? `<button class="btn-link" style="font-size:0.72rem;color:var(--accent);background:none;border:none;cursor:pointer;padding:0;margin-top:2px" onclick="openChangeDeliveryPerson('${d.id}')"> Change</button>` : ''}
         </td>`;
 
         const cellMap = {
-            orderNo:     `<td style="font-weight:600">${d.orderNo}</td>`,
-            invoiceNo:   `<td><span class="badge badge-success" style="font-size:0.72rem">${d.invoiceNo || '-'}</span></td>`,
+            orderNo: `<td style="font-weight:600">${d.orderNo}</td>`,
+            invoiceNo: `<td><span class="badge badge-success" style="font-size:0.72rem">${d.invoiceNo || '-'}</span></td>`,
             invoiceDate: `<td style="font-size:0.8rem">${d.invoiceDate || d.dispatchedAt || '-'}</td>`,
-            party:       `<td>${escapeHtml(d.partyName)}</td>`,
-            location:    locationCell,
-            phone:       `<td style="white-space:nowrap">${partyPhone
+            party: `<td>${escapeHtml(d.partyName)}</td>`,
+            location: locationCell,
+            phone: `<td style="white-space:nowrap">${partyPhone
                 ? `<a href="tel:${partyPhone}" style="display:inline-flex;align-items:center;gap:5px;color:var(--success);font-weight:600;text-decoration:none;font-size:0.88rem">
-                       <span style="font-size:1rem">📞</span>${partyPhone}
+                       <span style="font-size:1rem"></span>${partyPhone}
                    </a>`
                 : '<span style="color:var(--text-muted);font-size:0.82rem">-</span>'}</td>`,
-            person:      personCell,
-            packages:    `<td style="max-width:180px">${pkgDisplay}<div style="font-size:0.7rem;color:var(--text-muted);margin-top:2px">${pkgNums.length} pkg(s)</div></td>`,
-            status:      `<td><span class="badge ${statusBadge}">${d.status}</span></td>`,
-            reason:      `<td style="font-size:0.82rem;color:var(--text-muted)">${escapeHtml(d.undeliveredReason || '-')}</td>`,
-            actions:     `<td>${actions}</td>`,
+            person: personCell,
+            packages: `<td style="max-width:180px">${pkgDisplay}<div style="font-size:0.7rem;color:var(--text-muted);margin-top:2px">${pkgNums.length} pkg(s)</div></td>`,
+            status: `<td><span class="badge ${statusBadge}">${d.status}</span></td>`,
+            reason: `<td style="font-size:0.82rem;color:var(--text-muted)">${escapeHtml(d.undeliveredReason || '-')}</td>`,
+            actions: `<td>${actions}</td>`,
         };
         return `<tr>${cols.map(c => cellMap[c.key] || '').join('')}</tr>`;
     }).join('');
@@ -9606,9 +9677,9 @@ async function openChangeDeliveryPerson(id) {
     const d = dels.find(x => x.id === id);
     if (!d) return;
     const dp = await DB.getAll('delivery_persons');
-    openModal('✏️ Change Delivery Person', `
+    openModal(' Change Delivery Person', `
         <div style="margin-bottom:14px;padding:12px;background:var(--bg-secondary);border-radius:8px;font-size:0.85rem">
-            <strong>${d.orderNo}</strong> — ${escapeHtml(d.partyName)}<br>
+            <strong>${d.orderNo}</strong>  ${escapeHtml(d.partyName)}<br>
             <span style="color:var(--text-muted)">Current: <strong>${d.deliveryPerson || '-'}</strong></span>
         </div>
         <div class="form-group"><label>New Delivery Person *</label>
@@ -9617,7 +9688,7 @@ async function openChangeDeliveryPerson(id) {
                 ${dp.map(p => `<option value="${escapeHtml(p.name)}" ${p.name === d.deliveryPerson ? 'selected' : ''}>${escapeHtml(p.name)}${p.phone ? ' (' + p.phone + ')' : ''}</option>`).join('')}
             </select>
         </div>
-        ${!dp.length ? '<div style="font-size:0.8rem;color:var(--warning);margin-bottom:10px">⚠️ No delivery persons. <a href="#" onclick="closeModal();navigateTo(\'deliverypersons\')" style="color:var(--accent)">Add Now</a></div>' : ''}
+        ${!dp.length ? '<div style="font-size:0.8rem;color:var(--warning);margin-bottom:10px"> No delivery persons. <a href="#" onclick="closeModal();navigateTo(\'deliverypersons\')" style="color:var(--accent)">Add Now</a></div>' : ''}
         <div class="modal-actions">
             <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
             <button class="btn btn-primary" onclick="saveChangeDeliveryPerson('${id}')">Save</button>
@@ -9649,7 +9720,7 @@ async function viewDeliveryDetail(id) {
     const items = d.items || [];
     const itemsHtml = items.length ? `
         <div style="margin-bottom:16px">
-            <div style="font-weight:600;font-size:0.82rem;color:var(--text-muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.04em">📦 Items</div>
+            <div style="font-weight:600;font-size:0.82rem;color:var(--text-muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.04em"> Items</div>
             <div style="overflow-x:auto;border-radius:8px;border:1px solid var(--border)">
                 <table style="width:100%;border-collapse:collapse;font-size:0.85rem">
                     <thead><tr style="background:var(--bg-secondary)">
@@ -9661,12 +9732,12 @@ async function viewDeliveryDetail(id) {
                     </tr></thead>
                     <tbody>
                         ${items.map(li => {
-                            const invItem = inventory.find(x => x.id === li.itemId || x.name === li.name);
-                            const photoHtml = invItem && invItem.photo
-                                ? `<img src="${invItem.photo}" style="width:44px;height:44px;object-fit:cover;border-radius:6px;border:1px solid var(--border)">`
-                                : `<div style="width:44px;height:44px;border-radius:6px;border:1px dashed var(--border);display:flex;align-items:center;justify-content:center;font-size:1.1rem">📦</div>`;
-                            const amt = (li.qty || 0) * (li.price || li.salePrice || 0);
-                            return `<tr style="border-top:1px solid var(--border)">
+        const invItem = inventory.find(x => x.id === li.itemId || x.name === li.name);
+        const photoHtml = invItem && invItem.photo
+            ? `<img src="${invItem.photo}" style="width:44px;height:44px;object-fit:cover;border-radius:6px;border:1px solid var(--border)">`
+            : `<div style="width:44px;height:44px;border-radius:6px;border:1px dashed var(--border);display:flex;align-items:center;justify-content:center;font-size:1.1rem"></div>`;
+        const amt = (li.qty || 0) * (li.price || li.salePrice || 0);
+        return `<tr style="border-top:1px solid var(--border)">
                                 <td style="padding:8px 10px">${photoHtml}</td>
                                 <td style="padding:8px 10px">
                                     <div style="font-weight:600">${escapeHtml(li.name || '')}</div>
@@ -9676,7 +9747,7 @@ async function viewDeliveryDetail(id) {
                                 <td style="padding:8px 10px;text-align:right;color:var(--text-muted)">${currency(li.price || li.salePrice || 0)}</td>
                                 <td style="padding:8px 10px;text-align:right;font-weight:700;color:var(--success)">${currency(amt)}</td>
                             </tr>`;
-                        }).join('')}
+    }).join('')}
                         <tr style="border-top:2px solid var(--border);background:var(--bg-secondary)">
                             <td colspan="4" style="padding:8px 10px;font-weight:700;text-align:right">Total</td>
                             <td style="padding:8px 10px;text-align:right;font-weight:700;color:var(--success)">${currency(d.total || 0)}</td>
@@ -9689,27 +9760,27 @@ async function viewDeliveryDetail(id) {
     // Location section
     const locationHtml = `
         <div style="margin-bottom:16px">
-            <div style="font-weight:600;font-size:0.82rem;color:var(--text-muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.04em">📍 Location</div>
+            <div style="font-weight:600;font-size:0.82rem;color:var(--text-muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.04em"> Location</div>
             ${party && party.lat && party.lng
-                ? `<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:rgba(52,168,83,0.07);border:1px solid rgba(52,168,83,0.2);border-radius:8px">
+            ? `<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:rgba(52,168,83,0.07);border:1px solid rgba(52,168,83,0.2);border-radius:8px">
                        <div style="flex:1">
                            <div style="font-size:0.85rem;font-weight:600">${escapeHtml(party.address || party.city || d.partyName)}</div>
-                           ${party.city ? `<div style="font-size:0.75rem;color:var(--text-muted)">${escapeHtml(party.city)}${party.postCode ? ' — ' + escapeHtml(party.postCode) : ''}</div>` : ''}
+                           ${party.city ? `<div style="font-size:0.75rem;color:var(--text-muted)">${escapeHtml(party.city)}${party.postCode ? '  ' + escapeHtml(party.postCode) : ''}</div>` : ''}
                            <div style="font-size:0.7rem;color:var(--text-muted);margin-top:2px">GPS: ${(+party.lat).toFixed(5)}, ${(+party.lng).toFixed(5)}</div>
                        </div>
-                       <a href="https://www.google.com/maps?q=${party.lat},${party.lng}&z=16" target="_blank" style="background:#34a853;color:#fff;padding:6px 12px;border-radius:8px;font-size:0.8rem;text-decoration:none;white-space:nowrap">🗺️ Navigate</a>
+                       <a href="https://www.google.com/maps?q=${party.lat},${party.lng}&z=16" target="_blank" style="background:#34a853;color:#fff;padding:6px 12px;border-radius:8px;font-size:0.8rem;text-decoration:none;white-space:nowrap"> Navigate</a>
                    </div>`
-                : `<div style="padding:10px 12px;background:rgba(255,193,7,0.07);border:1px solid rgba(255,193,7,0.2);border-radius:8px;font-size:0.82rem;color:var(--text-muted)">
-                       ⚠️ No GPS saved for this customer.
+            : `<div style="padding:10px 12px;background:rgba(255,193,7,0.07);border:1px solid rgba(255,193,7,0.2);border-radius:8px;font-size:0.82rem;color:var(--text-muted)">
+                        No GPS saved for this customer.
                        ${party && (party.address || party.city) ? `<br><span>${escapeHtml(party.address || '')} ${escapeHtml(party.city || '')}</span>` : ''}
                    </div>`
-            }
+        }
             ${d.deliveryLocation || d.deliveryLat ? `
                 <div style="margin-top:8px;padding:10px 12px;background:rgba(99,102,241,0.06);border:1px solid rgba(99,102,241,0.18);border-radius:8px">
-                    <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:4px;font-weight:600">✅ Delivery Confirmation Location</div>
+                    <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:4px;font-weight:600"> Delivery Confirmation Location</div>
                     ${d.deliveryLocation ? `<div style="font-size:0.85rem;font-weight:600">${escapeHtml(d.deliveryLocation)}</div>` : ''}
                     ${d.deliveryLat ? `<div style="font-size:0.72rem;color:var(--text-muted)">GPS: ${(+d.deliveryLat).toFixed(5)}, ${(+d.deliveryLng).toFixed(5)}</div>
-                    <a href="https://www.google.com/maps?q=${d.deliveryLat},${d.deliveryLng}&z=16" target="_blank" style="color:var(--accent);font-size:0.78rem;text-decoration:none">View on map ↗</a>` : ''}
+                    <a href="https://www.google.com/maps?q=${d.deliveryLat},${d.deliveryLng}&z=16" target="_blank" style="color:var(--accent);font-size:0.78rem;text-decoration:none">View on map </a>` : ''}
                 </div>` : ''}
         </div>`;
 
@@ -9720,13 +9791,13 @@ async function viewDeliveryDetail(id) {
     </div>` : '';
 
     const actionHtml = d.status === 'Dispatched'
-        ? `<button class="btn btn-primary" onclick="markDelivered('${d.id}')">✅ Mark Delivered</button>
-           <button class="btn btn-outline" onclick="openUndeliveredModal('${d.id}')">↩ Undelivered</button>`
+        ? `<button class="btn btn-primary" onclick="markDelivered('${d.id}')"> Mark Delivered</button>
+           <button class="btn btn-outline" onclick="openUndeliveredModal('${d.id}')"> Undelivered</button>`
         : d.status === 'Undelivered'
-        ? `<button class="btn btn-primary btn-sm" onclick="closeModal();reDispatchOrder('${d.id}')">🚚 Re-Dispatch</button>`
-        : '';
+            ? `<button class="btn btn-primary btn-sm" onclick="closeModal();reDispatchOrder('${d.id}')"> Re-Dispatch</button>`
+            : '';
 
-    openModal(`Delivery — ${d.orderNo}`, `
+    openModal(`Delivery  ${d.orderNo}`, `
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 16px;margin-bottom:16px;padding:12px 14px;background:var(--bg-secondary);border-radius:8px;font-size:0.85rem">
             <div><span style="color:var(--text-muted);font-size:0.75rem">Invoice</span><br><strong>${d.invoiceNo || '-'}</strong></div>
             <div><span style="color:var(--text-muted);font-size:0.75rem">Party</span><br><strong>${escapeHtml(d.partyName)}</strong></div>
@@ -9749,12 +9820,12 @@ function markDelivered(id) {
     const dels = DB.cache['delivery'] || [];
     const d = dels.find(x => x.id === id);
     const summaryHtml = d ? `<div style="margin-bottom:14px;padding:12px;background:var(--bg-secondary);border-radius:8px;font-size:0.85rem">
-        <strong>${d.orderNo}</strong> — ${escapeHtml(d.partyName)}<br>
+        <strong>${d.orderNo}</strong>  ${escapeHtml(d.partyName)}<br>
         <span style="color:var(--text-muted)">Invoice: ${d.invoiceNo || '-'} | ${currency(d.total || 0)}</span>
     </div>` : '';
-    openModal('✅ Confirm Delivery', `
+    openModal(' Confirm Delivery', `
         ${summaryHtml}
-        <div style="font-weight:600;font-size:0.82rem;color:var(--text-muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.04em">📍 Delivery Location <span style="font-weight:400;text-transform:none">(Optional)</span></div>
+        <div style="font-weight:600;font-size:0.82rem;color:var(--text-muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.04em"> Delivery Location <span style="font-weight:400;text-transform:none">(Optional)</span></div>
         <div class="form-group">
             <label>Location / Handover Notes</label>
             <input type="text" id="f-del-location" placeholder="e.g. Left at gate, Handed to owner...">
@@ -9767,27 +9838,27 @@ function markDelivered(id) {
                 <input type="number" step="any" id="f-del-lng" placeholder="Auto-fill via GPS">
             </div>
         </div>
-        <button class="btn btn-outline btn-sm" onclick="captureDeliveryGps()" style="margin-bottom:14px">📍 Use My Live Location</button>
+        <button class="btn btn-outline btn-sm" onclick="captureDeliveryGps()" style="margin-bottom:14px"> Use My Live Location</button>
         <div class="modal-actions">
             <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-            <button class="btn btn-primary" onclick="confirmMarkDelivered('${id}')">✅ Mark as Delivered</button>
+            <button class="btn btn-primary" onclick="confirmMarkDelivered('${id}')"> Mark as Delivered</button>
         </div>`);
 }
 
 function captureDeliveryGps() {
     if (!navigator.geolocation) return alert('Geolocation not supported.');
     const btn = document.querySelector('[onclick="captureDeliveryGps()"]');
-    if (btn) { btn.textContent = '⏳ Getting...'; btn.disabled = true; }
+    if (btn) { btn.textContent = ' Getting...'; btn.disabled = true; }
     navigator.geolocation.getCurrentPosition(
         pos => {
             const latEl = $('f-del-lat'), lngEl = $('f-del-lng');
             if (latEl) latEl.value = pos.coords.latitude.toFixed(6);
             if (lngEl) lngEl.value = pos.coords.longitude.toFixed(6);
-            if (btn) { btn.textContent = '✅ Location Captured'; btn.disabled = false; }
+            if (btn) { btn.textContent = ' Location Captured'; btn.disabled = false; }
             showToast('Delivery location captured!', 'success');
         },
         err => {
-            if (btn) { btn.textContent = '📍 Use My Live Location'; btn.disabled = false; }
+            if (btn) { btn.textContent = ' Use My Live Location'; btn.disabled = false; }
             alert('Could not get location: ' + err.message);
         },
         { enableHighAccuracy: true, timeout: 10000 }
@@ -9812,16 +9883,16 @@ async function openQuickGpsUpdate(partyId, returnId, returnSource) {
     const party = parties.find(p => p.id === partyId);
     if (!party) return alert('Party not found.');
 
-    // Any user can update GPS — but non-editors see ONLY lat/lng (no other fields)
+    // Any user can update GPS  but non-editors see ONLY lat/lng (no other fields)
     const isEditor = canEdit();
-    openModal(`📍 Update GPS — ${escapeHtml(party.name)}`, `
+    openModal(` Update GPS  ${escapeHtml(party.name)}`, `
         <div style="background:rgba(99,102,241,0.06);border:1px solid rgba(99,102,241,0.18);border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:0.82rem;color:var(--text-muted)">
             Only GPS coordinates will be updated. All other party details remain unchanged.
         </div>
         <div class="form-group">
             <label style="font-weight:600">${escapeHtml(party.name)}</label>
             <div style="font-size:0.82rem;color:var(--text-muted)">${escapeHtml(party.address || '')} ${escapeHtml(party.city || '')} ${escapeHtml(party.postCode || '')}</div>
-            ${party.phone ? `<div style="margin-top:4px"><a href="tel:${party.phone}" style="color:var(--success);font-size:0.85rem">📞 ${party.phone}</a></div>` : ''}
+            ${party.phone ? `<div style="margin-top:4px"><a href="tel:${party.phone}" style="color:var(--success);font-size:0.85rem"> ${party.phone}</a></div>` : ''}
         </div>
         <div style="display:flex;gap:8px;margin-bottom:10px">
             <div class="form-group" style="flex:1"><label>Latitude</label>
@@ -9831,14 +9902,14 @@ async function openQuickGpsUpdate(partyId, returnId, returnSource) {
                 <input type="number" step="any" id="qgps-lng" value="${party.lng || ''}" placeholder="e.g. 77.59369">
             </div>
         </div>
-        ${party.lat && party.lng ? `<div style="margin-bottom:10px;font-size:0.8rem;color:var(--success)">📍 Current: ${(+party.lat).toFixed(5)}, ${(+party.lng).toFixed(5)}</div>` : ''}
+        ${party.lat && party.lng ? `<div style="margin-bottom:10px;font-size:0.8rem;color:var(--success)"> Current: ${(+party.lat).toFixed(5)}, ${(+party.lng).toFixed(5)}</div>` : ''}
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
-            <button class="btn btn-primary btn-sm" onclick="qgpsLiveLocation()">📍 Use My Live Location</button>
-            ${isEditor ? `<button class="btn btn-outline btn-sm" onclick="closeModal();openPartyModal('${partyId}')">✏️ Full Edit</button>` : ''}
+            <button class="btn btn-primary btn-sm" onclick="qgpsLiveLocation()"> Use My Live Location</button>
+            ${isEditor ? `<button class="btn btn-outline btn-sm" onclick="closeModal();openPartyModal('${partyId}')"> Full Edit</button>` : ''}
         </div>
-        <small style="color:var(--text-muted)">💡 Go to the customer location and tap "Use My Live Location" for best accuracy.</small>
+        <small style="color:var(--text-muted)"> Go to the customer location and tap "Use My Live Location" for best accuracy.</small>
         <div class="modal-actions">
-            <button class="btn btn-outline" onclick="${returnId ? `openDispatchModalUnified('${returnId}','${returnSource}')` : 'closeModal()'}">← Back</button>
+            <button class="btn btn-outline" onclick="${returnId ? `openDispatchModalUnified('${returnId}','${returnSource}')` : 'closeModal()'}"> Back</button>
             <button class="btn btn-primary" onclick="saveQuickGps('${partyId}','${returnId}','${returnSource}')">Save GPS</button>
         </div>`);
 }
@@ -9846,17 +9917,17 @@ async function openQuickGpsUpdate(partyId, returnId, returnSource) {
 function qgpsLiveLocation() {
     if (!navigator.geolocation) return alert('Geolocation not supported.');
     const btn = document.querySelector('[onclick="qgpsLiveLocation()"]');
-    if (btn) { btn.textContent = '⏳ Getting...'; btn.disabled = true; }
+    if (btn) { btn.textContent = ' Getting...'; btn.disabled = true; }
     navigator.geolocation.getCurrentPosition(
         pos => {
             const latEl = $('qgps-lat'), lngEl = $('qgps-lng');
             if (latEl) latEl.value = pos.coords.latitude.toFixed(6);
             if (lngEl) lngEl.value = pos.coords.longitude.toFixed(6);
-            if (btn) { btn.textContent = '✅ Location Set'; btn.disabled = false; }
+            if (btn) { btn.textContent = ' Location Set'; btn.disabled = false; }
             showToast('Location captured!', 'success');
         },
         err => {
-            if (btn) { btn.textContent = '📍 Use My Live Location'; btn.disabled = false; }
+            if (btn) { btn.textContent = ' Use My Live Location'; btn.disabled = false; }
             alert('Could not get location: ' + err.message);
         },
         { enableHighAccuracy: true, timeout: 10000 }
@@ -9875,7 +9946,7 @@ async function saveQuickGps(partyId, returnId, returnSource) {
         } else {
             closeModal();
         }
-    } catch(err) {
+    } catch (err) {
         alert('Error saving GPS: ' + (err.message || err));
     }
 }
@@ -9889,14 +9960,14 @@ async function openDispatchModal(orderId) {
         <div class="form-group"><label>Delivery Person *</label>
             <select id="f-del-person"><option value="">Select</option>${dp.map(p => `<option value="${p.name}">${p.name} (${p.phone || ''})</option>`).join('')}</select>
         </div>
-        ${!dp.length ? '<div style="font-size:0.8rem;color:var(--warning);margin-bottom:10px">⚠️ No delivery persons. <a href="#" onclick="closeModal();navigateTo(\'deliverypersons\')" style="color:var(--accent)">Add Now</a></div>' : ''}
+        ${!dp.length ? '<div style="font-size:0.8rem;color:var(--warning);margin-bottom:10px"> No delivery persons. <a href="#" onclick="closeModal();navigateTo(\'deliverypersons\')" style="color:var(--accent)">Add Now</a></div>' : ''}
         <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-        <button class="btn btn-primary" onclick="dispatchOrder('${orderId}')">🚚 Dispatch</button></div>`);
+        <button class="btn btn-primary" onclick="dispatchOrder('${orderId}')"> Dispatch</button></div>`);
 }
 function calcDistanceKm(lat1, lng1, lat2, lng2) {
     const R = 6371, toRad = x => x * Math.PI / 180;
     const dLat = toRad(lat2 - lat1), dLng = toRad(lng2 - lng1);
-    const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng/2)**2;
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
@@ -9921,11 +9992,11 @@ async function printDeliveryRouteSheet() {
         byPerson[name].push({ ...d, _party: party, _hasGps: hasGps, _distKm: distKm });
     });
 
-    const sections = Object.entries(byPerson).sort(([a],[b])=>a.localeCompare(b)).map(([person, dlist]) => {
+    const sections = Object.entries(byPerson).sort(([a], [b]) => a.localeCompare(b)).map(([person, dlist]) => {
         // Separate stops into those with GPS and those without
         let unrouted = dlist.filter(d => d._hasGps);
         const withoutGps = dlist.filter(d => !d._hasGps);
-        
+
         const withGps = [];
         let currentLat = warehouseLat;
         let currentLng = warehouseLng;
@@ -9968,30 +10039,30 @@ async function printDeliveryRouteSheet() {
             seq++;
             const p = d._party;
             const gpsInfo = d._hasGps
-                ? `<span style="color:#34a853;font-size:0.78rem">📍 ${p.address||p.city||''} ${d._legDistance !== undefined && d._legDistance !== null ? `(Leg: ${d._legDistance.toFixed(1)} km)` : ''}</span>`
-                : `<span style="color:#f59e0b;font-size:0.78rem">⚠️ No GPS — Manual seq: <input type="number" value="${seq}" style="width:40px;border:1px solid #ddd;border-radius:3px;padding:1px 3px;text-align:center" onchange="this.closest('tr').querySelector('.seq-num').textContent=this.value"></span>`;
+                ? `<span style="color:#34a853;font-size:0.78rem"> ${p.address || p.city || ''} ${d._legDistance !== undefined && d._legDistance !== null ? `(Leg: ${d._legDistance.toFixed(1)} km)` : ''}</span>`
+                : `<span style="color:#f59e0b;font-size:0.78rem"> No GPS  Manual seq: <input type="number" value="${seq}" style="width:40px;border:1px solid #ddd;border-radius:3px;padding:1px 3px;text-align:center" onchange="this.closest('tr').querySelector('.seq-num').textContent=this.value"></span>`;
             const phone = p ? (p.phone || '-') : '-';
             return `<tr>
                 <td style="text-align:center;font-weight:700;font-size:1rem" class="seq-num">${seq}</td>
-                <td><strong>${d.orderNo||d.invoiceNo||'-'}</strong><br><span style="font-size:0.75rem;color:#666">${d.invoiceNo||''}</span></td>
+                <td><strong>${d.orderNo || d.invoiceNo || '-'}</strong><br><span style="font-size:0.75rem;color:#666">${d.invoiceNo || ''}</span></td>
                 <td><strong>${d.partyName}</strong><br>${gpsInfo}</td>
                 <td>${phone !== '-' ? `<a href="tel:${phone}" style="color:#1a73e8">${phone}</a>` : '-'}</td>
-                <td>${(d.packageNumbers||[]).join(', ')||'-'}</td>
-                <td style="text-align:right">₹${(d.total||0).toFixed(2)}</td>
+                <td>${(d.packageNumbers || []).join(', ') || '-'}</td>
+                <td style="text-align:right">${(d.total || 0).toFixed(2)}</td>
                 <td style="width:90px"></td>
             </tr>`;
         }).join('');
 
-        const total = dlist.reduce((s,d)=>s+(d.total||0),0);
+        const total = dlist.reduce((s, d) => s + (d.total || 0), 0);
         const gpsCount = withGps.length, noGpsCount = withoutGps.length;
-        const totalDistance = withGps.reduce((s,d)=>s+(d._legDistance||0),0);
+        const totalDistance = withGps.reduce((s, d) => s + (d._legDistance || 0), 0);
         const gpsNote = hasWarehouseGps
-            ? `<span style="font-size:0.78rem;color:#34a853">📍 ${gpsCount} GPS stops (Route: ${totalDistance.toFixed(1)} km)</span>${noGpsCount ? ` &nbsp; <span style="font-size:0.78rem;color:#f59e0b">⚠️ ${noGpsCount} without GPS</span>` : ''}`
-            : `<span style="font-size:0.78rem;color:#f59e0b">⚠️ Warehouse GPS missing — Route distances unoptimised</span>`;
+            ? `<span style="font-size:0.78rem;color:#34a853"> ${gpsCount} GPS stops (Route: ${totalDistance.toFixed(1)} km)</span>${noGpsCount ? ` &nbsp; <span style="font-size:0.78rem;color:#f59e0b"> ${noGpsCount} without GPS</span>` : ''}`
+            : `<span style="font-size:0.78rem;color:#f59e0b"> Warehouse GPS missing  Route distances unoptimised</span>`;
 
         return `<div style="margin-bottom:32px;page-break-inside:avoid">
         <div style="border-bottom:2px solid #333;padding-bottom:6px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:4px">
-            <h3 style="margin:0">🧑‍✈️ ${person} &nbsp;<span style="font-size:0.85rem;color:#666;font-weight:400">Date: ${new Date().toLocaleDateString('en-IN')}</span></h3>
+            <h3 style="margin:0"> ${person} &nbsp;<span style="font-size:0.85rem;color:#666;font-weight:400">Date: ${new Date().toLocaleDateString('en-IN')}</span></h3>
             <div>${gpsNote}</div>
         </div>
         <table style="width:100%;border-collapse:collapse;font-size:0.88rem">
@@ -10004,10 +10075,10 @@ async function printDeliveryRouteSheet() {
             <th style="border:1px solid #ddd;padding:6px;text-align:right">Amount</th>
             <th style="border:1px solid #ddd;padding:6px">Signature</th>
         </tr></thead>
-        <tbody>${rows.replace(/<td(?! style)/g,'<td style="border:1px solid #ddd;padding:5px"')}</tbody>
+        <tbody>${rows.replace(/<td(?! style)/g, '<td style="border:1px solid #ddd;padding:5px"')}</tbody>
         <tfoot><tr>
             <td colspan="5" style="border:1px solid #ddd;padding:6px;text-align:right;font-weight:700">Total (${dlist.length} stops)</td>
-            <td style="border:1px solid #ddd;padding:6px;text-align:right;font-weight:700">₹${total.toFixed(2)}</td>
+            <td style="border:1px solid #ddd;padding:6px;text-align:right;font-weight:700">${total.toFixed(2)}</td>
             <td style="border:1px solid #ddd"></td>
         </tr></tfoot>
         </table></div>`;
@@ -10015,14 +10086,14 @@ async function printDeliveryRouteSheet() {
 
     const header = `<div style="text-align:center;margin-bottom:16px">
         <h2 style="margin:0">${co.name || 'Delivery Route Sheet'}</h2>
-        <div style="font-size:0.85rem;color:#666">Route Sheet &nbsp;|&nbsp; Printed: ${new Date().toLocaleString('en-IN')}${hasWarehouseGps ? ' &nbsp;|&nbsp; 📍 GPS-optimised route' : ''}</div>
+        <div style="font-size:0.85rem;color:#666">Route Sheet &nbsp;|&nbsp; Printed: ${new Date().toLocaleString('en-IN')}${hasWarehouseGps ? ' &nbsp;|&nbsp;  GPS-optimised route' : ''}</div>
     </div><hr style="margin-bottom:16px">`;
 
     const w = window.open('', '_blank');
     w.document.write(`<!DOCTYPE html><html><head><title>Route Sheet</title>
     <style>body{font-family:sans-serif;padding:20px;max-width:960px;margin:0 auto}@media print{button{display:none}.no-print{display:none}}</style>
     </head><body>${header}${sections || '<p>No dispatched deliveries</p>'}
-    <button onclick="window.print()" style="margin-top:16px;padding:8px 20px;background:#f97316;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:1rem">🖨️ Print Route Sheet</button>
+    <button onclick="window.print()" style="margin-top:16px;padding:8px 20px;background:#f97316;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:1rem"> Print Route Sheet</button>
     </body></html>`);
     w.document.close();
 }
@@ -10042,17 +10113,17 @@ async function openDispatchModalUnified(id, source) {
     const party = parties.find(p => p.id === partyId);
     const gpsHtml = (party && party.lat && party.lng)
         ? `<div style="margin-bottom:14px;padding:10px 14px;background:rgba(52,168,83,0.08);border:1px solid rgba(52,168,83,0.3);border-radius:8px;display:flex;align-items:center;gap:12px">
-               <span style="font-size:1.4rem">📍</span>
+               <span style="font-size:1.4rem"></span>
                <div style="flex:1">
                    <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:2px">Customer GPS Location</div>
                    <div style="font-size:0.85rem;font-weight:600">${escapeHtml(party.address || party.city || partyName)}</div>
                    <div style="font-size:0.75rem;color:var(--text-muted)">${(+party.lat).toFixed(5)}, ${(+party.lng).toFixed(5)}</div>
                </div>
-               <a href="https://www.google.com/maps?q=${party.lat},${party.lng}&z=16" target="_blank" style="background:#34a853;color:#fff;padding:7px 14px;border-radius:8px;font-size:0.85rem;text-decoration:none;white-space:nowrap">🗺️ Navigate</a>
+               <a href="https://www.google.com/maps?q=${party.lat},${party.lng}&z=16" target="_blank" style="background:#34a853;color:#fff;padding:7px 14px;border-radius:8px;font-size:0.85rem;text-decoration:none;white-space:nowrap"> Navigate</a>
            </div>`
         : `<div style="margin-bottom:14px;padding:10px 14px;background:rgba(255,193,7,0.08);border:1px solid rgba(255,193,7,0.3);border-radius:8px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
-               <div style="font-size:0.82rem;color:var(--text-muted)">⚠️ No GPS saved for <strong>${escapeHtml(partyName)}</strong>. Route sheet won't include this stop.</div>
-               <button class="btn btn-outline btn-sm" style="border-color:var(--warning);color:var(--warning);white-space:nowrap" onclick="openQuickGpsUpdate('${partyId || ''}','${id}','${source}')">📍 Add GPS Now</button>
+               <div style="font-size:0.82rem;color:var(--text-muted)"> No GPS saved for <strong>${escapeHtml(partyName)}</strong>. Route sheet won't include this stop.</div>
+               <button class="btn btn-outline btn-sm" style="border-color:var(--warning);color:var(--warning);white-space:nowrap" onclick="openQuickGpsUpdate('${partyId || ''}','${id}','${source}')"> Add GPS Now</button>
            </div>`;
     openModal(`Dispatch ${label}`, `
         <div style="margin-bottom:14px"><strong>Customer:</strong> ${escapeHtml(partyName)} | <strong>Invoice:</strong> ${invoiceNo}</div>
@@ -10060,9 +10131,9 @@ async function openDispatchModalUnified(id, source) {
         <div class="form-group"><label>Delivery Person *</label>
             <select id="f-del-person"><option value="">Select</option>${dp.map(p => `<option value="${p.name}">${p.name} (${p.phone || ''})</option>`).join('')}</select>
         </div>
-        ${!dp.length ? '<div style="font-size:0.8rem;color:var(--warning);margin-bottom:10px">⚠️ No delivery persons. <a href="#" onclick="closeModal();navigateTo(\'deliverypersons\')" style="color:var(--accent)">Add Now</a></div>' : ''}
+        ${!dp.length ? '<div style="font-size:0.8rem;color:var(--warning);margin-bottom:10px"> No delivery persons. <a href="#" onclick="closeModal();navigateTo(\'deliverypersons\')" style="color:var(--accent)">Add Now</a></div>' : ''}
         <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-        <button class="btn btn-primary" onclick="dispatchOrderUnified('${id}','${source}')">🚚 Dispatch</button></div>`);
+        <button class="btn btn-primary" onclick="dispatchOrderUnified('${id}','${source}')"> Dispatch</button></div>`);
 }
 async function dispatchOrderUnified(id, source) {
     const person = $('f-del-person').value; if (!person) return alert('Select delivery person');
@@ -10131,11 +10202,11 @@ function openUndeliveredModal(id) {
         </div>
         <div class="form-group"><label>Additional Notes</label><input id="f-undel-notes" placeholder="Optional details..."></div>
         <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-        <button class="btn btn-danger" onclick="markUndelivered('${id}')">↩️ Mark Undelivered</button></div>`);
+        <button class="btn btn-danger" onclick="markUndelivered('${id}')"> Mark Undelivered</button></div>`);
 }
 
 async function markUndelivered(id) {
-    const reason = $('f-undel-reason').value + ($('f-undel-notes').value.trim() ? ' — ' + $('f-undel-notes').value.trim() : '');
+    const reason = $('f-undel-reason').value + ($('f-undel-notes').value.trim() ? '  ' + $('f-undel-notes').value.trim() : '');
     await DB.update('delivery', id, {
         status: 'Undelivered',
         undeliveredReason: reason,
@@ -10154,7 +10225,7 @@ function confirmReturn(id) {
         </div>
         <p style="margin-bottom:16px;font-size:0.9rem">Confirm that goods have been returned to the warehouse?</p>
         <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-        <button class="btn btn-primary" onclick="executeConfirmReturn('${id}')">📦 Confirm Return</button></div>`);
+        <button class="btn btn-primary" onclick="executeConfirmReturn('${id}')"> Confirm Return</button></div>`);
 }
 async function executeConfirmReturn(id) {
     try {
@@ -10183,7 +10254,7 @@ async function openBulkDispatchModal() {
         Dispatching <strong>${rows.length}</strong> order(s) to the same delivery person.
     </p>
     <div style="max-height:200px;overflow-y:auto;margin-bottom:16px;border:1px solid var(--border);border-radius:8px;padding:8px">
-        ${rows.map((r,i) => `<div style="display:flex;justify-content:space-between;font-size:0.85rem;padding:5px 4px;${i?'border-top:1px solid var(--border)':''}">
+        ${rows.map((r, i) => `<div style="display:flex;justify-content:space-between;font-size:0.85rem;padding:5px 4px;${i ? 'border-top:1px solid var(--border)' : ''}">
             <span style="font-weight:600">${r.orderNo}</span>
             <span style="color:var(--text-muted)">${r.party}</span>
         </div>`).join('')}
@@ -10191,15 +10262,15 @@ async function openBulkDispatchModal() {
     <div class="form-group">
         <label>Delivery Person *</label>
         <select id="f-bulk-del-person" class="form-control">
-            <option value="">— Select Person —</option>
-            ${dp.map(p => `<option value="${p.name}">${p.name}${p.phone ? ' ('+p.phone+')' : ''}</option>`).join('')}
+            <option value=""> Select Person </option>
+            ${dp.map(p => `<option value="${p.name}">${p.name}${p.phone ? ' (' + p.phone + ')' : ''}</option>`).join('')}
         </select>
-        ${!dp.length ? '<p style="font-size:0.78rem;color:var(--warning);margin-top:6px">⚠️ No delivery persons found. <a href="#" onclick="closeModal();navigateTo(\'deliverypersons\')" style="color:var(--accent)">Add Now</a></p>' : ''}
+        ${!dp.length ? '<p style="font-size:0.78rem;color:var(--warning);margin-top:6px"> No delivery persons found. <a href="#" onclick="closeModal();navigateTo(\'deliverypersons\')" style="color:var(--accent)">Add Now</a></p>' : ''}
     </div>
     <input type="hidden" id="bulk-disp-rows" value="${encodeURIComponent(JSON.stringify(rows))}">
     <div class="modal-actions">
         <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-        <button class="btn btn-primary" onclick="confirmBulkDispatch()">🚚 Dispatch All (${rows.length})</button>
+        <button class="btn btn-primary" onclick="confirmBulkDispatch()"> Dispatch All (${rows.length})</button>
     </div>`);
 }
 
@@ -10208,7 +10279,7 @@ async function confirmBulkDispatch() {
     if (!person) { alert('Select a delivery person'); return; }
     const rows = JSON.parse(decodeURIComponent($('bulk-disp-rows').value));
     closeModal();
-    showToast('Dispatching…', 'info');
+    showToast('Dispatching', 'info');
     try {
         const [orders, invoices] = await Promise.all([DB.getAll('salesorders'), DB.getAll('invoices')]);
         const ops = rows.map(r => {
@@ -10227,7 +10298,7 @@ async function confirmBulkDispatch() {
         await Promise.all(ops);
         await DB.refreshTables(['delivery']);
         await renderDelivery();
-        showToast(`✅ ${ops.length} order(s) dispatched to ${person}!`, 'success');
+        showToast(` ${ops.length} order(s) dispatched to ${person}!`, 'success');
     } catch (err) {
         alert('Bulk Dispatch Error: ' + err.message);
     }
@@ -10243,9 +10314,9 @@ async function reDispatchOrder(id) {
         <div class="form-group"><label>Delivery Person *</label>
             <select id="f-redel-person"><option value="">Select</option>${dp.map(p => `<option value="${p.name}">${p.name} (${p.phone || ''})</option>`).join('')}</select>
         </div>
-        ${!dp.length ? '<div style="font-size:0.8rem;color:var(--warning);margin-bottom:10px">⚠️ No delivery persons. <a href="#" onclick="closeModal();navigateTo(\'deliverypersons\')" style="color:var(--accent)">Add Now</a></div>' : ''}
+        ${!dp.length ? '<div style="font-size:0.8rem;color:var(--warning);margin-bottom:10px"> No delivery persons. <a href="#" onclick="closeModal();navigateTo(\'deliverypersons\')" style="color:var(--accent)">Add Now</a></div>' : ''}
         <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-        <button class="btn btn-primary" onclick="executeReDispatch('${id}')">🚚 Re-Dispatch</button></div>`);
+        <button class="btn btn-primary" onclick="executeReDispatch('${id}')"> Re-Dispatch</button></div>`);
 }
 
 async function executeReDispatch(id) {
@@ -10290,7 +10361,7 @@ async function cancelDeliveryInvoice(id) {
         </div>
         <p style="margin-bottom:16px;font-size:0.9rem">Cancel this invoice? Stock will be restored and party balance adjusted.</p>
         <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Keep Invoice</button>
-        <button class="btn btn-danger" onclick="executeCancelDeliveryInvoice('${id}')">❌ Cancel Invoice</button></div>`);
+        <button class="btn btn-danger" onclick="executeCancelDeliveryInvoice('${id}')"> Cancel Invoice</button></div>`);
 }
 async function executeCancelDeliveryInvoice(id) {
     const dels = await DB.getAll('delivery');
@@ -10354,52 +10425,52 @@ function exportTableToExcel(tableId, filename) {
 function renderReports() {
     pageContent.innerHTML = `
         <div class="report-grid">
-            <div class="report-card" onclick="showReport('payment-report')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(16,185,129,0.12),rgba(249,115,22,0.08))"><div class="report-icon">💰</div></div><div class="report-text"><h4>Payment Report</h4><p>Pay In / Pay Out with filters</p></div></div>
-            <div class="report-card" onclick="showReport('sales')"><div class="report-icon-wrap"><div class="report-icon">💹</div></div><div class="report-text"><h4>Sales Report</h4><p>Sales invoices summary</p></div></div>
-            <div class="report-card" onclick="showReport('purchases')"><div class="report-icon-wrap"><div class="report-icon">🛒</div></div><div class="report-text"><h4>Purchase Report</h4><p>Purchase invoices summary</p></div></div>
-            <div class="report-card" onclick="showReport('usersales')"><div class="report-icon-wrap"><div class="report-icon">👤</div></div><div class="report-text"><h4>User Sales</h4><p>Detailed salesman performance</p></div></div>
-            <div class="report-card" onclick="showReport('userpayments')"><div class="report-icon-wrap"><div class="report-icon">💸</div></div><div class="report-text"><h4>User Collections</h4><p>Detailed salesman collections</p></div></div>
-            <div class="report-card" onclick="showReport('pnl')"><div class="report-icon-wrap"><div class="report-icon">📊</div></div><div class="report-text"><h4>Profit & Loss</h4><p>Revenue vs expenses</p></div></div>
-            <div class="report-card" onclick="showReport('invoice-pnl')"><div class="report-icon-wrap"><div class="report-icon">🧾</div></div><div class="report-text"><h4>Invoice P&L</h4><p>Profit per invoice</p></div></div>
-            <div class="report-card" onclick="showReport('stock')"><div class="report-icon-wrap"><div class="report-icon">📦</div></div><div class="report-text"><h4>Stock Summary</h4><p>Current inventory levels</p></div></div>
-            <div class="report-card" onclick="showReport('outstanding')"><div class="report-icon-wrap"><div class="report-icon">💰</div></div><div class="report-text"><h4>Outstanding</h4><p>Party balances</p></div></div>
-            <div class="report-card" onclick="showReport('expenses')"><div class="report-icon-wrap"><div class="report-icon">💸</div></div><div class="report-text"><h4>Expense Summary</h4><p>Category-wise breakdown</p></div></div>
-            <div class="report-card" onclick="showReport('chequeregister')"><div class="report-icon-wrap"><div class="report-icon">📝</div></div><div class="report-text"><h4>Cheque Register</h4><p>Track cheque deposits & clearance</p></div></div>
-            <div class="report-card" onclick="showReport('salesman')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(124,58,237,0.12),rgba(99,102,241,0.08))"><div class="report-icon">🏆</div></div><div class="report-text"><h4>Salesman Performance</h4><p>Invoices + collections by salesman</p></div></div>
-            <div class="report-card" onclick="showReport('user-outstanding')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(239,68,68,0.12),rgba(249,115,22,0.08))"><div class="report-icon">👤💰</div></div><div class="report-text"><h4>Outstanding by User</h4><p>Pending bills grouped by salesman</p></div></div>
-            <div class="report-card" onclick="showReport('collection-allocations')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(59,130,246,0.12),rgba(37,99,235,0.08))"><div class="report-icon">👤💳</div></div><div class="report-text"><h4>Collection Allocations</h4><p>Track assigned invoices & payments</p></div></div>
-            <div class="report-card" onclick="showReport('daybook')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(20,184,166,0.12),rgba(6,182,212,0.08))"><div class="report-icon">📒</div></div><div class="report-text"><h4>Day Book</h4><p>Date-wise transaction summary</p></div></div>
-            <div class="report-card" onclick="showReport('stock-aging')"><div class="report-icon-wrap" style="background:var(--bg-primary)"><div class="report-icon">⏳</div></div><div class="report-text"><h4>Stock Aging</h4><p>Stock staying >30/60/90 days</p></div></div>
-            <div class="report-card" onclick="showReport('salesman-ach')"><div class="report-icon-wrap" style="background:var(--bg-primary)"><div class="report-icon">🎯</div></div><div class="report-text"><h4>Target vs Achievement</h4><p>Salesman performance vs targets</p></div></div>
-            <div class="report-card" onclick="showReport('party-soa')"><div class="report-icon-wrap" style="background:var(--bg-primary)"><div class="report-icon">👥</div></div><div class="report-text"><h4>Statement of Account</h4><p>Full party ledger with print</p></div></div>
-            <div class="report-card" onclick="showReport('abc-analysis')"><div class="report-icon-wrap" style="background:var(--bg-primary)"><div class="report-icon">🔍</div></div><div class="report-text"><h4>ABC Analysis</h4><p>Revenue-based item classification</p></div></div>
-            <div class="report-card" onclick="showReport('indent')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(249,115,22,0.12),rgba(234,88,12,0.08))"><div class="report-icon">📋</div></div><div class="report-text"><h4>Purchase Indent</h4><p>Suggested PO based on 30d sales</p></div></div>
+            <div class="report-card" onclick="showReport('payment-report')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(16,185,129,0.12),rgba(249,115,22,0.08))"><div class="report-icon"></div></div><div class="report-text"><h4>Payment Report</h4><p>Pay In / Pay Out with filters</p></div></div>
+            <div class="report-card" onclick="showReport('sales')"><div class="report-icon-wrap"><div class="report-icon"></div></div><div class="report-text"><h4>Sales Report</h4><p>Sales invoices summary</p></div></div>
+            <div class="report-card" onclick="showReport('purchases')"><div class="report-icon-wrap"><div class="report-icon"></div></div><div class="report-text"><h4>Purchase Report</h4><p>Purchase invoices summary</p></div></div>
+            <div class="report-card" onclick="showReport('usersales')"><div class="report-icon-wrap"><div class="report-icon"></div></div><div class="report-text"><h4>User Sales</h4><p>Detailed salesman performance</p></div></div>
+            <div class="report-card" onclick="showReport('userpayments')"><div class="report-icon-wrap"><div class="report-icon"></div></div><div class="report-text"><h4>User Collections</h4><p>Detailed salesman collections</p></div></div>
+            <div class="report-card" onclick="showReport('pnl')"><div class="report-icon-wrap"><div class="report-icon"></div></div><div class="report-text"><h4>Profit & Loss</h4><p>Revenue vs expenses</p></div></div>
+            <div class="report-card" onclick="showReport('invoice-pnl')"><div class="report-icon-wrap"><div class="report-icon"></div></div><div class="report-text"><h4>Invoice P&L</h4><p>Profit per invoice</p></div></div>
+            <div class="report-card" onclick="showReport('stock')"><div class="report-icon-wrap"><div class="report-icon"></div></div><div class="report-text"><h4>Stock Summary</h4><p>Current inventory levels</p></div></div>
+            <div class="report-card" onclick="showReport('outstanding')"><div class="report-icon-wrap"><div class="report-icon"></div></div><div class="report-text"><h4>Outstanding</h4><p>Party balances</p></div></div>
+            <div class="report-card" onclick="showReport('expenses')"><div class="report-icon-wrap"><div class="report-icon"></div></div><div class="report-text"><h4>Expense Summary</h4><p>Category-wise breakdown</p></div></div>
+            <div class="report-card" onclick="showReport('chequeregister')"><div class="report-icon-wrap"><div class="report-icon"></div></div><div class="report-text"><h4>Cheque Register</h4><p>Track cheque deposits & clearance</p></div></div>
+            <div class="report-card" onclick="showReport('salesman')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(124,58,237,0.12),rgba(99,102,241,0.08))"><div class="report-icon"></div></div><div class="report-text"><h4>Salesman Performance</h4><p>Invoices + collections by salesman</p></div></div>
+            <div class="report-card" onclick="showReport('user-outstanding')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(239,68,68,0.12),rgba(249,115,22,0.08))"><div class="report-icon"></div></div><div class="report-text"><h4>Outstanding by User</h4><p>Pending bills grouped by salesman</p></div></div>
+            <div class="report-card" onclick="showReport('collection-allocations')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(59,130,246,0.12),rgba(37,99,235,0.08))"><div class="report-icon"></div></div><div class="report-text"><h4>Collection Allocations</h4><p>Track assigned invoices & payments</p></div></div>
+            <div class="report-card" onclick="showReport('daybook')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(20,184,166,0.12),rgba(6,182,212,0.08))"><div class="report-icon"></div></div><div class="report-text"><h4>Day Book</h4><p>Date-wise transaction summary</p></div></div>
+            <div class="report-card" onclick="showReport('stock-aging')"><div class="report-icon-wrap" style="background:var(--bg-primary)"><div class="report-icon"></div></div><div class="report-text"><h4>Stock Aging</h4><p>Stock staying >30/60/90 days</p></div></div>
+            <div class="report-card" onclick="showReport('salesman-ach')"><div class="report-icon-wrap" style="background:var(--bg-primary)"><div class="report-icon"></div></div><div class="report-text"><h4>Target vs Achievement</h4><p>Salesman performance vs targets</p></div></div>
+            <div class="report-card" onclick="showReport('party-soa')"><div class="report-icon-wrap" style="background:var(--bg-primary)"><div class="report-icon"></div></div><div class="report-text"><h4>Statement of Account</h4><p>Full party ledger with print</p></div></div>
+            <div class="report-card" onclick="showReport('abc-analysis')"><div class="report-icon-wrap" style="background:var(--bg-primary)"><div class="report-icon"></div></div><div class="report-text"><h4>ABC Analysis</h4><p>Revenue-based item classification</p></div></div>
+            <div class="report-card" onclick="showReport('indent')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(249,115,22,0.12),rgba(234,88,12,0.08))"><div class="report-icon"></div></div><div class="report-text"><h4>Purchase Indent</h4><p>Suggested PO based on 30d sales</p></div></div>
         </div>
 
         <div class="section-toolbar" style="margin-top:28px">
-            <h3>📒 Vyapar Import Reports</h3>
+            <h3> Vyapar Import Reports</h3>
         </div>
         <p style="font-size:0.82rem;color:var(--text-muted);margin-bottom:14px">Line-wise detailed reports for re-entry into Vyapar accounting software.</p>
         <div class="report-grid">
-            <div class="report-card" onclick="showReport('vyapar-sales')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(22,163,74,0.12),rgba(16,185,129,0.08))"><div class="report-icon">🧾</div></div><div class="report-text"><h4>Vyapar Sales Import</h4><p>Sales invoices — line-wise for Vyapar entry</p></div></div>
-            <div class="report-card" onclick="showReport('vyapar-payments')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(37,99,235,0.12),rgba(99,102,241,0.08))"><div class="report-icon">💳</div></div><div class="report-text"><h4>Vyapar Payment In Import</h4><p>Payment receipts — line-wise for Vyapar entry</p></div></div>
+            <div class="report-card" onclick="showReport('vyapar-sales')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(22,163,74,0.12),rgba(16,185,129,0.08))"><div class="report-icon"></div></div><div class="report-text"><h4>Vyapar Sales Import</h4><p>Sales invoices  line-wise for Vyapar entry</p></div></div>
+            <div class="report-card" onclick="showReport('vyapar-payments')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(37,99,235,0.12),rgba(99,102,241,0.08))"><div class="report-icon"></div></div><div class="report-text"><h4>Vyapar Payment In Import</h4><p>Payment receipts  line-wise for Vyapar entry</p></div></div>
             <div class="report-card" onclick="showReport('payment-trend')">
                 <div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(124,45,18,0.12),rgba(249,115,22,0.08))">
-                    <div class="report-icon">📊</div>
+                    <div class="report-icon"></div>
                 </div>
                 <div class="report-text">
                     <h4>Customer Payment Trend</h4>
-                    <p>Customer × Date pivot — collection summary</p>
+                    <p>Customer  Date pivot  collection summary</p>
                 </div>
             </div>
         </div>
 `;
 }
 async function showReport(type) {
-    // Each report opens as a full page — replace page content entirely
+    // Each report opens as a full page  replace page content entirely
     pageContent.innerHTML = `
         <div class="section-toolbar" style="margin-bottom:16px;flex-wrap:wrap;gap:8px">
-            <button class="btn btn-outline" onclick="renderReports()">← Back</button>
+            <button class="btn btn-outline" onclick="renderReports()"> Back</button>
         </div>
         <div id="report-detail"></div>`;
     const el = $('report-detail'); if (!el) return;
@@ -10418,42 +10489,42 @@ async function showReport(type) {
     if (type === 'sales') {
         window._rSalesAll = invoices.filter(i => i.type === 'sale' && i.status !== 'cancelled');
         const monthStart = today().substring(0, 8) + '01';
-        const salesUsers = users.filter(u => ['Admin','Manager','Salesman'].includes(u.role));
+        const salesUsers = users.filter(u => ['Admin', 'Manager', 'Salesman'].includes(u.role));
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
             <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
                 <div class="form-group"><label>From Date</label><input type="date" id="r-s-from" value="${monthStart}" onchange="renderSalesRpt()"></div>
                 <div class="form-group"><label>To Date</label><input type="date" id="r-s-to" value="${today()}" onchange="renderSalesRpt()"></div>
                 <div class="form-group"><label>Party</label><input id="r-s-party" placeholder="All parties..." oninput="renderSalesRpt()" style="width:160px"></div>
-                <div class="form-group"><label>Salesman</label><select id="r-s-user" onchange="renderSalesRpt()"><option value="">All</option>${salesUsers.map(u=>`<option>${u.name}</option>`).join('')}</select></div>
-                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-sales','SalesReport_${today()}')">📥 Export</button></div>
+                <div class="form-group"><label>Salesman</label><select id="r-s-user" onchange="renderSalesRpt()"><option value="">All</option>${salesUsers.map(u => `<option>${u.name}</option>`).join('')}</select></div>
+                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-sales','SalesReport_${today()}')"> Export</button></div>
             </div>
         </div></div>
         <div id="r-s-out"></div>`;
         renderSalesRpt();
     }
-    
+
     if (type === 'collection-allocations') {
         window._rAllocAll = invoices.filter(i => i.type === 'sale' && i.status !== 'cancelled');
         const collectors = [...new Set(window._rAllocAll.map(i => i.allocatedTo || i.assignedTo))].filter(Boolean).sort();
-        
+
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
             <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
-                <div class="form-group"><label>Filter Collector</label><select id="r-ca-user" onchange="renderCollectionAllocationsRpt()"><option value="">All</option><option value="Unassigned">Unassigned</option>${collectors.map(c=>`<option>${c}</option>`).join('')}</select></div>
+                <div class="form-group"><label>Filter Collector</label><select id="r-ca-user" onchange="renderCollectionAllocationsRpt()"><option value="">All</option><option value="Unassigned">Unassigned</option>${collectors.map(c => `<option>${c}</option>`).join('')}</select></div>
                 <div class="form-group"><label>Status</label><select id="r-ca-status" onchange="renderCollectionAllocationsRpt()"><option value="">All Assigned</option><option value="pending">Pending Balance</option><option value="paid">Fully Paid</option></select></div>
-                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-allocations','CollectionAllocations_${today()}')">📥 Export</button></div>
+                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-allocations','CollectionAllocations_${today()}')"> Export</button></div>
             </div>
         </div></div>
         <div id="r-ca-out"></div>`;
-        
-        window.renderCollectionAllocationsRpt = async function() {
+
+        window.renderCollectionAllocationsRpt = async function () {
             const userFlt = $('r-ca-user').value;
             const statusFlt = $('r-ca-status').value;
-            
+
             let html = '<div class="table-wrapper"><table class="data-table" id="tbl-allocations"><thead><tr><th>Collector</th><th>Invoice No</th><th>Date</th><th>Customer</th><th>Total Amt</th><th>Paid</th><th>Balance</th><th>Assigned On</th><th>Action</th></tr></thead><tbody>';
             let grandTotal = 0, grandPaid = 0, grandBal = 0;
-            
+
             for (const inv of window._rAllocAll) {
                 const currCollector = inv.allocatedTo || inv.assignedTo;
                 if (userFlt === 'Unassigned') {
@@ -10461,25 +10532,25 @@ async function showReport(type) {
                 } else if (userFlt && currCollector !== userFlt) {
                     continue;
                 }
-                
+
                 const paid = await getInvoicePaidAmount(inv.invoiceNo);
                 const bal = inv.total - paid;
-                
+
                 if (statusFlt === 'pending' && bal <= 0) continue;
                 if (statusFlt === 'paid' && bal > 0) continue;
-                
+
                 grandTotal += inv.total;
                 grandPaid += paid;
                 grandBal += bal;
-                
+
                 let assignDate = '-';
                 if (inv.allocationHistory && inv.allocationHistory.length) {
                     const last = inv.allocationHistory[inv.allocationHistory.length - 1];
-                    assignDate = fmtDate(last.date.substring(0,10));
+                    assignDate = fmtDate(last.date.substring(0, 10));
                 } else if (inv.handoverDate) {
                     assignDate = fmtDate(inv.handoverDate);
                 }
-                
+
                 html += `<tr>
                     <td><span class="badge ${currCollector ? 'badge-info' : 'badge-outline'}">${escapeHtml(currCollector || 'Unassigned')}</span></td>
                     <td><a href="#" onclick="viewInvoice('${inv.id}')" style="color:var(--primary);text-decoration:underline;font-weight:600">${inv.invoiceNo}</a></td>
@@ -10487,18 +10558,18 @@ async function showReport(type) {
                     <td>${escapeHtml(inv.partyName)}</td>
                     <td>${currency(inv.total)}</td>
                     <td class="amount-green">${currency(paid)}</td>
-                    <td style="color:${bal>0?'var(--danger)':'inherit'};font-weight:600">${currency(bal)}</td>
+                    <td style="color:${bal > 0 ? 'var(--danger)' : 'inherit'};font-weight:600">${currency(bal)}</td>
                     <td style="font-size:0.8rem;color:var(--text-muted)">${assignDate}</td>
                     <td>
                         <div class="action-btns">
-                            <button class="btn-icon" style="color:var(--info)" title="Assign Salesman" onclick="openAssignCollectorModal('${inv.id}')">👤</button>
-                            <button class="btn-icon" style="color:var(--primary)" title="Assign Collector" onclick="openAssignCollectorModal('${inv.id}')">👷</button>
-                            <button class="btn-icon" style="color:var(--success)" title="Payment History" onclick="showPaymentHistory('${inv.partyId}', '${inv.invoiceNo}')">💳</button>
+                            <button class="btn-icon" style="color:var(--info)" title="Assign Salesman" onclick="openAssignCollectorModal('${inv.id}')"></button>
+                            <button class="btn-icon" style="color:var(--primary)" title="Assign Collector" onclick="openAssignCollectorModal('${inv.id}')"></button>
+                            <button class="btn-icon" style="color:var(--success)" title="Payment History" onclick="showPaymentHistory('${inv.partyId}', '${inv.invoiceNo}')"></button>
                         </div>
                     </td>
                 </tr>`;
             }
-            
+
             html += `<tr style="font-weight:700;background:var(--bg-card)">
                 <td colspan="4" style="text-align:right">Total</td>
                 <td>${currency(grandTotal)}</td>
@@ -10508,7 +10579,7 @@ async function showReport(type) {
             </tr></tbody></table></div>`;
             $('r-ca-out').innerHTML = html;
         };
-        
+
         await window.renderCollectionAllocationsRpt();
     }
 
@@ -10516,27 +10587,27 @@ async function showReport(type) {
         const stockLedger = await DB.getAll('stock_ledger');
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px; display:flex; justify-content:space-between; align-items:center">
-            <h3 style="margin:0">📦 Stock Aging & Expiry Report</h3>
-            <button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-aging','StockAging_${today()}')">📥 Export</button>
+            <h3 style="margin:0"> Stock Aging & Expiry Report</h3>
+            <button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-aging','StockAging_${today()}')"> Export</button>
         </div></div>
         <div id="r-aging-out"></div>`;
-        
-        window.renderStockAgingRpt = async function() {
+
+        window.renderStockAgingRpt = async function () {
             let html = '<div class="table-wrapper"><table class="data-table" id="tbl-aging"><thead><tr><th>Item Name</th><th>Code</th><th>Current Stock</th><th>0-30 Days</th><th>31-60 Days</th><th>61-90 Days</th><th>>90 Days</th><th>Expiry</th></tr></thead><tbody>';
-            
+
             const now = new Date();
             for (const item of inventory) {
                 if (item.stock <= 0) continue;
-                
-                const ledger = stockLedger.filter(l => l.itemId === item.id).sort((a,b) => new Date(b.date) - new Date(a.date));
+
+                const ledger = stockLedger.filter(l => l.itemId === item.id).sort((a, b) => new Date(b.date) - new Date(a.date));
                 let rem = item.stock;
                 let buckets = [0, 0, 0, 0]; // 0-30, 31-60, 61-90, 91+
-                
+
                 for (const entry of ledger) {
                     if (rem <= 0) break;
                     if (entry.qty > 0) { // Positive movement (Purchase/Adjustment)
                         const addedQty = Math.min(rem, entry.qty);
-                        const days = Math.floor((now - new Date(entry.date)) / (1000*60*60*24));
+                        const days = Math.floor((now - new Date(entry.date)) / (1000 * 60 * 60 * 24));
                         if (days <= 30) buckets[0] += addedQty;
                         else if (days <= 60) buckets[1] += addedQty;
                         else if (days <= 90) buckets[2] += addedQty;
@@ -10548,7 +10619,7 @@ async function showReport(type) {
                 if (rem > 0) buckets[3] += rem;
 
                 const expiryDate = item.expiryDate ? fmtDate(item.expiryDate) : '-';
-                const isNearExpiry = item.expiryDate && (new Date(item.expiryDate) - now < 30 * 24*60*60*1000);
+                const isNearExpiry = item.expiryDate && (new Date(item.expiryDate) - now < 30 * 24 * 60 * 60 * 1000);
 
                 html += `<tr>
                     <td><strong>${escapeHtml(item.name)}</strong></td>
@@ -10557,8 +10628,8 @@ async function showReport(type) {
                     <td>${buckets[0] || '-'}</td>
                     <td>${buckets[1] || '-'}</td>
                     <td>${buckets[2] || '-'}</td>
-                    <td style="color:${buckets[3]>0?'var(--danger)':'inherit'}">${buckets[3] || '-'}</td>
-                    <td style="color:${isNearExpiry?'var(--danger)':'inherit'}">${expiryDate}</td>
+                    <td style="color:${buckets[3] > 0 ? 'var(--danger)' : 'inherit'}">${buckets[3] || '-'}</td>
+                    <td style="color:${isNearExpiry ? 'var(--danger)' : 'inherit'}">${expiryDate}</td>
                 </tr>`;
             }
             html += '</tbody></table></div>';
@@ -10570,15 +10641,15 @@ async function showReport(type) {
     if (type === 'purchases') {
         window._rPurchAll = invoices.filter(i => i.type === 'purchase' && i.status !== 'cancelled');
         const monthStart = today().substring(0, 8) + '01';
-        const poUsers = users.filter(u => ['Admin','Manager'].includes(u.role));
+        const poUsers = users.filter(u => ['Admin', 'Manager'].includes(u.role));
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
             <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
                 <div class="form-group"><label>From Date</label><input type="date" id="r-p-from" value="${monthStart}" onchange="renderPurchaseRpt()"></div>
                 <div class="form-group"><label>To Date</label><input type="date" id="r-p-to" value="${today()}" onchange="renderPurchaseRpt()"></div>
                 <div class="form-group"><label>Supplier</label><input id="r-p-party" placeholder="All suppliers..." oninput="renderPurchaseRpt()" style="width:160px"></div>
-                <div class="form-group"><label>Created By</label><select id="r-p-user" onchange="renderPurchaseRpt()"><option value="">All</option>${poUsers.map(u=>`<option>${u.name}</option>`).join('')}</select></div>
-                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-purchases','PurchaseReport_${today()}')">📥 Export</button></div>
+                <div class="form-group"><label>Created By</label><select id="r-p-user" onchange="renderPurchaseRpt()"><option value="">All</option>${poUsers.map(u => `<option>${u.name}</option>`).join('')}</select></div>
+                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-purchases','PurchaseReport_${today()}')"> Export</button></div>
             </div>
         </div></div>
         <div id="r-p-out"></div>`;
@@ -10589,13 +10660,13 @@ async function showReport(type) {
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
             <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
-                <div class="form-group"><label>Month</label><input type="month" id="r-sa-month" value="${today().substring(0,7)}" onchange="renderSalesmanAchRpt()"></div>
-                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-salesman-ach','SalesmanPerformance_${today()}')">📥 Export</button></div>
+                <div class="form-group"><label>Month</label><input type="month" id="r-sa-month" value="${today().substring(0, 7)}" onchange="renderSalesmanAchRpt()"></div>
+                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-salesman-ach','SalesmanPerformance_${today()}')"> Export</button></div>
             </div>
         </div></div>
         <div id="r-sa-out"></div>`;
-        
-        window.renderSalesmanAchRpt = async function() {
+
+        window.renderSalesmanAchRpt = async function () {
             const selMonth = $('r-sa-month').value; // YYYY-MM
             const start = selMonth + '-01';
             const end = selMonth + '-31';
@@ -10605,7 +10676,7 @@ async function showReport(type) {
             const salesmanUsers = users.filter(u => Array.isArray(u.roles) ? u.roles.includes('Salesman') : u.role === 'Salesman');
 
             let html = '<div class="table-wrapper"><table class="data-table" id="tbl-salesman-ach"><thead><tr><th>Salesman</th><th>Target</th><th>Achievement</th><th>Achievement %</th><th>Collections</th></tr></thead><tbody>';
-            
+
             for (const u of salesmanUsers) {
                 const sales = filteredInvoices.filter(i => i.createdBy === u.name).reduce((s, i) => s + i.total, 0);
                 const colls = filteredPayments.filter(p => p.createdBy === u.name).reduce((s, p) => s + p.amount, 0);
@@ -10643,25 +10714,25 @@ async function showReport(type) {
                 <div class="form-group"><label>From Date</label><input type="date" id="r-soa-from" value="${monthStart}" onchange="renderPartySOARpt()"></div>
                 <div class="form-group"><label>To Date</label><input type="date" id="r-soa-to" value="${today()}" onchange="renderPartySOARpt()"></div>
                 <div class="form-group" style="align-self:flex-end">
-                    <button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-soa','Statement_${today()}')">📥 Export</button>
-                    <button class="btn btn-outline btn-sm" onclick="window.print()">🖨️ Print</button>
+                    <button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-soa','Statement_${today()}')"> Export</button>
+                    <button class="btn btn-outline btn-sm" onclick="window.print()"> Print</button>
                 </div>
             </div>
         </div></div>
         <div id="r-soa-out"></div>`;
-        
+
         let selectedPartyId = null;
-        initSearchDropdown('r-soa-party-input', buildPartySearchList(parties), function(p) {
+        initSearchDropdown('r-soa-party-input', buildPartySearchList(parties), function (p) {
             selectedPartyId = p.id;
             renderPartySOARpt();
         });
 
-        window.renderPartySOARpt = async function() {
+        window.renderPartySOARpt = async function () {
             if (!selectedPartyId) return $('r-soa-out').innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted)">Please select a party to view statement.</div>';
-            
+
             const from = $('r-soa-from').value;
             const to = $('r-soa-to').value;
-            const ledger = (await DB.getAll('party_ledger')).filter(l => l.partyId === selectedPartyId && l.date >= from && l.date <= to).sort((a,b) => new Date(a.date) - new Date(b.date));
+            const ledger = (await DB.getAll('party_ledger')).filter(l => l.partyId === selectedPartyId && l.date >= from && l.date <= to).sort((a, b) => new Date(a.date) - new Date(b.date));
             const party = parties.find(p => p.id === selectedPartyId);
 
             let html = `
@@ -10671,18 +10742,18 @@ async function showReport(type) {
                         <div style="text-align:right"><h4 style="margin:0">Statement of Account</h4><p style="margin:0;color:var(--text-muted)">${fmtDate(from)} to ${fmtDate(to)}</p></div>
                     </div>
                     <div class="table-wrapper"><table class="data-table" id="tbl-soa"><thead><tr><th>Date</th><th>Type</th><th>Ref No</th><th>Description</th><th>Debit (Out)</th><th>Credit (In)</th><th>Balance</th></tr></thead><tbody>`;
-            
+
             ledger.forEach(l => {
                 const debit = l.amount > 0 ? l.amount : 0;
                 const credit = l.amount < 0 ? Math.abs(l.amount) : 0;
                 html += `<tr>
                     <td>${fmtDate(l.date)}</td>
-                    <td><span class="badge ${l.type.includes('Payment')?'badge-success':'badge-info'}">${l.type}</span></td>
+                    <td><span class="badge ${l.type.includes('Payment') ? 'badge-success' : 'badge-info'}">${l.type}</span></td>
                     <td>${l.docNo || '-'}</td>
                     <td style="font-size:0.8rem">${escapeHtml(l.notes || '')}</td>
                     <td>${debit ? currency(debit) : '-'}</td>
                     <td class="amount-green">${credit ? currency(credit) : '-'}</td>
-                    <td style="font-weight:600;color:${l.balance>0?'var(--danger)':'var(--success)'}">${currency(Math.abs(l.balance))} ${l.balance>0?'Dr':'Cr'}</td>
+                    <td style="font-weight:600;color:${l.balance > 0 ? 'var(--danger)' : 'var(--success)'}">${currency(Math.abs(l.balance))} ${l.balance > 0 ? 'Dr' : 'Cr'}</td>
                 </tr>`;
             });
             html += '</tbody></table></div></div></div>';
@@ -10693,12 +10764,12 @@ async function showReport(type) {
     if (type === 'abc-analysis') {
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px; display:flex; justify-content:space-between; align-items:center">
-            <h3 style="margin:0">🔍 ABC Inventory Analysis</h3>
-            <button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-abc','ABCAnalysis_${today()}')">📥 Export</button>
+            <h3 style="margin:0"> ABC Inventory Analysis</h3>
+            <button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-abc','ABCAnalysis_${today()}')"> Export</button>
         </div></div>
         <div id="r-abc-out"></div>`;
 
-        window.renderABCAnalysisRpt = async function() {
+        window.renderABCAnalysisRpt = async function () {
             // Revenue contribution based on all-time invoices
             const itemRevenue = {};
             invoices.filter(i => i.type === 'sale' && i.status !== 'cancelled').forEach(inv => {
@@ -10707,23 +10778,23 @@ async function showReport(type) {
                 });
             });
 
-            const totalRev = Object.values(itemRevenue).reduce((a,b) => a+b, 0);
+            const totalRev = Object.values(itemRevenue).reduce((a, b) => a + b, 0);
             const sorted = inventory.map(item => ({
                 ...item,
                 revenue: itemRevenue[item.id] || 0,
                 pct: totalRev > 0 ? ((itemRevenue[item.id] || 0) / totalRev * 100) : 0
-            })).sort((a,b) => b.revenue - a.revenue);
+            })).sort((a, b) => b.revenue - a.revenue);
 
             let cumulativePct = 0;
-            let html = '<div class="table-wrapper"><table class="data-table" id="tbl-abc"><thead><tr><th>Rank</th><th>Item Name</th><th>Revenue (₹)</th><th>% Share</th><th>Cumul %</th><th>Class</th></tr></thead><tbody>';
-            
+            let html = '<div class="table-wrapper"><table class="data-table" id="tbl-abc"><thead><tr><th>Rank</th><th>Item Name</th><th>Revenue ()</th><th>% Share</th><th>Cumul %</th><th>Class</th></tr></thead><tbody>';
+
             sorted.forEach((item, idx) => {
                 cumulativePct += item.pct;
                 let abcClass = 'C';
                 let color = '#991b1b'; // Red for C
-                if (cumulativePct <= 70) { abcClass = 'A'; color = '#10b981'; } 
+                if (cumulativePct <= 70) { abcClass = 'A'; color = '#10b981'; }
                 else if (cumulativePct <= 90) { abcClass = 'B'; color = '#f97316'; }
-                
+
                 html += `<tr>
                     <td>${idx + 1}</td>
                     <td style="font-weight:600">${escapeHtml(item.name)}</td>
@@ -10762,15 +10833,15 @@ async function showReport(type) {
         window._rInvPnlAll = invoices.filter(i => i.type === 'sale' && i.status !== 'cancelled');
         window._rInvPnlInvt = inventory;
         const monthStart = today().substring(0, 8) + '01';
-        const salesUsers = users.filter(u => ['Admin','Manager','Salesman'].includes(u.role));
+        const salesUsers = users.filter(u => ['Admin', 'Manager', 'Salesman'].includes(u.role));
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
             <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
                 <div class="form-group"><label>From Date</label><input type="date" id="r-ip-from" value="${monthStart}" onchange="renderInvPnlRpt()"></div>
                 <div class="form-group"><label>To Date</label><input type="date" id="r-ip-to" value="${today()}" onchange="renderInvPnlRpt()"></div>
                 <div class="form-group"><label>Party</label><input id="r-ip-party" placeholder="All parties..." oninput="renderInvPnlRpt()" style="width:160px"></div>
-                <div class="form-group"><label>Salesman</label><select id="r-ip-user" onchange="renderInvPnlRpt()"><option value="">All</option>${salesUsers.map(u=>`<option>${u.name}</option>`).join('')}</select></div>
-                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-invpnl','InvoicePnL_${today()}')">📥 Export</button></div>
+                <div class="form-group"><label>Salesman</label><select id="r-ip-user" onchange="renderInvPnlRpt()"><option value="">All</option>${salesUsers.map(u => `<option>${u.name}</option>`).join('')}</select></div>
+                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-invpnl','InvoicePnL_${today()}')"> Export</button></div>
             </div>
         </div></div>
         <div id="r-ip-out"></div>`;
@@ -10782,10 +10853,10 @@ async function showReport(type) {
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
             <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
-                <div class="form-group"><label>Category</label><select id="r-st-cat" onchange="renderStockRpt()"><option value="">All Categories</option>${catList.map(c=>`<option>${c}</option>`).join('')}</select></div>
+                <div class="form-group"><label>Category</label><select id="r-st-cat" onchange="renderStockRpt()"><option value="">All Categories</option>${catList.map(c => `<option>${c}</option>`).join('')}</select></div>
                 <div class="form-group"><label>Stock Status</label><select id="r-st-status" onchange="renderStockRpt()"><option value="">All</option><option value="low">Low / Out of Stock</option><option value="out">Out of Stock Only</option><option value="ok">In Stock</option></select></div>
                 <div class="form-group"><label>Search</label><input id="r-st-search" placeholder="Item name..." oninput="renderStockRpt()" style="width:160px"></div>
-                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-stock','StockSummary_${today()}')">📥 Export</button></div>
+                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-stock','StockSummary_${today()}')"> Export</button></div>
             </div>
         </div></div>
         <div id="r-st-out"></div>`;
@@ -10801,8 +10872,8 @@ async function showReport(type) {
                 <div class="form-group"><label>Party Type</label><select id="r-out-type" onchange="renderOutstandingRpt()"><option value="">All</option><option>Customer</option><option>Supplier</option></select></div>
                 <div class="form-group"><label>Search</label><input id="r-out-search" placeholder="Party name..." oninput="renderOutstandingRpt()" style="width:180px"></div>
                 <div class="form-group"><label>Balance</label><select id="r-out-bal" onchange="renderOutstandingRpt()"><option value="">All</option><option value="dr">Receivable (Customer owes us)</option><option value="cr">Payable (We owe them)</option></select></div>
-                <div class="form-group"><label>Age</label><select id="r-out-age" onchange="renderOutstandingRpt()"><option value="">All</option><option value="0-30">0–30 days</option><option value="31-60">31–60 days</option><option value="61-90">61–90 days</option><option value="90+">90+ days</option></select></div>
-                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-outstanding','Outstanding_${today()}')">📥 Export</button></div>
+                <div class="form-group"><label>Age</label><select id="r-out-age" onchange="renderOutstandingRpt()"><option value="">All</option><option value="0-30">030 days</option><option value="31-60">3160 days</option><option value="61-90">6190 days</option><option value="90+">90+ days</option></select></div>
+                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-outstanding','Outstanding_${today()}')"> Export</button></div>
             </div>
         </div></div>
         <div id="r-out-out"></div>`;
@@ -10818,9 +10889,9 @@ async function showReport(type) {
             <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
                 <div class="form-group"><label>From Date</label><input type="date" id="r-exp-from" value="${monthStart}" onchange="renderExpenseRpt()"></div>
                 <div class="form-group"><label>To Date</label><input type="date" id="r-exp-to" value="${today()}" onchange="renderExpenseRpt()"></div>
-                <div class="form-group"><label>Category</label><select id="r-exp-cat" onchange="renderExpenseRpt()"><option value="">All Categories</option>${expCats.map(c=>`<option>${c}</option>`).join('')}</select></div>
-                <div class="form-group"><label>Added By</label><select id="r-exp-user" onchange="renderExpenseRpt()"><option value="">All</option>${expUsers.map(u=>`<option>${u}</option>`).join('')}</select></div>
-                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-expenses','ExpenseSummary_${today()}')">📥 Export</button></div>
+                <div class="form-group"><label>Category</label><select id="r-exp-cat" onchange="renderExpenseRpt()"><option value="">All Categories</option>${expCats.map(c => `<option>${c}</option>`).join('')}</select></div>
+                <div class="form-group"><label>Added By</label><select id="r-exp-user" onchange="renderExpenseRpt()"><option value="">All</option>${expUsers.map(u => `<option>${u}</option>`).join('')}</select></div>
+                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-expenses','ExpenseSummary_${today()}')"> Export</button></div>
             </div>
         </div></div>
         <div id="r-exp-out"></div>`;
@@ -10843,14 +10914,14 @@ async function showReport(type) {
                 <div class="form-group"><label>To Date</label><input type="date" id="r-chq-to" value="${today()}" onchange="renderChequeRpt()"></div>
                 <div class="form-group"><label>Party</label><input id="r-chq-party" placeholder="All parties..." oninput="renderChequeRpt()" style="width:160px"></div>
                 <div class="form-group"><label>Status</label><select id="r-chq-status" onchange="renderChequeRpt()"><option value="">All</option><option>Pending</option><option>Deposited</option><option>Cleared</option></select></div>
-                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('cheque-reg-table','ChequeRegister_${today()}')">📥 Export</button></div>
+                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('cheque-reg-table','ChequeRegister_${today()}')"> Export</button></div>
             </div>
         </div></div>
         <div id="r-chq-out"></div>`;
         renderChequeRpt();
     }
 
-    // ── VYAPAR SALES IMPORT REPORT ──
+    //  VYAPAR SALES IMPORT REPORT 
     if (type === 'vyapar-sales') {
         window._vySalesAll = invoices.filter(i => i.type === 'sale' && i.status !== 'cancelled');
         const monthStart = today().substring(0, 8) + '01';
@@ -10860,8 +10931,8 @@ async function showReport(type) {
                 <div class="form-group"><label>From Date</label><input type="date" id="vy-s-from" value="${monthStart}" onchange="renderVyaparSalesTable()"></div>
                 <div class="form-group"><label>To Date</label><input type="date" id="vy-s-to" value="${today()}" onchange="renderVyaparSalesTable()"></div>
                 <div class="form-group"><label>Party</label><input id="vy-s-party" placeholder="All parties..." oninput="renderVyaparSalesTable()" style="width:180px"></div>
-                <div class="form-group"><label>Salesman</label><select id="vy-s-user" onchange="renderVyaparSalesTable()"><option value="">All</option>${users.filter(u=>['Admin','Manager','Salesman'].includes(u.role)).map(u=>`<option>${u.name}</option>`).join('')}</select></div>
-                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-vy-sales','VyaparSales_${today()}')">📥 Export Excel</button></div>
+                <div class="form-group"><label>Salesman</label><select id="vy-s-user" onchange="renderVyaparSalesTable()"><option value="">All</option>${users.filter(u => ['Admin', 'Manager', 'Salesman'].includes(u.role)).map(u => `<option>${u.name}</option>`).join('')}</select></div>
+                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-vy-sales','VyaparSales_${today()}')"> Export Excel</button></div>
             </div>
         </div></div>
         <div class="card"><div class="card-body" id="vy-sales-wrap">
@@ -10873,7 +10944,7 @@ async function showReport(type) {
         renderVyaparSalesTable();
     }
 
-    // ── VYAPAR PAYMENT IN IMPORT REPORT ──
+    //  VYAPAR PAYMENT IN IMPORT REPORT 
     if (type === 'vyapar-payments') {
         window._vyPayAll = payments.filter(p => p.type === 'in');
         const monthStart = today().substring(0, 8) + '01';
@@ -10885,8 +10956,8 @@ async function showReport(type) {
                 <div class="form-group"><label>To Date</label><input type="date" id="vy-p-to" value="${today()}" onchange="renderVyaparPayTable()"></div>
                 <div class="form-group"><label>Party</label><input id="vy-p-party" placeholder="All parties..." oninput="renderVyaparPayTable()" style="width:180px"></div>
                 <div class="form-group"><label>Mode</label><select id="vy-p-mode" onchange="renderVyaparPayTable()"><option value="">All Modes</option><option>Cash</option><option>UPI</option><option>Cheque</option><option>Bank Transfer</option></select></div>
-                <div class="form-group"><label>Collected By</label><select id="vy-p-collector" onchange="renderVyaparPayTable()"><option value="">All</option>${collectors.map(n=>`<option>${n}</option>`).join('')}</select></div>
-                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-vy-pay','VyaparPayments_${today()}')">📥 Export Excel</button></div>
+                <div class="form-group"><label>Collected By</label><select id="vy-p-collector" onchange="renderVyaparPayTable()"><option value="">All</option>${collectors.map(n => `<option>${n}</option>`).join('')}</select></div>
+                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-vy-pay','VyaparPayments_${today()}')"> Export Excel</button></div>
             </div>
         </div></div>
         <div class="card"><div class="card-body">
@@ -10900,14 +10971,14 @@ async function showReport(type) {
     if (type === 'salesman') {
         window._rSlsInv = invoices.filter(i => i.type === 'sale' && i.status !== 'cancelled');
         window._rSlsPay = payments.filter(p => p.type === 'in');
-        const salesUsers = users.filter(u => ['Admin','Manager','Salesman'].includes(u.role));
-        const monthStart = today().substring(0,8)+'01';
+        const salesUsers = users.filter(u => ['Admin', 'Manager', 'Salesman'].includes(u.role));
+        const monthStart = today().substring(0, 8) + '01';
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
             <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
                 <div class="form-group"><label>From Date</label><input type="date" id="r-sl-from" value="${monthStart}" onchange="renderSalesmanRpt()"></div>
                 <div class="form-group"><label>To Date</label><input type="date" id="r-sl-to" value="${today()}" onchange="renderSalesmanRpt()"></div>
-                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-salesman','SalesmanPerformance_${today()}')">📥 Export</button></div>
+                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-salesman','SalesmanPerformance_${today()}')"> Export</button></div>
             </div>
         </div></div>
         <div id="r-sl-out"></div>`;
@@ -10924,7 +10995,7 @@ async function showReport(type) {
                 <div class="form-group"><label>From Date</label><input type="date" id="r-db-from" value="${today()}" onchange="renderDayBook()"></div>
                 <div class="form-group"><label>To Date</label><input type="date" id="r-db-to" value="${today()}" onchange="renderDayBook()"></div>
                 <div class="form-group"><label>Type</label><select id="r-db-type" onchange="renderDayBook()"><option value="">All</option><option>Sale Invoice</option><option>Purchase Invoice</option><option>Payment In</option><option>Payment Out</option><option>Expense</option></select></div>
-                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-daybook','DayBook_${today()}')">📥 Export</button></div>
+                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-daybook','DayBook_${today()}')"> Export</button></div>
             </div>
         </div></div>
         <div id="r-db-out"></div>`;
@@ -10934,14 +11005,14 @@ async function showReport(type) {
     if (type === 'user-outstanding') {
         window._rUOutInv = invoices.filter(i => i.type === 'sale' && i.status !== 'cancelled');
         window._rUOutPay = payments;
-        window._rUOutUsers = users.filter(u => ['Admin','Manager','Salesman'].includes(u.role));
+        window._rUOutUsers = users.filter(u => ['Admin', 'Manager', 'Salesman'].includes(u.role));
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
             <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
-                <div class="form-group"><label>Salesman</label><select id="r-uo-user" onchange="renderUserOutstandingRpt()"><option value="">All Salesmen</option>${users.filter(u=>['Admin','Manager','Salesman'].includes(u.role)).map(u=>`<option>${escapeHtml(u.name)}</option>`).join('')}</select></div>
-                <div class="form-group"><label>Age</label><select id="r-uo-age" onchange="renderUserOutstandingRpt()"><option value="">All</option><option value="0-30">0–30 days</option><option value="31-60">31–60 days</option><option value="61-90">61–90 days</option><option value="90+">90+ days</option></select></div>
+                <div class="form-group"><label>Salesman</label><select id="r-uo-user" onchange="renderUserOutstandingRpt()"><option value="">All Salesmen</option>${users.filter(u => ['Admin', 'Manager', 'Salesman'].includes(u.role)).map(u => `<option>${escapeHtml(u.name)}</option>`).join('')}</select></div>
+                <div class="form-group"><label>Age</label><select id="r-uo-age" onchange="renderUserOutstandingRpt()"><option value="">All</option><option value="0-30">030 days</option><option value="31-60">3160 days</option><option value="61-90">6190 days</option><option value="90+">90+ days</option></select></div>
                 <div class="form-group"><label>Search Party</label><input id="r-uo-party" placeholder="Party name..." oninput="renderUserOutstandingRpt()" style="width:160px"></div>
-                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-user-outstanding','OutstandingByUser_${today()}')">📥 Export</button></div>
+                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-user-outstanding','OutstandingByUser_${today()}')"> Export</button></div>
             </div>
         </div></div>
         <div id="r-uo-out"></div>`;
@@ -10955,9 +11026,9 @@ async function showReport(type) {
 
         pageContent.innerHTML = `
         <div class="section-toolbar" style="flex-wrap:wrap;gap:8px;margin-bottom:16px">
-            <button class="btn btn-outline" onclick="renderReports()">← Back</button>
-            <h3 style="flex:1;min-width:200px">📊 Customer Payment Trend</h3>
-            <button class="btn btn-primary" onclick="exportTableToExcel('tbl-pay-trend','CustomerPaymentTrend')">📥 Export Excel</button>
+            <button class="btn btn-outline" onclick="renderReports()"> Back</button>
+            <h3 style="flex:1;min-width:200px"> Customer Payment Trend</h3>
+            <button class="btn btn-primary" onclick="exportTableToExcel('tbl-pay-trend','CustomerPaymentTrend')"> Export Excel</button>
         </div>
         <div class="card"><div class="card-body padded" style="padding-bottom:12px">
             <div class="form-row" style="margin-bottom:0">
@@ -10982,7 +11053,7 @@ async function showReport(type) {
 
     if (type === 'payment-report') {
         const monthStart = today().substring(0, 8) + '01';
-        const collectors = users.filter(u => ['Admin','Manager','Salesman'].includes(u.role));
+        const collectors = users.filter(u => ['Admin', 'Manager', 'Salesman'].includes(u.role));
         window._rPayAll = payments;
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
@@ -11009,11 +11080,11 @@ async function showReport(type) {
                 <div class="form-group"><label>Collected By</label>
                     <select id="r-pay-user" onchange="renderPaymentRpt()">
                         <option value="">All</option>
-                        ${collectors.map(u=>`<option>${escapeHtml(u.name)}</option>`).join('')}
+                        ${collectors.map(u => `<option>${escapeHtml(u.name)}</option>`).join('')}
                     </select>
                 </div>
                 <div class="form-group" style="align-self:flex-end">
-                    <button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-pay-rpt','PaymentReport_${today()}')">📥 Export</button>
+                    <button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-pay-rpt','PaymentReport_${today()}')"> Export</button>
                 </div>
             </div>
         </div></div>
@@ -11025,45 +11096,45 @@ async function showReport(type) {
     }
 }
 
-// ── REPORT RENDER HELPERS ──
+//  REPORT RENDER HELPERS 
 function renderPaymentRpt() {
-    const from   = ($('r-pay-from')||{}).value||'';
-    const to     = ($('r-pay-to')||{}).value||'';
-    const type   = ($('r-pay-type')||{}).value||'';
-    const mode   = ($('r-pay-mode')||{}).value||'';
-    const party  = (($('r-pay-party')||{}).value||'').toLowerCase();
-    const user   = ($('r-pay-user')||{}).value||'';
-    const out    = $('r-pay-out');     if (!out) return;
-    const sumEl  = $('r-pay-summary');
+    const from = ($('r-pay-from') || {}).value || '';
+    const to = ($('r-pay-to') || {}).value || '';
+    const type = ($('r-pay-type') || {}).value || '';
+    const mode = ($('r-pay-mode') || {}).value || '';
+    const party = (($('r-pay-party') || {}).value || '').toLowerCase();
+    const user = ($('r-pay-user') || {}).value || '';
+    const out = $('r-pay-out'); if (!out) return;
+    const sumEl = $('r-pay-summary');
 
-    let rows = (window._rPayAll||[]).slice();
-    if (from)  rows = rows.filter(p => p.date >= from);
-    if (to)    rows = rows.filter(p => p.date <= to);
-    if (type)  rows = rows.filter(p => p.type === type);
-    if (mode)  rows = rows.filter(p => (p.mode||'') === mode);
-    if (party) rows = rows.filter(p => (p.partyName||'').toLowerCase().includes(party));
-    if (user)  rows = rows.filter(p => (p.collectedBy||p.createdBy||'') === user);
-    rows.sort((a,b) => (b.date||'').localeCompare(a.date||''));
+    let rows = (window._rPayAll || []).slice();
+    if (from) rows = rows.filter(p => p.date >= from);
+    if (to) rows = rows.filter(p => p.date <= to);
+    if (type) rows = rows.filter(p => p.type === type);
+    if (mode) rows = rows.filter(p => (p.mode || '') === mode);
+    if (party) rows = rows.filter(p => (p.partyName || '').toLowerCase().includes(party));
+    if (user) rows = rows.filter(p => (p.collectedBy || p.createdBy || '') === user);
+    rows.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
 
-    const totalIn  = rows.filter(p=>p.type==='in').reduce((s,p)=>s+p.amount,0);
-    const totalOut = rows.filter(p=>p.type==='out').reduce((s,p)=>s+p.amount,0);
-    const net      = totalIn - totalOut;
+    const totalIn = rows.filter(p => p.type === 'in').reduce((s, p) => s + p.amount, 0);
+    const totalOut = rows.filter(p => p.type === 'out').reduce((s, p) => s + p.amount, 0);
+    const net = totalIn - totalOut;
 
     if (sumEl) sumEl.innerHTML = `
         <div class="dash-kpi-card dash-kpi-green" style="flex:1;min-width:130px;padding:10px 14px">
             <div class="dash-kpi-label">Pay In</div>
             <div class="dash-kpi-amount">${currency(totalIn)}</div>
-            <div class="dash-kpi-badge dash-kpi-badge-green">${rows.filter(p=>p.type==='in').length} entries</div>
+            <div class="dash-kpi-badge dash-kpi-badge-green">${rows.filter(p => p.type === 'in').length} entries</div>
         </div>
         <div class="dash-kpi-card dash-kpi-red" style="flex:1;min-width:130px;padding:10px 14px">
             <div class="dash-kpi-label">Pay Out</div>
             <div class="dash-kpi-amount">${currency(totalOut)}</div>
-            <div class="dash-kpi-badge dash-kpi-badge-red">${rows.filter(p=>p.type==='out').length} entries</div>
+            <div class="dash-kpi-badge dash-kpi-badge-red">${rows.filter(p => p.type === 'out').length} entries</div>
         </div>
-        <div class="dash-kpi-card" style="flex:1;min-width:130px;padding:10px 14px;border-color:${net>=0?'rgba(16,185,129,0.3)':'rgba(239,68,68,0.3)'}">
+        <div class="dash-kpi-card" style="flex:1;min-width:130px;padding:10px 14px;border-color:${net >= 0 ? 'rgba(16,185,129,0.3)' : 'rgba(239,68,68,0.3)'}">
             <div class="dash-kpi-label">Net</div>
-            <div class="dash-kpi-amount" style="color:${net>=0?'#10b981':'#ef4444'}">${currency(Math.abs(net))}</div>
-            <div class="dash-kpi-badge" style="background:${net>=0?'rgba(16,185,129,0.1)':'rgba(239,68,68,0.1)'};color:${net>=0?'#10b981':'#ef4444'}">${net>=0?'Surplus':'Deficit'}</div>
+            <div class="dash-kpi-amount" style="color:${net >= 0 ? '#10b981' : '#ef4444'}">${currency(Math.abs(net))}</div>
+            <div class="dash-kpi-badge" style="background:${net >= 0 ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)'};color:${net >= 0 ? '#10b981' : '#ef4444'}">${net >= 0 ? 'Surplus' : 'Deficit'}</div>
         </div>`;
 
     if (!rows.length) { out.innerHTML = '<div class="empty-state"><p>No payments found for selected filters</p></div>'; return; }
@@ -11077,15 +11148,15 @@ function renderPaymentRpt() {
                 <th>Collected By</th><th>Note</th>
             </tr></thead>
             <tbody>
-            ${rows.map(p=>`<tr>
+            ${rows.map(p => `<tr>
                 <td>${fmtDate(p.date)}</td>
-                <td style="font-weight:600;font-size:0.82rem">${escapeHtml(p.receiptNo||'-')}</td>
-                <td>${escapeHtml(p.partyName||'-')}</td>
-                <td><span class="badge ${p.type==='in'?'badge-success':'badge-danger'}">${p.type==='in'?'Pay In':'Pay Out'}</span></td>
-                <td><span class="badge badge-info">${escapeHtml(p.mode||'-')}</span></td>
-                <td class="${p.type==='in'?'amount-green':'amount-red'}" style="font-weight:700">${currency(p.amount)}</td>
-                <td style="font-size:0.82rem">${escapeHtml(p.collectedBy||p.createdBy||'-')}</td>
-                <td style="font-size:0.8rem;color:var(--text-muted)">${escapeHtml(p.notes||p.note||'-')}</td>
+                <td style="font-weight:600;font-size:0.82rem">${escapeHtml(p.receiptNo || '-')}</td>
+                <td>${escapeHtml(p.partyName || '-')}</td>
+                <td><span class="badge ${p.type === 'in' ? 'badge-success' : 'badge-danger'}">${p.type === 'in' ? 'Pay In' : 'Pay Out'}</span></td>
+                <td><span class="badge badge-info">${escapeHtml(p.mode || '-')}</span></td>
+                <td class="${p.type === 'in' ? 'amount-green' : 'amount-red'}" style="font-weight:700">${currency(p.amount)}</td>
+                <td style="font-size:0.82rem">${escapeHtml(p.collectedBy || p.createdBy || '-')}</td>
+                <td style="font-size:0.8rem;color:var(--text-muted)">${escapeHtml(p.notes || p.note || '-')}</td>
             </tr>`).join('')}
             </tbody>
         </table></div>
@@ -11093,53 +11164,53 @@ function renderPaymentRpt() {
 }
 
 function renderSalesRpt() {
-    const from  = ($('r-s-from')||{}).value||'';
-    const to    = ($('r-s-to')||{}).value||'';
-    const party = (($('r-s-party')||{}).value||'').toLowerCase();
-    const user  = ($('r-s-user')||{}).value||'';
-    const out   = $('r-s-out'); if (!out) return;
-    let inv = (window._rSalesAll||[]).slice();
-    if (from)  inv = inv.filter(i => i.date >= from);
-    if (to)    inv = inv.filter(i => i.date <= to);
-    if (party) inv = inv.filter(i => (i.partyName||'').toLowerCase().includes(party));
-    if (user)  inv = inv.filter(i => i.createdBy === user);
-    const total = inv.reduce((s,i) => s+i.total, 0);
+    const from = ($('r-s-from') || {}).value || '';
+    const to = ($('r-s-to') || {}).value || '';
+    const party = (($('r-s-party') || {}).value || '').toLowerCase();
+    const user = ($('r-s-user') || {}).value || '';
+    const out = $('r-s-out'); if (!out) return;
+    let inv = (window._rSalesAll || []).slice();
+    if (from) inv = inv.filter(i => i.date >= from);
+    if (to) inv = inv.filter(i => i.date <= to);
+    if (party) inv = inv.filter(i => (i.partyName || '').toLowerCase().includes(party));
+    if (user) inv = inv.filter(i => i.createdBy === user);
+    const total = inv.reduce((s, i) => s + i.total, 0);
     const count = inv.length;
     out.innerHTML = `
     <div class="stats-grid-sm">
-        <div class="stat-card green"><div class="stat-icon">🧾</div><div class="stat-value">${count}</div><div class="stat-label">Invoices</div></div>
-        <div class="stat-card blue"><div class="stat-icon">💹</div><div class="stat-value">${currency(total)}</div><div class="stat-label">Total Sales</div></div>
-        <div class="stat-card amber"><div class="stat-icon">📊</div><div class="stat-value">${count ? currency(total/count) : '—'}</div><div class="stat-label">Avg Invoice</div></div>
+        <div class="stat-card green"><div class="stat-icon"></div><div class="stat-value">${count}</div><div class="stat-label">Invoices</div></div>
+        <div class="stat-card blue"><div class="stat-icon"></div><div class="stat-value">${currency(total)}</div><div class="stat-label">Total Sales</div></div>
+        <div class="stat-card amber"><div class="stat-icon"></div><div class="stat-value">${count ? currency(total / count) : ''}</div><div class="stat-label">Avg Invoice</div></div>
     </div>
     <div class="card"><div class="card-body"><table class="data-table" id="tbl-sales">
         <thead><tr><th>Date</th><th>Invoice</th><th>Party</th><th>Salesman</th><th style="text-align:right">Amount</th></tr></thead>
-        <tbody>${inv.map(i=>`<tr><td>${fmtDate(i.date)}</td><td style="font-weight:600">${i.invoiceNo}</td><td>${escapeHtml(i.partyName)}</td><td>${i.createdBy||'-'}</td><td class="amount-green" style="text-align:right">${currency(i.total)}</td></tr>`).join('')||'<tr><td colspan="5" class="empty-state"><p>No sales found</p></td></tr>'}
+        <tbody>${inv.map(i => `<tr><td>${fmtDate(i.date)}</td><td style="font-weight:600">${i.invoiceNo}</td><td>${escapeHtml(i.partyName)}</td><td>${i.createdBy || '-'}</td><td class="amount-green" style="text-align:right">${currency(i.total)}</td></tr>`).join('') || '<tr><td colspan="5" class="empty-state"><p>No sales found</p></td></tr>'}
         <tr style="font-weight:700;background:rgba(0,212,170,0.1)"><td colspan="4" style="text-align:right">Total (${count} invoices)</td><td class="amount-green" style="text-align:right">${currency(total)}</td></tr>
         </tbody></table></div></div>`;
 }
 
 function renderPurchaseRpt() {
-    const from  = ($('r-p-from')||{}).value||'';
-    const to    = ($('r-p-to')||{}).value||'';
-    const party = (($('r-p-party')||{}).value||'').toLowerCase();
-    const user  = ($('r-p-user')||{}).value||'';
-    const out   = $('r-p-out'); if (!out) return;
-    let inv = (window._rPurchAll||[]).slice();
-    if (from)  inv = inv.filter(i => i.date >= from);
-    if (to)    inv = inv.filter(i => i.date <= to);
-    if (party) inv = inv.filter(i => (i.partyName||'').toLowerCase().includes(party));
-    if (user)  inv = inv.filter(i => i.createdBy === user);
-    const total = inv.reduce((s,i) => s+i.total, 0);
+    const from = ($('r-p-from') || {}).value || '';
+    const to = ($('r-p-to') || {}).value || '';
+    const party = (($('r-p-party') || {}).value || '').toLowerCase();
+    const user = ($('r-p-user') || {}).value || '';
+    const out = $('r-p-out'); if (!out) return;
+    let inv = (window._rPurchAll || []).slice();
+    if (from) inv = inv.filter(i => i.date >= from);
+    if (to) inv = inv.filter(i => i.date <= to);
+    if (party) inv = inv.filter(i => (i.partyName || '').toLowerCase().includes(party));
+    if (user) inv = inv.filter(i => i.createdBy === user);
+    const total = inv.reduce((s, i) => s + i.total, 0);
     out.innerHTML = `
     <div class="stats-grid-sm">
-        <div class="stat-card blue"><div class="stat-icon">🛒</div><div class="stat-value">${inv.length}</div><div class="stat-label">Invoices</div></div>
-        <div class="stat-card red"><div class="stat-icon">💸</div><div class="stat-value">${currency(total)}</div><div class="stat-label">Total Purchases</div></div>
+        <div class="stat-card blue"><div class="stat-icon"></div><div class="stat-value">${inv.length}</div><div class="stat-label">Invoices</div></div>
+        <div class="stat-card red"><div class="stat-icon"></div><div class="stat-value">${currency(total)}</div><div class="stat-label">Total Purchases</div></div>
     </div>
     <div class="card"><div class="card-body">
         <div class="table-wrapper">
             <table class="data-table" id="tbl-purchases">
             <thead><tr><th>Date</th><th>Invoice</th><th>Supplier</th><th>Created By</th><th style="text-align:right">Amount</th></tr></thead>
-            <tbody>${inv.map(i=>`<tr><td>${fmtDate(i.date)}</td><td style="font-weight:600">${i.invoiceNo}</td><td>${escapeHtml(i.partyName)}</td><td>${i.createdBy||'-'}</td><td class="amount-red" style="text-align:right">${currency(i.total)}</td></tr>`).join('')||'<tr><td colspan="5" class="empty-state"><p>No purchases found</p></td></tr>'}
+            <tbody>${inv.map(i => `<tr><td>${fmtDate(i.date)}</td><td style="font-weight:600">${i.invoiceNo}</td><td>${escapeHtml(i.partyName)}</td><td>${i.createdBy || '-'}</td><td class="amount-red" style="text-align:right">${currency(i.total)}</td></tr>`).join('') || '<tr><td colspan="5" class="empty-state"><p>No purchases found</p></td></tr>'}
             <tr style="font-weight:700;background:rgba(0,180,216,0.1)"><td colspan="4" style="text-align:right">Total</td><td class="amount-red" style="text-align:right">${currency(total)}</td></tr>
             </tbody></table>
         </div>
@@ -11147,50 +11218,50 @@ function renderPurchaseRpt() {
 }
 
 function renderPnlRpt() {
-    const from = ($('r-pnl-from')||{}).value||'';
-    const to   = ($('r-pnl-to')||{}).value||'';
-    const out  = $('r-pnl-out'); if (!out) return;
-    const invt = window._rPnlInvt||[];
-    let saleInvs = (window._rPnlInv||[]).filter(i => i.type==='sale');
-    let expList  = (window._rPnlExp||[]).slice();
+    const from = ($('r-pnl-from') || {}).value || '';
+    const to = ($('r-pnl-to') || {}).value || '';
+    const out = $('r-pnl-out'); if (!out) return;
+    const invt = window._rPnlInvt || [];
+    let saleInvs = (window._rPnlInv || []).filter(i => i.type === 'sale');
+    let expList = (window._rPnlExp || []).slice();
     if (from) { saleInvs = saleInvs.filter(i => i.date >= from); expList = expList.filter(e => e.date >= from); }
-    if (to)   { saleInvs = saleInvs.filter(i => i.date <= to);   expList = expList.filter(e => e.date <= to);   }
-    const s = saleInvs.reduce((a,i) => a+i.total, 0);
+    if (to) { saleInvs = saleInvs.filter(i => i.date <= to); expList = expList.filter(e => e.date <= to); }
+    const s = saleInvs.reduce((a, i) => a + i.total, 0);
     let estCost = 0;
-    saleInvs.forEach(inv => { inv.items.forEach(li => { const item = invt.find(x => x.id === li.itemId); estCost += (li.packedQty !== undefined ? li.packedQty : li.qty) * (item ? (item.purchasePrice||0) : 0); }); });
-    const e = expList.reduce((a,x) => a+x.amount, 0);
+    saleInvs.forEach(inv => { inv.items.forEach(li => { const item = invt.find(x => x.id === li.itemId); estCost += (li.packedQty !== undefined ? li.packedQty : li.qty) * (item ? (item.purchasePrice || 0) : 0); }); });
+    const e = expList.reduce((a, x) => a + x.amount, 0);
     const gross = s - estCost;
     const net = gross - e;
-    const margin = s > 0 ? ((gross/s)*100).toFixed(1) : '0.0';
+    const margin = s > 0 ? ((gross / s) * 100).toFixed(1) : '0.0';
     out.innerHTML = `
     <div class="stats-grid-sm">
-        <div class="stat-card green"><div class="stat-icon">💹</div><div class="stat-value">${currency(s)}</div><div class="stat-label">Sales Revenue</div></div>
-        <div class="stat-card red"><div class="stat-icon">📦</div><div class="stat-value">${currency(estCost)}</div><div class="stat-label">Cost of Goods</div></div>
-        <div class="stat-card blue"><div class="stat-icon">📊</div><div class="stat-value">${currency(gross)}</div><div class="stat-label">Gross Profit (${margin}%)</div></div>
-        <div class="stat-card red"><div class="stat-icon">💸</div><div class="stat-value">${currency(e)}</div><div class="stat-label">Expenses</div></div>
+        <div class="stat-card green"><div class="stat-icon"></div><div class="stat-value">${currency(s)}</div><div class="stat-label">Sales Revenue</div></div>
+        <div class="stat-card red"><div class="stat-icon"></div><div class="stat-value">${currency(estCost)}</div><div class="stat-label">Cost of Goods</div></div>
+        <div class="stat-card blue"><div class="stat-icon"></div><div class="stat-value">${currency(gross)}</div><div class="stat-label">Gross Profit (${margin}%)</div></div>
+        <div class="stat-card red"><div class="stat-icon"></div><div class="stat-value">${currency(e)}</div><div class="stat-label">Expenses</div></div>
     </div>
     <div class="card"><div class="card-body padded">
         <div style="font-size:1.05rem;margin-bottom:10px;display:flex;justify-content:space-between"><span>Sales Revenue</span><span class="amount-green">${currency(s)}</span></div>
-        <div style="font-size:1.05rem;margin-bottom:10px;display:flex;justify-content:space-between"><span>Cost of Goods Sold <span style="font-size:0.78rem;color:var(--text-muted)">(purchase price)</span></span><span class="amount-red">− ${currency(estCost)}</span></div>
-        <div style="font-size:1.05rem;margin-bottom:10px;display:flex;justify-content:space-between;font-weight:600"><span>Gross Margin</span><span class="${gross>=0?'amount-green':'amount-red'}">${currency(gross)} (${margin}%)</span></div>
-        <div style="font-size:1.05rem;margin-bottom:10px;display:flex;justify-content:space-between"><span>Expenses</span><span class="amount-red">− ${currency(e)}</span></div>
+        <div style="font-size:1.05rem;margin-bottom:10px;display:flex;justify-content:space-between"><span>Cost of Goods Sold <span style="font-size:0.78rem;color:var(--text-muted)">(purchase price)</span></span><span class="amount-red"> ${currency(estCost)}</span></div>
+        <div style="font-size:1.05rem;margin-bottom:10px;display:flex;justify-content:space-between;font-weight:600"><span>Gross Margin</span><span class="${gross >= 0 ? 'amount-green' : 'amount-red'}">${currency(gross)} (${margin}%)</span></div>
+        <div style="font-size:1.05rem;margin-bottom:10px;display:flex;justify-content:space-between"><span>Expenses</span><span class="amount-red"> ${currency(e)}</span></div>
         <hr style="border-color:var(--border);margin:14px 0">
-        <div style="font-size:1.25rem;font-weight:700;display:flex;justify-content:space-between"><span>Net Profit</span><span class="${net>=0?'amount-green':'amount-red'}">${currency(net)}</span></div>
+        <div style="font-size:1.25rem;font-weight:700;display:flex;justify-content:space-between"><span>Net Profit</span><span class="${net >= 0 ? 'amount-green' : 'amount-red'}">${currency(net)}</span></div>
     </div></div>`;
 }
 
 function renderInvPnlRpt() {
-    const from  = ($('r-ip-from')||{}).value||'';
-    const to    = ($('r-ip-to')||{}).value||'';
-    const party = (($('r-ip-party')||{}).value||'').toLowerCase();
-    const user  = ($('r-ip-user')||{}).value||'';
-    const out   = $('r-ip-out'); if (!out) return;
-    const invt  = window._rInvPnlInvt||[];
-    let invs = (window._rInvPnlAll||[]).slice();
-    if (from)  invs = invs.filter(i => i.date >= from);
-    if (to)    invs = invs.filter(i => i.date <= to);
-    if (party) invs = invs.filter(i => (i.partyName||'').toLowerCase().includes(party));
-    if (user)  invs = invs.filter(i => i.createdBy === user);
+    const from = ($('r-ip-from') || {}).value || '';
+    const to = ($('r-ip-to') || {}).value || '';
+    const party = (($('r-ip-party') || {}).value || '').toLowerCase();
+    const user = ($('r-ip-user') || {}).value || '';
+    const out = $('r-ip-out'); if (!out) return;
+    const invt = window._rInvPnlInvt || [];
+    let invs = (window._rInvPnlAll || []).slice();
+    if (from) invs = invs.filter(i => i.date >= from);
+    if (to) invs = invs.filter(i => i.date <= to);
+    if (party) invs = invs.filter(i => (i.partyName || '').toLowerCase().includes(party));
+    if (user) invs = invs.filter(i => i.createdBy === user);
 
     let totalRev = 0, totalCost = 0;
     const lossItems = []; // Track items sold below cost
@@ -11217,13 +11288,13 @@ function renderInvPnlRpt() {
                 lossItems.push({ name: li.name, invoiceNo: inv.invoiceNo, margin: itemMargin });
             }
 
-            // Margin badge color: ≥12% green, 3-12% amber, <3% red
+            // Margin badge color: 12% green, 3-12% amber, <3% red
             let badgeClass = 'badge-success';
             if (+itemMargin < 3) badgeClass = 'badge-danger';
             else if (+itemMargin < 12) badgeClass = 'badge-warning';
 
             return `<tr class="ipnl-detail ipnl-detail-${idx}" style="display:none;background:var(--bg-body)">
-                <td style="padding-left:32px;font-size:0.82rem">📦 ${escapeHtml(li.name || '-')}</td>
+                <td style="padding-left:32px;font-size:0.82rem"> ${escapeHtml(li.name || '-')}</td>
                 <td style="text-align:center;font-size:0.82rem">${qty} ${li.unit || 'Pcs'}</td>
                 <td style="text-align:right;font-size:0.82rem">${currency(saleRate)}</td>
                 <td style="text-align:right;font-size:0.82rem;color:var(--text-muted)">${currency(costRate)}</td>
@@ -11240,13 +11311,13 @@ function renderInvPnlRpt() {
         invoiceCount++;
         marginSum += +margin;
 
-        // Invoice-level margin badge: ≥12% green, 3-12% amber, <3% red
+        // Invoice-level margin badge: 12% green, 3-12% amber, <3% red
         let invBadge = 'badge-success';
         if (+margin < 3) invBadge = 'badge-danger';
         else if (+margin < 12) invBadge = 'badge-warning';
 
         const summaryRow = `<tr class="ipnl-summary" style="cursor:pointer" onclick="toggleInvPnlDetail(${idx})" title="Click to expand item details">
-            <td style="white-space:nowrap"><span class="ipnl-arrow" id="ipnl-arrow-${idx}" style="display:inline-block;transition:transform 0.2s;margin-right:4px;font-size:0.7rem">▶</span>${fmtDate(inv.date)}</td>
+            <td style="white-space:nowrap"><span class="ipnl-arrow" id="ipnl-arrow-${idx}" style="display:inline-block;transition:transform 0.2s;margin-right:4px;font-size:0.7rem"></span>${fmtDate(inv.date)}</td>
             <td style="font-weight:600">${inv.invoiceNo}</td>
             <td>${escapeHtml(inv.partyName)}</td>
             <td>${inv.createdBy || '-'}</td>
@@ -11280,7 +11351,7 @@ function renderInvPnlRpt() {
     if (lossItems.length > 0) {
         const uniqueLoss = [...new Set(lossItems.map(l => l.name))];
         alertHtml = `<div style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.25);border-radius:10px;padding:12px 16px;margin-bottom:16px;display:flex;align-items:flex-start;gap:10px">
-            <span style="font-size:1.3rem">⚠️</span>
+            <span style="font-size:1.3rem"></span>
             <div>
                 <strong style="color:var(--danger);font-size:0.88rem">Low Margin Alert</strong>
                 <p style="font-size:0.8rem;color:var(--text-muted);margin:4px 0 0">${lossItems.length} item(s) sold below cost or at very low margin: <strong>${uniqueLoss.slice(0, 5).map(n => escapeHtml(n)).join(', ')}${uniqueLoss.length > 5 ? ` +${uniqueLoss.length - 5} more` : ''}</strong></p>
@@ -11290,16 +11361,16 @@ function renderInvPnlRpt() {
 
     out.innerHTML = `
     <div class="stats-grid-sm">
-        <div class="stat-card green"><div class="stat-icon">💹</div><div class="stat-value">${currency(totalRev)}</div><div class="stat-label">Revenue</div></div>
-        <div class="stat-card red"><div class="stat-icon">📦</div><div class="stat-value">${currency(totalCost)}</div><div class="stat-label">Cost of Goods</div></div>
-        <div class="stat-card ${totalProfit >= 0 ? 'blue' : 'red'}"><div class="stat-icon">📊</div><div class="stat-value">${currency(totalProfit)}</div><div class="stat-label">Gross Profit (${totalMargin}%)</div></div>
-        <div class="stat-card amber"><div class="stat-icon">📈</div><div class="stat-value">${avgMargin}%</div><div class="stat-label">Avg Invoice Margin</div></div>
+        <div class="stat-card green"><div class="stat-icon"></div><div class="stat-value">${currency(totalRev)}</div><div class="stat-label">Revenue</div></div>
+        <div class="stat-card red"><div class="stat-icon"></div><div class="stat-value">${currency(totalCost)}</div><div class="stat-label">Cost of Goods</div></div>
+        <div class="stat-card ${totalProfit >= 0 ? 'blue' : 'red'}"><div class="stat-icon"></div><div class="stat-value">${currency(totalProfit)}</div><div class="stat-label">Gross Profit (${totalMargin}%)</div></div>
+        <div class="stat-card amber"><div class="stat-icon"></div><div class="stat-value">${avgMargin}%</div><div class="stat-label">Avg Invoice Margin</div></div>
     </div>
     ${alertHtml}
     <div class="card"><div class="card-body">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-            <p style="font-size:0.78rem;color:var(--text-muted);margin:0">💡 Click any invoice row to expand and see item-level profit breakdown</p>
-            <button class="btn btn-outline btn-sm" onclick="toggleAllInvPnlDetails()" id="btn-ipnl-expand" style="font-size:0.78rem;white-space:nowrap">📋 Expand All</button>
+            <p style="font-size:0.78rem;color:var(--text-muted);margin:0"> Click any invoice row to expand and see item-level profit breakdown</p>
+            <button class="btn btn-outline btn-sm" onclick="toggleAllInvPnlDetails()" id="btn-ipnl-expand" style="font-size:0.78rem;white-space:nowrap"> Expand All</button>
         </div>
         <div class="table-wrapper">
             <table class="data-table" id="tbl-invpnl">
@@ -11312,7 +11383,7 @@ function renderInvPnlRpt() {
 }
 
 // Toggle expand/collapse for Invoice P&L detail rows
-window.toggleInvPnlDetail = function(idx) {
+window.toggleInvPnlDetail = function (idx) {
     const rows = document.querySelectorAll('.ipnl-detail-' + idx);
     const arrow = document.getElementById('ipnl-arrow-' + idx);
     const isVisible = rows.length > 0 && rows[0].style.display !== 'none';
@@ -11321,41 +11392,41 @@ window.toggleInvPnlDetail = function(idx) {
 };
 
 // Toggle ALL expand/collapse for Invoice P&L
-window.toggleAllInvPnlDetails = function() {
+window.toggleAllInvPnlDetails = function () {
     const allDetails = document.querySelectorAll('.ipnl-detail');
     const btn = document.getElementById('btn-ipnl-expand');
     const anyHidden = [...allDetails].some(r => r.style.display === 'none');
     allDetails.forEach(r => r.style.display = anyHidden ? '' : 'none');
     document.querySelectorAll('.ipnl-arrow').forEach(a => a.style.transform = anyHidden ? 'rotate(90deg)' : '');
-    if (btn) btn.textContent = anyHidden ? '📋 Collapse All' : '📋 Expand All';
+    if (btn) btn.textContent = anyHidden ? ' Collapse All' : ' Expand All';
 };
 
 function renderStockRpt() {
-    const cat    = ($('r-st-cat')||{}).value||'';
-    const status = ($('r-st-status')||{}).value||'';
-    const search = (($('r-st-search')||{}).value||'').toLowerCase();
-    const out    = $('r-st-out'); if (!out) return;
-    let items = (window._rStockAll||[]).slice();
-    if (cat)    items = items.filter(i => i.category === cat);
-    if (search) items = items.filter(i => (i.name||'').toLowerCase().includes(search));
-    if (status === 'low')  items = items.filter(i => i.stock <= (i.lowStockAlert||5));
-    if (status === 'out')  items = items.filter(i => i.stock <= 0);
-    if (status === 'ok')   items = items.filter(i => i.stock > (i.lowStockAlert||5));
-    const totalVal = items.reduce((s,i) => s + i.stock*(i.purchasePrice||0), 0);
-    const lowCount = items.filter(i => i.stock <= (i.lowStockAlert||5) && i.stock > 0).length;
+    const cat = ($('r-st-cat') || {}).value || '';
+    const status = ($('r-st-status') || {}).value || '';
+    const search = (($('r-st-search') || {}).value || '').toLowerCase();
+    const out = $('r-st-out'); if (!out) return;
+    let items = (window._rStockAll || []).slice();
+    if (cat) items = items.filter(i => i.category === cat);
+    if (search) items = items.filter(i => (i.name || '').toLowerCase().includes(search));
+    if (status === 'low') items = items.filter(i => i.stock <= (i.lowStockAlert || 5));
+    if (status === 'out') items = items.filter(i => i.stock <= 0);
+    if (status === 'ok') items = items.filter(i => i.stock > (i.lowStockAlert || 5));
+    const totalVal = items.reduce((s, i) => s + i.stock * (i.purchasePrice || 0), 0);
+    const lowCount = items.filter(i => i.stock <= (i.lowStockAlert || 5) && i.stock > 0).length;
     const outCount = items.filter(i => i.stock <= 0).length;
     out.innerHTML = `
     <div class="stats-grid-sm">
-        <div class="stat-card blue"><div class="stat-icon">📦</div><div class="stat-value">${items.length}</div><div class="stat-label">Items</div></div>
-        <div class="stat-card green"><div class="stat-icon">💰</div><div class="stat-value">${currency(totalVal)}</div><div class="stat-label">Stock Value</div></div>
-        <div class="stat-card amber"><div class="stat-icon">⚠️</div><div class="stat-value">${lowCount}</div><div class="stat-label">Low Stock</div></div>
-        <div class="stat-card red"><div class="stat-icon">🚫</div><div class="stat-value">${outCount}</div><div class="stat-label">Out of Stock</div></div>
+        <div class="stat-card blue"><div class="stat-icon"></div><div class="stat-value">${items.length}</div><div class="stat-label">Items</div></div>
+        <div class="stat-card green"><div class="stat-icon"></div><div class="stat-value">${currency(totalVal)}</div><div class="stat-label">Stock Value</div></div>
+        <div class="stat-card amber"><div class="stat-icon"></div><div class="stat-value">${lowCount}</div><div class="stat-label">Low Stock</div></div>
+        <div class="stat-card red"><div class="stat-icon"></div><div class="stat-value">${outCount}</div><div class="stat-label">Out of Stock</div></div>
     </div>
     <div class="card"><div class="card-body">
         <div class="table-wrapper">
             <table class="data-table" id="tbl-stock">
             <thead><tr><th>Item</th><th>Category</th><th>Unit</th><th style="text-align:right">Stock</th><th style="text-align:right">Purchase Price</th><th style="text-align:right">Stock Value</th></tr></thead>
-            <tbody>${items.map(i=>{const low=i.stock<=(i.lowStockAlert||5);return`<tr><td style="font-weight:600">${escapeHtml(i.name)}</td><td>${i.category||'-'}</td><td>${i.unit||'Pcs'}</td><td style="text-align:right"><span class="badge ${i.stock<=0?'badge-danger':low?'badge-warning':'badge-success'}">${i.stock}</span></td><td style="text-align:right">${currency(i.purchasePrice||0)}</td><td style="text-align:right">${currency(i.stock*(i.purchasePrice||0))}</td></tr>`;}).join('')||'<tr><td colspan="6" class="empty-state"><p>No items found</p></td></tr>'}
+            <tbody>${items.map(i => { const low = i.stock <= (i.lowStockAlert || 5); return `<tr><td style="font-weight:600">${escapeHtml(i.name)}</td><td>${i.category || '-'}</td><td>${i.unit || 'Pcs'}</td><td style="text-align:right"><span class="badge ${i.stock <= 0 ? 'badge-danger' : low ? 'badge-warning' : 'badge-success'}">${i.stock}</span></td><td style="text-align:right">${currency(i.purchasePrice || 0)}</td><td style="text-align:right">${currency(i.stock * (i.purchasePrice || 0))}</td></tr>`; }).join('') || '<tr><td colspan="6" class="empty-state"><p>No items found</p></td></tr>'}
             <tr style="font-weight:700"><td colspan="5" style="text-align:right">Total Value</td><td style="text-align:right">${currency(totalVal)}</td></tr>
             </tbody></table>
         </div>
@@ -11363,67 +11434,67 @@ function renderStockRpt() {
 }
 
 function renderOutstandingRpt() {
-    const ptype  = ($('r-out-type')||{}).value||'';
-    const search = (($('r-out-search')||{}).value||'').toLowerCase();
-    const bal    = ($('r-out-bal')||{}).value||'';
-    const age    = ($('r-out-age')||{}).value||'';
-    const out    = $('r-out-out'); if (!out) return;
+    const ptype = ($('r-out-type') || {}).value || '';
+    const search = (($('r-out-search') || {}).value || '').toLowerCase();
+    const bal = ($('r-out-bal') || {}).value || '';
+    const age = ($('r-out-age') || {}).value || '';
+    const out = $('r-out-out'); if (!out) return;
     const invAll = window._rOutInv || [];
     const payAll = window._rOutPay || [];
-    const todayMs = new Date().setHours(0,0,0,0);
+    const todayMs = new Date().setHours(0, 0, 0, 0);
 
     // Build paid-per-invoice map
     const paidMap = {};
     payAll.forEach(p => {
-        if (p.allocations) { Object.entries(p.allocations).forEach(([inv,amt]) => { paidMap[inv] = (paidMap[inv]||0) + (+amt||0); }); }
-        else if (p.invoiceNo && p.invoiceNo !== 'Advance' && p.invoiceNo !== 'Multi') { paidMap[p.invoiceNo] = (paidMap[p.invoiceNo]||0) + (p.amount||0); }
+        if (p.allocations) { Object.entries(p.allocations).forEach(([inv, amt]) => { paidMap[inv] = (paidMap[inv] || 0) + (+amt || 0); }); }
+        else if (p.invoiceNo && p.invoiceNo !== 'Advance' && p.invoiceNo !== 'Multi') { paidMap[p.invoiceNo] = (paidMap[p.invoiceNo] || 0) + (p.amount || 0); }
     });
 
-    let pts = (window._rOutAll||[]).filter(p => p.balance);
-    if (ptype)  pts = pts.filter(p => p.type === ptype);
-    if (search) pts = pts.filter(p => (p.name||'').toLowerCase().includes(search));
+    let pts = (window._rOutAll || []).filter(p => p.balance);
+    if (ptype) pts = pts.filter(p => p.type === ptype);
+    if (search) pts = pts.filter(p => (p.name || '').toLowerCase().includes(search));
     if (bal === 'dr') pts = pts.filter(p => p.balance < 0);
     if (bal === 'cr') pts = pts.filter(p => p.balance > 0);
 
     const rows = [];
     pts.forEach(p => {
         const partyInvs = invAll.filter(i => String(i.partyId) === String(p.id) && i.type === 'sale');
-        const pending = partyInvs.filter(i => (i.total - (paidMap[i.invoiceNo]||0)) > 0.01).sort((a,b)=>(a.dueDate||a.date).localeCompare(b.dueDate||b.date));
-        const lastPay = payAll.filter(py => String(py.partyId) === String(p.id)).sort((a,b)=>b.date.localeCompare(a.date))[0];
+        const pending = partyInvs.filter(i => (i.total - (paidMap[i.invoiceNo] || 0)) > 0.01).sort((a, b) => (a.dueDate || a.date).localeCompare(b.dueDate || b.date));
+        const lastPay = payAll.filter(py => String(py.partyId) === String(p.id)).sort((a, b) => b.date.localeCompare(a.date))[0];
         const oldest = pending[0];
         let daysDue = null, ageBucket = '';
         if (oldest) {
             const ageRef = oldest.dueDate || oldest.date;
-            daysDue = Math.floor((todayMs - new Date(ageRef).setHours(0,0,0,0)) / 86400000);
+            daysDue = Math.floor((todayMs - new Date(ageRef).setHours(0, 0, 0, 0)) / 86400000);
             ageBucket = daysDue <= 30 ? '0-30' : daysDue <= 60 ? '31-60' : daysDue <= 90 ? '61-90' : '90+';
         }
         if (age && ageBucket !== age) return;
         const ageColor = daysDue === null ? 'var(--text-muted)' : daysDue <= 30 ? '#22c55e' : daysDue <= 60 ? '#f59e0b' : '#ef4444';
         const dirColor = p.balance < 0 ? 'var(--success)' : 'var(--danger)';
         rows.push(`<tr style="cursor:pointer;font-weight:500" onclick="currentLedgerPartyId='${p.id}';navigateTo('partyledger')">
-            <td><span style="font-weight:700">${escapeHtml(p.name)}</span><br><span style="font-size:0.75rem;color:var(--text-muted)">${p.phone||''}</span></td>
-            <td><span class="badge ${p.type==='Customer'?'badge-success':'badge-info'}">${p.type}</span></td>
+            <td><span style="font-weight:700">${escapeHtml(p.name)}</span><br><span style="font-size:0.75rem;color:var(--text-muted)">${p.phone || ''}</span></td>
+            <td><span class="badge ${p.type === 'Customer' ? 'badge-success' : 'badge-info'}">${p.type}</span></td>
             <td style="font-size:0.82rem">${pending.length}</td>
             <td style="font-size:0.82rem;color:var(--text-muted)">${lastPay ? fmtDate(lastPay.date) : '<span style="color:var(--danger)">Never</span>'}</td>
-            <td style="text-align:right"><span style="font-weight:700;color:${ageColor}">${daysDue !== null ? daysDue+'d' : '-'}</span></td>
+            <td style="text-align:right"><span style="font-weight:700;color:${ageColor}">${daysDue !== null ? daysDue + 'd' : '-'}</span></td>
             <td style="text-align:right;font-weight:700;font-size:1rem;color:${dirColor}">${currency(Math.abs(p.balance))}</td>
-            <td><span class="badge ${p.balance<0?'badge-success':'badge-danger'}">${p.balance<0?'Receivable':'Payable'}</span></td>
+            <td><span class="badge ${p.balance < 0 ? 'badge-success' : 'badge-danger'}">${p.balance < 0 ? 'Receivable' : 'Payable'}</span></td>
         </tr>`);
         pending.forEach(i => {
-            const paid = paidMap[i.invoiceNo]||0;
+            const paid = paidMap[i.invoiceNo] || 0;
             const due = i.total - paid;
             const ageRef = i.dueDate || i.date;
-            const d = Math.floor((todayMs - new Date(ageRef).setHours(0,0,0,0)) / 86400000);
+            const d = Math.floor((todayMs - new Date(ageRef).setHours(0, 0, 0, 0)) / 86400000);
             const ac = d <= 0 ? '#22c55e' : d <= 30 ? '#f59e0b' : '#ef4444';
             const dueLabel = i.dueDate ? `Due ${fmtDate(i.dueDate)}` : fmtDate(i.date);
             const overLabel = d <= 0 ? `${Math.abs(d)}d left` : `${d}d overdue`;
             rows.push(`<tr style="background:var(--bg-body)">
-                <td style="padding:3px 8px;font-size:0.78rem;color:var(--text-muted);padding-left:24px">↳ <a href="#" onclick="viewInvoiceByNo('${i.invoiceNo}');return false" style="color:var(--accent)">${i.invoiceNo}</a></td>
+                <td style="padding:3px 8px;font-size:0.78rem;color:var(--text-muted);padding-left:24px"> <a href="#" onclick="viewInvoiceByNo('${i.invoiceNo}');return false" style="color:var(--accent)">${i.invoiceNo}</a></td>
                 <td style="padding:3px 8px;font-size:0.78rem;color:var(--text-muted)">${fmtDate(i.date)}</td>
-                <td style="padding:3px 8px;font-size:0.78rem;color:var(--text-muted)">Total: ₹${i.total.toFixed(2)}</td>
+                <td style="padding:3px 8px;font-size:0.78rem;color:var(--text-muted)">Total: ${i.total.toFixed(2)}</td>
                 <td style="padding:3px 8px;font-size:0.78rem;color:var(--text-muted)">${dueLabel}</td>
                 <td style="padding:3px 8px;text-align:right"><span style="color:${ac};font-weight:600;font-size:0.8rem">${overLabel}</span></td>
-                <td style="padding:3px 8px;text-align:right;font-weight:700;color:#ef4444;font-size:0.85rem">₹${due.toFixed(2)}</td>
+                <td style="padding:3px 8px;text-align:right;font-weight:700;color:#ef4444;font-size:0.85rem">${due.toFixed(2)}</td>
                 <td></td>
             </tr>`);
         });
@@ -11431,54 +11502,54 @@ function renderOutstandingRpt() {
 
     const filtered = pts.filter(p => {
         if (!age) return true;
-        const invs = invAll.filter(i => String(i.partyId)===String(p.id)&&i.type==='sale');
-        const pend = invs.filter(i=>(i.total-(paidMap[i.invoiceNo]||0))>0.01).sort((a,b)=>a.date.localeCompare(b.date));
+        const invs = invAll.filter(i => String(i.partyId) === String(p.id) && i.type === 'sale');
+        const pend = invs.filter(i => (i.total - (paidMap[i.invoiceNo] || 0)) > 0.01).sort((a, b) => a.date.localeCompare(b.date));
         if (!pend[0]) return false;
-        const d = Math.floor((todayMs - new Date(pend[0].date).setHours(0,0,0,0))/86400000);
-        return (d<=30?'0-30':d<=60?'31-60':d<=90?'61-90':'90+') === age;
+        const d = Math.floor((todayMs - new Date(pend[0].date).setHours(0, 0, 0, 0)) / 86400000);
+        return (d <= 30 ? '0-30' : d <= 60 ? '31-60' : d <= 90 ? '61-90' : '90+') === age;
     });
-    const totalRec = filtered.filter(p=>p.balance<0).reduce((s,p)=>s+Math.abs(p.balance),0);
-    const totalPay = filtered.filter(p=>p.balance>0).reduce((s,p)=>s+p.balance,0);
+    const totalRec = filtered.filter(p => p.balance < 0).reduce((s, p) => s + Math.abs(p.balance), 0);
+    const totalPay = filtered.filter(p => p.balance > 0).reduce((s, p) => s + p.balance, 0);
 
     out.innerHTML = `
     <div class="stats-grid-sm">
-        <div class="stat-card green"><div class="stat-icon">💰</div><div class="stat-value">${currency(totalRec)}</div><div class="stat-label">Receivable</div></div>
-        <div class="stat-card red"><div class="stat-icon">💸</div><div class="stat-value">${currency(totalPay)}</div><div class="stat-label">Payable</div></div>
-        <div class="stat-card blue"><div class="stat-icon">👥</div><div class="stat-value">${rows.filter(r=>!r.includes('padding-left:24px')).length}</div><div class="stat-label">Parties</div></div>
+        <div class="stat-card green"><div class="stat-icon"></div><div class="stat-value">${currency(totalRec)}</div><div class="stat-label">Receivable</div></div>
+        <div class="stat-card red"><div class="stat-icon"></div><div class="stat-value">${currency(totalPay)}</div><div class="stat-label">Payable</div></div>
+        <div class="stat-card blue"><div class="stat-icon"></div><div class="stat-value">${rows.filter(r => !r.includes('padding-left:24px')).length}</div><div class="stat-label">Parties</div></div>
     </div>
     <div class="card"><div class="card-body">
         <div class="table-wrapper">
             <table class="data-table" id="tbl-outstanding">
             <thead><tr><th>Party</th><th>Type</th><th>Pending Inv.</th><th>Last Payment</th><th style="text-align:right">Oldest Age</th><th style="text-align:right">Balance</th><th>Status</th></tr></thead>
-            <tbody>${rows.join('')||'<tr><td colspan="7" class="empty-state"><p>No outstanding balance found</p></td></tr>'}
+            <tbody>${rows.join('') || '<tr><td colspan="7" class="empty-state"><p>No outstanding balance found</p></td></tr>'}
             </tbody></table>
         </div>
     </div></div>`;
 }
 
 function renderUserOutstandingRpt() {
-    const filterUser  = ($('r-uo-user')||{}).value||'';
-    const filterAge   = ($('r-uo-age')||{}).value||'';
-    const filterParty = (($('r-uo-party')||{}).value||'').toLowerCase();
+    const filterUser = ($('r-uo-user') || {}).value || '';
+    const filterAge = ($('r-uo-age') || {}).value || '';
+    const filterParty = (($('r-uo-party') || {}).value || '').toLowerCase();
     const out = $('r-uo-out'); if (!out) return;
 
     const invAll = window._rUOutInv || [];
     const payAll = window._rUOutPay || [];
-    const todayMs = new Date().setHours(0,0,0,0);
+    const todayMs = new Date().setHours(0, 0, 0, 0);
 
     // Build paid-per-invoice map from allocations + direct links
     const paidMap = {};
     payAll.forEach(p => {
         if (p.allocations) {
-            Object.entries(p.allocations).forEach(([inv, amt]) => { paidMap[inv] = (paidMap[inv]||0) + (+amt||0); });
+            Object.entries(p.allocations).forEach(([inv, amt]) => { paidMap[inv] = (paidMap[inv] || 0) + (+amt || 0); });
         } else if (p.invoiceNo && p.invoiceNo !== 'Advance' && p.invoiceNo !== 'Multi' && p.invoiceNo !== '') {
-            paidMap[p.invoiceNo] = (paidMap[p.invoiceNo]||0) + (p.amount||0);
+            paidMap[p.invoiceNo] = (paidMap[p.invoiceNo] || 0) + (p.amount || 0);
         }
     });
 
     // Find all pending invoices
     const pendingInvs = invAll.filter(i => {
-        const due = (i.total||0) - (paidMap[i.invoiceNo]||0);
+        const due = (i.total || 0) - (paidMap[i.invoiceNo] || 0);
         return due > 0.01;
     });
 
@@ -11501,14 +11572,14 @@ function renderUserOutstandingRpt() {
         let invs = byUser[userName];
 
         // Filter by party name
-        if (filterParty) invs = invs.filter(i => (i.partyName||'').toLowerCase().includes(filterParty));
+        if (filterParty) invs = invs.filter(i => (i.partyName || '').toLowerCase().includes(filterParty));
         if (!invs.length) return;
 
         // Filter by age (use dueDate if present, else invoice date)
         if (filterAge) {
             invs = invs.filter(i => {
                 const ageRef = i.dueDate || i.date;
-                const d = Math.floor((todayMs - new Date(ageRef).setHours(0,0,0,0)) / 86400000);
+                const d = Math.floor((todayMs - new Date(ageRef).setHours(0, 0, 0, 0)) / 86400000);
                 const b = d <= 30 ? '0-30' : d <= 60 ? '31-60' : d <= 90 ? '61-90' : '90+';
                 return b === filterAge;
             });
@@ -11516,12 +11587,12 @@ function renderUserOutstandingRpt() {
         if (!invs.length) return;
 
         // Sort oldest due date first
-        invs.sort((a,b) => (a.dueDate||a.date).localeCompare(b.dueDate||b.date));
+        invs.sort((a, b) => (a.dueDate || a.date).localeCompare(b.dueDate || b.date));
 
-        const userTotal = invs.reduce((s,i) => s + ((i.total||0) - (paidMap[i.invoiceNo]||0)), 0);
+        const userTotal = invs.reduce((s, i) => s + ((i.total || 0) - (paidMap[i.invoiceNo] || 0)), 0);
         const oldest = invs[0];
         const oldestAgeRef = oldest.dueDate || oldest.date;
-        const oldestDays = Math.floor((todayMs - new Date(oldestAgeRef).setHours(0,0,0,0)) / 86400000);
+        const oldestDays = Math.floor((todayMs - new Date(oldestAgeRef).setHours(0, 0, 0, 0)) / 86400000);
         const ageColor = oldestDays <= 30 ? '#22c55e' : oldestDays <= 60 ? '#f59e0b' : '#ef4444';
 
         grandTotal += userTotal;
@@ -11530,7 +11601,7 @@ function renderUserOutstandingRpt() {
         // Salesman summary row
         rows.push(`<tr style="background:var(--bg-card);font-weight:600">
             <td colspan="2" style="padding:10px 12px;font-size:0.95rem">
-                <span style="font-size:1rem">👤</span> ${escapeHtml(userName)}
+                <span style="font-size:1rem"></span> ${escapeHtml(userName)}
             </td>
             <td style="padding:10px 12px;text-align:center">
                 <span class="badge badge-info">${invs.length} invoices</span>
@@ -11542,21 +11613,21 @@ function renderUserOutstandingRpt() {
 
         // Invoice detail rows
         invs.forEach(i => {
-            const paid = paidMap[i.invoiceNo]||0;
-            const due = (i.total||0) - paid;
+            const paid = paidMap[i.invoiceNo] || 0;
+            const due = (i.total || 0) - paid;
             const ageRef = i.dueDate || i.date;
-            const d = Math.floor((todayMs - new Date(ageRef).setHours(0,0,0,0)) / 86400000);
+            const d = Math.floor((todayMs - new Date(ageRef).setHours(0, 0, 0, 0)) / 86400000);
             const ac = d <= 0 ? '#22c55e' : d <= 30 ? '#f59e0b' : '#ef4444';
             const overLabel = d <= 0 ? `${Math.abs(d)}d left` : `${d}d over`;
             rows.push(`<tr style="background:var(--bg-body)">
                 <td style="padding:4px 12px 4px 28px;font-size:0.8rem;color:var(--accent);white-space:nowrap">
-                    ↳ <a href="#" onclick="viewInvoiceByNo('${escapeHtml(i.invoiceNo)}');return false" style="color:var(--accent);font-weight:600">${escapeHtml(i.invoiceNo)}</a>
+                     <a href="#" onclick="viewInvoiceByNo('${escapeHtml(i.invoiceNo)}');return false" style="color:var(--accent);font-weight:600">${escapeHtml(i.invoiceNo)}</a>
                 </td>
-                <td style="padding:4px 8px;font-size:0.8rem;color:var(--text-muted)">${escapeHtml(i.partyName||'-')}</td>
+                <td style="padding:4px 8px;font-size:0.8rem;color:var(--text-muted)">${escapeHtml(i.partyName || '-')}</td>
                 <td style="padding:4px 8px;font-size:0.8rem;color:var(--text-muted);text-align:center">${fmtDate(i.date)}${i.dueDate ? `<br><span style="font-size:0.72rem;color:var(--accent)">Due: ${fmtDate(i.dueDate)}</span>` : ''}</td>
                 <td style="padding:4px 8px;font-size:0.8rem;color:var(--text-muted);text-align:right"><span style="color:${ac};font-weight:600">${overLabel}</span></td>
-                <td style="padding:4px 8px;font-size:0.8rem;text-align:right;color:var(--text-muted)">Paid: ₹${paid.toFixed(2)}</td>
-                <td style="padding:4px 8px;font-size:0.85rem;font-weight:700;color:#ef4444;text-align:right">₹${due.toFixed(2)}</td>
+                <td style="padding:4px 8px;font-size:0.8rem;text-align:right;color:var(--text-muted)">Paid: ${paid.toFixed(2)}</td>
+                <td style="padding:4px 8px;font-size:0.85rem;font-weight:700;color:#ef4444;text-align:right">${due.toFixed(2)}</td>
             </tr>`);
         });
     });
@@ -11568,14 +11639,14 @@ function renderUserOutstandingRpt() {
 
     out.innerHTML = `
     <div class="stats-grid-sm" style="margin-bottom:14px">
-        <div class="stat-card red"><div class="stat-icon">💰</div><div class="stat-value">${currency(grandTotal)}</div><div class="stat-label">Total Outstanding</div></div>
-        <div class="stat-card blue"><div class="stat-icon">🧾</div><div class="stat-value">${grandInvCount}</div><div class="stat-label">Pending Invoices</div></div>
-        <div class="stat-card"><div class="stat-icon">👤</div><div class="stat-value">${userKeys.filter(u => {
-            let invs = byUser[u]||[];
-            if (filterParty) invs = invs.filter(i=>(i.partyName||'').toLowerCase().includes(filterParty));
-            if (filterAge) invs = invs.filter(i=>{ const d=Math.floor((todayMs-new Date(i.date).setHours(0,0,0,0))/86400000); return (d<=30?'0-30':d<=60?'31-60':d<=90?'61-90':'90+')===filterAge; });
-            return invs.length > 0;
-        }).length}</div><div class="stat-label">Salesmen</div></div>
+        <div class="stat-card red"><div class="stat-icon"></div><div class="stat-value">${currency(grandTotal)}</div><div class="stat-label">Total Outstanding</div></div>
+        <div class="stat-card blue"><div class="stat-icon"></div><div class="stat-value">${grandInvCount}</div><div class="stat-label">Pending Invoices</div></div>
+        <div class="stat-card"><div class="stat-icon"></div><div class="stat-value">${userKeys.filter(u => {
+        let invs = byUser[u] || [];
+        if (filterParty) invs = invs.filter(i => (i.partyName || '').toLowerCase().includes(filterParty));
+        if (filterAge) invs = invs.filter(i => { const d = Math.floor((todayMs - new Date(i.date).setHours(0, 0, 0, 0)) / 86400000); return (d <= 30 ? '0-30' : d <= 60 ? '31-60' : d <= 90 ? '61-90' : '90+') === filterAge; });
+        return invs.length > 0;
+    }).length}</div><div class="stat-label">Salesmen</div></div>
     </div>
     <div class="card"><div class="card-body">
         <div class="table-wrapper">
@@ -11592,32 +11663,32 @@ function renderUserOutstandingRpt() {
 }
 
 function renderExpenseRpt() {
-    const from = ($('r-exp-from')||{}).value||'';
-    const to   = ($('r-exp-to')||{}).value||'';
-    const cat  = ($('r-exp-cat')||{}).value||'';
-    const user = ($('r-exp-user')||{}).value||'';
-    const out  = $('r-exp-out'); if (!out) return;
-    let exps = (window._rExpAll||[]).slice();
+    const from = ($('r-exp-from') || {}).value || '';
+    const to = ($('r-exp-to') || {}).value || '';
+    const cat = ($('r-exp-cat') || {}).value || '';
+    const user = ($('r-exp-user') || {}).value || '';
+    const out = $('r-exp-out'); if (!out) return;
+    let exps = (window._rExpAll || []).slice();
     if (from) exps = exps.filter(e => e.date >= from);
-    if (to)   exps = exps.filter(e => e.date <= to);
-    if (cat)  exps = exps.filter(e => (e.category||'General') === cat);
+    if (to) exps = exps.filter(e => e.date <= to);
+    if (cat) exps = exps.filter(e => (e.category || 'General') === cat);
     if (user) exps = exps.filter(e => e.createdBy === user);
-    const total = exps.reduce((s,e) => s+e.amount, 0);
+    const total = exps.reduce((s, e) => s + e.amount, 0);
     const catMap = {};
-    exps.forEach(e => { const c = e.category||'General'; catMap[c] = (catMap[c]||0) + e.amount; });
-    const catRows = Object.entries(catMap).sort((a,b)=>b[1]-a[1]).map(([c,a])=>`<tr><td style="font-weight:600">${c}</td><td class="amount-red" style="text-align:right">${currency(a)}</td><td style="text-align:right;color:var(--text-muted)">${total>0?((a/total)*100).toFixed(1):0}%</td></tr>`).join('');
-    const detailRows = exps.map(e=>`<tr><td>${fmtDate(e.date)}</td><td>${e.category||'General'}</td><td>${escapeHtml(e.note||'-')}</td><td>${e.createdBy||'-'}</td><td class="amount-red" style="text-align:right">${currency(e.amount)}</td></tr>`).join('');
+    exps.forEach(e => { const c = e.category || 'General'; catMap[c] = (catMap[c] || 0) + e.amount; });
+    const catRows = Object.entries(catMap).sort((a, b) => b[1] - a[1]).map(([c, a]) => `<tr><td style="font-weight:600">${c}</td><td class="amount-red" style="text-align:right">${currency(a)}</td><td style="text-align:right;color:var(--text-muted)">${total > 0 ? ((a / total) * 100).toFixed(1) : 0}%</td></tr>`).join('');
+    const detailRows = exps.map(e => `<tr><td>${fmtDate(e.date)}</td><td>${e.category || 'General'}</td><td>${escapeHtml(e.note || '-')}</td><td>${e.createdBy || '-'}</td><td class="amount-red" style="text-align:right">${currency(e.amount)}</td></tr>`).join('');
     out.innerHTML = `
     <div class="stats-grid-sm">
-        <div class="stat-card red"><div class="stat-icon">💸</div><div class="stat-value">${currency(total)}</div><div class="stat-label">Total Expenses</div></div>
-        <div class="stat-card blue"><div class="stat-icon">📋</div><div class="stat-value">${exps.length}</div><div class="stat-label">Entries</div></div>
-        <div class="stat-card amber"><div class="stat-icon">🗂️</div><div class="stat-value">${Object.keys(catMap).length}</div><div class="stat-label">Categories</div></div>
+        <div class="stat-card red"><div class="stat-icon"></div><div class="stat-value">${currency(total)}</div><div class="stat-label">Total Expenses</div></div>
+        <div class="stat-card blue"><div class="stat-icon"></div><div class="stat-value">${exps.length}</div><div class="stat-label">Entries</div></div>
+        <div class="stat-card amber"><div class="stat-icon"></div><div class="stat-value">${Object.keys(catMap).length}</div><div class="stat-label">Categories</div></div>
     </div>
     <div class="card" style="margin-bottom:14px"><div class="card-header"><h4 style="font-size:0.9rem">Category Breakup</h4></div><div class="card-body">
         <div class="table-wrapper">
             <table class="data-table" id="tbl-expenses">
             <thead><tr><th>Category</th><th style="text-align:right">Amount</th><th style="text-align:right">%</th></tr></thead>
-            <tbody>${catRows||'<tr><td colspan="3" class="empty-state"><p>No expenses</p></td></tr>'}
+            <tbody>${catRows || '<tr><td colspan="3" class="empty-state"><p>No expenses</p></td></tr>'}
             <tr style="font-weight:700"><td style="text-align:right">Total</td><td class="amount-red" style="text-align:right">${currency(total)}</td><td></td></tr>
             </tbody></table>
         </div>
@@ -11626,46 +11697,46 @@ function renderExpenseRpt() {
         <div class="table-wrapper">
             <table class="data-table">
             <thead><tr><th>Date</th><th>Category</th><th>Note</th><th>Added By</th><th style="text-align:right">Amount</th></tr></thead>
-            <tbody>${detailRows||'<tr><td colspan="5" class="empty-state"><p>No expenses</p></td></tr>'}</tbody></table>
+            <tbody>${detailRows || '<tr><td colspan="5" class="empty-state"><p>No expenses</p></td></tr>'}</tbody></table>
         </div>
     </div></div>`;
 }
 
 function renderChequeRpt() {
-    const from   = ($('r-chq-from')||{}).value||'';
-    const to     = ($('r-chq-to')||{}).value||'';
-    const party  = (($('r-chq-party')||{}).value||'').toLowerCase();
-    const status = ($('r-chq-status')||{}).value||'';
-    const out    = $('r-chq-out'); if (!out) return;
-    let cheques = (window._rChqAll||[]).slice();
-    if (from)   cheques = cheques.filter(c => c.date >= from);
-    if (to)     cheques = cheques.filter(c => c.date <= to);
-    if (party)  cheques = cheques.filter(c => (c.partyName||'').toLowerCase().includes(party));
-    if (status) cheques = cheques.filter(c => (c.chequeStatus||'Pending') === status);
-    const pending   = cheques.filter(c => !c.chequeStatus || c.chequeStatus === 'Pending').length;
+    const from = ($('r-chq-from') || {}).value || '';
+    const to = ($('r-chq-to') || {}).value || '';
+    const party = (($('r-chq-party') || {}).value || '').toLowerCase();
+    const status = ($('r-chq-status') || {}).value || '';
+    const out = $('r-chq-out'); if (!out) return;
+    let cheques = (window._rChqAll || []).slice();
+    if (from) cheques = cheques.filter(c => c.date >= from);
+    if (to) cheques = cheques.filter(c => c.date <= to);
+    if (party) cheques = cheques.filter(c => (c.partyName || '').toLowerCase().includes(party));
+    if (status) cheques = cheques.filter(c => (c.chequeStatus || 'Pending') === status);
+    const pending = cheques.filter(c => !c.chequeStatus || c.chequeStatus === 'Pending').length;
     const deposited = cheques.filter(c => c.chequeStatus === 'Deposited').length;
-    const cleared   = cheques.filter(c => c.chequeStatus === 'Cleared').length;
-    const totalAmt  = cheques.reduce((s,c) => s+c.amount, 0);
+    const cleared = cheques.filter(c => c.chequeStatus === 'Cleared').length;
+    const totalAmt = cheques.reduce((s, c) => s + c.amount, 0);
     const rows = cheques.map(c => {
-        const statusBadge = c.chequeStatus==='Cleared'?'badge-success':c.chequeStatus==='Deposited'?'badge-warning':'badge-danger';
+        const statusBadge = c.chequeStatus === 'Cleared' ? 'badge-success' : c.chequeStatus === 'Deposited' ? 'badge-warning' : 'badge-danger';
         let actionBtns = '';
-        if (!c.chequeStatus || c.chequeStatus==='Pending') actionBtns = `<button class="btn btn-outline btn-sm" onclick="updateChequeStatus('${c.id}','Deposited')">Mark Deposited</button>`;
-        else if (c.chequeStatus==='Deposited') actionBtns = `<button class="btn btn-primary btn-sm" onclick="updateChequeStatus('${c.id}','Cleared')">Mark Cleared</button>`;
-        else actionBtns = '<span style="color:var(--success);font-weight:600">✔ Done</span>';
-        return `<tr><td style="font-size:0.8rem;color:var(--text-muted)">${c.payNo || c.id.substring(0,8)}</td><td>${fmtDate(c.date)}</td><td style="font-weight:600">${c.chequeNo||'-'}</td><td>${escapeHtml(c.partyName)}</td><td>${c.chequeBank||'-'}</td><td>${c.chequeDepositDate?fmtDate(c.chequeDepositDate):'-'}</td><td class="${c.type==='in'?'amount-green':'amount-red'}" style="text-align:right">${currency(c.amount)}</td><td><span class="badge ${statusBadge}">${c.chequeStatus||'Pending'}</span></td><td>${actionBtns}</td></tr>`;
+        if (!c.chequeStatus || c.chequeStatus === 'Pending') actionBtns = `<button class="btn btn-outline btn-sm" onclick="updateChequeStatus('${c.id}','Deposited')">Mark Deposited</button>`;
+        else if (c.chequeStatus === 'Deposited') actionBtns = `<button class="btn btn-primary btn-sm" onclick="updateChequeStatus('${c.id}','Cleared')">Mark Cleared</button>`;
+        else actionBtns = '<span style="color:var(--success);font-weight:600"> Done</span>';
+        return `<tr><td style="font-size:0.8rem;color:var(--text-muted)">${c.payNo || c.id.substring(0, 8)}</td><td>${fmtDate(c.date)}</td><td style="font-weight:600">${c.chequeNo || '-'}</td><td>${escapeHtml(c.partyName)}</td><td>${c.chequeBank || '-'}</td><td>${c.chequeDepositDate ? fmtDate(c.chequeDepositDate) : '-'}</td><td class="${c.type === 'in' ? 'amount-green' : 'amount-red'}" style="text-align:right">${currency(c.amount)}</td><td><span class="badge ${statusBadge}">${c.chequeStatus || 'Pending'}</span></td><td>${actionBtns}</td></tr>`;
     }).join('');
     out.innerHTML = `
     <div class="stats-grid-sm">
-        <div class="stat-card amber"><div class="stat-icon">⏳</div><div class="stat-value">${pending}</div><div class="stat-label">Pending</div></div>
-        <div class="stat-card blue"><div class="stat-icon">🏦</div><div class="stat-value">${deposited}</div><div class="stat-label">Deposited</div></div>
-        <div class="stat-card green"><div class="stat-icon">✅</div><div class="stat-value">${cleared}</div><div class="stat-label">Cleared</div></div>
-        <div class="stat-card blue"><div class="stat-icon">💰</div><div class="stat-value">${currency(totalAmt)}</div><div class="stat-label">Total Amount</div></div>
+        <div class="stat-card amber"><div class="stat-icon"></div><div class="stat-value">${pending}</div><div class="stat-label">Pending</div></div>
+        <div class="stat-card blue"><div class="stat-icon"></div><div class="stat-value">${deposited}</div><div class="stat-label">Deposited</div></div>
+        <div class="stat-card green"><div class="stat-icon"></div><div class="stat-value">${cleared}</div><div class="stat-label">Cleared</div></div>
+        <div class="stat-card blue"><div class="stat-icon"></div><div class="stat-value">${currency(totalAmt)}</div><div class="stat-label">Total Amount</div></div>
     </div>
     <div class="card"><div class="card-body">
         <div class="table-wrapper">
             <table class="data-table" id="cheque-reg-table">
             <thead><tr><th>Voucher #</th><th>Pay Date</th><th>Cheque #</th><th>Party</th><th>Bank</th><th>Deposit Date</th><th style="text-align:right">Amount</th><th>Status</th><th>Action</th></tr></thead>
-            <tbody>${rows||'<tr><td colspan="9"><div class="empty-state"><p>No cheques found</p></div></td></tr>'}</tbody>
+            <tbody>${rows || '<tr><td colspan="9"><div class="empty-state"><p>No cheques found</p></div></td></tr>'}</tbody>
             </table>
         </div>
     </div></div>`;
@@ -11682,13 +11753,13 @@ async function updateChequeStatus(payId, newStatus) {
 }
 
 function renderSalesmanRpt() {
-    const from = ($('r-sl-from')||{}).value||'';
-    const to   = ($('r-sl-to')||{}).value||'';
-    const out  = $('r-sl-out'); if (!out) return;
-    let invs = (window._rSlsInv||[]).slice();
-    let pays = (window._rSlsPay||[]).slice();
+    const from = ($('r-sl-from') || {}).value || '';
+    const to = ($('r-sl-to') || {}).value || '';
+    const out = $('r-sl-out'); if (!out) return;
+    let invs = (window._rSlsInv || []).slice();
+    let pays = (window._rSlsPay || []).slice();
     if (from) { invs = invs.filter(i => i.date >= from); pays = pays.filter(p => p.date >= from); }
-    if (to)   { invs = invs.filter(i => i.date <= to);   pays = pays.filter(p => p.date <= to);   }
+    if (to) { invs = invs.filter(i => i.date <= to); pays = pays.filter(p => p.date <= to); }
     // Group by salesman
     const slsMap = {};
     invs.forEach(i => {
@@ -11703,25 +11774,25 @@ function renderSalesmanRpt() {
         slsMap[name].collections += p.amount;
         slsMap[name].payCount++;
     });
-    const rows = Object.entries(slsMap).sort((a,b)=>b[1].sales-a[1].sales).map(([name, d]) => {
-        const eff = d.sales > 0 ? ((d.collections/d.sales)*100).toFixed(1) : '0.0';
+    const rows = Object.entries(slsMap).sort((a, b) => b[1].sales - a[1].sales).map(([name, d]) => {
+        const eff = d.sales > 0 ? ((d.collections / d.sales) * 100).toFixed(1) : '0.0';
         return `<tr>
             <td style="font-weight:700">${escapeHtml(name)}</td>
             <td style="text-align:right">${d.invoices}</td>
             <td class="amount-green" style="text-align:right">${currency(d.sales)}</td>
             <td style="text-align:right">${d.payCount}</td>
             <td class="amount-green" style="text-align:right">${currency(d.collections)}</td>
-            <td style="text-align:right;font-weight:600;color:${+eff>=80?'var(--success)':+eff>=50?'#f59e0b':'#ef4444'}">${eff}%</td>
+            <td style="text-align:right;font-weight:600;color:${+eff >= 80 ? 'var(--success)' : +eff >= 50 ? '#f59e0b' : '#ef4444'}">${eff}%</td>
         </tr>`;
     });
-    const totSales = Object.values(slsMap).reduce((s,d)=>s+d.sales,0);
-    const totColl  = Object.values(slsMap).reduce((s,d)=>s+d.collections,0);
+    const totSales = Object.values(slsMap).reduce((s, d) => s + d.sales, 0);
+    const totColl = Object.values(slsMap).reduce((s, d) => s + d.collections, 0);
     out.innerHTML = `
     <div class="card"><div class="card-body">
         <div class="table-wrapper">
             <table class="data-table" id="tbl-salesman">
-                <thead><tr><th>Salesman</th><th style="text-align:right">Invoices</th><th style="text-align:right">Sales ₹</th><th style="text-align:right">Receipts</th><th style="text-align:right">Collections ₹</th><th style="text-align:right">Collection %</th></tr></thead>
-                <tbody>${rows.join('')||'<tr><td colspan="6" class="empty-state"><p>No data found</p></td></tr>'}
+                <thead><tr><th>Salesman</th><th style="text-align:right">Invoices</th><th style="text-align:right">Sales </th><th style="text-align:right">Receipts</th><th style="text-align:right">Collections </th><th style="text-align:right">Collection %</th></tr></thead>
+                <tbody>${rows.join('') || '<tr><td colspan="6" class="empty-state"><p>No data found</p></td></tr>'}
                 <tr style="font-weight:700;background:rgba(0,212,170,0.1)"><td>Total</td><td></td><td class="amount-green" style="text-align:right">${currency(totSales)}</td><td></td><td class="amount-green" style="text-align:right">${currency(totColl)}</td><td></td></tr>
                 </tbody>
             </table>
@@ -11730,35 +11801,35 @@ function renderSalesmanRpt() {
 }
 
 function renderDayBook() {
-    const from  = ($('r-db-from')||{}).value||today();
-    const to    = ($('r-db-to')||{}).value||today();
-    const ftype = ($('r-db-type')||{}).value||'';
-    const out   = $('r-db-out'); if (!out) return;
+    const from = ($('r-db-from') || {}).value || today();
+    const to = ($('r-db-to') || {}).value || today();
+    const ftype = ($('r-db-type') || {}).value || '';
+    const out = $('r-db-out'); if (!out) return;
 
     // Build unified transaction list
     const txns = [];
-    (window._rDbInv||[]).filter(i => i.date >= from && i.date <= to).forEach(i => {
+    (window._rDbInv || []).filter(i => i.date >= from && i.date <= to).forEach(i => {
         const label = i.type === 'sale' ? 'Sale Invoice' : 'Purchase Invoice';
         if (ftype && ftype !== label) return;
-        txns.push({ date: i.date, type: label, ref: i.invoiceNo, party: i.partyName, dr: i.type === 'sale' ? i.total : 0, cr: i.type === 'purchase' ? i.total : 0, by: i.createdBy||'' });
+        txns.push({ date: i.date, type: label, ref: i.invoiceNo, party: i.partyName, dr: i.type === 'sale' ? i.total : 0, cr: i.type === 'purchase' ? i.total : 0, by: i.createdBy || '' });
     });
-    (window._rDbPay||[]).filter(p => p.date >= from && p.date <= to).forEach(p => {
+    (window._rDbPay || []).filter(p => p.date >= from && p.date <= to).forEach(p => {
         const label = p.type === 'in' ? 'Payment In' : 'Payment Out';
         if (ftype && ftype !== label) return;
-        txns.push({ date: p.date, type: label, ref: p.payNo||p.id.substring(0,8), party: p.partyName, dr: p.type === 'in' ? p.amount : 0, cr: p.type === 'out' ? p.amount : 0, by: p.collectedBy||p.createdBy||'' });
+        txns.push({ date: p.date, type: label, ref: p.payNo || p.id.substring(0, 8), party: p.partyName, dr: p.type === 'in' ? p.amount : 0, cr: p.type === 'out' ? p.amount : 0, by: p.collectedBy || p.createdBy || '' });
     });
-    (window._rDbExp||[]).filter(e => e.date >= from && e.date <= to).forEach(e => {
+    (window._rDbExp || []).filter(e => e.date >= from && e.date <= to).forEach(e => {
         if (ftype && ftype !== 'Expense') return;
-        txns.push({ date: e.date, type: 'Expense', ref: e.category||'General', party: e.note||'-', dr: 0, cr: e.amount, by: e.createdBy||'' });
+        txns.push({ date: e.date, type: 'Expense', ref: e.category || 'General', party: e.note || '-', dr: 0, cr: e.amount, by: e.createdBy || '' });
     });
-    txns.sort((a,b)=>a.date.localeCompare(b.date));
+    txns.sort((a, b) => a.date.localeCompare(b.date));
 
-    const totalDr = txns.reduce((s,t)=>s+t.dr,0);
-    const totalCr = txns.reduce((s,t)=>s+t.cr,0);
+    const totalDr = txns.reduce((s, t) => s + t.dr, 0);
+    const totalCr = txns.reduce((s, t) => s + t.cr, 0);
     const typeColor = { 'Sale Invoice': 'var(--success)', 'Purchase Invoice': 'var(--info)', 'Payment In': '#22c55e', 'Payment Out': '#ef4444', 'Expense': '#f59e0b' };
     const rows = txns.map(t => `<tr>
         <td>${fmtDate(t.date)}</td>
-        <td><span style="font-size:0.8rem;font-weight:600;color:${typeColor[t.type]||'var(--text-primary)'}">${t.type}</span></td>
+        <td><span style="font-size:0.8rem;font-weight:600;color:${typeColor[t.type] || 'var(--text-primary)'}">${t.type}</span></td>
         <td style="font-weight:600">${escapeHtml(t.ref)}</td>
         <td>${escapeHtml(t.party)}</td>
         <td class="amount-green" style="text-align:right">${t.dr > 0 ? currency(t.dr) : '-'}</td>
@@ -11767,15 +11838,15 @@ function renderDayBook() {
     </tr>`).join('');
     out.innerHTML = `
     <div class="stats-grid-sm">
-        <div class="stat-card green"><div class="stat-icon">📥</div><div class="stat-value">${currency(totalDr)}</div><div class="stat-label">Total Inflow (Sales+Receipts)</div></div>
-        <div class="stat-card red"><div class="stat-icon">📤</div><div class="stat-value">${currency(totalCr)}</div><div class="stat-label">Total Outflow (Purchases+Exp)</div></div>
-        <div class="stat-card blue"><div class="stat-icon">📋</div><div class="stat-value">${txns.length}</div><div class="stat-label">Transactions</div></div>
+        <div class="stat-card green"><div class="stat-icon"></div><div class="stat-value">${currency(totalDr)}</div><div class="stat-label">Total Inflow (Sales+Receipts)</div></div>
+        <div class="stat-card red"><div class="stat-icon"></div><div class="stat-value">${currency(totalCr)}</div><div class="stat-label">Total Outflow (Purchases+Exp)</div></div>
+        <div class="stat-card blue"><div class="stat-icon"></div><div class="stat-value">${txns.length}</div><div class="stat-label">Transactions</div></div>
     </div>
     <div class="card"><div class="card-body">
         <div class="table-wrapper">
             <table class="data-table" id="tbl-daybook">
-                <thead><tr><th>Date</th><th>Type</th><th>Ref #</th><th>Party / Note</th><th style="text-align:right">Inflow ₹</th><th style="text-align:right">Outflow ₹</th><th>By</th></tr></thead>
-                <tbody>${rows||'<tr><td colspan="7" class="empty-state"><p>No transactions found</p></td></tr>'}
+                <thead><tr><th>Date</th><th>Type</th><th>Ref #</th><th>Party / Note</th><th style="text-align:right">Inflow </th><th style="text-align:right">Outflow </th><th>By</th></tr></thead>
+                <tbody>${rows || '<tr><td colspan="7" class="empty-state"><p>No transactions found</p></td></tr>'}
                 <tr style="font-weight:700;background:rgba(0,212,170,0.08)"><td colspan="4" style="text-align:right">Totals</td><td class="amount-green" style="text-align:right">${currency(totalDr)}</td><td class="amount-red" style="text-align:right">${currency(totalCr)}</td><td></td></tr>
                 </tbody>
             </table>
@@ -11863,10 +11934,10 @@ async function generateUserSalesReport() {
 
     $('rep-us-output').innerHTML = `
         <div class="stats-grid" style="margin-bottom:15px">
-            <div class="stat-card blue"><div class="stat-icon">🛒</div><div class="stat-value">${currency(totalOrderValue)}</div><div class="stat-label">Total Ordered</div></div>
-            <div class="stat-card green"><div class="stat-icon">🧾</div><div class="stat-value">${currency(totalInvoiceValue)}</div><div class="stat-label">Total Invoiced</div></div>
-            <div class="stat-card amber"><div class="stat-icon">💰</div><div class="stat-value">${currency(totalPayments)}</div><div class="stat-label">Total Collected</div></div>
-            <div class="stat-card red"><div class="stat-icon">⏳</div><div class="stat-value">${currency(outstanding)}</div><div class="stat-label">Outstanding (Inv - Pay)</div></div>
+            <div class="stat-card blue"><div class="stat-icon"></div><div class="stat-value">${currency(totalOrderValue)}</div><div class="stat-label">Total Ordered</div></div>
+            <div class="stat-card green"><div class="stat-icon"></div><div class="stat-value">${currency(totalInvoiceValue)}</div><div class="stat-label">Total Invoiced</div></div>
+            <div class="stat-card amber"><div class="stat-icon"></div><div class="stat-value">${currency(totalPayments)}</div><div class="stat-label">Total Collected</div></div>
+            <div class="stat-card red"><div class="stat-icon"></div><div class="stat-value">${currency(outstanding)}</div><div class="stat-label">Outstanding (Inv - Pay)</div></div>
         </div>
         <div class="card">
             <div class="card-header"><h3 style="font-size:0.95rem">Item-wise Details ${catSearch ? `(Category: ${catSearch})` : ''}</h3></div>
@@ -11954,7 +12025,7 @@ async function generateUserPaymentReport() {
         <div class="card">
             <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
                 <h3 style="font-size:0.95rem">Receipt Breakup</h3>
-                <button class="btn btn-outline btn-sm" onclick="exportTableToExcel('tbl-pay-report','PaymentReport_${new Date().toISOString().split('T')[0]}')">📥 Export Excel</button>
+                <button class="btn btn-outline btn-sm" onclick="exportTableToExcel('tbl-pay-report','PaymentReport_${new Date().toISOString().split('T')[0]}')"> Export Excel</button>
             </div>
             <div class="card-body">
                 <table class="data-table" id="tbl-pay-report" style="font-size:0.85rem">
@@ -11970,7 +12041,7 @@ async function generateUserPaymentReport() {
                             <td>${escapeHtml(p.createdBy || 'System')}</td>
                             <td class="amount-green" style="text-align:right;font-weight:700">${currency(p.amount)}</td>
                         </tr>
-                    `).join('') || '<tr><td colspan="6"><div class="empty-state"><span class="empty-icon">💰</span><p>No payments collected in this range</p></div></td></tr>'}
+                    `).join('') || '<tr><td colspan="6"><div class="empty-state"><span class="empty-icon"></span><p>No payments collected in this range</p></div></td></tr>'}
                     ${payments.length ? `<tr style="font-weight:800;background:rgba(249,115,22,0.04);border-top:2px solid var(--border)"><td colspan="5" style="text-align:right;font-size:0.85rem;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted)">Grand Total</td><td class="amount-green" style="text-align:right;font-size:1rem">${currency(totalCollected)}</td></tr>` : ''}
                     </tbody>
                 </table>
@@ -11994,8 +12065,8 @@ function renderPackers() {
                 <table class="data-table"><thead><tr><th>Name</th><th>Phone</th><th>Actions</th></tr></thead>
                 <tbody>${packers.length ? packers.map(p => `<tr>
                     <td style="color:var(--text-primary);font-weight:600">${p.name}</td><td>${p.phone || '-'}</td>
-                    <td><div class="action-btns"><button class="btn-icon" onclick="openPackerModal('${p.id}')">✏️</button><button class="btn-icon" onclick="deletePacker('${p.id}')">🗑️</button></div></td>
-                </tr>`).join('') : '<tr><td colspan="3"><div class="empty-state"><div class="empty-icon">🧑‍🏭</div><p>No packers added yet</p></div></td></tr>'}</tbody></table>
+                    <td><div class="action-btns"><button class="btn-icon" onclick="openPackerModal('${p.id}')"></button><button class="btn-icon" onclick="deletePacker('${p.id}')"></button></div></td>
+                </tr>`).join('') : '<tr><td colspan="3"><div class="empty-state"><div class="empty-icon"></div><p>No packers added yet</p></div></td></tr>'}</tbody></table>
             </div>
         </div></div>`;
 }
@@ -12005,7 +12076,7 @@ function openPackerModal(id) {
         <div class="form-group"><label>Name *</label><input id="f-packer-name" value="${p ? p.name : ''}"></div>
         <div class="form-group"><label>Phone</label><input id="f-packer-phone" value="${p ? p.phone || '' : ''}"></div>
         <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-        ${!id ? `<button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;savePacker('')">＋ Save & New</button>` : ''}
+        ${!id ? `<button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;savePacker('')"> Save & New</button>` : ''}
         <button class="btn btn-primary" onclick="savePacker('${id || ''}')">Save Packer</button></div>`);
 }
 async function savePacker(id) {
@@ -12038,8 +12109,8 @@ function renderDeliveryPersons() {
                 <table class="data-table"><thead><tr><th>Name</th><th>Phone</th><th>Vehicle</th><th>Actions</th></tr></thead>
                 <tbody>${persons.length ? persons.map(p => `<tr>
                     <td style="color:var(--text-primary);font-weight:600">${p.name}</td><td>${p.phone || '-'}</td><td>${p.vehicle || '-'}</td>
-                    <td><div class="action-btns"><button class="btn-icon" onclick="openDelPersonModal('${p.id}')">✏️</button><button class="btn-icon" onclick="deleteDelPerson('${p.id}')">🗑️</button></div></td>
-                </tr>`).join('') : '<tr><td colspan="4"><div class="empty-state"><div class="empty-icon">🧑‍✈️</div><p>No delivery persons added yet</p></div></td></tr>'}</tbody></table>
+                    <td><div class="action-btns"><button class="btn-icon" onclick="openDelPersonModal('${p.id}')"></button><button class="btn-icon" onclick="deleteDelPerson('${p.id}')"></button></div></td>
+                </tr>`).join('') : '<tr><td colspan="4"><div class="empty-state"><div class="empty-icon"></div><p>No delivery persons added yet</p></div></td></tr>'}</tbody></table>
             </div>
         </div></div>`;
 }
@@ -12050,7 +12121,7 @@ function openDelPersonModal(id) {
         <div class="form-row"><div class="form-group"><label>Phone</label><input id="f-dp-phone" value="${p ? p.phone || '' : ''}"></div>
         <div class="form-group"><label>Vehicle</label><input id="f-dp-vehicle" value="${p ? p.vehicle || '' : ''}" placeholder="e.g. Tempo, Bike"></div></div>
         <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-        ${!id ? `<button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveDelPerson('')">＋ Save & New</button>` : ''}
+        ${!id ? `<button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveDelPerson('')"> Save & New</button>` : ''}
         <button class="btn btn-primary" onclick="saveDelPerson('${id || ''}')">Save</button></div>`);
 }
 async function saveDelPerson(id) {
@@ -12074,7 +12145,7 @@ async function deleteDelPerson(id) {
 // =============================================
 function renderUsers() {
     const users = DB.cache['users'] || [];
-    const roleBadgeClass = { Admin:'badge-danger', Manager:'badge-info', Salesman:'badge-success', Delivery:'badge-info', Packing:'badge-warning' };
+    const roleBadgeClass = { Admin: 'badge-danger', Manager: 'badge-info', Salesman: 'badge-success', Delivery: 'badge-info', Packing: 'badge-warning' };
     pageContent.innerHTML = `
         <div class="section-toolbar">
             <h3 style="font-size:1rem">Users & Access</h3>
@@ -12085,18 +12156,18 @@ function renderUsers() {
                 <table class="data-table">
                     <thead><tr><th>Name</th><th>User ID</th><th>Roles</th><th>PIN</th><th>Actions</th></tr></thead>
                     <tbody>${users.map(u => {
-                        const roles = Array.isArray(u.roles) && u.roles.length ? u.roles : [u.role];
-                        return `<tr>
+        const roles = Array.isArray(u.roles) && u.roles.length ? u.roles : [u.role];
+        return `<tr>
                             <td style="font-weight:600">${escapeHtml(u.name)}</td>
                             <td style="font-family:monospace;color:var(--accent);font-weight:600">${escapeHtml(u.userId || u.name)}</td>
-                            <td>${roles.map(r => `<span class="badge ${roleBadgeClass[r]||'badge-info'}" style="margin-right:4px">${r}</span>`).join('')}</td>
-                            <td style="color:var(--text-muted);letter-spacing:3px">${'•'.repeat((u.pin||'').length)}</td>
+                            <td>${roles.map(r => `<span class="badge ${roleBadgeClass[r] || 'badge-info'}" style="margin-right:4px">${r}</span>`).join('')}</td>
+                            <td style="color:var(--text-muted);letter-spacing:3px">${''.repeat((u.pin || '').length)}</td>
                             <td><div class="action-btns">
-                                <button class="btn-icon" onclick="openUserModal('${u.id}')">✏️</button>
-                                ${users.length > 1 ? `<button class="btn-icon" onclick="deleteUser('${u.id}')">🗑️</button>` : ''}
+                                <button class="btn-icon" onclick="openUserModal('${u.id}')"></button>
+                                ${users.length > 1 ? `<button class="btn-icon" onclick="deleteUser('${u.id}')"></button>` : ''}
                             </div></td>
                         </tr>`;
-                    }).join('')}</tbody>
+    }).join('')}</tbody>
                 </table>
             </div>
         </div></div>
@@ -12106,8 +12177,8 @@ function renderUsers() {
             <thead><tr><th>Role</th><th>Access</th></tr></thead>
             <tbody>
                 ${Object.entries(ROLE_PAGES).map(([role, pages]) => `<tr>
-                    <td><span class="badge ${roleBadgeClass[role]||'badge-info'}">${role}</span></td>
-                    <td style="color:var(--text-muted)">${pages.map(p => p.charAt(0).toUpperCase()+p.slice(1)).join(', ')}</td>
+                    <td><span class="badge ${roleBadgeClass[role] || 'badge-info'}">${role}</span></td>
+                    <td style="color:var(--text-muted)">${pages.map(p => p.charAt(0).toUpperCase() + p.slice(1)).join(', ')}</td>
                 </tr>`).join('')}
             </tbody>
         </table></div></div></div>`;
@@ -12115,23 +12186,23 @@ function renderUsers() {
 function openUserModal(id) {
     const u = id ? (DB.cache['users'] || []).find(x => x.id === id) : null;
     const userRoles = u ? (Array.isArray(u.roles) && u.roles.length ? u.roles : [u.role]) : [];
-    const allRoles = ['Admin','Manager','Salesman','Delivery','Packing'];
-    const roleBadgeClass = { Admin:'badge-danger', Manager:'badge-info', Salesman:'badge-success', Delivery:'badge-info', Packing:'badge-warning' };
+    const allRoles = ['Admin', 'Manager', 'Salesman', 'Delivery', 'Packing'];
+    const roleBadgeClass = { Admin: 'badge-danger', Manager: 'badge-info', Salesman: 'badge-success', Delivery: 'badge-info', Packing: 'badge-warning' };
     openModal(u ? 'Edit User' : 'Add User', `
         <div class="form-group">
             <label>Full Name *</label>
             <input id="f-user-name" class="form-control" value="${u ? escapeHtml(u.name) : ''}" placeholder="Employee name">
         </div>
         <div class="form-group">
-            <label>User ID * <span style="font-size:0.78rem;color:var(--text-muted)">(for login — no spaces, e.g. ram01)</span></label>
+            <label>User ID * <span style="font-size:0.78rem;color:var(--text-muted)">(for login  no spaces, e.g. ram01)</span></label>
             <input id="f-user-userid" class="form-control" value="${u ? escapeHtml(u.userId || '') : ''}" placeholder="e.g. ram01" style="text-transform:lowercase;font-family:monospace" oninput="this.value=this.value.toLowerCase().replace(/\\s/g,'')">
         </div>
         <div class="form-group">
             <label>Roles * <span style="font-size:0.78rem;color:var(--text-muted)">(select one or more)</span></label>
             <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:8px">
                 ${allRoles.map(r => `
-                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:6px 12px;border:2px solid var(--border);border-radius:20px;font-size:0.85rem;transition:all 0.15s;${userRoles.includes(r)?'border-color:var(--primary);background:var(--primary-light,#eff6ff);font-weight:600':''}">
-                    <input type="checkbox" class="chk-user-role" value="${r}" ${userRoles.includes(r)?'checked':''} onchange="this.parentElement.style.borderColor=this.checked?'var(--primary)':'var(--border)';this.parentElement.style.background=this.checked?'var(--primary-light,#eff6ff)':'';this.parentElement.style.fontWeight=this.checked?'600':'400'">
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:6px 12px;border:2px solid var(--border);border-radius:20px;font-size:0.85rem;transition:all 0.15s;${userRoles.includes(r) ? 'border-color:var(--primary);background:var(--primary-light,#eff6ff);font-weight:600' : ''}">
+                    <input type="checkbox" class="chk-user-role" value="${r}" ${userRoles.includes(r) ? 'checked' : ''} onchange="this.parentElement.style.borderColor=this.checked?'var(--primary)':'var(--border)';this.parentElement.style.background=this.checked?'var(--primary-light,#eff6ff)':'';this.parentElement.style.fontWeight=this.checked?'600':'400'">
                     <span class="badge ${roleBadgeClass[r]}">${r}</span>
                 </label>`).join('')}
             </div>
@@ -12139,51 +12210,51 @@ function openUserModal(id) {
         <div class="form-group">
             <label>PIN * <span style="font-size:0.78rem;color:var(--text-muted)">(4 to 6 digits)</span></label>
             <div style="position:relative">
-                <input type="password" id="f-user-pin" class="form-control" maxlength="6" value="${u ? u.pin : ''}" placeholder="Enter 4–6 digit PIN" inputmode="numeric" style="padding-right:40px">
-                <button type="button" onclick="const p=$('f-user-pin');p.type=p.type==='password'?'text':'password'" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:1rem">👁</button>
+                <input type="password" id="f-user-pin" class="form-control" maxlength="6" value="${u ? u.pin : ''}" placeholder="Enter 46 digit PIN" inputmode="numeric" style="padding-right:40px">
+                <button type="button" onclick="const p=$('f-user-pin');p.type=p.type==='password'?'text':'password'" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:1rem"></button>
             </div>
         </div>
         <div class="form-group">
-            <label>Monthly Sales Target (₹) <span style="font-size:0.78rem;color:var(--text-muted)">(optional)</span></label>
+            <label>Monthly Sales Target () <span style="font-size:0.78rem;color:var(--text-muted)">(optional)</span></label>
             <input type="number" id="f-user-target" class="form-control" value="${u ? (u.monthlyTarget || 0) : 0}" placeholder="e.g. 500000">
         </div>
         <div class="form-group" id="extra-perms-section">
             <label>Extra Permissions <span style="font-size:0.78rem;color:var(--text-muted)">(beyond role defaults)</span></label>
             <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:8px">
-                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:6px 12px;border:2px solid var(--border);border-radius:20px;font-size:0.85rem;${(u && Array.isArray(u.extra_perms) && u.extra_perms.includes('partyledger'))?'border-color:var(--primary);background:#eff6ff;font-weight:600':''}">
-                    <input type="checkbox" id="perm-partyledger" value="partyledger" ${(u && Array.isArray(u.extra_perms) && u.extra_perms.includes('partyledger'))?'checked':''} onchange="this.parentElement.style.borderColor=this.checked?'var(--primary)':'var(--border)';this.parentElement.style.background=this.checked?'#eff6ff':'';this.parentElement.style.fontWeight=this.checked?'600':'400'">
-                    📒 View Party Ledger
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:6px 12px;border:2px solid var(--border);border-radius:20px;font-size:0.85rem;${(u && Array.isArray(u.extra_perms) && u.extra_perms.includes('partyledger')) ? 'border-color:var(--primary);background:#eff6ff;font-weight:600' : ''}">
+                    <input type="checkbox" id="perm-partyledger" value="partyledger" ${(u && Array.isArray(u.extra_perms) && u.extra_perms.includes('partyledger')) ? 'checked' : ''} onchange="this.parentElement.style.borderColor=this.checked?'var(--primary)':'var(--border)';this.parentElement.style.background=this.checked?'#eff6ff':'';this.parentElement.style.fontWeight=this.checked?'600':'400'">
+                     View Party Ledger
                 </label>
-                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:6px 12px;border:2px solid var(--border);border-radius:20px;font-size:0.85rem;${(u && Array.isArray(u.extra_perms) && u.extra_perms.includes('reports'))?'border-color:var(--primary);background:#eff6ff;font-weight:600':''}">
-                    <input type="checkbox" id="perm-reports" value="reports" ${(u && Array.isArray(u.extra_perms) && u.extra_perms.includes('reports'))?'checked':''} onchange="this.parentElement.style.borderColor=this.checked?'var(--primary)':'var(--border)';this.parentElement.style.background=this.checked?'#eff6ff':'';this.parentElement.style.fontWeight=this.checked?'600':'400'">
-                    📊 View Reports
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:6px 12px;border:2px solid var(--border);border-radius:20px;font-size:0.85rem;${(u && Array.isArray(u.extra_perms) && u.extra_perms.includes('reports')) ? 'border-color:var(--primary);background:#eff6ff;font-weight:600' : ''}">
+                    <input type="checkbox" id="perm-reports" value="reports" ${(u && Array.isArray(u.extra_perms) && u.extra_perms.includes('reports')) ? 'checked' : ''} onchange="this.parentElement.style.borderColor=this.checked?'var(--primary)':'var(--border)';this.parentElement.style.background=this.checked?'#eff6ff':'';this.parentElement.style.fontWeight=this.checked?'600':'400'">
+                     View Reports
                 </label>
-                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:6px 12px;border:2px solid var(--border);border-radius:20px;font-size:0.85rem;${(u && Array.isArray(u.extra_perms) && u.extra_perms.includes('invoices'))?'border-color:var(--primary);background:#eff6ff;font-weight:600':''}">
-                    <input type="checkbox" id="perm-invoices" value="invoices" ${(u && Array.isArray(u.extra_perms) && u.extra_perms.includes('invoices'))?'checked':''} onchange="this.parentElement.style.borderColor=this.checked?'var(--primary)':'var(--border)';this.parentElement.style.background=this.checked?'#eff6ff':'';this.parentElement.style.fontWeight=this.checked?'600':'400'">
-                    🧾 View Invoices
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:6px 12px;border:2px solid var(--border);border-radius:20px;font-size:0.85rem;${(u && Array.isArray(u.extra_perms) && u.extra_perms.includes('invoices')) ? 'border-color:var(--primary);background:#eff6ff;font-weight:600' : ''}">
+                    <input type="checkbox" id="perm-invoices" value="invoices" ${(u && Array.isArray(u.extra_perms) && u.extra_perms.includes('invoices')) ? 'checked' : ''} onchange="this.parentElement.style.borderColor=this.checked?'var(--primary)':'var(--border)';this.parentElement.style.background=this.checked?'#eff6ff':'';this.parentElement.style.fontWeight=this.checked?'600':'400'">
+                     View Invoices
                 </label>
-                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:6px 12px;border:2px solid var(--border);border-radius:20px;font-size:0.85rem;${(u && Array.isArray(u.extra_perms) && u.extra_perms.includes('expenses'))?'border-color:var(--primary);background:#eff6ff;font-weight:600':''}">
-                    <input type="checkbox" id="perm-expenses" value="expenses" ${(u && Array.isArray(u.extra_perms) && u.extra_perms.includes('expenses'))?'checked':''} onchange="this.parentElement.style.borderColor=this.checked?'var(--primary)':'var(--border)';this.parentElement.style.background=this.checked?'#eff6ff':'';this.parentElement.style.fontWeight=this.checked?'600':'400'">
-                    💸 View Expenses
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:6px 12px;border:2px solid var(--border);border-radius:20px;font-size:0.85rem;${(u && Array.isArray(u.extra_perms) && u.extra_perms.includes('expenses')) ? 'border-color:var(--primary);background:#eff6ff;font-weight:600' : ''}">
+                    <input type="checkbox" id="perm-expenses" value="expenses" ${(u && Array.isArray(u.extra_perms) && u.extra_perms.includes('expenses')) ? 'checked' : ''} onchange="this.parentElement.style.borderColor=this.checked?'var(--primary)':'var(--border)';this.parentElement.style.background=this.checked?'#eff6ff':'';this.parentElement.style.fontWeight=this.checked?'600':'400'">
+                     View Expenses
                 </label>
-                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:6px 12px;border:2px solid var(--accent);border-radius:20px;font-size:0.85rem;${(u && u.canEdit)?'border-color:var(--accent);background:rgba(249,115,22,0.1);font-weight:600':''}">
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:6px 12px;border:2px solid var(--accent);border-radius:20px;font-size:0.85rem;${(u && u.canEdit) ? 'border-color:var(--accent);background:rgba(249,115,22,0.1);font-weight:600' : ''}">
                     <input type="checkbox" id="f-user-canedit" ${u && u.canEdit ? 'checked' : ''} onchange="this.parentElement.style.borderColor=this.checked?'var(--accent)':'var(--border)';this.parentElement.style.background=this.checked?'rgba(249,115,22,0.1)':'';this.parentElement.style.fontWeight=this.checked?'600':'400'">
-                    ✏️ Can Edit Records
+                     Can Edit Records
                 </label>
             </div>
         </div>
         <div class="modal-actions">
             <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-            ${!id ? `<button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveUser('')">＋ Save & New</button>` : ''}
+            ${!id ? `<button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveUser('')"> Save & New</button>` : ''}
             <button class="btn btn-primary" onclick="saveUser('${id || ''}')">Save User</button>
         </div>`);
 }
 async function saveUser(id) {
     const name = $('f-user-name').value.trim();
-    const userId = $('f-user-userid').value.trim().toLowerCase().replace(/\s/g,'');
+    const userId = $('f-user-userid').value.trim().toLowerCase().replace(/\s/g, '');
     const pin = $('f-user-pin').value.trim();
     const selectedRoles = [...document.querySelectorAll('.chk-user-role:checked')].map(c => c.value);
-    const extraPerms = ['partyledger','reports','invoices','expenses'].filter(p => {
+    const extraPerms = ['partyledger', 'reports', 'invoices', 'expenses'].filter(p => {
         const el = document.getElementById('perm-' + p);
         return el && el.checked;
     });
@@ -12235,15 +12306,15 @@ async function deleteUser(id) {
 // =============================================
 function renderVyaparSalesTable() {
     const from = ($('vy-s-from') || {}).value || '';
-    const to   = ($('vy-s-to')   || {}).value || '';
+    const to = ($('vy-s-to') || {}).value || '';
     const party = (($('vy-s-party') || {}).value || '').toLowerCase();
-    const user  = ($('vy-s-user')  || {}).value || '';
+    const user = ($('vy-s-user') || {}).value || '';
     const tbody = $('vy-sales-tbody'); if (!tbody) return;
     let invs = (window._vySalesAll || []).slice();
     if (from) invs = invs.filter(i => i.date >= from);
-    if (to)   invs = invs.filter(i => i.date <= to);
+    if (to) invs = invs.filter(i => i.date <= to);
     if (party) invs = invs.filter(i => (i.partyName || '').toLowerCase().includes(party));
-    if (user)  invs = invs.filter(i => i.createdBy === user);
+    if (user) invs = invs.filter(i => i.createdBy === user);
     const rows = [];
     invs.forEach(inv => {
         inv.items.forEach((li, idx) => {
@@ -12261,26 +12332,26 @@ function renderVyaparSalesTable() {
             </tr>`);
         });
     });
-    tbody.innerHTML = rows.join('') || '<tr><td colspan="10"><div class="empty-state"><span class="empty-icon">🧾</span><p>No invoices for selected filters</p></div></td></tr>';
+    tbody.innerHTML = rows.join('') || '<tr><td colspan="10"><div class="empty-state"><span class="empty-icon"></span><p>No invoices for selected filters</p></div></td></tr>';
 }
 
 function renderVyaparPayTable() {
-    const from      = ($('vy-p-from')       || {}).value || '';
-    const to        = ($('vy-p-to')         || {}).value || '';
-    const party     = (($('vy-p-party')     || {}).value || '').toLowerCase();
-    const mode      = ($('vy-p-mode')       || {}).value || '';
-    const collector = ($('vy-p-collector')  || {}).value || '';
+    const from = ($('vy-p-from') || {}).value || '';
+    const to = ($('vy-p-to') || {}).value || '';
+    const party = (($('vy-p-party') || {}).value || '').toLowerCase();
+    const mode = ($('vy-p-mode') || {}).value || '';
+    const collector = ($('vy-p-collector') || {}).value || '';
     const tbody = $('vy-pay-tbody'); if (!tbody) return;
     let pays = (window._vyPayAll || []).slice();
-    if (from)      pays = pays.filter(p => p.date >= from);
-    if (to)        pays = pays.filter(p => p.date <= to);
-    if (party)     pays = pays.filter(p => (p.partyName || '').toLowerCase().includes(party));
-    if (mode)      pays = pays.filter(p => (p.mode || 'Cash') === mode);
+    if (from) pays = pays.filter(p => p.date >= from);
+    if (to) pays = pays.filter(p => p.date <= to);
+    if (party) pays = pays.filter(p => (p.partyName || '').toLowerCase().includes(party));
+    if (mode) pays = pays.filter(p => (p.mode || 'Cash') === mode);
     if (collector) pays = pays.filter(p => (p.collectedBy || p.createdBy) === collector);
     const total = pays.reduce((s, p) => s + p.amount, 0);
     tbody.innerHTML = pays.map((p, i) => `<tr>
         <td style="white-space:nowrap">${fmtDate(p.date)}</td>
-        <td style="font-weight:700">RCP-${String(i+1).padStart(4,'0')}</td>
+        <td style="font-weight:700">RCP-${String(i + 1).padStart(4, '0')}</td>
         <td>${escapeHtml(p.partyName)}</td>
         <td>${p.invoiceNo ? `<span style="color:var(--primary);font-weight:600">${escapeHtml(p.invoiceNo)}</span>` : '-'}</td>
         <td><span class="badge badge-info">${p.mode || 'Cash'}</span></td>
@@ -12288,7 +12359,7 @@ function renderVyaparPayTable() {
         <td>${escapeHtml(p.collectedBy || p.createdBy || 'System')}</td>
         <td class="amount-green" style="text-align:right;font-weight:700">${currency(p.amount)}</td>
     </tr>`).join('') +
-    (pays.length ? `<tr style="font-weight:800;border-top:2px solid var(--border)"><td colspan="7" style="text-align:right;text-transform:uppercase;font-size:0.82rem;color:var(--text-muted)">Total (${pays.length} records)</td><td class="amount-green" style="text-align:right;font-size:1rem">${currency(total)}</td></tr>` : '<tr><td colspan="8"><div class="empty-state"><span class="empty-icon">💳</span><p>No payments for selected filters</p></div></td></tr>');
+        (pays.length ? `<tr style="font-weight:800;border-top:2px solid var(--border)"><td colspan="7" style="text-align:right;text-transform:uppercase;font-size:0.82rem;color:var(--text-muted)">Total (${pays.length} records)</td><td class="amount-green" style="text-align:right;font-size:1rem">${currency(total)}</td></tr>` : '<tr><td colspan="8"><div class="empty-state"><span class="empty-icon"></span><p>No payments for selected filters</p></div></td></tr>');
 }
 
 function renderPayTrend() {
@@ -12304,7 +12375,7 @@ function renderPayTrend() {
     if (userFilter) pays = pays.filter(p => p.createdBy === userFilter);
 
     if (!pays.length) {
-        $('pay-trend-output').innerHTML = '<div class="empty-state"><span class="empty-icon">📊</span><p>No payments in selected range</p></div>';
+        $('pay-trend-output').innerHTML = '<div class="empty-state"><span class="empty-icon"></span><p>No payments in selected range</p></div>';
         return;
     }
 
@@ -12373,7 +12444,7 @@ function getPaymentTermsList() {
     if (co.paymentTermsList && co.paymentTermsList.length) return co.paymentTermsList;
     return [
         { name: 'Due on Receipt', days: 0 },
-        { name: 'Net 7',  days: 7  },
+        { name: 'Net 7', days: 7 },
         { name: 'Net 15', days: 15 },
         { name: 'Net 30', days: 30 },
         { name: 'Net 45', days: 45 },
@@ -12381,23 +12452,23 @@ function getPaymentTermsList() {
     ];
 }
 function updateNsPreview(key) {
-    const prefix = (document.getElementById('ns-'+key+'-prefix')||{}).value || '';
-    const pad    = parseInt((document.getElementById('ns-'+key+'-pad')||{}).value) || 5;
-    const start  = parseInt((document.getElementById('ns-'+key+'-start')||{}).value) || 1;
-    const el = document.getElementById('ns-'+key+'-preview');
-    if (el) el.textContent = prefix + String(start).padStart(pad,'0');
+    const prefix = (document.getElementById('ns-' + key + '-prefix') || {}).value || '';
+    const pad = parseInt((document.getElementById('ns-' + key + '-pad') || {}).value) || 5;
+    const start = parseInt((document.getElementById('ns-' + key + '-start') || {}).value) || 1;
+    const el = document.getElementById('ns-' + key + '-preview');
+    if (el) el.textContent = prefix + String(start).padStart(pad, '0');
 }
 
 async function saveNumberSeries() {
-    const keys = ['inv','pur','so','po','cust','supp'];
+    const keys = ['inv', 'pur', 'so', 'po', 'cust', 'supp'];
     const ns = DB.ls.getObj('db_number_series') || {};
     for (const k of keys) {
-        const prefix = (document.getElementById('ns-'+k+'-prefix')||{}).value || '';
-        const pad    = parseInt((document.getElementById('ns-'+k+'-pad')||{}).value) || 5;
-        const start  = parseInt((document.getElementById('ns-'+k+'-start')||{}).value) || 1;
-        ns[k+'_prefix'] = prefix;
-        ns[k+'_pad']    = pad;
-        ns[k+'_start']  = start;
+        const prefix = (document.getElementById('ns-' + k + '-prefix') || {}).value || '';
+        const pad = parseInt((document.getElementById('ns-' + k + '-pad') || {}).value) || 5;
+        const start = parseInt((document.getElementById('ns-' + k + '-start') || {}).value) || 1;
+        ns[k + '_prefix'] = prefix;
+        ns[k + '_pad'] = pad;
+        ns[k + '_start'] = start;
     }
     await DB.saveSettings('db_number_series', ns);
     showToast('Number series saved!', 'success');
@@ -12405,14 +12476,14 @@ async function saveNumberSeries() {
 
 function getNsSetting(key, field, fallback) {
     const ns = DB.ls.getObj('db_number_series') || {};
-    return ns[key+'_'+field] !== undefined ? ns[key+'_'+field] : fallback;
+    return ns[key + '_' + field] !== undefined ? ns[key + '_' + field] : fallback;
 }
 
 async function nextPartyCode(type) {
     // type: 'Customer' or 'Supplier'
-    const key     = type === 'Supplier' ? 'supp' : 'cust';
-    const prefix  = getNsSetting(key, 'prefix', type === 'Supplier' ? 'SUP-' : 'CUST-');
-    const pad     = getNsSetting(key, 'pad', 5);
+    const key = type === 'Supplier' ? 'supp' : 'cust';
+    const prefix = getNsSetting(key, 'prefix', type === 'Supplier' ? 'SUP-' : 'CUST-');
+    const pad = getNsSetting(key, 'pad', 5);
     // Find max existing code number for this prefix
     const parties = DB.get('db_parties') || [];
     const nums = parties
@@ -12423,7 +12494,7 @@ async function nextPartyCode(type) {
     const next = Math.max(maxExisting + 1, configStart);
     // Update start for next call
     const ns = DB.ls.getObj('db_number_series') || {};
-    ns[key+'_start'] = next + 1;
+    ns[key + '_start'] = next + 1;
     await DB.saveSettings('db_number_series', ns);
     return prefix + String(next).padStart(pad, '0');
 }
@@ -12432,14 +12503,14 @@ async function autoAssignPartyCodes() {
     const parties = await DB.getAll('parties');
     const without = parties.filter(p => !p.partyCode);
     if (!without.length) return showToast('All parties already have a code!', 'success');
-    const confirmed = confirm(`${without.length} parties have no code.\n\nCustomers → CUST-00001 format\nSuppliers → SUP-00001 format\n\nProceed?`);
+    const confirmed = confirm(`${without.length} parties have no code.\n\nCustomers  CUST-00001 format\nSuppliers  SUP-00001 format\n\nProceed?`);
     if (!confirmed) return;
 
-    const key_cust  = 'cust', key_supp = 'supp';
+    const key_cust = 'cust', key_supp = 'supp';
     const custPrefix = getNsSetting(key_cust, 'prefix', 'CUST-');
-    const custPad    = getNsSetting(key_cust, 'pad', 5);
+    const custPad = getNsSetting(key_cust, 'pad', 5);
     const suppPrefix = getNsSetting(key_supp, 'prefix', 'SUP-');
-    const suppPad    = getNsSetting(key_supp, 'pad', 5);
+    const suppPad = getNsSetting(key_supp, 'pad', 5);
 
     // Find current max numbers
     const allParties = DB.get('db_parties') || [];
@@ -12467,14 +12538,14 @@ async function autoAssignPartyCodes() {
 
         // Save updated counters
         const ns = DB.ls.getObj('db_number_series') || {};
-        ns[key_cust+'_start'] = custCounter;
-        ns[key_supp+'_start'] = suppCounter;
+        ns[key_cust + '_start'] = custCounter;
+        ns[key_supp + '_start'] = suppCounter;
         await DB.saveSettings('db_number_series', ns);
 
         await DB.refreshTables(['parties']);
         showToast(`Done! ${without.length} parties assigned codes.`, 'success');
         await renderCompanySetup();
-    } catch(e) {
+    } catch (e) {
         alert('Error assigning party codes: ' + e.message + '\n\nMake sure you have run the SQL:\nALTER TABLE parties ADD COLUMN IF NOT EXISTS party_code TEXT;');
     }
 }
@@ -12490,8 +12561,8 @@ async function renderCompanySetup() {
                 <label>Company Logo</label>
                 <div style="display:flex;align-items:center;gap:16px;margin-bottom:8px">
                     ${co.logo ? `<img src="${co.logo}" style="max-height:60px;max-width:180px;object-fit:contain;border:1px solid var(--border);border-radius:8px;padding:4px" alt="Logo">` : '<div style="width:80px;height:50px;background:var(--bg-input);border:1px dashed var(--border);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:0.8rem;color:var(--text-muted)">No Logo</div>'}
-                    <div><button class="btn btn-outline btn-sm" onclick="document.getElementById('logo-upload').click()">📷 Upload Logo</button>
-                    ${co.logo ? ' <button class="btn btn-outline btn-sm" onclick="removeCompanyLogo()">✕ Remove</button>' : ''}</div>
+                    <div><button class="btn btn-outline btn-sm" onclick="document.getElementById('logo-upload').click()"> Upload Logo</button>
+                    ${co.logo ? ' <button class="btn btn-outline btn-sm" onclick="removeCompanyLogo()"> Remove</button>' : ''}</div>
                 </div>
                 <input type="file" id="logo-upload" accept="image/*" style="display:none" onchange="handleLogoUpload(event)">
             </div>
@@ -12502,18 +12573,18 @@ async function renderCompanySetup() {
             <div class="form-row"><div class="form-group"><label>City</label><input id="f-co-city" value="${co.city || ''}"></div>
             <div class="form-group"><label>UPI ID (Optional)</label><input id="f-co-upi" value="${co.upi || ''}" placeholder="e.g. 9876543210@upi"></div></div>
             <div class="form-group">
-                <label>🏭 Warehouse / Office GPS <small style="color:var(--text-muted)">(used for route sheet distance sorting)</small></label>
+                <label> Warehouse / Office GPS <small style="color:var(--text-muted)">(used for route sheet distance sorting)</small></label>
                 <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
                     <input type="number" step="any" id="f-co-wlat" value="${co.warehouseLat || ''}" placeholder="Latitude" style="flex:1;min-width:120px">
                     <input type="number" step="any" id="f-co-wlng" value="${co.warehouseLng || ''}" placeholder="Longitude" style="flex:1;min-width:120px">
-                    <button class="btn btn-outline btn-sm" type="button" onclick="captureWarehouseGps()">📍 Live Location</button>
+                    <button class="btn btn-outline btn-sm" type="button" onclick="captureWarehouseGps()"> Live Location</button>
                 </div>
-                ${co.warehouseLat ? `<small style="color:var(--success)">✅ Set: ${(+co.warehouseLat).toFixed(5)}, ${(+co.warehouseLng).toFixed(5)}</small>` : `<small style="color:var(--text-muted)">Not set — route sheet will not sort by distance until configured.</small>`}
+                ${co.warehouseLat ? `<small style="color:var(--success)"> Set: ${(+co.warehouseLat).toFixed(5)}, ${(+co.warehouseLng).toFixed(5)}</small>` : `<small style="color:var(--text-muted)">Not set  route sheet will not sort by distance until configured.</small>`}
             </div>
             <button class="btn btn-primary" onclick="saveCompanySetup()">Save Changes</button>
         </div></div>
         <div class="card" style="margin-top:20px"><div class="card-body padded">
-    <h3 style="margin-bottom:16px;font-size:1rem">📒 Vyapar Invoice Settings</h3>
+    <h3 style="margin-bottom:16px;font-size:1rem"> Vyapar Invoice Settings</h3>
     <p style="font-size:0.82rem;color:var(--text-muted);margin-bottom:14px">Set the prefix and current number for Vyapar Invoice No. This auto-increments on each sale invoice save.</p>
     <div class="form-row">
         <div class="form-group">
@@ -12531,25 +12602,25 @@ async function renderCompanySetup() {
     <button class="btn btn-primary" onclick="saveVyaparSetup()">Save Vyapar Settings</button>
 </div></div>
         <div class="card" style="margin-top:20px"><div class="card-body padded">
-    <h3 style="margin-bottom:6px;font-size:1rem">🔢 Number Series Setup</h3>
+    <h3 style="margin-bottom:6px;font-size:1rem"> Number Series Setup</h3>
     <p style="font-size:0.82rem;color:var(--text-muted);margin-bottom:16px">Configure prefixes and starting numbers for all auto-generated codes.</p>
-    ${(()=>{
-        const ns = DB.ls.getObj('db_number_series') || {};
-        const rows = [
-            { key:'inv',   label:'Sale Invoice',    defPrefix:'INV-',   defStart:1 },
-            { key:'pur',   label:'Purchase Invoice', defPrefix:'PUR-',   defStart:1 },
-            { key:'so',    label:'Sales Order',      defPrefix:'SO-',    defStart:1 },
-            { key:'po',    label:'Purchase Order',   defPrefix:'PO-',    defStart:1 },
-            { key:'cust',  label:'Customer Code',    defPrefix:'CUST-',  defStart:1 },
-            { key:'supp',  label:'Supplier Code',    defPrefix:'SUP-',   defStart:1 },
-        ];
-        return `<div class="table-wrapper"><table class="data-table">
+    ${(() => {
+            const ns = DB.ls.getObj('db_number_series') || {};
+            const rows = [
+                { key: 'inv', label: 'Sale Invoice', defPrefix: 'INV-', defStart: 1 },
+                { key: 'pur', label: 'Purchase Invoice', defPrefix: 'PUR-', defStart: 1 },
+                { key: 'so', label: 'Sales Order', defPrefix: 'SO-', defStart: 1 },
+                { key: 'po', label: 'Purchase Order', defPrefix: 'PO-', defStart: 1 },
+                { key: 'cust', label: 'Customer Code', defPrefix: 'CUST-', defStart: 1 },
+                { key: 'supp', label: 'Supplier Code', defPrefix: 'SUP-', defStart: 1 },
+            ];
+            return `<div class="table-wrapper"><table class="data-table">
             <thead><tr><th>Series</th><th>Prefix</th><th>Padding (digits)</th><th>Next No.</th><th>Preview</th></tr></thead>
             <tbody>${rows.map(r => {
-                const prefix = ns[r.key+'_prefix'] !== undefined ? ns[r.key+'_prefix'] : r.defPrefix;
-                const start  = ns[r.key+'_start']  !== undefined ? ns[r.key+'_start']  : r.defStart;
-                const pad    = ns[r.key+'_pad']    !== undefined ? ns[r.key+'_pad']    : 5;
-                const preview = prefix + String(start).padStart(pad,'0');
+                const prefix = ns[r.key + '_prefix'] !== undefined ? ns[r.key + '_prefix'] : r.defPrefix;
+                const start = ns[r.key + '_start'] !== undefined ? ns[r.key + '_start'] : r.defStart;
+                const pad = ns[r.key + '_pad'] !== undefined ? ns[r.key + '_pad'] : 5;
+                const preview = prefix + String(start).padStart(pad, '0');
                 return `<tr>
                     <td style="font-weight:600;font-size:0.88rem">${r.label}</td>
                     <td><input id="ns-${r.key}-prefix" value="${escapeHtml(prefix)}" style="width:90px;font-family:monospace" oninput="updateNsPreview('${r.key}')"></td>
@@ -12560,10 +12631,10 @@ async function renderCompanySetup() {
             }).join('')}</tbody>
         </table></div>
         <button class="btn btn-primary" style="margin-top:14px" onclick="saveNumberSeries()">Save Number Series</button>`;
-    })()}
+        })()}
 </div></div>
         <div class="card" style="margin-top:20px"><div class="card-body padded">
-    <h3 style="margin-bottom:16px;font-size:1rem">💳 Payment Reference No. Settings</h3>
+    <h3 style="margin-bottom:16px;font-size:1rem"> Payment Reference No. Settings</h3>
     <p style="font-size:0.82rem;color:var(--text-muted);margin-bottom:14px">Set the prefix and starting number for Payment receipts. Auto-increments on each payment saved.</p>
     <div class="form-row">
         <div class="form-group">
@@ -12581,16 +12652,16 @@ async function renderCompanySetup() {
     <button class="btn btn-primary" onclick="savePaySetup()">Save Payment Settings</button>
 </div></div>
         <div class="card" style="margin-top:20px"><div class="card-body padded">
-            <h3 style="margin-bottom:6px;font-size:1rem">⏱️ Payment Terms Master</h3>
+            <h3 style="margin-bottom:6px;font-size:1rem"> Payment Terms Master</h3>
             <p style="font-size:0.82rem;color:var(--text-muted);margin-bottom:14px">Define payment terms used on party accounts. These drive due date and aging calculations automatically.</p>
             <div class="table-wrapper">
                 <table class="data-table" style="margin-bottom:12px">
                     <thead><tr><th>Term Name</th><th style="width:110px">Days</th><th style="width:50px"></th></tr></thead>
                     <tbody id="pt-list-body">
-                        ${getPaymentTermsList().map((t,i) => `<tr>
+                        ${getPaymentTermsList().map((t, i) => `<tr>
                             <td><input id="pt-name-${i}" value="${escapeHtml(t.name)}" style="width:100%;border:none;background:transparent;font-size:0.9rem" placeholder="e.g. Net 30"></td>
                             <td><input id="pt-days-${i}" type="number" value="${t.days}" min="0" style="width:80px;border:none;background:transparent;font-weight:600;text-align:center"></td>
-                            <td><button class="btn-icon" style="color:var(--danger)" onclick="deletePaymentTerm(${i})" title="Delete">🗑️</button></td>
+                            <td><button class="btn-icon" style="color:var(--danger)" onclick="deletePaymentTerm(${i})" title="Delete"></button></td>
                         </tr>`).join('')}
                     </tbody>
                 </table>
@@ -12601,7 +12672,7 @@ async function renderCompanySetup() {
             </div>
         </div></div>
         <div class="card" style="margin-top:20px"><div class="card-body padded">
-            <h3 style="margin-bottom:16px;font-size:1rem">📦 Inventory Settings</h3>
+            <h3 style="margin-bottom:16px;font-size:1rem"> Inventory Settings</h3>
             <div style="display:flex;align-items:flex-start;gap:14px;padding:14px;background:rgba(99,102,241,0.05);border:1px solid rgba(99,102,241,0.18);border-radius:10px">
                 <input type="checkbox" id="f-allow-neg-stock" ${co.allowNegativeStock ? 'checked' : ''} style="margin-top:3px;width:18px;height:18px;cursor:pointer">
                 <div>
@@ -12612,39 +12683,39 @@ async function renderCompanySetup() {
             <button class="btn btn-primary" style="margin-top:14px" onclick="saveInventorySettings()">Save Inventory Settings</button>
         </div></div>
         <div class="card" style="margin-top:20px"><div class="card-body padded">
-            <h3 style="margin-bottom:10px;font-size:1rem">📲 Fast2SMS — OTP Settings</h3>
-            <p style="font-size:0.82rem;color:var(--text-muted);margin-bottom:14px">Automatically sends OTP to customers on the Customer Portal. Get API key from fast2sms.com → Dev → API.</p>
+            <h3 style="margin-bottom:10px;font-size:1rem"> Fast2SMS  OTP Settings</h3>
+            <p style="font-size:0.82rem;color:var(--text-muted);margin-bottom:14px">Automatically sends OTP to customers on the Customer Portal. Get API key from fast2sms.com  Dev  API.</p>
             <div class="form-group">
                 <label>Fast2SMS API Key</label>
                 <div style="display:flex;gap:8px">
                     <input type="password" id="f-f2s-key" value="${co.fast2smsKey || ''}" placeholder="Paste your Fast2SMS API key here" style="flex:1">
-                    <button class="btn btn-outline btn-sm" type="button" onclick="const el=document.getElementById('f-f2s-key');el.type=el.type==='password'?'text':'password'">👁</button>
+                    <button class="btn btn-outline btn-sm" type="button" onclick="const el=document.getElementById('f-f2s-key');el.type=el.type==='password'?'text':'password'"></button>
                 </div>
             </div>
             <button class="btn btn-primary" onclick="saveF2SKey()">Save SMS Key</button>
-            ${co.fast2smsKey ? ' <span style="margin-left:12px;font-size:0.82rem;color:var(--success)">✅ OTP will be sent via SMS automatically</span>' : ' <span style="margin-left:12px;font-size:0.82rem;color:var(--text-muted)">No key set — OTP shown on screen only</span>'}
+            ${co.fast2smsKey ? ' <span style="margin-left:12px;font-size:0.82rem;color:var(--success)"> OTP will be sent via SMS automatically</span>' : ' <span style="margin-left:12px;font-size:0.82rem;color:var(--text-muted)">No key set  OTP shown on screen only</span>'}
         </div></div>
         <div class="card" style="margin-top:20px"><div class="card-body padded">
-            <h3 style="margin-bottom:10px;font-size:1rem">🔧 Admin Tools</h3>
+            <h3 style="margin-bottom:10px;font-size:1rem"> Admin Tools</h3>
             <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:14px">Maintenance tools for data integrity and bulk operations.</p>
             <div style="display:flex;gap:10px;flex-wrap:wrap">
-                <button class="btn btn-outline" onclick="healStockLedger()">🩺 Heal Stock Ledger</button>
-                <button class="btn btn-outline" style="border-color:#f59e0b;color:#f59e0b" onclick="autoAssignPartyCodes()">🔄 Auto-assign Party Codes</button>
+                <button class="btn btn-outline" onclick="healStockLedger()"> Heal Stock Ledger</button>
+                <button class="btn btn-outline" style="border-color:#f59e0b;color:#f59e0b" onclick="autoAssignPartyCodes()"> Auto-assign Party Codes</button>
             </div>
         </div></div>
         <div class="card" style="margin-top:20px"><div class="card-body padded">
-            <h3 style="margin-bottom:10px;font-size:1rem">💾 Data Backup & Restore</h3>
+            <h3 style="margin-bottom:10px;font-size:1rem"> Data Backup & Restore</h3>
             <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:14px">Export all app data as JSON backup, or restore from a previous backup.</p>
             <div style="display:flex;gap:10px;flex-wrap:wrap">
-                <button class="btn btn-primary" onclick="exportDataBackup()">📤 Export Backup</button>
-                <button class="btn btn-outline" onclick="importDataBackup()">📥 Import Backup</button>
+                <button class="btn btn-primary" onclick="downloadFullDatabaseBackup()"> Download Cloud Backup</button>
+                <button class="btn btn-outline" onclick="importDataBackup()"> Import Backup</button>
             </div>
             <input type="file" id="backup-file-input" accept=".json" style="display:none" onchange="processBackupImport(event)">
         </div></div>
         <div class="card" style="margin-top:20px"><div class="card-body padded">
-            <h3 style="margin-bottom:10px;font-size:1rem;color:var(--danger)">⚠️ Danger Zone</h3>
+            <h3 style="margin-bottom:10px;font-size:1rem;color:var(--danger)"> Danger Zone</h3>
             <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:14px">Selectively delete entries or master data. Cannot be undone.</p>
-            <button class="btn btn-danger" onclick="openSmartReset()">🗑️ Reset Data</button>
+            <button class="btn btn-danger" onclick="openSmartReset()"> Reset Data</button>
         </div></div>`;
 }
 async function saveCompanySetup() {
@@ -12703,16 +12774,46 @@ function addPaymentTermRow() {
     const tr = document.createElement('tr');
     tr.innerHTML = `<td><input id="pt-name-${i}" style="width:100%;border:none;background:transparent;font-size:0.9rem" placeholder="e.g. Net 30"></td>
         <td><input id="pt-days-${i}" type="number" min="0" value="0" style="width:80px;border:none;background:transparent;font-weight:600;text-align:center"></td>
-        <td><button class="btn-icon" style="color:var(--danger)" onclick="this.closest('tr').remove()" title="Delete">🗑️</button></td>`;
+        <td><button class="btn-icon" style="color:var(--danger)" onclick="this.closest('tr').remove()" title="Delete"></button></td>`;
     tbody.appendChild(tr);
     const inp = document.getElementById('pt-name-' + i);
     if (inp) inp.focus();
 }
-async function deletePaymentTerm(idx) {
-    const terms = getPaymentTermsList().filter((_,i) => i !== idx);
-    const co = DB.getObj('db_company') || {};
-    await DB.saveSettings('db_company', { ...co, paymentTermsList: terms });
-    renderCompanySetup();
+async function deletePayment(id) {
+    if (!DB.canEdit()) {
+        return alert("Access Denied: Only Admin or users with Edit permission can delete records.");
+    }
+    if (!confirm('Delete payment? Effects will be reversed.')) return;
+    try {
+        const payments = await DB.getAll('payments');
+        const pay = payments.find(p => p.id === id);
+        if (pay) {
+            const parties = await DB.getAll('parties');
+            const party = parties.find(p => p.id === pay.partyId);
+
+            // 1. Correctly calculate the total reduction to reverse
+            const reductionToReverse = pay.total_reduction || pay.totalReduction || (pay.amount + (pay.discount || 0));
+
+            if (party) {
+                const balChange = pay.type === 'in' ? reductionToReverse : -reductionToReverse;
+                const newBal = (party.balance || 0) + balChange;
+                await DB.update('parties', party.id, { balance: newBal });
+                await addPartyLedgerEntry(party.id, party.name, 'Payment Deleted', balChange, pay.invoiceNo || 'Advance', 'Payment Deleted');
+            }
+
+            // 2. Delete the associated discount expense from P&L if it exists
+            if (pay.discount > 0 && pay.type === 'in') {
+                const expenses = await DB.getAll('expenses');
+                const exp = expenses.find(e => e.category === 'Payment Discount' && e.docNo === (pay.payNo || pay.id));
+                if (exp) await DB.delete('expenses', exp.id);
+            }
+        }
+        await DB.delete('payments', id);
+        await renderPayments();
+        showToast('Payment deleted!', 'warning');
+    } catch (err) {
+        alert('Error: ' + err.message);
+    }
 }
 async function healStockLedger() {
     if (!confirm('This will scan all items and create correction ledger entries for any discrepancies. Continue?')) return;
@@ -12731,7 +12832,7 @@ async function healStockLedger() {
         }
     }
     if (!fixed) {
-        showToast('✅ All items balanced — no discrepancies found!', 'success');
+        showToast(' All items balanced  no discrepancies found!', 'success');
     } else {
         alert(`Healed ${fixed} item(s):\n\n${report.join('\n')}`);
         showToast(`Healed ${fixed} ledger discrepancy(s)`, 'success');
@@ -12740,7 +12841,7 @@ async function healStockLedger() {
 function handleLogoUpload(event) {
     const file = event.target.files[0];
     if (!file) return;
-    
+
     showToast('Processing logo...', 'info');
     compressImage(file, { maxWidth: 512, quality: 0.8 }).then(async dataUrl => {
         const co = DB.getObj('db_company');
@@ -12762,15 +12863,15 @@ async function removeCompanyLogo() {
 }
 function openSmartReset() {
     window._resetOption = 'entries';
-    openModal('🗑️ Reset Data', `
+    openModal(' Reset Data', `
         <p style="color:var(--text-secondary);font-size:0.88rem;margin-bottom:14px">Choose what to delete. This <strong>cannot be undone</strong>.</p>
         <div id="reset-opt-entries" class="reset-option-card active" onclick="selectResetOption('entries')">
-            <div style="font-weight:700">📋 Entries Only</div>
+            <div style="font-weight:700"> Entries Only</div>
             <div style="font-size:0.8rem;color:var(--text-muted);margin-top:4px">Orders, Invoices, Payments, Expenses, Packing, Delivery, Ledger entries</div>
-            <div style="font-size:0.78rem;color:var(--success);margin-top:4px">✅ Masters (Parties, Items, etc.) kept</div>
+            <div style="font-size:0.78rem;color:var(--success);margin-top:4px"> Masters (Parties, Items, etc.) kept</div>
         </div>
         <div id="reset-opt-all" class="reset-option-card" onclick="selectResetOption('all')" style="margin-top:10px">
-            <div style="font-weight:700">💣 Entries + Masters</div>
+            <div style="font-weight:700"> Entries + Masters</div>
             <div style="font-size:0.8rem;color:var(--text-muted);margin-top:4px">Transactions AND selected master data</div>
         </div>
         <div id="reset-masters-section" style="display:none;margin-top:12px;padding:12px;background:var(--bg-input);border-radius:var(--radius-md)">
@@ -12789,7 +12890,7 @@ function openSmartReset() {
             <input id="reset-confirm-input" type="text" class="form-input" placeholder="RESET" style="margin-top:6px;font-weight:700;letter-spacing:2px;text-transform:uppercase">
         </div>`,
         `<button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-         <button class="btn btn-danger" onclick="executeSmartReset()">🗑️ Reset Now</button>`);
+         <button class="btn btn-danger" onclick="executeSmartReset()"> Reset Now</button>`);
 }
 
 function selectResetOption(opt) {
@@ -12806,18 +12907,18 @@ async function executeSmartReset() {
     const entryTables = ['sales_orders', 'invoices', 'payments', 'expenses', 'stock_ledger', 'party_ledger', 'delivery'];
     const entryLsKeys = ['db_salesorders', 'db_invoices', 'db_payments', 'db_expenses', 'db_packing', 'db_delivery', 'db_stock_ledger', 'db_party_ledger', 'db_counters'];
     const masterMap = [
-        { id: 'rm-parties',    supabase: 'parties',          ls: 'db_parties' },
-        { id: 'rm-inventory',  supabase: 'inventory',        ls: 'db_inventory' },
-        { id: 'rm-categories', supabase: 'categories',       ls: 'db_categories' },
-        { id: 'rm-uom',        supabase: 'uom',              ls: 'db_uom' },
-        { id: 'rm-brands',     supabase: null,               ls: 'db_brands' },
+        { id: 'rm-parties', supabase: 'parties', ls: 'db_parties' },
+        { id: 'rm-inventory', supabase: 'inventory', ls: 'db_inventory' },
+        { id: 'rm-categories', supabase: 'categories', ls: 'db_categories' },
+        { id: 'rm-uom', supabase: 'uom', ls: 'db_uom' },
+        { id: 'rm-brands', supabase: null, ls: 'db_brands' },
         { id: 'rm-delpersons', supabase: 'delivery_persons', ls: 'db_delivery_persons' },
-        { id: 'rm-packers',    supabase: 'packers',          ls: 'db_packers' },
-        { id: 'rm-users',      supabase: 'users',            ls: 'db_users' },
+        { id: 'rm-packers', supabase: 'packers', ls: 'db_packers' },
+        { id: 'rm-users', supabase: 'users', ls: 'db_users' },
     ];
 
     const btn = document.querySelector('#modal-overlay .btn-danger');
-    if (btn) { btn.disabled = true; btn.textContent = '⏳ Resetting...'; }
+    if (btn) { btn.disabled = true; btn.textContent = ' Resetting...'; }
 
     try {
         for (const t of entryTables) {
@@ -12841,54 +12942,69 @@ async function executeSmartReset() {
         closeModal();
         showToast('Reset complete! Reloading...', 'success');
         setTimeout(() => location.reload(), 1200);
-    } catch(e) {
+    } catch (e) {
         showToast('Reset failed: ' + e.message, 'error');
-        if (btn) { btn.disabled = false; btn.textContent = '🗑️ Reset Now'; }
+        if (btn) { btn.disabled = false; btn.textContent = ' Reset Now'; }
     }
 }
 
-// --- Data Backup & Restore ---
-function exportDataBackup() {
-    const keys = ['db_users', 'db_parties', 'db_inventory', 'db_invoices', 'db_payments', 'db_expenses', 'db_packing', 'db_delivery', 'db_salesorders', 'db_delivery_persons', 'db_packers', 'db_stock_ledger', 'db_party_ledger', 'db_company', 'db_counters', 'db_categories', 'db_uom', 'db_brands', 'db_tax_settings'];
-    const backup = {};
-    keys.forEach(k => { backup[k] = localStorage.getItem(k); });
-    backup._meta = { exportedAt: new Date().toISOString(), version: '1.0' };
-    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = 'distromanager_backup_' + today() + '.json';
-    document.body.appendChild(a); a.click();
-    setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
-    showToast('Backup exported successfully!', 'success');
-}
-function importDataBackup() {
-    const input = $('backup-file-input');
-    if (input) { input.value = ''; input.click(); }
-}
-function processBackupImport(event) {
-    const file = event.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = function (e) {
-        try {
-            const backup = JSON.parse(e.target.result);
-            if (!backup.db_users && !backup.db_company) {
-                alert('Invalid backup file. Missing required data.'); return;
+// --- Supabase Full Cloud Data Backup ---
+window.downloadFullDatabaseBackup = async function () {
+    // Only allow Admins to pull a full database dump
+    if (!currentUser || currentUser.role !== 'Admin') {
+        return alert("Access Denied: Only Administrators can download a full database backup.");
+    }
+
+    showToast('Initiating full cloud database backup. Please wait...', 'info', 4000);
+
+    try {
+        // List of all your actual Supabase tables
+        const tables = [
+            'users', 'parties', 'inventory', 'sales_orders', 'purchase_orders',
+            'invoices', 'payments', 'expenses', 'stock_ledger', 'party_ledger',
+            'categories', 'uom', 'brands', 'packers', 'delivery_persons', 'delivery',
+            'settings', 'staff', 'attendance', 'salary_records', 'salary_advances',
+            'customer_registrations', 'customer_otps'
+        ];
+
+        const backupData = {
+            _meta: {
+                exportedAt: new Date().toISOString(),
+                version: '2.0 (Supabase Cloud Backup)',
+                generatedBy: currentUser.name
             }
-            if (!confirm('This will REPLACE all current data with the backup. Continue?')) return;
-            Object.keys(backup).forEach(k => {
-                if (k !== '_meta' && backup[k] !== null) {
-                    localStorage.setItem(k, backup[k]);
-                }
-            });
-            showToast('Backup restored! Reloading...', 'success');
-            setTimeout(() => location.reload(), 1500);
-        } catch (err) {
-            alert('Error reading backup file: ' + err.message);
-        }
-    };
-    reader.readAsText(file);
-}
+        };
+
+        // Fetch all data from Supabase concurrently to make it fast
+        const promises = tables.map(async (table) => {
+            const { data, error } = await supabaseClient.from(table).select('*');
+            if (error) throw new Error(`Failed to fetch ${table}: ${error.message}`);
+            backupData[table] = data || [];
+        });
+
+        // Wait for all tables to finish downloading
+        await Promise.all(promises);
+
+        // Package it into a JSON file and trigger download
+        const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `DistroManager_Cloud_Backup_${today()}.json`;
+        document.body.appendChild(a);
+        a.click();
+
+        setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+        showToast(' Full database backup downloaded successfully!', 'success');
+
+        // Note: Save today's date so we know a backup was taken today
+        DB.ls.set('last_backup_date', today());
+
+    } catch (err) {
+        console.error('Backup failed:', err);
+        alert('Backup failed: ' + err.message);
+    }
+};
 
 function openDedicatedPartyLedger(partyId) {
     currentLedgerPartyId = partyId;
@@ -12918,11 +13034,11 @@ async function renderPartyLedgerLayout() {
     pageContent.innerHTML = `
         <div class="section-toolbar">
             <h3 style="font-size:1rem;display:flex;align-items:center;gap:10px">
-                <button class="btn-icon" onclick="navigateTo('parties')" title="Back to Parties">⬅️</button>
-                📜 Ledger: ${party.name} <span class="badge ${party.type === 'Customer' ? 'badge-success' : 'badge-info'}" style="font-size:0.7rem">${party.type}</span>
+                <button class="btn-icon" onclick="navigateTo('parties')" title="Back to Parties"></button>
+                 Ledger: ${party.name} <span class="badge ${party.type === 'Customer' ? 'badge-success' : 'badge-info'}" style="font-size:0.7rem">${party.type}</span>
             </h3>
             <div class="filter-group">
-                <button class="btn btn-outline btn-sm" onclick="exportPartyLedger('${partyId}')">📥 Export Excel</button>
+                <button class="btn btn-outline btn-sm" onclick="exportPartyLedger('${partyId}')"> Export Excel</button>
             </div>
         </div>
         <div class="card" style="margin-bottom:15px">
@@ -12964,9 +13080,9 @@ async function renderPartyLedgerLayout() {
                         <tbody id="party-ledger-tbody">
                             ${ledger.slice().reverse().map(e => {
         const entryType = e.type || e.entryType || '-';
-        const docNo     = e.docNo || e.documentNo || '';
-        const bal       = e._runningBalance !== undefined ? e._runningBalance : '';
-        const reason    = e.notes || e.reason || '';
+        const docNo = e.docNo || e.documentNo || '';
+        const bal = e._runningBalance !== undefined ? e._runningBalance : '';
+        const reason = e.notes || e.reason || '';
         let docBalCell = '<td style="font-size:0.82rem;color:var(--text-muted)">-</td>';
         if (entryType.includes('Invoice') && docNo) {
             const allInvs = DB.cache['invoices'] || DB.get('db_invoices') || [];
@@ -12980,7 +13096,7 @@ async function renderPartyLedgerLayout() {
                 });
                 const due = inv.total - paid;
                 const dueColor = due <= 0.01 ? 'var(--success)' : 'var(--danger)';
-                docBalCell = `<td style="font-size:0.85rem;font-weight:600;color:${dueColor};white-space:nowrap">${due <= 0.01 ? '✅ Settled' : '₹' + due.toFixed(2)}</td>`;
+                docBalCell = `<td style="font-size:0.85rem;font-weight:600;color:${dueColor};white-space:nowrap">${due <= 0.01 ? ' Settled' : '' + due.toFixed(2)}</td>`;
             }
         } else if ((entryType === 'Payment In' || entryType === 'Payment Out') && docNo) {
             const allPays = DB.cache['payments'] || DB.get('db_payments') || [];
@@ -12992,16 +13108,16 @@ async function renderPartyLedgerLayout() {
                     // Advance with explicit per-invoice allocations
                     Object.values(pay.allocations).forEach(v => allocated += (+v || 0));
                 } else if (pay.invoiceNo && pay.invoiceNo !== 'Advance' && pay.invoiceNo !== 'Multi' && pay.invoiceNo !== '') {
-                    // Direct payment linked to one invoice — only consume up to that invoice's total
+                    // Direct payment linked to one invoice  only consume up to that invoice's total
                     const allInvs2 = DB.cache['invoices'] || DB.get('db_invoices') || [];
                     const linkedInv = allInvs2.find(i => i.invoiceNo === pay.invoiceNo);
                     allocated = linkedInv ? Math.min(pay.amount || 0, linkedInv.total || 0) : (pay.amount || 0);
                 }
                 const unallocated = (pay.amount || 0) - allocated;
                 if (unallocated <= 0.01) {
-                    docBalCell = `<td style="font-size:0.85rem;font-weight:600;color:var(--success);white-space:nowrap">✅ Fully Applied</td>`;
+                    docBalCell = `<td style="font-size:0.85rem;font-weight:600;color:var(--success);white-space:nowrap"> Fully Applied</td>`;
                 } else {
-                    docBalCell = `<td style="font-size:0.85rem;font-weight:600;color:var(--warning);white-space:nowrap">₹${unallocated.toFixed(2)} Advance</td>`;
+                    docBalCell = `<td style="font-size:0.85rem;font-weight:600;color:var(--warning);white-space:nowrap">${unallocated.toFixed(2)} Advance</td>`;
                 }
             }
         }
@@ -13017,15 +13133,15 @@ async function renderPartyLedgerLayout() {
                                 <td style="font-size:0.8rem">${e.createdBy || '-'}</td>
                                 <td>
                                     <div class="action-btns" style="flex-wrap:nowrap">
-                                        ${entryType.includes('Invoice') && docNo ? `<button class="btn-icon" onclick="showPaymentHistory('${partyId}', '${docNo}')" title="Payment History">💳</button>` : ''}
-                                        ${canEdit() ? `<button class="btn-icon" onclick="editPartyLedgerEntry('${partyId}','${e.id}')" title="Edit Entry">✏️</button><button class="btn-icon" onclick="deletePartyLedgerEntry('${partyId}','${e.id}')" title="Delete Entry" style="color:var(--danger)">🗑️</button>` : ''}
+                                        ${entryType.includes('Invoice') && docNo ? `<button class="btn-icon" onclick="showPaymentHistory('${partyId}', '${docNo}')" title="Payment History"></button>` : ''}
+                                        ${canEdit() ? `<button class="btn-icon" onclick="editPartyLedgerEntry('${partyId}','${e.id}')" title="Edit Entry"></button><button class="btn-icon" onclick="deletePartyLedgerEntry('${partyId}','${e.id}')" title="Delete Entry" style="color:var(--danger)"></button>` : ''}
                                     </div>
                                 </td>
                             </tr>`;
     }).join('')}
                         </tbody>
                     </table>
-                </div>` : '<div class="empty-state" style="padding:40px"><div class="empty-icon">📜</div><p>No transactions recorded yet.</p></div>'}
+                </div>` : '<div class="empty-state" style="padding:40px"><div class="empty-icon"></div><p>No transactions recorded yet.</p></div>'}
             </div>
         </div>
     `;
@@ -13049,17 +13165,17 @@ async function showPaymentHistory(partyId, invoiceNo) {
     const modalTitle = invoiceNo ? `Payment History for ${invoiceNo}` : 'Payment History';
 
     if (!partyPayments.length) {
-        openModal(modalTitle, '<div class="empty-state"><span class="empty-icon">💳</span><p>No payment records found for this invoice.</p></div>');
+        openModal(modalTitle, '<div class="empty-state"><span class="empty-icon"></span><p>No payment records found for this invoice.</p></div>');
         return;
     }
 
     // Build the rows: each payment with its date, ref, type, and linked amount
     let totalLinked = 0;
     const rows = partyPayments.map(p => {
-        const dt = p.date ? new Date(p.date).toLocaleDateString('en-IN', {day:'2-digit', month:'2-digit', year:'numeric'}) : '-';
+        const dt = p.date ? new Date(p.date).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '-';
         const refNo = p.payNo || p.id || '-';
         const txType = p.type === 'out' ? 'Payment-Out' : 'Payment-In';
-        
+
         let linkedAmt = 0;
         let linkedInfo = '';
         if (p.allocations && invoiceNo && p.allocations[invoiceNo]) {
@@ -13078,7 +13194,7 @@ async function showPaymentHistory(partyId, invoiceNo) {
                 linkedInfo = 'Advance';
             }
         }
-        
+
         totalLinked += linkedAmt;
 
         return `<tr>
@@ -13144,14 +13260,14 @@ function editPartyLedgerEntry(partyId, ledgerId) {
     if (!entry) return;
     openModal('Edit Ledger Entry', `
         <div style="font-size:0.85rem;color:var(--warning);margin-bottom:15px">
-            ⚠️ <strong>Warning:</strong> Editing system-generated entries (like Invoice Postings) here will NOT update the original invoice document. This only adjusts the ledger line and running balance.
+             <strong>Warning:</strong> Editing system-generated entries (like Invoice Postings) here will NOT update the original invoice document. This only adjusts the ledger line and running balance.
         </div>
         <div class="form-row">
             <div class="form-group"><label>Date *</label><input type="date" id="f-ledg-date" value="${entry.date || today()}"></div>
             <div class="form-group"><label>Ref / Doc #</label><input id="f-ledg-doc" value="${entry.docNo || entry.documentNo || ''}"></div>
         </div>
         <div class="form-row">
-            <div class="form-group"><label>Amount ₹ * <span style="font-weight:normal;color:var(--text-muted)">(Positive = Cr/Received, Negative = Dr/Paid)</span></label>
+            <div class="form-group"><label>Amount  * <span style="font-weight:normal;color:var(--text-muted)">(Positive = Cr/Received, Negative = Dr/Paid)</span></label>
                 <input type="number" step="0.01" id="f-ledg-amount" value="${entry.amount}">
             </div>
         </div>
@@ -13179,7 +13295,7 @@ async function savePartyLedgerEntry(partyId, ledgerId) {
         closeModal();
         renderPartyLedgerLayout(); // Refresh UI (async, fetches fresh Supabase data)
         showToast('Ledger entry updated.', 'success');
-    } catch(err) {
+    } catch (err) {
         alert('Error saving: ' + (err.message || err));
     }
 }
@@ -13267,9 +13383,9 @@ async function renderUOM() {
     const container = $('inv-setup-content') || pageContent;
     container.innerHTML = `
         <div class="section-toolbar">
-            <h3 style="font-size:1rem">📏 Unit of Measurement Master</h3>
+            <h3 style="font-size:1rem"> Unit of Measurement Master</h3>
             <div class="filter-group">
-                <button class="btn btn-outline" onclick="triggerUomExcelImport()">📥 Import</button>
+                <button class="btn btn-outline" onclick="triggerUomExcelImport()"> Import</button>
                 <input type="file" id="f-uom-import" accept=".xlsx, .xls" style="display:none" onchange="importUomExcel(event)">
                 <button class="btn btn-primary" onclick="openUOMModal()">+ Add UOM</button>
             </div>
@@ -13281,8 +13397,8 @@ async function renderUOM() {
                     <td style="color:var(--text-primary);font-weight:600">${u.name}</td>
                     <td><span class="badge badge-info">${u.code || u.name}</span></td>
                     <td style="font-size:0.85rem;color:var(--text-muted)">${u.description || '-'}</td>
-                    <td><div class="action-btns"><button class="btn-icon" onclick="openUOMModal('${u.id}')">✏️</button><button class="btn-icon" onclick="deleteUOM('${u.id}')">🗑️</button></div></td>
-                </tr>`).join('') : '<tr><td colspan="4"><div class="empty-state"><div class="empty-icon">📏</div><p>No UOM entries yet. Add units like Pcs, Kg, Box, Ltr, Pack etc.</p></div></td></tr>'}</tbody></table>
+                    <td><div class="action-btns"><button class="btn-icon" onclick="openUOMModal('${u.id}')"></button><button class="btn-icon" onclick="deleteUOM('${u.id}')"></button></div></td>
+                </tr>`).join('') : '<tr><td colspan="4"><div class="empty-state"><div class="empty-icon"></div><p>No UOM entries yet. Add units like Pcs, Kg, Box, Ltr, Pack etc.</p></div></td></tr>'}</tbody></table>
             </div>
         </div></div>`;
 }
@@ -13295,14 +13411,14 @@ async function openUOMModal(id) {
         <div class="form-group"><label>Short Code</label><input id="f-uom-code" value="${u ? u.code || '' : ''}" placeholder="e.g. Kg"></div>
         <div class="form-group"><label>Description</label><input id="f-uom-desc" value="${u ? u.description || '' : ''}" placeholder="Optional description"></div>
         <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-        ${!id ? `<button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveUOM('')">＋ Save & New</button>` : ''}
+        ${!id ? `<button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveUOM('')"> Save & New</button>` : ''}
         <button class="btn btn-primary" onclick="saveUOM('${id || ''}')">Save UOM</button></div>`);
 }
 
 async function saveUOM(id) {
     const name = $('f-uom-name').value.trim(); if (!name) return alert('Unit name is required');
     const data = { name, code: $('f-uom-code').value.trim() || name, description: $('f-uom-desc').value.trim() };
-    
+
     try {
         if (id) {
             await DB.update('uom', id, data);
@@ -13341,7 +13457,7 @@ async function importUomExcel(e) {
         const data = await new Promise((resolve, reject) => {
             const reader = new FileReader();
             reader.onload = (e) => {
-                const workbook = XLSX.read(e.target.result, {type: 'binary'});
+                const workbook = XLSX.read(e.target.result, { type: 'binary' });
                 const firstSheet = workbook.SheetNames[0];
                 const excelRows = XLSX.utils.sheet_to_row_object_array(workbook.Sheets[firstSheet]);
                 resolve(excelRows);
@@ -13351,7 +13467,7 @@ async function importUomExcel(e) {
         });
 
         if (!data || data.length === 0) return alert('No data found in the Excel file.');
-        
+
         const existingUoms = await DB.getAll('uom');
         let added = 0;
         let updated = 0;
@@ -13390,7 +13506,7 @@ let _catalogAutoSyncInterval = null;
 
 async function renderCatalog() {
     // Ping GPS immediately when opening catalog
-    await getFreshLocationAndSort([], 'none'); 
+    await getFreshLocationAndSort([], 'none');
     // Setup background interval if not already running
     if (!_catalogAutoSyncInterval) {
         _catalogAutoSyncInterval = setInterval(() => {
@@ -13410,11 +13526,11 @@ async function renderCatalog() {
 
     pageContent.innerHTML = `
         <div style="margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;gap:10px">
-            <h2 style="font-size:1.2rem;margin:0">📦 Item Catalog</h2>
-            <button class="btn btn-outline btn-sm" onclick="syncCatalogData()">🔄 Sync Data</button>
+            <h2 style="font-size:1.2rem;margin:0"> Item Catalog</h2>
+            <button class="btn btn-outline btn-sm" onclick="syncCatalogData()"> Sync Data</button>
         </div>
         <div style="margin-bottom:16px;display:flex;gap:10px">
-            <input class="search-box" id="catalog-search" placeholder="🔍 Search products..." oninput="filterCatalog()" style="flex:1;font-size:1rem;padding:12px 16px;border-radius:12px">
+            <input class="search-box" id="catalog-search" placeholder=" Search products..." oninput="filterCatalog()" style="flex:1;font-size:1rem;padding:12px 16px;border-radius:12px">
             <select id="catalog-sort" class="search-box" style="width:auto;border-radius:12px" onchange="filterCatalog()">
                 <option value="">Sort: Default</option>
                 <option value="name-asc">Name: A to Z</option>
@@ -13429,9 +13545,9 @@ async function renderCatalog() {
         </div>
         <div id="catalog-subcat-pills" style="display:flex;gap:6px;overflow-x:auto;padding-bottom:8px;margin-bottom:8px;-webkit-overflow-scrolling:touch"></div>
         <div id="catalog-movement-pills" style="display:flex;gap:8px;margin-bottom:14px">
-            <button class="catalog-pill active" data-movement="" onclick="filterCatalogByMovement('')" style="font-size:0.75rem;padding:5px 12px">📦 All Items</button>
-            <button class="catalog-pill" data-movement="slow" onclick="filterCatalogByMovement('slow')" style="font-size:0.75rem;padding:5px 12px;border-color:var(--warning)">🐢 Slow Moving</button>
-            <button class="catalog-pill" data-movement="non" onclick="filterCatalogByMovement('non')" style="font-size:0.75rem;padding:5px 12px;border-color:var(--danger)">⛔ Non-Moving (10d)</button>
+            <button class="catalog-pill active" data-movement="" onclick="filterCatalogByMovement('')" style="font-size:0.75rem;padding:5px 12px"> All Items</button>
+            <button class="catalog-pill" data-movement="slow" onclick="filterCatalogByMovement('slow')" style="font-size:0.75rem;padding:5px 12px;border-color:var(--warning)"> Slow Moving</button>
+            <button class="catalog-pill" data-movement="non" onclick="filterCatalogByMovement('non')" style="font-size:0.75rem;padding:5px 12px;border-color:var(--danger)"> Non-Moving (10d)</button>
         </div>
         <div id="catalog-grid" class="catalog-grid">
             ${await renderCatalogCards(items)}
@@ -13451,8 +13567,8 @@ async function syncCatalogData(silent = false) {
 }
 
 async function renderCatalogCards(items) {
-    if (!items.length) return '<div class="empty-state" style="padding:40px"><div class="empty-icon">📦</div><p>No products found</p></div>';
-    
+    if (!items.length) return '<div class="empty-state" style="padding:40px"><div class="empty-icon"></div><p>No products found</p></div>';
+
     // Process all cards in parallel
     const cards = await Promise.all(items.map(async i => {
         const stockData = await getAvailableStock(i);
@@ -13472,15 +13588,15 @@ async function renderCatalogCards(items) {
                     <span class="catalog-uom-badge">${i.unit || 'Pcs'}</span>
                     ${i.secUom ? `<span class="catalog-uom-badge">${i.secUom}${i.secUomRatio ? ' (' + i.secUomRatio + ')' : ''}</span>` : ''}
                 </div>
-                <div class="catalog-card-price">₹${i.salePrice} <span style="font-size:0.75rem;color:var(--text-muted)">/ ${i.unit || 'Pcs'}</span></div>
-                ${i.mrp ? `<div style="font-size:0.72rem;color:var(--text-muted)">MRP: <span style="text-decoration:none">₹${i.mrp}</span></div>` : ''}
+                <div class="catalog-card-price">${i.salePrice} <span style="font-size:0.75rem;color:var(--text-muted)">/ ${i.unit || 'Pcs'}</span></div>
+                ${i.mrp ? `<div style="font-size:0.72rem;color:var(--text-muted)">MRP: <span style="text-decoration:none">${i.mrp}</span></div>` : ''}
                 <div style="background:var(--bg-body);padding:8px;border-radius:8px;margin-top:8px;border:1px solid var(--border)">
                     <div style="display:flex;justify-content:space-between;font-size:0.7rem;color:var(--text-secondary);margin-bottom:2px">
                         <span>Stock:</span>
                         <span>${stockData.stock} ${i.unit || 'Pcs'}</span>
                     </div>
                     <div onclick="showReservedDetails('${i.id}')" style="display:flex;justify-content:space-between;font-size:0.7rem;color:var(--warning);margin-bottom:4px;cursor:pointer">
-                        <span style="display:flex;align-items:center;gap:2px">ℹ️ Reserved:</span>
+                        <span style="display:flex;align-items:center;gap:2px"> Reserved:</span>
                         <span style="font-weight:600">${stockData.reserved} ${i.unit || 'Pcs'}</span>
                     </div>
                     <div style="display:flex;justify-content:space-between;font-size:0.85rem;color:${isLow ? 'var(--danger)' : 'var(--success)'};font-weight:700;border-top:1px dashed var(--border);padding-top:4px">
@@ -13492,7 +13608,7 @@ async function renderCatalogCards(items) {
             <div class="catalog-card-action">
                 ${cartEntries.length ? `<div style="width:100%">
                     ${cartEntries.map(ce => `<div style="display:flex;align-items:center;justify-content:center;gap:6px;${cartEntries.length > 1 ? 'margin-bottom:4px' : ''}">
-                        <button class="catalog-qty-btn" onclick="updateCartQty('${i.id}',-1,'${ce.unit}')">−</button>
+                        <button class="catalog-qty-btn" onclick="updateCartQty('${i.id}',-1,'${ce.unit}')"></button>
                         <span style="font-weight:700;min-width:24px;text-align:center">${ce.qty}</span>
                         <button class="catalog-qty-btn" onclick="updateCartQty('${i.id}',1,'${ce.unit}')">+</button>
                         <span style="font-size:0.72rem;color:var(--text-muted);min-width:28px">${ce.unit}</span>
@@ -13510,10 +13626,10 @@ function renderCatalogCartBar() {
     const totalAmt = catalogCart.reduce((s, c) => s + c.qty * c.price, 0);
     return `<div id="catalog-cart-bar" class="catalog-cart-bar">
         <div onclick="openCatalogCart()" style="cursor:pointer;display:flex;align-items:center;gap:10px;flex:1">
-            <span style="font-size:1.3rem">🛒</span>
-            <span><strong>${totalItems} item${totalItems > 1 ? 's' : ''}</strong> • ${currency(totalAmt)}</span>
+            <span style="font-size:1.3rem"></span>
+            <span><strong>${totalItems} item${totalItems > 1 ? 's' : ''}</strong>  ${currency(totalAmt)}</span>
         </div>
-        <button class="btn btn-primary btn-sm" onclick="createOrderFromCatalog()" style="border-radius:8px;font-weight:600">Create Order →</button>
+        <button class="btn btn-primary btn-sm" onclick="createOrderFromCatalog()" style="border-radius:8px;font-weight:600">Create Order </button>
     </div>`;
 }
 
@@ -13652,14 +13768,14 @@ async function addToCatalogCart(itemId, uom) {
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
                 <button class="btn btn-outline" style="padding:16px;border-radius:12px;display:flex;flex-direction:column;align-items:center;gap:6px" onclick="closeModal();addToCatalogCart('${itemId}','${priUnit}')">
-                    <span style="font-size:1.3rem">📦</span>
+                    <span style="font-size:1.3rem"></span>
                     <span style="font-weight:700">${priUnit}</span>
-                    <span style="font-size:0.85rem;color:var(--accent)">₹${item.salePrice}</span>
+                    <span style="font-size:0.85rem;color:var(--accent)">${item.salePrice}</span>
                 </button>
                 <button class="btn btn-outline" style="padding:16px;border-radius:12px;display:flex;flex-direction:column;align-items:center;gap:6px" onclick="closeModal();addToCatalogCart('${itemId}','${secUom}')">
-                    <span style="font-size:1.3rem">📋</span>
+                    <span style="font-size:1.3rem"></span>
                     <span style="font-weight:700">${secUom}</span>
-                    <span style="font-size:0.85rem;color:var(--accent)">₹${secPrice}${secRatio > 0 ? ` (1 ${priUnit} = ${secRatio} ${secUom})` : ''}</span>
+                    <span style="font-size:0.85rem;color:var(--accent)">${secPrice}${secRatio > 0 ? ` (1 ${priUnit} = ${secRatio} ${secUom})` : ''}</span>
                 </button>
             </div>
             <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button></div>`);
@@ -13746,7 +13862,7 @@ async function viewCatalogItem(itemId) {
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
             <div style="padding:10px;background:var(--bg-body);border-radius:8px"><div style="font-size:0.75rem;color:var(--text-muted)">Category</div><div style="font-weight:600">${i.category || '-'}${i.subCategory ? ' / ' + i.subCategory : ''}</div></div>
             <div style="padding:10px;background:var(--bg-body);border-radius:8px"><div style="font-size:0.75rem;color:var(--text-muted)">Unit</div><div style="font-weight:600">${i.unit || 'Pcs'}${i.secUom ? ' / ' + i.secUom : ''}</div></div>
-            <div style="padding:10px;background:var(--bg-body);border-radius:8px"><div style="font-size:0.75rem;color:var(--text-muted)">Sale Price</div><div style="font-weight:700;color:var(--accent)">₹${i.salePrice}</div></div>
+            <div style="padding:10px;background:var(--bg-body);border-radius:8px"><div style="font-size:0.75rem;color:var(--text-muted)">Sale Price</div><div style="font-weight:700;color:var(--accent)">${i.salePrice}</div></div>
             <div style="padding:10px;background:var(--bg-body);border-radius:8px"><div style="font-size:0.75rem;color:var(--text-muted)">Stock</div><div style="font-weight:600;color:${stockData.available <= (i.lowStockAlert || 5) ? 'var(--danger)' : 'var(--success)'}">${stockData.available} ${i.unit || 'Pcs'}</div></div>
         </div>
         ${i.itemCode ? `<div style="font-size:0.85rem;color:var(--text-muted);margin-bottom:8px">Code: <strong>${i.itemCode}</strong></div>` : ''}
@@ -13758,21 +13874,21 @@ async function viewCatalogItem(itemId) {
 async function openCatalogCart() {
     if (!catalogCart.length) return;
     const total = catalogCart.reduce((s, c) => s + c.qty * c.price, 0);
-    openModal('🛒 Cart', `
+    openModal(' Cart', `
         <div style="max-height:350px;overflow-y:auto">
             <div class="table-wrapper">
                 <table class="data-table"><thead><tr><th>Item</th><th>Qty</th><th>Unit</th><th>Price</th><th>Amount</th><th></th></tr></thead>
                 <tbody>${catalogCart.map((c, idx) => `<tr>
                     <td style="font-weight:600">${c.name}</td>
                     <td><div style="display:flex;align-items:center;gap:4px">
-                        <button class="catalog-qty-btn" onclick="updateCartQtyInModal(${idx},-1)">−</button>
+                        <button class="catalog-qty-btn" onclick="updateCartQtyInModal(${idx},-1)"></button>
                         <span style="font-weight:700">${c.qty}</span>
                         <button class="catalog-qty-btn" onclick="updateCartQtyInModal(${idx},1)">+</button>
                     </div></td>
                     <td><span class="catalog-uom-badge">${c.unit}</span></td>
-                    <td>₹${c.price}</td>
+                    <td>${c.price}</td>
                     <td class="amount-green" style="font-weight:600">${currency(c.qty * c.price)}</td>
-                    <td><button class="btn-icon" onclick="removeFromCartByIdx(${idx})" style="color:var(--danger)">🗑️</button></td>
+                    <td><button class="btn-icon" onclick="removeFromCartByIdx(${idx})" style="color:var(--danger)"></button></td>
                 </tr>`).join('')}</tbody></table>
             </div>
         </div>
@@ -13780,7 +13896,7 @@ async function openCatalogCart() {
         <div class="modal-actions">
             <button class="btn btn-outline" onclick="catalogCart=[];closeModal();renderCatalog()">Clear Cart</button>
             <button class="btn btn-outline" onclick="closeModal()">Continue Shopping</button>
-            <button class="btn btn-primary" onclick="closeModal();createOrderFromCatalog()">Create Order →</button>
+            <button class="btn btn-primary" onclick="closeModal();createOrderFromCatalog()">Create Order </button>
         </div>`);
 }
 
@@ -13864,7 +13980,7 @@ async function createOrderFromCatalog() {
 
     openModal('Create Sales Order (from Catalog)', `
         <div class="form-row"><div class="form-group"><label>Order #</label><input id="f-so-no" value="${orderNo}" readonly></div><div class="form-group"><label>Date</label><input type="date" id="f-so-date" value="${today()}"></div></div>
-        <div class="form-row"><div class="form-group"><label>Expected Delivery</label><input type="date" id="f-so-delivery" value=""></div><div class="form-group"><label>Priority</label><select id="f-so-priority"><option value="Normal">Normal</option><option value="Urgent">🔥 Urgent</option></select></div></div>
+        <div class="form-row"><div class="form-group"><label>Expected Delivery</label><input type="date" id="f-so-delivery" value=""></div><div class="form-group"><label>Priority</label><select id="f-so-priority"><option value="Normal">Normal</option><option value="Urgent"> Urgent</option></select></div></div>
         <div class="form-group"><label>Customer * <small style="color:var(--text-muted)">(new name = auto-created)</small></label>
             <input id="f-so-party" placeholder="Type customer name or mobile...">
         </div>
@@ -13894,7 +14010,7 @@ async function createOrderFromCatalog() {
             </div>
             <div class="form-group"><label>Qty</label><input type="number" id="f-so-qty" value="1" min="1"></div>
             <div class="form-group"><label>UOM</label><select id="f-so-uom" onchange="onSOUomChange()"><option value="">--</option></select></div>
-            <div class="form-group"><label>Price ₹</label><input type="number" id="f-so-price" value="" min="0" step="0.01" placeholder="Listed"></div>
+            <div class="form-group"><label>Price </label><input type="number" id="f-so-price" value="" min="0" step="0.01" placeholder="Listed"></div>
             <div class="form-group"><label>&nbsp;</label><button class="btn btn-primary btn-block" onclick="addSOLine()">Add</button></div>
         </div>
         
@@ -13902,7 +14018,7 @@ async function createOrderFromCatalog() {
         <div style="text-align:right;font-size:1.1rem;font-weight:700;color:var(--accent)" id="so-total-display">Total: ${currency(soItems.reduce((s, li) => s + li.amount, 0))}</div>
         
         <div class="form-group" style="margin-top:12px"><label>Notes</label><input id="f-so-notes" placeholder="Instructions..."></div>
-    `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveSalesOrder()">＋ Save & New</button><button class="btn btn-primary" onclick="saveSalesOrder()">✅ Submit Order</button>`);
+    `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveSalesOrder()"> Save & New</button><button class="btn btn-primary" onclick="saveSalesOrder()"> Submit Order</button>`);
 
     // Initialize party search and item list search
     initSearchDropdown('f-so-party', buildPartySearchList(customers));
@@ -13927,11 +14043,11 @@ let invSetupTab = 'categories';
 async function renderInventorySetup() {
     pageContent.innerHTML = `
         <div style="display:flex;gap:8px;margin-bottom:20px;overflow-x:auto;padding-bottom:4px">
-            <button class="catalog-pill ${invSetupTab === 'categories' ? 'active' : ''}" onclick="invSetupTab='categories';renderInventorySetup()">🏷️ Categories</button>
-            <button class="catalog-pill ${invSetupTab === 'uom' ? 'active' : ''}" onclick="invSetupTab='uom';renderInventorySetup()">📏 UOM</button>
-            <button class="catalog-pill ${invSetupTab === 'brands' ? 'active' : ''}" onclick="invSetupTab='brands';renderInventorySetup()">🏭 Brands</button>
-            <button class="catalog-pill ${invSetupTab === 'tax' ? 'active' : ''}" onclick="invSetupTab='tax';renderInventorySetup()">💹 Tax / GST</button>
-            <button class="btn btn-outline btn-sm" style="border-color:var(--primary);color:var(--primary);margin-left:auto" onclick="showReport('indent')">📑 Generate Indent</button>
+            <button class="catalog-pill ${invSetupTab === 'categories' ? 'active' : ''}" onclick="invSetupTab='categories';renderInventorySetup()"> Categories</button>
+            <button class="catalog-pill ${invSetupTab === 'uom' ? 'active' : ''}" onclick="invSetupTab='uom';renderInventorySetup()"> UOM</button>
+            <button class="catalog-pill ${invSetupTab === 'brands' ? 'active' : ''}" onclick="invSetupTab='brands';renderInventorySetup()"> Brands</button>
+            <button class="catalog-pill ${invSetupTab === 'tax' ? 'active' : ''}" onclick="invSetupTab='tax';renderInventorySetup()"> Tax / GST</button>
+            <button class="btn btn-outline btn-sm" style="border-color:var(--primary);color:var(--primary);margin-left:auto" onclick="showReport('indent')"> Generate Indent</button>
         </div>
         <div id="inv-setup-content"></div>`;
 
@@ -13947,9 +14063,9 @@ async function renderBrands() {
     const el = $('inv-setup-content') || pageContent;
     el.innerHTML = `
         <div class="section-toolbar">
-            <h3 style="font-size:1rem">🏭 Brand Master</h3>
+            <h3 style="font-size:1rem"> Brand Master</h3>
             <div class="filter-group">
-                <button class="btn btn-outline" onclick="triggerBrandExcelImport()">📥 Import</button>
+                <button class="btn btn-outline" onclick="triggerBrandExcelImport()"> Import</button>
                 <input type="file" id="f-brand-import" accept=".xlsx, .xls" style="display:none" onchange="importBrandsExcel(event)">
                 <button class="btn btn-primary" onclick="openBrandModal()">+ Add Brand</button>
             </div>
@@ -13960,8 +14076,8 @@ async function renderBrands() {
                 <tbody>${brands.length ? brands.map(b => `<tr>
                     <td style="color:var(--text-primary);font-weight:600">${b.name}</td>
                     <td style="font-size:0.85rem;color:var(--text-muted)">${b.description || '-'}</td>
-                    <td><div class="action-btns"><button class="btn-icon" onclick="openBrandModal('${b.id}')">✏️</button><button class="btn-icon" onclick="deleteBrand('${b.id}')">🗑️</button></div></td>
-                </tr>`).join('') : '<tr><td colspan="3"><div class="empty-state"><div class="empty-icon">🏭</div><p>No brands yet. Add brands to categorize products by manufacturer.</p></div></td></tr>'}</tbody></table>
+                    <td><div class="action-btns"><button class="btn-icon" onclick="openBrandModal('${b.id}')"></button><button class="btn-icon" onclick="deleteBrand('${b.id}')"></button></div></td>
+                </tr>`).join('') : '<tr><td colspan="3"><div class="empty-state"><div class="empty-icon"></div><p>No brands yet. Add brands to categorize products by manufacturer.</p></div></td></tr>'}</tbody></table>
             </div>
         </div></div>`;
 }
@@ -13970,7 +14086,7 @@ async function openBrandModal(id) {
     const brands = await DB.getAll('brands');
     const b = id ? brands.find(x => x.id === id) : null;
     openModal(b ? 'Edit Brand' : 'Add Brand', `
-        <div class="form-group"><label>Brand Name *</label><input id="f-brand-name" value="${b ? b.name : ''}" placeholder="e.g. Coca-Cola, Nestlé"></div>
+        <div class="form-group"><label>Brand Name *</label><input id="f-brand-name" value="${b ? b.name : ''}" placeholder="e.g. Coca-Cola, Nestl"></div>
         <div class="form-group"><label>Description</label><input id="f-brand-desc" value="${b ? b.description || '' : ''}" placeholder="Optional"></div>
         <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button>
         <button class="btn btn-primary" onclick="saveBrand('${id || ''}')">Save</button></div>`);
@@ -13979,7 +14095,7 @@ async function openBrandModal(id) {
 async function saveBrand(id) {
     const name = $('f-brand-name').value.trim(); if (!name) return alert('Brand name required');
     const description = $('f-brand-desc').value.trim();
-    
+
     try {
         if (id) {
             await DB.update('brands', id, { name, description });
@@ -14016,7 +14132,7 @@ async function importBrandsExcel(e) {
         const data = await new Promise((resolve, reject) => {
             const reader = new FileReader();
             reader.onload = (e) => {
-                const workbook = XLSX.read(e.target.result, {type: 'binary'});
+                const workbook = XLSX.read(e.target.result, { type: 'binary' });
                 const firstSheet = workbook.SheetNames[0];
                 const excelRows = XLSX.utils.sheet_to_row_object_array(workbook.Sheets[firstSheet]);
                 resolve(excelRows);
@@ -14026,7 +14142,7 @@ async function importBrandsExcel(e) {
         });
 
         if (!data || data.length === 0) return alert('No data found in the Excel file.');
-        
+
         const existingBrands = await DB.getAll('brands');
         let added = 0;
         let updated = 0;
@@ -14062,7 +14178,7 @@ async function renderTaxSetup() {
     const el = $('inv-setup-content') || pageContent;
     el.innerHTML = `
         <div class="card"><div class="card-body padded">
-            <h3 style="font-size:1rem;margin-bottom:16px">💹 Tax / GST Configuration</h3>
+            <h3 style="font-size:1rem;margin-bottom:16px"> Tax / GST Configuration</h3>
             <div class="form-group">
                 <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
                     <input type="checkbox" id="f-tax-gst-enabled" ${tax.gstEnabled ? 'checked' : ''} style="width:18px;height:18px;accent-color:var(--accent)">
@@ -14107,21 +14223,37 @@ function cpRestoreSession() {
         const saved = localStorage.getItem('cp_session');
         if (!saved) return false;
         cpSession = JSON.parse(saved);
-        // Validate session has required fields — clear stale/invalid sessions
-        if (!cpSession || !cpSession.phone || !cpSession.partyId) {
+        if (!cpSession || !cpSession.phone || !cpSession.partyId || !cpSession.token) {
             cpSession = null;
             localStorage.removeItem('cp_session');
             return false;
         }
-        // Show portal immediately
+
         const root = document.getElementById('cp-root');
         if (!root) { cpSession = null; localStorage.removeItem('cp_session'); return false; }
         root.style.display = 'block';
         document.getElementById('login-screen') && (document.getElementById('login-screen').classList.add('hidden'));
         document.getElementById('app') && (document.getElementById('app').classList.add('hidden'));
+
+        // Background token verification
+        supabaseClient.from('customer_otps').select('*')
+            .eq('phone', cpSession.phone).eq('purpose', 'session').single()
+            .then(({ data, error }) => {
+                if (!error && data) {
+                    if (data.otp !== cpSession.token || new Date(data.expires_at) < new Date()) {
+                        console.warn('Session token invalid or expired.');
+                        cpLogout();
+                    }
+                } else if (error && error.code !== 'PGRST116') {
+                    console.log('Skipped strict token verification due to error/offline.');
+                } else {
+                    cpLogout(); // PGRST116 implies no rows found (logged out remotely)
+                }
+            });
+
         DB.refresh().then(() => cpRenderHome()).catch(() => { cpLogout(); location.reload(); });
         return true;
-    } catch(e) { localStorage.removeItem('cp_session'); return false; }
+    } catch (e) { localStorage.removeItem('cp_session'); return false; }
 }
 
 function showCustomerPortal() {
@@ -14244,7 +14376,7 @@ async function cpSendOTP(phone, forRegister, regData) {
                 console.warn('Fast2SMS error:', json);
                 showToast('SMS failed: ' + (json.message || 'Unknown error') + '. OTP shown on screen.', 'error', 6000);
             }
-        } catch(e) {
+        } catch (e) {
             console.warn('Fast2SMS fetch failed:', e);
             showToast('SMS could not be sent. OTP shown on screen.', 'error', 5000);
         }
@@ -14256,14 +14388,14 @@ async function cpSendOTP(phone, forRegister, regData) {
 
 function cpRenderOTP(phone, otpHint, forRegister, regData, smsSent) {
     const regDataJson = JSON.stringify(regData || null).replace(/"/g, '&quot;');
-    const regDataStr  = regData ? JSON.stringify(regData).replace(/"/g, "'") : 'null';
+    const regDataStr = regData ? JSON.stringify(regData).replace(/"/g, "'") : 'null';
     const otpBox = smsSent
         ? `<div style="background:rgba(34,197,94,0.1);border:2px solid rgba(34,197,94,0.4);border-radius:12px;padding:14px;text-align:center;margin-bottom:18px">
-               <div style="font-size:0.8rem;color:#22c55e;font-weight:600;margin-bottom:4px">✅ OTP sent to ${phone} via SMS</div>
+               <div style="font-size:0.8rem;color:#22c55e;font-weight:600;margin-bottom:4px"> OTP sent to ${phone} via SMS</div>
                <div style="font-size:0.75rem;color:var(--text-muted)">Ask customer to check their messages</div>
            </div>`
         : `<div style="background:rgba(99,102,241,0.1);border:2px dashed rgba(99,102,241,0.4);border-radius:12px;padding:14px;text-align:center;margin-bottom:18px">
-               <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:6px">📲 Share this OTP with customer on WhatsApp</div>
+               <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:6px"> Share this OTP with customer on WhatsApp</div>
                <div style="font-size:2rem;font-weight:800;letter-spacing:8px;color:var(--accent)">${otpHint}</div>
            </div>`;
     cpShell(`
@@ -14273,27 +14405,27 @@ function cpRenderOTP(phone, otpHint, forRegister, regData, smsSent) {
         <p style="color:var(--text-muted);font-size:0.78rem;margin:0 0 14px">Valid for 10 minutes</p>
         ${otpBox}
         <div class="cp-otp-row" id="cp-otp-row">
-            ${[0,1,2,3,4,5].map(i => `<input class="cp-otp-box" maxlength="1" type="text" inputmode="numeric" pattern="[0-9]" id="cp-otp-${i}" oninput="cpOTPInput(this,${i})" onkeydown="cpOTPKey(this,${i},event)">`).join('')}
+            ${[0, 1, 2, 3, 4, 5].map(i => `<input class="cp-otp-box" maxlength="1" type="text" inputmode="numeric" pattern="[0-9]" id="cp-otp-${i}" oninput="cpOTPInput(this,${i})" onkeydown="cpOTPKey(this,${i},event)">`).join('')}
         </div>
         <input type="hidden" id="cp-otp-phone" value="${phone}">
         <input type="hidden" id="cp-otp-for-reg" value="${forRegister ? '1' : '0'}">
         <button class="btn btn-primary btn-block" style="margin-top:20px" onclick="cpVerifyOTP(${regDataJson})">Verify OTP</button>
         <button class="btn btn-outline btn-block" style="margin-top:8px" onclick="cpSendOTP('${phone}',${forRegister},${regDataStr})">Resend OTP</button>
     </div>`, true, cpRenderAuth);
-    setTimeout(() => { const el = document.getElementById('cp-otp-0'); if(el) el.focus(); }, 100);
+    setTimeout(() => { const el = document.getElementById('cp-otp-0'); if (el) el.focus(); }, 100);
 }
 
 function cpOTPInput(el, idx) {
-    el.value = el.value.replace(/[^0-9]/g,'');
+    el.value = el.value.replace(/[^0-9]/g, '');
     if (el.value && idx < 5) {
-        const next = document.getElementById('cp-otp-' + (idx+1));
+        const next = document.getElementById('cp-otp-' + (idx + 1));
         if (next) next.focus();
     }
 }
 
 function cpOTPKey(el, idx, e) {
     if (e.key === 'Backspace' && !el.value && idx > 0) {
-        const prev = document.getElementById('cp-otp-' + (idx-1));
+        const prev = document.getElementById('cp-otp-' + (idx - 1));
         if (prev) { prev.focus(); prev.value = ''; }
     }
 }
@@ -14301,22 +14433,27 @@ function cpOTPKey(el, idx, e) {
 async function cpVerifyOTP(regData) {
     const phone = document.getElementById('cp-otp-phone').value;
     const forReg = document.getElementById('cp-otp-for-reg').value === '1';
-    const entered = [0,1,2,3,4,5].map(i => { const el = document.getElementById('cp-otp-'+i); return el ? el.value : ''; }).join('');
+    const entered = [0, 1, 2, 3, 4, 5].map(i => { const el = document.getElementById('cp-otp-' + i); return el ? el.value : ''; }).join('');
     if (entered.length < 6) { alert('Please enter all 6 digits'); return; }
     const { data, error } = await supabaseClient.from('customer_otps').select('*').eq('phone', phone).single();
     if (error || !data) { alert('OTP not found. Please request again.'); return; }
     if (data.otp !== entered) { alert('Incorrect OTP. Please try again.'); return; }
     if (new Date(data.expires_at) < new Date()) { alert('OTP expired. Please request a new one.'); return; }
-    // Delete used OTP
-    await supabaseClient.from('customer_otps').delete().eq('phone', phone);
     if (forReg && regData) {
+        await supabaseClient.from('customer_otps').delete().eq('phone', phone);
         await cpSaveReg(phone, regData);
     } else {
-        await cpDoLogin(phone);
+        const sessionToken = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2) + Date.now().toString(36);
+        const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+        const { error: updErr } = await supabaseClient.from('customer_otps')
+            .update({ otp: sessionToken, expires_at: expiresAt, purpose: 'session' })
+            .eq('phone', phone);
+        if (updErr) { alert('Session creation failed.'); return; }
+        await cpDoLogin(phone, sessionToken);
     }
 }
 
-async function cpDoLogin(phone) {
+async function cpDoLogin(phone, sessionToken = null) {
     await DB.refreshTables(['parties']);
     const parties = DB.get('db_parties') || [];
     const party = parties.find(p => p.portalPhone === phone && p.portalEnabled);
@@ -14326,7 +14463,8 @@ async function cpDoLogin(phone) {
             allowedCategories: party.allowedCategories || [],
             paymentTerms: party.paymentTerms || 'COD',
             creditLimit: party.creditLimit || 0,
-            balance: party.balance || 0
+            balance: party.balance || 0,
+            token: sessionToken
         };
         cpSaveSession();
         cpRenderHome();
@@ -14340,7 +14478,7 @@ async function cpDoLogin(phone) {
     // No account
     cpShell(`
     <div class="cp-card" style="margin-top:32px;text-align:center">
-        <div style="font-size:3rem;margin-bottom:12px">🔍</div>
+        <div style="font-size:3rem;margin-bottom:12px"></div>
         <h3>No Account Found</h3>
         <p style="color:var(--text-muted);font-size:0.88rem">No approved account linked to <strong>${phone}</strong>.</p>
         <button class="btn btn-primary btn-block" style="margin-top:16px" onclick="cpRenderRegister()">Register Now</button>
@@ -14365,7 +14503,7 @@ function cpRenderRegister() {
             <div style="display:flex;gap:8px;align-items:center">
                 <input id="cp-reg-lat" class="form-control" placeholder="Latitude" readonly style="flex:1">
                 <input id="cp-reg-lng" class="form-control" placeholder="Longitude" readonly style="flex:1">
-                <button class="btn btn-outline" style="white-space:nowrap" onclick="cpCaptureGeo()">📍 Get</button>
+                <button class="btn btn-outline" style="white-space:nowrap" onclick="cpCaptureGeo()"> Get</button>
             </div>
         </div>
         <button class="btn btn-primary btn-block" style="margin-top:8px" onclick="cpRegSubmit()">Submit Registration</button>
@@ -14435,7 +14573,7 @@ async function cpSaveReg(phone, d) {
 function cpRenderPending(reg) {
     cpShell(`
     <div class="cp-card" style="margin-top:48px;text-align:center">
-        <div style="font-size:3.5rem;margin-bottom:16px">⏳</div>
+        <div style="font-size:3.5rem;margin-bottom:16px"></div>
         <h3 style="margin:0 0 8px">Registration Pending</h3>
         <p style="color:var(--text-muted);font-size:0.88rem;margin:0 0 4px"><strong>${reg.business_name || ''}</strong></p>
         <p style="color:var(--text-muted);font-size:0.85rem">Your registration is under review. The admin will approve soon and notify you.</p>
@@ -14446,7 +14584,7 @@ function cpRenderPending(reg) {
 function cpRenderRejected(reg) {
     cpShell(`
     <div class="cp-card" style="margin-top:48px;text-align:center">
-        <div style="font-size:3.5rem;margin-bottom:16px">❌</div>
+        <div style="font-size:3.5rem;margin-bottom:16px"></div>
         <h3 style="margin:0 0 8px">Registration Rejected</h3>
         ${reg.rejection_reason ? `<p style="color:#ef4444;font-size:0.88rem">Reason: ${reg.rejection_reason}</p>` : ''}
         <p style="color:var(--text-muted);font-size:0.85rem">Please contact the admin for more information.</p>
@@ -14458,9 +14596,9 @@ function cpRenderRejected(reg) {
 async function cpRenderHome() {
     if (!cpSession) { cpRenderAuth(); return; }
     await DB.refreshTables(['sales_orders', 'inventory', 'categories']);
-    const orders = (DB.get('db_salesorders') || []).filter(o => o.partyId === cpSession.partyId).sort((a,b) => (b.date||'').localeCompare(a.date||'')).slice(0, 20);
+    const orders = (DB.get('db_salesorders') || []).filter(o => o.partyId === cpSession.partyId).sort((a, b) => (b.date || '').localeCompare(a.date || '')).slice(0, 20);
     const bal = cpSession.balance || 0;
-    const balLabel = bal < 0 ? `You are owed ₹${Math.abs(bal).toLocaleString('en-IN')}` : bal > 0 ? `You owe ₹${bal.toLocaleString('en-IN')}` : 'No outstanding balance';
+    const balLabel = bal < 0 ? `You are owed ${Math.abs(bal).toLocaleString('en-IN')}` : bal > 0 ? `You owe ${bal.toLocaleString('en-IN')}` : 'No outstanding balance';
     const balColor = bal < 0 ? '#22c55e' : bal > 0 ? '#ef4444' : '#6b7280';
     cpShell(`
     <div class="cp-balance-card" style="background:linear-gradient(135deg,var(--accent),#f59e0b);color:#fff;border-radius:16px;padding:20px;margin-bottom:20px">
@@ -14470,8 +14608,8 @@ async function cpRenderHome() {
         <div style="font-size:1.5rem;font-weight:800">${balLabel}</div>
     </div>
     <div style="display:flex;gap:12px;margin-bottom:20px">
-        <button class="btn btn-primary" style="flex:1;font-size:0.9rem" onclick="cpRenderCatalog(null,'')">🛍️ Place Order</button>
-        <button class="btn btn-outline" style="flex:1;font-size:0.9rem" onclick="cpRenderCart()">🛒 Cart${Object.keys(cpCart).length ? ' ('+Object.values(cpCart).reduce((a,b)=>a+b,0)+')' : ''}</button>
+        <button class="btn btn-primary" style="flex:1;font-size:0.9rem" onclick="cpRenderCatalog(null,'')"> Place Order</button>
+        <button class="btn btn-outline" style="flex:1;font-size:0.9rem" onclick="cpRenderCart()"> Cart${Object.keys(cpCart).length ? ' (' + Object.values(cpCart).reduce((a, b) => a + b, 0) + ')' : ''}</button>
     </div>
     <h4 style="margin:0 0 12px;font-size:0.95rem;color:var(--text-muted)">Recent Orders</h4>
     ${orders.length ? orders.map(o => `
@@ -14479,11 +14617,11 @@ async function cpRenderHome() {
         <div style="display:flex;justify-content:space-between;align-items:center">
             <div>
                 <div style="font-weight:600;font-size:0.92rem">${o.orderNo || o.id}</div>
-                <div style="font-size:0.78rem;color:var(--text-muted)">${o.date || ''} &bull; ${(o.items||[]).length} items</div>
+                <div style="font-size:0.78rem;color:var(--text-muted)">${o.date || ''} &bull; ${(o.items || []).length} items</div>
             </div>
             <div style="text-align:right">
-                <div style="font-weight:700">₹${(o.total||0).toLocaleString('en-IN')}</div>
-                <span class="status-badge status-${o.status||'pending'}">${o.status||'pending'}</span>
+                <div style="font-weight:700">${(o.total || 0).toLocaleString('en-IN')}</div>
+                <span class="status-badge status-${o.status || 'pending'}">${o.status || 'pending'}</span>
             </div>
         </div>
     </div>`).join('') : '<p style="text-align:center;color:var(--text-muted);padding:24px 0">No orders yet</p>'}
@@ -14502,7 +14640,7 @@ function cpViewOrder(orderId) {
                 <div style="font-weight:700;font-size:1rem">${o.orderNo || o.id}</div>
                 <div style="font-size:0.8rem;color:var(--text-muted)">${o.date || ''}</div>
             </div>
-            <span class="status-badge status-${o.status||'pending'}">${o.status||'pending'}</span>
+            <span class="status-badge status-${o.status || 'pending'}">${o.status || 'pending'}</span>
         </div>
         <table style="width:100%;border-collapse:collapse;font-size:0.85rem">
             <thead><tr style="border-bottom:1px solid var(--border)">
@@ -14513,15 +14651,15 @@ function cpViewOrder(orderId) {
             </tr></thead>
             <tbody>${items.map(li => `
             <tr style="border-bottom:1px solid var(--border)">
-                <td style="padding:6px 4px">${li.itemName||li.name||''}</td>
-                <td style="text-align:center;padding:6px 4px">${li.qty||0} ${li.uom||''}</td>
-                <td style="text-align:right;padding:6px 4px">₹${(+(li.price||0)).toFixed(2)}</td>
-                <td style="text-align:right;padding:6px 4px">₹${(+(li.amount||0)).toFixed(2)}</td>
+                <td style="padding:6px 4px">${li.itemName || li.name || ''}</td>
+                <td style="text-align:center;padding:6px 4px">${li.qty || 0} ${li.uom || ''}</td>
+                <td style="text-align:right;padding:6px 4px">${(+(li.price || 0)).toFixed(2)}</td>
+                <td style="text-align:right;padding:6px 4px">${(+(li.amount || 0)).toFixed(2)}</td>
             </tr>`).join('')}
             </tbody>
             <tfoot><tr>
                 <td colspan="3" style="text-align:right;padding:8px 4px;font-weight:600">Total</td>
-                <td style="text-align:right;padding:8px 4px;font-weight:700">₹${(o.total||0).toLocaleString('en-IN')}</td>
+                <td style="text-align:right;padding:8px 4px;font-weight:700">${(o.total || 0).toLocaleString('en-IN')}</td>
             </tr></tfoot>
         </table>
         ${o.notes ? `<div style="margin-top:12px;padding:10px;background:var(--bg-card);border-radius:8px;font-size:0.85rem;color:var(--text-muted)">${o.notes}</div>` : ''}
@@ -14539,16 +14677,16 @@ function cpRenderCatalog(filterCat, search) {
     // Category filter
     const cats = [...new Set(items.map(i => i.category).filter(Boolean))];
     if (filterCat) items = items.filter(i => i.category === filterCat);
-    if (search) items = items.filter(i => (i.name||'').toLowerCase().includes(search.toLowerCase()));
+    if (search) items = items.filter(i => (i.name || '').toLowerCase().includes(search.toLowerCase()));
     cpShell(`
     <div>
         <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
-            <input id="cp-search" class="form-control" placeholder="Search items..." value="${search||''}" oninput="cpRenderCatalog('${filterCat||''}',this.value)" style="flex:1">
-            <button class="btn btn-outline" onclick="cpRenderCart()">🛒 ${Object.values(cpCart).reduce((a,b)=>a+b,0)||''}</button>
+            <input id="cp-search" class="form-control" placeholder="Search items..." value="${search || ''}" oninput="cpRenderCatalog('${filterCat || ''}',this.value)" style="flex:1">
+            <button class="btn btn-outline" onclick="cpRenderCart()"> ${Object.values(cpCart).reduce((a, b) => a + b, 0) || ''}</button>
         </div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px">
-            <button class="cp-cat-pill ${!filterCat?'active':''}" onclick="cpRenderCatalog(null,'${search||''}')">All</button>
-            ${cats.map(c => `<button class="cp-cat-pill ${filterCat===c?'active':''}" onclick="cpRenderCatalog('${c}','${search||''}')">${c}</button>`).join('')}
+            <button class="cp-cat-pill ${!filterCat ? 'active' : ''}" onclick="cpRenderCatalog(null,'${search || ''}')">All</button>
+            ${cats.map(c => `<button class="cp-cat-pill ${filterCat === c ? 'active' : ''}" onclick="cpRenderCatalog('${c}','${search || ''}')">${c}</button>`).join('')}
         </div>
         ${items.length ? cpItemListHTML(items) : '<p style="text-align:center;color:var(--text-muted);padding:24px 0">No items found</p>'}
     </div>`, true, cpRenderHome);
@@ -14559,11 +14697,11 @@ function cpItemListHTML(items) {
         const qty = cpCart[i.id] || 0;
         const price = i.salePrice || i.mrp || 0;
         return `<div class="cp-item-row">
-            ${(i.imageUrl||i.photo) ? `<img src="${i.imageUrl||i.photo}" class="cp-item-img">` : `<div class="cp-item-img" style="background:var(--bg-page);display:flex;align-items:center;justify-content:center;font-size:1.4rem">📦</div>`}
+            ${(i.imageUrl || i.photo) ? `<img src="${i.imageUrl || i.photo}" class="cp-item-img">` : `<div class="cp-item-img" style="background:var(--bg-page);display:flex;align-items:center;justify-content:center;font-size:1.4rem"></div>`}
             <div style="flex:1;min-width:0">
                 <div style="font-weight:600;font-size:0.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${i.name}</div>
-                <div style="font-size:0.78rem;color:var(--text-muted)">${i.category||''} ${i.uom ? '| '+i.uom : ''}</div>
-                <div style="font-weight:700;color:var(--accent);font-size:0.95rem">₹${price.toFixed ? price.toFixed(2) : price}</div>
+                <div style="font-size:0.78rem;color:var(--text-muted)">${i.category || ''} ${i.uom ? '| ' + i.uom : ''}</div>
+                <div style="font-weight:700;color:var(--accent);font-size:0.95rem">${price.toFixed ? price.toFixed(2) : price}</div>
             </div>
             <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
                 ${qty > 0 ? `
@@ -14610,18 +14748,18 @@ function cpRenderCart() {
     <div class="cp-item-row">
         <div style="flex:1">
             <div style="font-weight:600">${i.name}</div>
-            <div style="font-size:0.8rem;color:var(--text-muted)">₹${i.price.toFixed(2)} each</div>
+            <div style="font-size:0.8rem;color:var(--text-muted)">${i.price.toFixed(2)} each</div>
         </div>
         <div style="display:flex;align-items:center;gap:8px">
             <button class="cp-qty-btn" onclick="cpCartUpdate('${i.id}',-1)">-</button>
             <span style="min-width:24px;text-align:center;font-weight:600">${i.qty}</span>
             <button class="cp-qty-btn" onclick="cpCartUpdate('${i.id}',1)">+</button>
-            <span style="min-width:70px;text-align:right;font-weight:700">₹${i.amount.toFixed(2)}</span>
+            <span style="min-width:70px;text-align:right;font-weight:700">${i.amount.toFixed(2)}</span>
         </div>
     </div>`).join('')}
     <div style="border-top:2px solid var(--border);margin-top:12px;padding-top:12px;display:flex;justify-content:space-between;align-items:center">
         <span style="font-size:1rem;font-weight:600">Total</span>
-        <span style="font-size:1.2rem;font-weight:800;color:var(--accent)">₹${total.toLocaleString('en-IN', {minimumFractionDigits:2})}</span>
+        <span style="font-size:1.2rem;font-weight:800;color:var(--accent)">${total.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
     </div>
     <div class="form-group" style="margin-top:16px"><label>Notes / Instructions</label><textarea id="cp-order-notes" class="form-control" rows="2" placeholder="Any special instructions..."></textarea></div>
     <button class="btn btn-primary btn-block" style="margin-top:8px;font-size:1rem" onclick="cpPlaceOrder()">Place Order</button>
@@ -14637,12 +14775,12 @@ async function cpPlaceOrder() {
         const item = inventory.find(i => i.id === id);
         if (!item) return null;
         const price = +(item.salePrice || item.mrp || 0).toFixed ? +(item.salePrice || item.mrp || 0).toFixed(2) : (item.salePrice || item.mrp || 0);
-        return { itemId: id, itemName: item.name, qty, uom: item.uom||'', price, amount: +(qty * price).toFixed(2) };
+        return { itemId: id, itemName: item.name, qty, uom: item.uom || '', price, amount: +(qty * price).toFixed(2) };
     }).filter(Boolean);
     const total = items.reduce((s, i) => s + i.amount, 0);
     const now = new Date();
     const orderId = 'cp-' + now.getTime();
-    const orderNo = 'CPO-' + Math.random().toString(36).substr(2,8).toUpperCase();
+    const orderNo = 'CPO-' + Math.random().toString(36).substr(2, 8).toUpperCase();
     const notes = document.getElementById('cp-order-notes') ? document.getElementById('cp-order-notes').value.trim() : '';
     const payload = {
         id: orderId, order_no: orderNo,
@@ -14665,8 +14803,8 @@ async function cpPlaceOrder() {
 async function renderCustomerRequests() {
     const { data: regs, error } = await supabaseClient.from('customer_registrations').select('*').order('submitted_at', { ascending: false });
     if (error) { document.getElementById('page-content').innerHTML = '<p>Error loading requests: ' + error.message + '</p>'; return; }
-    const pending = (regs||[]).filter(r => r.status === 'pending');
-    const others = (regs||[]).filter(r => r.status !== 'pending');
+    const pending = (regs || []).filter(r => r.status === 'pending');
+    const others = (regs || []).filter(r => r.status !== 'pending');
     document.getElementById('page-content').innerHTML = `
     <div style="padding:16px">
         <h3 style="margin:0 0 16px">Pending Requests (${pending.length})</h3>
@@ -14679,15 +14817,15 @@ function cpRegCard(r) {
     return `<div class="cp-card" style="margin-bottom:12px">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px">
             <div>
-                <div style="font-weight:700">${r.business_name||''}</div>
-                <div style="font-size:0.82rem;color:var(--text-muted)">${r.contact_name||''} &bull; ${r.phone||''}</div>
+                <div style="font-weight:700">${r.business_name || ''}</div>
+                <div style="font-size:0.82rem;color:var(--text-muted)">${r.contact_name || ''} &bull; ${r.phone || ''}</div>
                 ${r.city ? `<div style="font-size:0.8rem;color:var(--text-muted)">${r.city}</div>` : ''}
                 ${r.gstin ? `<div style="font-size:0.78rem;color:var(--text-muted)">GSTIN: ${r.gstin}</div>` : ''}
-                ${r.lat && r.lng ? `<div style="font-size:0.78rem"><a href="https://maps.google.com/?q=${r.lat},${r.lng}" target="_blank" style="color:var(--accent)">📍 View on Map</a></div>` : ''}
-                <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">${new Date(r.submitted_at||Date.now()).toLocaleDateString('en-IN')}</div>
+                ${r.lat && r.lng ? `<div style="font-size:0.78rem"><a href="https://maps.google.com/?q=${r.lat},${r.lng}" target="_blank" style="color:var(--accent)"> View on Map</a></div>` : ''}
+                <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">${new Date(r.submitted_at || Date.now()).toLocaleDateString('en-IN')}</div>
             </div>
             <div>
-                <span class="status-badge status-${r.status||'pending'}">${r.status||'pending'}</span>
+                <span class="status-badge status-${r.status || 'pending'}">${r.status || 'pending'}</span>
                 ${r.rejection_reason ? `<div style="font-size:0.78rem;color:#ef4444;margin-top:4px">Reason: ${r.rejection_reason}</div>` : ''}
             </div>
         </div>
@@ -14707,12 +14845,12 @@ async function openApproveCustModal(regId) {
     const matching = parties.filter(p => p.name && regs.business_name && p.name.toLowerCase().includes(regs.business_name.toLowerCase().split(' ')[0]));
     openModal('Approve Customer', `
     <div>
-        <p style="font-size:0.88rem;margin-bottom:16px"><strong>${regs.business_name}</strong> — ${regs.phone}</p>
+        <p style="font-size:0.88rem;margin-bottom:16px"><strong>${regs.business_name}</strong>  ${regs.phone}</p>
         <div class="form-group">
             <label>Link to Existing Party (optional)</label>
             <select id="ap-party" class="form-control">
-                <option value="">— Create New Party —</option>
-                ${parties.filter(p => p.type === 'customer' || !p.type).map(p => `<option value="${p.id}" ${matching.find(m=>m.id===p.id)?'selected':''}>${p.name}</option>`).join('')}
+                <option value=""> Create New Party </option>
+                ${parties.filter(p => p.type === 'customer' || !p.type).map(p => `<option value="${p.id}" ${matching.find(m => m.id === p.id) ? 'selected' : ''}>${p.name}</option>`).join('')}
             </select>
         </div>
         <div class="form-group">
@@ -14726,17 +14864,17 @@ async function openApproveCustModal(regId) {
             </select>
         </div>
         <div class="form-group">
-            <label>Credit Limit (₹)</label>
+            <label>Credit Limit ()</label>
             <input id="ap-credit" type="number" class="form-control" value="0" min="0">
         </div>
         <div class="form-group">
             <label>Allowed Categories (leave empty for all)</label>
             <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px" id="ap-cats">
-                ${cats.map(c => `<label style="display:flex;align-items:center;gap:4px;font-size:0.85rem"><input type="checkbox" value="${c.name||c}"> ${c.name||c}</label>`).join('')}
+                ${cats.map(c => `<label style="display:flex;align-items:center;gap:4px;font-size:0.85rem"><input type="checkbox" value="${c.name || c}"> ${c.name || c}</label>`).join('')}
             </div>
         </div>
     </div>`,
-    `<button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+        `<button class="btn btn-outline" onclick="closeModal()">Cancel</button>
      <button class="btn btn-primary" onclick="confirmApproveCust('${regId}', document.getElementById('ap-party').value)">Confirm Approve</button>`);
 }
 
@@ -14750,7 +14888,7 @@ async function confirmApproveCust(regId, existingPartyId) {
     if (!partyId) {
         // Create new party
         const newParty = {
-            id: crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+            id: crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
                 var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
                 return v.toString(16);
             }),
@@ -14806,17 +14944,17 @@ async function renderStaffMaster() {
     <div class="table-wrapper"><table class="data-table">
         <thead><tr><th>Name</th><th>Role</th><th>Phone</th><th>Monthly Salary</th><th>Join Date</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody>
-        ${staff.length ? staff.map(s => `<tr style="${s.status==='inactive'?'opacity:0.55':''}">
+        ${staff.length ? staff.map(s => `<tr style="${s.status === 'inactive' ? 'opacity:0.55' : ''}">
             <td style="font-weight:600">${escapeHtml(s.name)}</td>
-            <td><span class="badge badge-info" style="font-size:0.72rem">${s.role||'Staff'}</span></td>
+            <td><span class="badge badge-info" style="font-size:0.72rem">${s.role || 'Staff'}</span></td>
             <td>${s.phone ? `<a href="tel:${s.phone}" style="color:var(--success)">${s.phone}</a>` : '-'}</td>
-            <td style="font-weight:600">${currency(s.monthly_salary||0)}</td>
+            <td style="font-weight:600">${currency(s.monthly_salary || 0)}</td>
             <td>${s.join_date ? fmtDate(s.join_date) : '-'}</td>
-            <td><span class="badge ${s.status==='active'?'badge-success':'badge-danger'}">${s.status||'active'}</span></td>
+            <td><span class="badge ${s.status === 'active' ? 'badge-success' : 'badge-danger'}">${s.status || 'active'}</span></td>
             <td><div class="action-btns">
-                ${isAdmin ? `<button class="btn-icon" onclick="openStaffModal('${s.id}')">✏️</button>
-                <button class="btn-icon" onclick="toggleStaffStatus('${s.id}','${s.status||'active'}')" title="${s.status==='inactive'?'Activate':'Deactivate'}">${s.status==='inactive'?'✅':'🚫'}</button>
-                <button class="btn-icon" onclick="openStaffAdvance('${s.id}','${escapeHtml(s.name)}')" title="Give Advance">💵</button>` : ''}
+                ${isAdmin ? `<button class="btn-icon" onclick="openStaffModal('${s.id}')"></button>
+                <button class="btn-icon" onclick="toggleStaffStatus('${s.id}','${s.status || 'active'}')" title="${s.status === 'inactive' ? 'Activate' : 'Deactivate'}">${s.status === 'inactive' ? '' : ''}</button>
+                <button class="btn-icon" onclick="openStaffAdvance('${s.id}','${escapeHtml(s.name)}')" title="Give Advance"></button>` : ''}
             </div></td>
         </tr>`).join('') : '<tr><td colspan="7"><div class="empty-state"><p>No staff added yet</p></div></td></tr>'}
         </tbody>
@@ -14835,28 +14973,28 @@ async function openStaffModal(id) {
     <div class="form-row">
         <div class="form-group"><label>Name *</label><input id="f-st-name" class="form-control" value="${s ? escapeHtml(s.name) : ''}"></div>
         <div class="form-group"><label>Role</label>
-            <select id="f-st-role" class="form-control">${ROLES.map(r=>`<option ${s&&s.role===r?'selected':''}>${r}</option>`).join('')}</select>
+            <select id="f-st-role" class="form-control">${ROLES.map(r => `<option ${s && s.role === r ? 'selected' : ''}>${r}</option>`).join('')}</select>
         </div>
     </div>
     <div class="form-row">
-        <div class="form-group"><label>Phone</label><input id="f-st-phone" class="form-control" value="${s ? (s.phone||'') : ''}" type="tel"></div>
-        <div class="form-group"><label>Monthly Salary (₹)</label><input id="f-st-salary" class="form-control" type="number" min="0" value="${s ? (s.monthly_salary||0) : ''}"></div>
+        <div class="form-group"><label>Phone</label><input id="f-st-phone" class="form-control" value="${s ? (s.phone || '') : ''}" type="tel"></div>
+        <div class="form-group"><label>Monthly Salary ()</label><input id="f-st-salary" class="form-control" type="number" min="0" value="${s ? (s.monthly_salary || 0) : ''}"></div>
     </div>
     <div class="form-row">
-        <div class="form-group"><label>Join Date</label><input id="f-st-join" class="form-control" type="date" value="${s ? (s.join_date||'') : today()}"></div>
+        <div class="form-group"><label>Join Date</label><input id="f-st-join" class="form-control" type="date" value="${s ? (s.join_date || '') : today()}"></div>
     </div>
     <div class="modal-actions">
         <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-        <button class="btn btn-primary" onclick="saveStaff('${id||''}')">Save</button>
+        <button class="btn btn-primary" onclick="saveStaff('${id || ''}')">Save</button>
     </div>`);
 }
 
 async function saveStaff(id) {
-    const name = ($('f-st-name').value||'').trim();
+    const name = ($('f-st-name').value || '').trim();
     if (!name) return alert('Name is required');
     const data = {
         name, role: $('f-st-role').value,
-        phone: ($('f-st-phone').value||'').trim(),
+        phone: ($('f-st-phone').value || '').trim(),
         monthly_salary: +$('f-st-salary').value || 0,
         join_date: $('f-st-join').value || null,
         status: 'active'
@@ -14881,9 +15019,9 @@ async function toggleStaffStatus(id, currentStatus) {
 
 // ---- ATTENDANCE ----
 async function renderAttendance() {
-    const selDate  = window._attDate  || today();
-    const selFrom  = window._attFrom  || today();
-    const selTo    = window._attTo    || today();
+    const selDate = window._attDate || today();
+    const selFrom = window._attFrom || today();
+    const selTo = window._attTo || today();
     const rangeMode = window._attRangeMode || false;
     const selMonth = selDate.substring(0, 7);
 
@@ -14891,55 +15029,55 @@ async function renderAttendance() {
 
     // Single-day data
     const { data: attRecs } = await supabaseClient.from('attendance').select('*').eq('date', selDate);
-    const attMap = {}; (attRecs||[]).forEach(r => attMap[r.staff_id] = r);
+    const attMap = {}; (attRecs || []).forEach(r => attMap[r.staff_id] = r);
 
     // Monthly summary
-    const { data: monthRecs } = await supabaseClient.from('attendance').select('*').gte('date', selMonth+'-01').lte('date', selMonth+'-31');
+    const { data: monthRecs } = await supabaseClient.from('attendance').select('*').gte('date', selMonth + '-01').lte('date', selMonth + '-31');
     const monthMap = {};
-    (monthRecs||[]).forEach(r => {
-        if (!monthMap[r.staff_id]) monthMap[r.staff_id] = { P:0, A:0, HD:0, PL:0, H:0 };
+    (monthRecs || []).forEach(r => {
+        if (!monthMap[r.staff_id]) monthMap[r.staff_id] = { P: 0, A: 0, HD: 0, PL: 0, H: 0 };
         const k = r.status === 'Present' ? 'P' : r.status === 'Absent' ? 'A' : r.status === 'Half Day' ? 'HD' : r.status === 'Paid Leave' ? 'PL' : 'H';
-        monthMap[r.staff_id][k] = (monthMap[r.staff_id][k]||0) + 1;
+        monthMap[r.staff_id][k] = (monthMap[r.staff_id][k] || 0) + 1;
     });
 
     const STATUS_BTNS = [
-        { s: 'Present',    label: 'P',    color: '#22c55e', bg: 'rgba(34,197,94,0.15)' },
-        { s: 'Absent',     label: 'A',    color: '#ef4444', bg: 'rgba(239,68,68,0.15)' },
-        { s: 'Half Day',   label: '½',    color: '#f59e0b', bg: 'rgba(245,158,11,0.15)' },
-        { s: 'Paid Leave', label: 'PL',   color: '#6366f1', bg: 'rgba(99,102,241,0.15)' },
-        { s: 'Holiday',    label: 'H',    color: '#64748b', bg: 'rgba(100,116,139,0.15)' },
+        { s: 'Present', label: 'P', color: '#22c55e', bg: 'rgba(34,197,94,0.15)' },
+        { s: 'Absent', label: 'A', color: '#ef4444', bg: 'rgba(239,68,68,0.15)' },
+        { s: 'Half Day', label: '', color: '#f59e0b', bg: 'rgba(245,158,11,0.15)' },
+        { s: 'Paid Leave', label: 'PL', color: '#6366f1', bg: 'rgba(99,102,241,0.15)' },
+        { s: 'Holiday', label: 'H', color: '#64748b', bg: 'rgba(100,116,139,0.15)' },
     ];
 
-    // ── Header toolbar ──
+    //  Header toolbar 
     const singleToolbar = `
         <input type="date" value="${selDate}" onchange="window._attDate=this.value;renderAttendance()" class="form-control" style="width:160px">
         <button class="btn btn-outline btn-sm" onclick="window._attDate='${today()}';renderAttendance()">Today</button>
-        <button class="btn btn-outline btn-sm" onclick="markAllAttendance('Present','${selDate}')">✅ All Present</button>
-        <button class="btn btn-outline btn-sm" onclick="markAllAttendance('Holiday','${selDate}')">🏖️ Holiday</button>`;
+        <button class="btn btn-outline btn-sm" onclick="markAllAttendance('Present','${selDate}')"> All Present</button>
+        <button class="btn btn-outline btn-sm" onclick="markAllAttendance('Holiday','${selDate}')"> Holiday</button>`;
 
     const rangeToolbar = `
         <label style="font-size:0.82rem;color:var(--text-muted);margin:0">From</label>
         <input type="date" id="att-from" value="${selFrom}" class="form-control" style="width:150px">
         <label style="font-size:0.82rem;color:var(--text-muted);margin:0">To</label>
         <input type="date" id="att-to" value="${selTo}" class="form-control" style="width:150px">
-        <button class="btn btn-primary btn-sm" onclick="openRangeAttModal()">Mark Range…</button>`;
+        <button class="btn btn-primary btn-sm" onclick="openRangeAttModal()">Mark Range</button>`;
 
     pageContent.innerHTML = `
     <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:16px">
         <div style="display:flex;align-items:center;gap:6px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:3px">
-            <button class="btn btn-sm ${!rangeMode?'btn-primary':'btn-outline'}" style="border-radius:6px" onclick="window._attRangeMode=false;renderAttendance()">Single Day</button>
-            <button class="btn btn-sm ${rangeMode?'btn-primary':'btn-outline'}" style="border-radius:6px" onclick="window._attRangeMode=true;renderAttendance()">Date Range</button>
+            <button class="btn btn-sm ${!rangeMode ? 'btn-primary' : 'btn-outline'}" style="border-radius:6px" onclick="window._attRangeMode=false;renderAttendance()">Single Day</button>
+            <button class="btn btn-sm ${rangeMode ? 'btn-primary' : 'btn-outline'}" style="border-radius:6px" onclick="window._attRangeMode=true;renderAttendance()">Date Range</button>
         </div>
         ${rangeMode ? rangeToolbar : singleToolbar}
     </div>
 
-    ${!(staff&&staff.length) ? '<div class="empty-state"><p>No active staff. <a href="#" onclick="navigateTo(\'staffmaster\')" style="color:var(--accent)">Add staff first</a></p></div>' : `
+    ${!(staff && staff.length) ? '<div class="empty-state"><p>No active staff. <a href="#" onclick="navigateTo(\'staffmaster\')" style="color:var(--accent)">Add staff first</a></p></div>' : `
 
     ${rangeMode ? `
     <div class="card" style="margin-bottom:20px;background:rgba(99,102,241,0.06);border:1px solid rgba(99,102,241,0.2)">
         <div class="card-body" style="padding:14px 18px">
             <p style="margin:0;font-size:0.88rem;color:var(--text-muted)">
-                <b>Date Range Mode:</b> Select From / To dates above, then click <b>Mark Range…</b> to choose a status and apply it to all staff (or individual staff) across every day in the range. Existing records are overwritten.
+                <b>Date Range Mode:</b> Select From / To dates above, then click <b>Mark Range</b> to choose a status and apply it to all staff (or individual staff) across every day in the range. Existing records are overwritten.
             </p>
         </div>
     </div>` : ''}
@@ -14949,46 +15087,46 @@ async function renderAttendance() {
         <thead><tr><th>Staff</th><th>${rangeMode ? 'Bulk Range Action' : 'Mark Attendance'}</th><th style="text-align:center">This Month (${selMonth})</th></tr></thead>
         <tbody>
         ${staff.map(s => {
-            const cur = attMap[s.id];
-            const mo = monthMap[s.id] || { P:0, A:0, HD:0, PL:0, H:0 };
-            const monthSummary = `<span style="font-size:0.8rem;color:var(--text-muted)">P:<b style="color:#22c55e">${mo.P}</b> A:<b style="color:#ef4444">${mo.A}</b> ½:<b style="color:#f59e0b">${mo.HD}</b> PL:<b style="color:#6366f1">${mo.PL}</b></span>`;
+        const cur = attMap[s.id];
+        const mo = monthMap[s.id] || { P: 0, A: 0, HD: 0, PL: 0, H: 0 };
+        const monthSummary = `<span style="font-size:0.8rem;color:var(--text-muted)">P:<b style="color:#22c55e">${mo.P}</b> A:<b style="color:#ef4444">${mo.A}</b> :<b style="color:#f59e0b">${mo.HD}</b> PL:<b style="color:#6366f1">${mo.PL}</b></span>`;
 
-            let actionCell;
-            if (rangeMode) {
-                actionCell = `<div style="display:flex;flex-wrap:wrap;gap:6px">
+        let actionCell;
+        if (rangeMode) {
+            actionCell = `<div style="display:flex;flex-wrap:wrap;gap:6px">
                     ${STATUS_BTNS.map(b => `<button onclick="markStaffRange('${s.id}','${escapeHtml(s.name)}','${b.s}')" style="padding:5px 10px;border-radius:20px;font-size:0.78rem;font-weight:700;cursor:pointer;border:2px solid ${b.color};color:${b.color};background:${b.bg};transition:all 0.15s">${b.label}</button>`).join('')}
                 </div>`;
-            } else {
-                actionCell = `<div style="display:flex;flex-wrap:wrap;gap:6px">
+        } else {
+            actionCell = `<div style="display:flex;flex-wrap:wrap;gap:6px">
                     ${STATUS_BTNS.map(b => {
-                        const active = cur && cur.status === b.s;
-                        return `<button onclick="markAttendance('${s.id}','${escapeHtml(s.name)}','${selDate}','${b.s}')" style="padding:5px 10px;border-radius:20px;font-size:0.78rem;font-weight:700;cursor:pointer;border:2px solid ${b.color};color:${active?'#fff':b.color};background:${active?b.color:b.bg};transition:all 0.15s">${b.label}</button>`;
-                    }).join('')}
+                const active = cur && cur.status === b.s;
+                return `<button onclick="markAttendance('${s.id}','${escapeHtml(s.name)}','${selDate}','${b.s}')" style="padding:5px 10px;border-radius:20px;font-size:0.78rem;font-weight:700;cursor:pointer;border:2px solid ${b.color};color:${active ? '#fff' : b.color};background:${active ? b.color : b.bg};transition:all 0.15s">${b.label}</button>`;
+            }).join('')}
                 </div>`;
-            }
+        }
 
-            return `<tr>
-                <td><div style="font-weight:600">${escapeHtml(s.name)}</div><div style="font-size:0.75rem;color:var(--text-muted)">${s.role||'Staff'}</div></td>
+        return `<tr>
+                <td><div style="font-weight:600">${escapeHtml(s.name)}</div><div style="font-size:0.75rem;color:var(--text-muted)">${s.role || 'Staff'}</div></td>
                 <td>${actionCell}</td>
                 <td style="text-align:center">${monthSummary}</td>
             </tr>`;
-        }).join('')}
+    }).join('')}
         </tbody>
     </table></div>
     </div></div>
 
-    <h4 style="margin-bottom:12px;font-size:0.95rem">Monthly Attendance — ${selMonth}</h4>
+    <h4 style="margin-bottom:12px;font-size:0.95rem">Monthly Attendance  ${selMonth}</h4>
     <div class="card"><div class="card-body" style="overflow-x:auto">
-        ${renderMonthCalendar(staff, monthRecs||[], selMonth)}
+        ${renderMonthCalendar(staff, monthRecs || [], selMonth)}
     </div></div>`}`;
 }
 
-// ── Range mode helpers ──
+//  Range mode helpers 
 function _getRangeDates() {
     const fromEl = document.getElementById('att-from');
-    const toEl   = document.getElementById('att-to');
+    const toEl = document.getElementById('att-to');
     const from = fromEl ? fromEl.value : (window._attFrom || today());
-    const to   = toEl   ? toEl.value   : (window._attTo   || today());
+    const to = toEl ? toEl.value : (window._attTo || today());
     if (from > to) { showToast('From date must be before To date', 'error'); return null; }
     window._attFrom = from; window._attTo = to;
     const dates = [];
@@ -15004,9 +15142,9 @@ function _getRangeDates() {
 function openRangeAttModal() {
     const dates = _getRangeDates();
     if (!dates) return;
-    openModal('Mark Attendance — Date Range',
+    openModal('Mark Attendance  Date Range',
         `<p style="margin:0 0 14px;color:var(--text-muted);font-size:0.88rem">
-            Applying to <b>${dates.length} day(s)</b>: ${dates[0]} → ${dates[dates.length-1]}
+            Applying to <b>${dates.length} day(s)</b>: ${dates[0]}  ${dates[dates.length - 1]}
         </p>
         <div class="form-group">
             <label>Status to apply to ALL staff</label>
@@ -15037,7 +15175,7 @@ async function confirmRangeAttendance() {
 async function markStaffRange(staffId, staffName, status) {
     const dates = _getRangeDates();
     if (!dates) return;
-    if (!confirm(`Mark ${staffName} as "${status}" for ${dates.length} day(s)?\n${dates[0]} → ${dates[dates.length-1]}`)) return;
+    if (!confirm(`Mark ${staffName} as "${status}" for ${dates.length} day(s)?\n${dates[0]}  ${dates[dates.length - 1]}`)) return;
     await _applyRangeAttendance(staffId, staffName, dates, status);
     showToast(`${staffName} marked as ${status} for ${dates.length} day(s)`, 'success');
     renderAttendance();
@@ -15054,12 +15192,12 @@ async function _applyRangeAttendance(staffId, staffName, dates, status) {
     }
 
     // Load existing records for the range to detect upsert vs insert
-    const from = dates[0], to = dates[dates.length-1];
+    const from = dates[0], to = dates[dates.length - 1];
     const staffIds = targets.map(s => s.id);
     const { data: existing } = await supabaseClient.from('attendance').select('id,staff_id,date')
         .in('staff_id', staffIds).gte('date', from).lte('date', to);
     const exMap = {};
-    (existing||[]).forEach(r => { exMap[r.staff_id + '_' + r.date] = r.id; });
+    (existing || []).forEach(r => { exMap[r.staff_id + '_' + r.date] = r.id; });
 
     const ops = [];
     for (const s of targets) {
@@ -15068,7 +15206,7 @@ async function _applyRangeAttendance(staffId, staffName, dates, status) {
             if (exMap[key]) {
                 ops.push(supabaseClient.from('attendance').update({ status, marked_by: currentUser.name }).eq('id', exMap[key]));
             } else {
-                ops.push(supabaseClient.from('attendance').insert({ id: 'att_'+Date.now()+'_'+s.id.slice(-4)+Math.random().toString(36).slice(2,5), staff_id: s.id, staff_name: s.name, date, status, marked_by: currentUser.name }));
+                ops.push(supabaseClient.from('attendance').insert({ id: 'att_' + Date.now() + '_' + s.id.slice(-4) + Math.random().toString(36).slice(2, 5), staff_id: s.id, staff_name: s.name, date, status, marked_by: currentUser.name }));
             }
         }
     }
@@ -15078,7 +15216,7 @@ async function _applyRangeAttendance(staffId, staffName, dates, status) {
 function renderMonthCalendar(staff, records, month) {
     const [y, m] = month.split('-').map(Number);
     const daysInMonth = new Date(y, m, 0).getDate();
-    const days = Array.from({length: daysInMonth}, (_, i) => i+1);
+    const days = Array.from({ length: daysInMonth }, (_, i) => i + 1);
     // Map: staffId -> { day -> status }
     const map = {};
     records.forEach(r => {
@@ -15086,35 +15224,35 @@ function renderMonthCalendar(staff, records, month) {
         if (!map[r.staff_id]) map[r.staff_id] = {};
         map[r.staff_id][day] = r.status;
     });
-    const STATUS_COLOR = { Present:'#22c55e', Absent:'#ef4444', 'Half Day':'#f59e0b', 'Paid Leave':'#6366f1', Holiday:'#94a3b8' };
-    const STATUS_ABBR  = { Present:'P', Absent:'A', 'Half Day':'½', 'Paid Leave':'PL', Holiday:'H' };
+    const STATUS_COLOR = { Present: '#22c55e', Absent: '#ef4444', 'Half Day': '#f59e0b', 'Paid Leave': '#6366f1', Holiday: '#94a3b8' };
+    const STATUS_ABBR = { Present: 'P', Absent: 'A', 'Half Day': '', 'Paid Leave': 'PL', Holiday: 'H' };
     if (!staff.length) return '<p style="color:var(--text-muted)">No staff</p>';
     return `<table style="border-collapse:collapse;font-size:0.72rem;min-width:600px">
     <thead><tr>
         <th style="padding:4px 8px;text-align:left;border-bottom:2px solid var(--border)">Staff</th>
         ${days.map(d => {
-            const dow = new Date(y, m-1, d).getDay();
-            return `<th style="padding:4px 4px;text-align:center;border-bottom:2px solid var(--border);${dow===0?'color:#ef4444':''}">${d}<br><span style="font-size:0.65rem;font-weight:400">${['Su','Mo','Tu','We','Th','Fr','Sa'][dow]}</span></th>`;
-        }).join('')}
+        const dow = new Date(y, m - 1, d).getDay();
+        return `<th style="padding:4px 4px;text-align:center;border-bottom:2px solid var(--border);${dow === 0 ? 'color:#ef4444' : ''}">${d}<br><span style="font-size:0.65rem;font-weight:400">${['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'][dow]}</span></th>`;
+    }).join('')}
         <th style="padding:4px 8px;border-bottom:2px solid var(--border)">Summary</th>
     </tr></thead>
     <tbody>${staff.map(s => {
         const sm = map[s.id] || {};
-        let p=0,a=0,hd=0,pl=0;
-        days.forEach(d => { const st=sm[d]; if(st==='Present')p++; else if(st==='Absent')a++; else if(st==='Half Day')hd++; else if(st==='Paid Leave')pl++; });
-        const eff = p + hd*0.5 + pl;
+        let p = 0, a = 0, hd = 0, pl = 0;
+        days.forEach(d => { const st = sm[d]; if (st === 'Present') p++; else if (st === 'Absent') a++; else if (st === 'Half Day') hd++; else if (st === 'Paid Leave') pl++; });
+        const eff = p + hd * 0.5 + pl;
         return `<tr>
             <td style="padding:4px 8px;font-weight:600;white-space:nowrap;border-bottom:1px solid var(--border)">${escapeHtml(s.name)}</td>
             ${days.map(d => {
-                const st = sm[d];
-                const col = STATUS_COLOR[st] || 'transparent';
-                const dow = new Date(y, m-1, d).getDay();
-                return `<td style="text-align:center;padding:2px;border-bottom:1px solid var(--border)">
-                    <div style="width:22px;height:22px;border-radius:50%;background:${st?col:'rgba(0,0,0,0.04)'};display:flex;align-items:center;justify-content:center;margin:auto;cursor:pointer;font-size:0.65rem;font-weight:700;color:${st?'#fff':'var(--text-muted)'}" title="${st||'No record'}">${st?STATUS_ABBR[st]:(dow===0?'S':'')}</div>
+            const st = sm[d];
+            const col = STATUS_COLOR[st] || 'transparent';
+            const dow = new Date(y, m - 1, d).getDay();
+            return `<td style="text-align:center;padding:2px;border-bottom:1px solid var(--border)">
+                    <div style="width:22px;height:22px;border-radius:50%;background:${st ? col : 'rgba(0,0,0,0.04)'};display:flex;align-items:center;justify-content:center;margin:auto;cursor:pointer;font-size:0.65rem;font-weight:700;color:${st ? '#fff' : 'var(--text-muted)'}" title="${st || 'No record'}">${st ? STATUS_ABBR[st] : (dow === 0 ? 'S' : '')}</div>
                 </td>`;
-            }).join('')}
+        }).join('')}
             <td style="padding:4px 8px;border-bottom:1px solid var(--border);white-space:nowrap;font-size:0.75rem">
-                <b style="color:#22c55e">${p}P</b> <b style="color:#ef4444">${a}A</b> <b style="color:#f59e0b">${hd}½</b>
+                <b style="color:#22c55e">${p}P</b> <b style="color:#ef4444">${a}A</b> <b style="color:#f59e0b">${hd}</b>
                 <br><span style="color:var(--accent);font-weight:700">Eff: ${eff.toFixed(1)}</span>
             </td>
         </tr>`;
@@ -15126,7 +15264,7 @@ async function markAttendance(staffId, staffName, date, status) {
     if (existing) {
         await supabaseClient.from('attendance').update({ status, marked_by: currentUser.name }).eq('id', existing.id);
     } else {
-        await supabaseClient.from('attendance').insert({ id: 'att_'+Date.now()+'_'+staffId.slice(-4), staff_id: staffId, staff_name: staffName, date, status, marked_by: currentUser.name });
+        await supabaseClient.from('attendance').insert({ id: 'att_' + Date.now() + '_' + staffId.slice(-4), staff_id: staffId, staff_name: staffName, date, status, marked_by: currentUser.name });
     }
     renderAttendance();
 }
@@ -15137,7 +15275,7 @@ async function markAllAttendance(status, date) {
     await Promise.all(staff.map(async s => {
         const { data: ex } = await supabaseClient.from('attendance').select('id').eq('staff_id', s.id).eq('date', date).single();
         if (ex) return supabaseClient.from('attendance').update({ status, marked_by: currentUser.name }).eq('id', ex.id);
-        return supabaseClient.from('attendance').insert({ id: 'att_'+Date.now()+'_'+s.id.slice(-4)+Math.random().toString(36).slice(2,5), staff_id: s.id, staff_name: s.name, date, status, marked_by: currentUser.name });
+        return supabaseClient.from('attendance').insert({ id: 'att_' + Date.now() + '_' + s.id.slice(-4) + Math.random().toString(36).slice(2, 5), staff_id: s.id, staff_name: s.name, date, status, marked_by: currentUser.name });
     }));
     showToast(`All marked as ${status}!`, 'success');
     renderAttendance();
@@ -15148,11 +15286,11 @@ async function renderHRPayroll() {
     const selMonth = window._payMonth || today().substring(0, 7);
     const [y, m] = selMonth.split('-').map(Number);
     const daysInMonth = new Date(y, m, 0).getDate();
-    const workingDays = Array.from({length: daysInMonth}, (_, i) => i+1).filter(d => new Date(y, m-1, d).getDay() !== 0).length;
+    const workingDays = Array.from({ length: daysInMonth }, (_, i) => i + 1).filter(d => new Date(y, m - 1, d).getDay() !== 0).length;
 
     const [staffRes, attRes, advRes, salRes] = await Promise.all([
         supabaseClient.from('staff').select('*').eq('status', 'active').order('name'),
-        supabaseClient.from('attendance').select('*').gte('date', selMonth+'-01').lte('date', selMonth+'-31'),
+        supabaseClient.from('attendance').select('*').gte('date', selMonth + '-01').lte('date', selMonth + '-31'),
         supabaseClient.from('salary_advances').select('*').order('date', { ascending: true }), // ALL advances (all months)
         supabaseClient.from('salary_records').select('*').eq('month', selMonth)
     ]);
@@ -15165,7 +15303,7 @@ async function renderHRPayroll() {
     // Build per-staff summary
     const rows = staff.map(s => {
         const myAtt = attRecs.filter(r => r.staff_id === s.id);
-        const p  = myAtt.filter(r => r.status === 'Present').length;
+        const p = myAtt.filter(r => r.status === 'Present').length;
         const hd = myAtt.filter(r => r.status === 'Half Day').length;
         const pl = myAtt.filter(r => r.status === 'Paid Leave').length;
         const daysEff = p + hd * 0.5 + pl;
@@ -15174,13 +15312,13 @@ async function renderHRPayroll() {
 
         // Pending advance balance across ALL months (FIFO simulation)
         const myAllAdvs = allAdvRecs.filter(r => r.staff_id === s.id);
-        const advPending = +myAllAdvs.reduce((t, a) => t + Math.max(0, (a.amount||0) - (a.deducted||0)), 0).toFixed(2);
+        const advPending = +myAllAdvs.reduce((t, a) => t + Math.max(0, (a.amount || 0) - (a.deducted || 0)), 0).toFixed(2);
 
         // Simulate how much will be deducted this month (FIFO)
         let toDeduct = 0, rem = earned;
         for (const adv of myAllAdvs) {
             if (rem <= 0) break;
-            const bal = Math.max(0, (adv.amount||0) - (adv.deducted||0));
+            const bal = Math.max(0, (adv.amount || 0) - (adv.deducted || 0));
             const d = Math.min(bal, rem);
             toDeduct += d; rem -= d;
         }
@@ -15210,45 +15348,45 @@ async function renderHRPayroll() {
     <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-bottom:16px">
         <input type="month" value="${selMonth}" onchange="window._payMonth=this.value;renderHRPayroll()" class="form-control" style="width:160px">
         <span style="font-size:0.82rem;color:var(--text-muted)">Working Days (excl. Sun): <strong>${workingDays}</strong></span>
-        <button class="btn btn-outline btn-sm" onclick="navigateTo('attendance')">📅 Mark Attendance</button>
-        <button class="btn btn-outline btn-sm" onclick="openStaffAdvance()">💵 Give Advance</button>
+        <button class="btn btn-outline btn-sm" onclick="navigateTo('attendance')"> Mark Attendance</button>
+        <button class="btn btn-outline btn-sm" onclick="openStaffAdvance()"> Give Advance</button>
     </div>
 
     <div class="stats-grid" style="margin-bottom:16px">
-        <div class="stat-card blue"><div class="stat-icon">👤</div><div class="stat-value">${staff.length}</div><div class="stat-label">Active Staff</div></div>
-        <div class="stat-card green"><div class="stat-icon">💰</div><div class="stat-value">${currency(totalEarned)}</div><div class="stat-label">Total Earned</div></div>
-        <div class="stat-card amber"><div class="stat-icon">💵</div><div class="stat-value">${currency(totalAdvPending)}</div><div class="stat-label">Advance Balance</div></div>
-        <div class="stat-card red"><div class="stat-icon">🏦</div><div class="stat-value">${currency(totalNet)}</div><div class="stat-label">Net Payable</div></div>
+        <div class="stat-card blue"><div class="stat-icon"></div><div class="stat-value">${staff.length}</div><div class="stat-label">Active Staff</div></div>
+        <div class="stat-card green"><div class="stat-icon"></div><div class="stat-value">${currency(totalEarned)}</div><div class="stat-label">Total Earned</div></div>
+        <div class="stat-card amber"><div class="stat-icon"></div><div class="stat-value">${currency(totalAdvPending)}</div><div class="stat-label">Advance Balance</div></div>
+        <div class="stat-card red"><div class="stat-icon"></div><div class="stat-value">${currency(totalNet)}</div><div class="stat-label">Net Payable</div></div>
     </div>
 
     <div class="card" style="margin-bottom:20px"><div class="card-body">
-    <div style="font-weight:700;margin-bottom:12px">Salary Sheet — ${selMonth}</div>
+    <div style="font-weight:700;margin-bottom:12px">Salary Sheet  ${selMonth}</div>
     <div class="table-wrapper"><table class="data-table">
-        <thead><tr><th>Staff</th><th>Salary/Mo</th><th style="text-align:center">P</th><th style="text-align:center">½</th><th style="text-align:center">Eff.Days</th><th style="text-align:right">Earned</th><th style="text-align:right">Adv Balance</th><th style="text-align:right">Deducting</th><th style="text-align:right">Net Payable</th><th>Status</th><th>Actions</th></tr></thead>
+        <thead><tr><th>Staff</th><th>Salary/Mo</th><th style="text-align:center">P</th><th style="text-align:center"></th><th style="text-align:center">Eff.Days</th><th style="text-align:right">Earned</th><th style="text-align:right">Adv Balance</th><th style="text-align:right">Deducting</th><th style="text-align:right">Net Payable</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody>
-        ${rows.length ? rows.map(r => `<tr style="${r.paid?'background:rgba(34,197,94,0.05)':''}">
-            <td style="font-weight:600">${escapeHtml(r.s.name)}<div style="font-size:0.72rem;color:var(--text-muted)">${r.s.role||'Staff'}</div></td>
-            <td>${currency(r.s.monthly_salary||0)}</td>
+        ${rows.length ? rows.map(r => `<tr style="${r.paid ? 'background:rgba(34,197,94,0.05)' : ''}">
+            <td style="font-weight:600">${escapeHtml(r.s.name)}<div style="font-size:0.72rem;color:var(--text-muted)">${r.s.role || 'Staff'}</div></td>
+            <td>${currency(r.s.monthly_salary || 0)}</td>
             <td style="text-align:center;color:#22c55e;font-weight:600">${r.p}</td>
             <td style="text-align:center;color:#f59e0b;font-weight:600">${r.hd}</td>
             <td style="text-align:center;font-weight:700">${r.daysEff.toFixed(1)}</td>
             <td style="text-align:right;font-weight:600">${currency(r.earned)}</td>
-            <td style="text-align:right;color:${r.advPending>0?'#ef4444':'var(--text-muted)'}">
+            <td style="text-align:right;color:${r.advPending > 0 ? '#ef4444' : 'var(--text-muted)'}">
                 ${r.advPending > 0 ? currency(r.advPending) : '-'}
             </td>
             <td style="text-align:right">
                 ${!r.paid && r.advPending > 0
-                    ? `<input type="number" id="deduct-${r.s.id}" value="${r.toDeduct}" min="0" max="${r.advPending}" step="1" class="form-control" style="width:90px;text-align:right;padding:4px 6px;font-size:0.85rem;color:#ef4444;font-weight:600" oninput="updateNetPayable('${r.s.id}',${r.earned})">`
-                    : (r.toDeduct > 0 ? `<span style="color:#ef4444;font-weight:600">- ${currency(r.toDeduct)}</span>` : '<span style="color:var(--text-muted)">-</span>')}
+            ? `<input type="number" id="deduct-${r.s.id}" value="${r.toDeduct}" min="0" max="${r.advPending}" step="1" class="form-control" style="width:90px;text-align:right;padding:4px 6px;font-size:0.85rem;color:#ef4444;font-weight:600" oninput="updateNetPayable('${r.s.id}',${r.earned})">`
+            : (r.toDeduct > 0 ? `<span style="color:#ef4444;font-weight:600">- ${currency(r.toDeduct)}</span>` : '<span style="color:var(--text-muted)">-</span>')}
             </td>
             <td style="text-align:right;font-weight:800;color:var(--accent);font-size:1rem"><span id="net-${r.s.id}">${currency(r.net)}</span></td>
-            <td><span class="badge ${r.paid?'badge-success':'badge-warning'}">${r.paid?'Paid':'Pending'}</span></td>
+            <td><span class="badge ${r.paid ? 'badge-success' : 'badge-warning'}">${r.paid ? 'Paid' : 'Pending'}</span></td>
             <td><div class="action-btns" style="gap:4px">
                 ${!r.paid
-                    ? `<button class="btn btn-primary btn-sm" onclick="markSalaryPaid('${r.s.id}','${escapeHtml(r.s.name)}','${selMonth}',${r.s.monthly_salary||0},${workingDays},${r.daysEff},${r.earned})">Mark Paid</button>`
-                    : `<button class="btn btn-outline btn-sm" onclick="viewPaySlip('${r.s.id}','${selMonth}')">📄 Pay Slip</button>
-                       <button class="btn btn-warning btn-sm" onclick="resetSalaryPaid('${r.s.id}','${escapeHtml(r.s.name)}','${selMonth}')">↩ Recalc</button>`
-                }
+            ? `<button class="btn btn-primary btn-sm" onclick="markSalaryPaid('${r.s.id}','${escapeHtml(r.s.name)}','${selMonth}',${r.s.monthly_salary || 0},${workingDays},${r.daysEff},${r.earned})">Mark Paid</button>`
+            : `<button class="btn btn-outline btn-sm" onclick="viewPaySlip('${r.s.id}','${selMonth}')"> Pay Slip</button>
+                       <button class="btn btn-warning btn-sm" onclick="resetSalaryPaid('${r.s.id}','${escapeHtml(r.s.name)}','${selMonth}')"> Recalc</button>`
+        }
                 <button class="btn btn-outline btn-sm" onclick="openStaffAdvance('${r.s.id}','${escapeHtml(r.s.name)}')">+Advance</button>
             </div></td>
         </tr>`).join('') : '<tr><td colspan="11"><div class="empty-state"><p>No active staff</p></div></td></tr>'}
@@ -15262,16 +15400,16 @@ async function renderHRPayroll() {
         <thead><tr><th>Staff</th><th>Date</th><th style="text-align:right">Given</th><th style="text-align:right">Deducted</th><th style="text-align:right">Balance</th><th>Notes</th><th>Action</th></tr></thead>
         <tbody>
         ${allAdvRecs.length ? allAdvRecs.map(a => {
-            const bal = Math.max(0, (a.amount||0) - (a.deducted||0));
-            const statusColor = bal === 0 ? '#22c55e' : bal < (a.amount||0) ? '#f59e0b' : '#ef4444';
+            const bal = Math.max(0, (a.amount || 0) - (a.deducted || 0));
+            const statusColor = bal === 0 ? '#22c55e' : bal < (a.amount || 0) ? '#f59e0b' : '#ef4444';
             return `<tr>
-                <td style="font-weight:600">${escapeHtml(a.staff_name||'')}</td>
-                <td>${fmtDate(a.date)}<div style="font-size:0.72rem;color:var(--text-muted)">${a.month||''}</div></td>
-                <td style="text-align:right;font-weight:700;color:#ef4444">${currency(a.amount||0)}</td>
-                <td style="text-align:right;color:#22c55e">${(a.deducted||0)>0?currency(a.deducted):'-'}</td>
-                <td style="text-align:right;font-weight:700;color:${statusColor}">${bal>0?currency(bal):'Cleared'}</td>
-                <td style="color:var(--text-muted);font-size:0.85rem">${escapeHtml(a.notes||'-')}</td>
-                <td>${bal>0?`<button class="btn-icon" onclick="deleteAdvance('${a.id}')" title="Delete">🗑️</button>`:''}</td>
+                <td style="font-weight:600">${escapeHtml(a.staff_name || '')}</td>
+                <td>${fmtDate(a.date)}<div style="font-size:0.72rem;color:var(--text-muted)">${a.month || ''}</div></td>
+                <td style="text-align:right;font-weight:700;color:#ef4444">${currency(a.amount || 0)}</td>
+                <td style="text-align:right;color:#22c55e">${(a.deducted || 0) > 0 ? currency(a.deducted) : '-'}</td>
+                <td style="text-align:right;font-weight:700;color:${statusColor}">${bal > 0 ? currency(bal) : 'Cleared'}</td>
+                <td style="color:var(--text-muted);font-size:0.85rem">${escapeHtml(a.notes || '-')}</td>
+                <td>${bal > 0 ? `<button class="btn-icon" onclick="deleteAdvance('${a.id}')" title="Delete"></button>` : ''}</td>
             </tr>`;
         }).join('') : '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:20px">No advance records</td></tr>'}
         </tbody>
@@ -15286,13 +15424,13 @@ async function openStaffAdvance(staffId, staffName) {
     <div class="form-group">
         <label>Staff Member *</label>
         <select id="f-adv-staff" class="form-control">
-            <option value="">— Select —</option>
-            ${(staff||[]).map(s => `<option value="${s.id}" data-name="${escapeHtml(s.name)}" ${staffId&&staffId===s.id?'selected':''}>${escapeHtml(s.name)}</option>`).join('')}
+            <option value=""> Select </option>
+            ${(staff || []).map(s => `<option value="${s.id}" data-name="${escapeHtml(s.name)}" ${staffId && staffId === s.id ? 'selected' : ''}>${escapeHtml(s.name)}</option>`).join('')}
         </select>
     </div>
     <div class="form-row">
         <div class="form-group"><label>Date</label><input id="f-adv-date" type="date" class="form-control" value="${today()}"></div>
-        <div class="form-group"><label>Amount (₹) *</label><input id="f-adv-amount" type="number" min="1" class="form-control" placeholder="0"></div>
+        <div class="form-group"><label>Amount () *</label><input id="f-adv-amount" type="number" min="1" class="form-control" placeholder="0"></div>
     </div>
     <div class="form-group"><label>For Month</label><input id="f-adv-month" type="month" class="form-control" value="${selMonth}"></div>
     <div class="form-group"><label>Notes</label><input id="f-adv-notes" class="form-control" placeholder="Reason / notes..."></div>
@@ -15315,7 +15453,7 @@ async function saveAdvance() {
         staff_id: staffId, staff_name: staffName,
         date: $('f-adv-date').value,
         amount, month: $('f-adv-month').value,
-        notes: ($('f-adv-notes').value||'').trim(),
+        notes: ($('f-adv-notes').value || '').trim(),
         paid_by: currentUser.name
     };
     const { error } = await supabaseClient.from('salary_advances').insert(rec);
@@ -15339,396 +15477,122 @@ function updateNetPayable(staffId, earned) {
     netEl.textContent = currency(Math.max(0, earned - deduct));
 }
 
+// --- Payroll Process: Mark Salary as Paid (Unified & Secured) ---
 async function markSalaryPaid(staffId, staffName, month, monthlySalary, workingDays, daysEff, earned) {
     try {
-        // Fetch ALL advances for this staff ordered oldest first (FIFO)
         const { data: allAdvs, error: advErr } = await supabaseClient
             .from('salary_advances').select('*')
             .eq('staff_id', staffId)
             .order('date', { ascending: true });
-        
+
         if (advErr) throw advErr;
 
-        const pendingAdvs = (allAdvs || []).filter(a => Math.max(0, (a.amount||0) - (a.deducted||0)) > 0);
-        const totalPending = pendingAdvs.reduce((t, a) => t + Math.max(0, (a.amount||0) - (a.deducted||0)), 0);
-
-        // Read admin-edited deduction amount (if input exists on page)
+        const pendingAdvs = (allAdvs || []).filter(a => ((a.amount || 0) - (a.deducted || 0)) > 0.01);
         const deductInput = document.getElementById('deduct-' + staffId);
-        const requestedDeduction = deductInput
-            ? Math.min(Math.max(0, +deductInput.value || 0), Math.min(earned, totalPending))
-            : Math.min(earned, totalPending);
+        const totalPending = pendingAdvs.reduce((t, a) => t + ((a.amount || 0) - (a.deducted || 0)), 0);
+        const finalDeductionAmount = deductInput ? parseFloat(deductInput.value || 0) : Math.min(earned, totalPending);
 
-        // FIFO: deduct from oldest advance first, capped at requestedDeduction
-        let remaining = requestedDeduction;
-        let totalDeducted = 0;
-        const advUpdates = []; // { id, newDeducted, deductNow, date, notes, total, oldDeducted }
+        let remainingToDeduct = finalDeductionAmount;
+        const advanceOps = [];
 
         for (const adv of pendingAdvs) {
-            if (remaining <= 0) break;
-            const bal = Math.max(0, (adv.amount||0) - (adv.deducted||0));
-            const deductNow = +Math.min(bal, remaining).toFixed(2);
-            remaining = +(remaining - deductNow).toFixed(2);
-            totalDeducted = +(totalDeducted + deductNow).toFixed(2);
-            advUpdates.push({ id: adv.id, newDeducted: +((adv.deducted||0) + deductNow).toFixed(2), deductNow, date: adv.date, notes: adv.notes, total: adv.amount, oldDeducted: adv.deducted||0 });
+            if (remainingToDeduct <= 0) break;
+            const bal = (adv.amount || 0) - (adv.deducted || 0);
+            const deductNow = +Math.min(bal, remainingToDeduct).toFixed(2);
+            remainingToDeduct = +(remainingToDeduct - deductNow).toFixed(2);
+            advanceOps.push({ id: adv.id, deductNow, oldDeducted: adv.deducted || 0 });
         }
 
-        const net = +Math.max(0, earned - totalDeducted).toFixed(2);
-        const carryForward = +(totalPending - totalDeducted).toFixed(2);
+        const netPayable = +(earned - finalDeductionAmount).toFixed(2);
+        const salData = {
+            id: 'sal_' + Date.now() + '_' + staffId.slice(-4),
+            staff_id: staffId, staff_name: staffName, month,
+            monthly_salary: monthlySalary, working_days: workingDays,
+            days_present: daysEff, earned_salary: earned,
+            advances: finalDeductionAmount, net_payable: netPayable,
+            status: finalDeductionAmount > 0 ? 'processing' : 'paid',
+            paid_date: today(), paid_by: currentUser.name
+        };
 
-        // Build confirmation message
-        let confLines = [`Staff: ${staffName}`, `Earned: ${currency(earned)}`];
-        if (totalDeducted > 0) {
-            confLines.push(`Advance deducted: - ${currency(totalDeducted)}`);
-            if (carryForward > 0) confLines.push(`Carry-forward balance: ${currency(carryForward)}`);
+        if (!confirm(`Confirm Salary for ${staffName}?\nNet: ${currency(netPayable)}`)) return;
+
+        // Step 1: Insert salary record
+        const { error: insertErr } = await supabaseClient.from('salary_records').insert(salData);
+        if (insertErr) throw new Error('Failed to create salary record: ' + insertErr.message);
+
+        // Step 2: Apply advance deductions sequentially for rollback capability
+        if (finalDeductionAmount > 0) {
+            let rollbackNeeded = false;
+            let errMessage = '';
+            const appliedOps = [];
+
+            for (const op of advanceOps) {
+                const { error: updErr } = await supabaseClient.from('salary_advances')
+                    .update({ deducted: +(op.oldDeducted + op.deductNow).toFixed(2) }).eq('id', op.id);
+                if (updErr) {
+                    rollbackNeeded = true;
+                    errMessage = updErr.message;
+                    break;
+                }
+                appliedOps.push(op);
+            }
+
+            // Step 3: Handle Rollback or Finalize
+            if (rollbackNeeded) {
+                for (const rop of appliedOps) {
+                    await supabaseClient.from('salary_advances').update({ deducted: rop.oldDeducted }).eq('id', rop.id);
+                }
+                await supabaseClient.from('salary_records').delete().eq('id', salData.id);
+                throw new Error('Transaction failed during advance deductions. Rolled back. ' + errMessage);
+            } else {
+                await supabaseClient.from('salary_records').update({ status: 'paid' }).eq('id', salData.id);
+            }
         }
-        confLines.push(`Net Payable: ${currency(net)}`);
-        if (!confirm(confLines.join('\n'))) return;
 
-        // Update each advance's deducted amount
-        const ops = advUpdates.map(u =>
-            supabaseClient.from('salary_advances').update({ deducted: u.newDeducted }).eq('id', u.id)
-        );
-
-        // Upsert salary record
-        const { data: existing } = await supabaseClient.from('salary_records').select('id').eq('staff_id', staffId).eq('month', month).single();
-        const rec = { staff_id: staffId, staff_name: staffName, month, monthly_salary: monthlySalary, working_days: workingDays, days_present: daysEff, earned_salary: earned, advances: totalDeducted, net_payable: net, status: 'paid', paid_date: today(), paid_by: currentUser.name };
-        if (existing) {
-            ops.push(supabaseClient.from('salary_records').update(rec).eq('id', existing.id));
-        } else {
-            rec.id = 'sal_' + Date.now() + '_' + staffId.slice(-4);
-            ops.push(supabaseClient.from('salary_records').insert(rec));
-        }
-
-        const results = await Promise.all(ops);
-        const firstError = results.find(r => r.error);
-        if (firstError) throw firstError.error;
-
-        showToast(`Salary paid for ${staffName}! Net: ${currency(net)}${carryForward > 0 ? ' | Adv carry-forward: ' + currency(carryForward) : ''}`, 'success');
+        showToast('Salary Paid!', 'success');
         renderHRPayroll();
-    } catch (err) {
-        console.error('Error marking salary as paid:', err);
-        alert('Error: ' + err.message);
-    }
+    } catch (err) { alert('Payroll Error: ' + err.message); }
 }
 
 async function resetSalaryPaid(staffId, staffName, month) {
-    if (!confirm(`Reset salary for ${staffName} (${month}) back to Pending?\n\nThis will:\n• Mark salary as Unpaid\n• Reverse advance deductions for this month\n• Allow you to re-enter deduction amount and recalculate`)) return;
-
-    // Load salary record to know how much was deducted
-    const { data: sr } = await supabaseClient
-        .from('salary_records').select('*')
-        .eq('staff_id', staffId).eq('month', month).single();
-    if (!sr) return alert('Salary record not found');
-
-    // Load all advances for this staff oldest-first
-    const { data: allAdvs } = await supabaseClient
-        .from('salary_advances').select('*')
-        .eq('staff_id', staffId)
-        .order('date', { ascending: true });
-
-    // Reverse FIFO: subtract the deducted amount back from advances (newest first among those that were deducted)
-    let toReverse = +(sr.advances || 0);
-    const ops = [];
-    const deductedAdvs = [...(allAdvs || [])].filter(a => (a.deducted || 0) > 0).reverse(); // newest first for reversal
-    for (const adv of deductedAdvs) {
-        if (toReverse <= 0) break;
-        const reverseNow = +Math.min(adv.deducted || 0, toReverse).toFixed(2);
-        toReverse = +(toReverse - reverseNow).toFixed(2);
-        const newDeducted = +Math.max(0, (adv.deducted || 0) - reverseNow).toFixed(2);
-        ops.push(supabaseClient.from('salary_advances').update({ deducted: newDeducted }).eq('id', adv.id));
-    }
-
-    // Mark salary record as unpaid (keep record for audit, just reset status)
-    ops.push(supabaseClient.from('salary_records').update({
-        status: 'unpaid', paid_date: null, paid_by: null, advances: 0, net_payable: sr.earned_salary
-    }).eq('id', sr.id));
-
-    await Promise.all(ops);
-    showToast(`Salary reset to Pending for ${staffName}. Advance deductions reversed.`, 'success');
-    renderHRPayroll();
-}
-
-async function viewPaySlip(staffId, month) {
-    const [{ data: s }, { data: sr }, { data: allAdvs }] = await Promise.all([
-        supabaseClient.from('staff').select('*').eq('id', staffId).single(),
-        supabaseClient.from('salary_records').select('*').eq('staff_id', staffId).eq('month', month).single(),
-        supabaseClient.from('salary_advances').select('*').eq('staff_id', staffId).order('date', { ascending: true })
-    ]);
-    if (!sr) return alert('Salary record not found');
-    const co = DB.getObj('db_company');
-
-    // Build advance deduction rows for pay slip
-    // Show advances that had deductions applied (deducted > 0) up to this month
-    const advRows = (allAdvs || []).filter(a => (a.deducted||0) > 0).map(a => {
-        const bal = Math.max(0, (a.amount||0) - (a.deducted||0));
-        return `<tr style="color:#ef4444">
-            <td style="padding:8px;border:1px solid var(--border)">
-                Advance (${fmtDate(a.date)})${a.notes?' — '+a.notes:''}
-                <div style="font-size:0.72rem;color:var(--text-muted)">Total: ${currency(a.amount)} | Deducted so far: ${currency(a.deducted)}${bal>0?' | Remaining: '+currency(bal):' | Cleared'}</div>
-            </td>
-            <td style="padding:8px;text-align:right;border:1px solid var(--border)">- ${currency(sr.advances)}</td>
-        </tr>`;
-    }).slice(0, 1); // show summary row (net advances in salary record is the total for this month)
-
-    // Simpler: just show the total deducted this month from salary record
-    const advDeductRow = sr.advances > 0 ? `<tr style="color:#ef4444">
-        <td style="padding:8px;border:1px solid var(--border)">Advance Adjustment${(allAdvs||[]).filter(a=>(a.deducted||0)>0).length > 0 ? ' (oldest first)' : ''}</td>
-        <td style="padding:8px;text-align:right;border:1px solid var(--border)">- ${currency(sr.advances)}</td>
-    </tr>` : '';
-
-    openModal('Pay Slip', `
-    <div id="payslip-print">
-        <div style="text-align:center;border-bottom:2px solid var(--border);padding-bottom:12px;margin-bottom:16px">
-            <div style="font-size:1.2rem;font-weight:800">${escapeHtml(co.name||'Company')}</div>
-            <div style="font-size:0.8rem;color:var(--text-muted)">${co.address||''}</div>
-            <div style="margin-top:8px;font-size:1rem;font-weight:700;color:var(--accent)">SALARY SLIP — ${month}</div>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:0.85rem;margin-bottom:16px">
-            <div><span style="color:var(--text-muted)">Employee:</span> <strong>${escapeHtml(s.name)}</strong></div>
-            <div><span style="color:var(--text-muted)">Role:</span> ${s.role||'Staff'}</div>
-            <div><span style="color:var(--text-muted)">Month:</span> ${month}</div>
-            <div><span style="color:var(--text-muted)">Paid Date:</span> ${fmtDate(sr.paid_date)}</div>
-            <div><span style="color:var(--text-muted)">Phone:</span> ${s.phone||'-'}</div>
-            <div><span style="color:var(--text-muted)">Paid By:</span> ${sr.paid_by||'-'}</div>
-        </div>
-        <table style="width:100%;border-collapse:collapse;font-size:0.85rem;margin-bottom:12px">
-            <tr style="background:var(--bg-page)"><th style="padding:8px;text-align:left;border:1px solid var(--border)">Description</th><th style="padding:8px;text-align:right;border:1px solid var(--border)">Amount</th></tr>
-            <tr><td style="padding:8px;border:1px solid var(--border)">Monthly Salary</td><td style="padding:8px;text-align:right;border:1px solid var(--border)">${currency(sr.monthly_salary)}</td></tr>
-            <tr><td style="padding:8px;border:1px solid var(--border)">Working Days (excl. Sun)</td><td style="padding:8px;text-align:right;border:1px solid var(--border)">${sr.working_days}</td></tr>
-            <tr><td style="padding:8px;border:1px solid var(--border)">Days Present (effective)</td><td style="padding:8px;text-align:right;border:1px solid var(--border)">${(+sr.days_present).toFixed(1)}</td></tr>
-            <tr style="background:rgba(34,197,94,0.07)"><td style="padding:8px;border:1px solid var(--border);font-weight:600">Earned Salary</td><td style="padding:8px;text-align:right;border:1px solid var(--border);font-weight:600">${currency(sr.earned_salary)}</td></tr>
-            ${advDeductRow}
-            <tr style="background:var(--accent);color:#fff"><td style="padding:10px;border:1px solid var(--border);font-weight:700;font-size:1rem">NET PAYABLE</td><td style="padding:10px;text-align:right;border:1px solid var(--border);font-weight:800;font-size:1.1rem">${currency(sr.net_payable)}</td></tr>
-        </table>
-        <div style="display:flex;justify-content:space-between;font-size:0.75rem;color:var(--text-muted);margin-top:16px;padding-top:12px;border-top:1px dashed var(--border)">
-            <span>Employee Signature: ___________________</span>
-            <span>Authorized: ___________________</span>
-        </div>
-    </div>
-    <div class="modal-actions" style="margin-top:12px">
-        <button class="btn btn-outline" onclick="closeModal()">Close</button>
-        <button class="btn btn-primary" onclick="window.print()">🖨️ Print</button>
-    </div>`);
-}
-
-
-
-
-// =============================================
-//  GLOBAL SEARCH (OMNIBOX)
-// =============================================
-let _searchTimer;
-function onGlobalSearch(q) {
-    clearTimeout(_searchTimer);
-    if (!q || q.trim().length < 2) return hideSearchResults();
-    _searchTimer = setTimeout(() => executeGlobalSearch(q.trim()), 300);
-}
-
-async function executeGlobalSearch(q) {
-    const lq = q.toLowerCase();
-    const [parties, inventory, invoices] = await Promise.all([
-        DB.getAll('parties'),
-        DB.getAll('inventory'),
-        DB.getAll('invoices')
-    ]);
-
-    const results = {
-        parties: parties.filter(p => p.name.toLowerCase().includes(lq) || (p.mobile && p.mobile.includes(lq))).slice(0, 5),
-        inventory: inventory.filter(p => p.name.toLowerCase().includes(lq) || (p.code && p.code.toLowerCase().includes(lq))).slice(0, 5),
-        invoices: invoices.filter(p => p.invoiceNo.toLowerCase().includes(lq) || p.partyName.toLowerCase().includes(lq)).slice(0, 5)
-    };
-
-    renderSearchResultsOverlay(q, results);
-}
-
-function renderSearchResultsOverlay(q, results) {
-    let overlay = document.getElementById('search-results-overlay');
-    if (!overlay) {
-        overlay = document.createElement('div');
-        overlay.id = 'search-results-overlay';
-        overlay.className = 'search-results-overlay';
-        document.body.appendChild(overlay);
-    }
-    overlay.classList.remove('hidden');
-
-    const total = results.parties.length + results.inventory.length + results.invoices.length;
-    if (total === 0) {
-        overlay.innerHTML = `<div style="padding:20px;text-align:center;color:var(--text-muted)">No results found for "${escapeHtml(q)}"</div>`;
-        return;
-    }
-
-    let html = `<div class="search-results-header">Results for "${escapeHtml(q)}"</div>`;
-    
-    if (results.parties.length) {
-        html += `<div class="search-category">Parties</div>`;
-        results.parties.forEach(p => {
-            html += `<div class="search-item" onclick="hideSearchResults();navigateTo('parties');setTimeout(()=>openPartyModal('${p.id}'),300)">
-                <div class="search-item-title">${escapeHtml(p.name)}</div>
-                <div class="search-item-detail">${p.mobile || ''} | Bal: ${currency(p.balance)}</div>
-            </div>`;
-        });
-    }
-    if (results.inventory.length) {
-        html += `<div class="search-category">Inventory</div>`;
-        results.inventory.forEach(p => {
-            html += `<div class="search-item" onclick="hideSearchResults();navigateTo('inventory')">
-                <div class="search-item-title">${escapeHtml(p.name)}</div>
-                <div class="search-item-detail">Code: ${p.code || '-'} | Stock: ${p.stock || 0} ${p.unit || 'Pcs'}</div>
-            </div>`;
-        });
-    }
-    if (results.invoices.length) {
-        html += `<div class="search-category">Invoices</div>`;
-        results.invoices.forEach(p => {
-            html += `<div class="search-item" onclick="hideSearchResults();viewInvoice('${p.invoiceNo}')">
-                <div class="search-item-title">${p.invoiceNo}</div>
-                <div class="search-item-detail">${p.partyName} | ${currency(p.total)}</div>
-            </div>`;
-        });
-    }
-
-    overlay.innerHTML = html;
-}
-
-function hideSearchResults() {
-    const overlay = document.getElementById('search-results-overlay');
-    if (overlay) overlay.classList.add('hidden');
-}
-
-function renderSearchResults() {
-    // This is a placeholder for navigateTo('search') if ever used
-    pageContent.innerHTML = `<div class="card"><div class="card-body">Use the top search bar for global search.</div></div>`;
-}
-
-// =============================================
-//  MOBILE SWIPE ACTIONS
-// =============================================
-function initSwipeActions() {
-    if (window.innerWidth > 768) return; // Desktop doesn't need swipes
-    
-    const rows = document.querySelectorAll('.swipe-row');
-    rows.forEach(row => {
-        if (row._swipeInit) return;
-        row._swipeInit = true;
-        
-        let startX = 0;
-        let diff = 0;
-        let isSwiping = false;
-
-        row.addEventListener('touchstart', e => {
-            startX = e.touches[0].clientX;
-            isSwiping = true;
-            row.style.transition = 'none';
-        }, { passive: true });
-
-        row.addEventListener('touchmove', e => {
-            if (!isSwiping) return;
-            const x = e.touches[0].clientX;
-            diff = x - startX;
-            // Only allow swiping left (to reveal delete/edit on the right)
-            if (diff < 0) {
-                const move = Math.max(-140, diff); // Max 140px (two buttons)
-                row.style.transform = `translateX(${move}px)`;
-            }
-        }, { passive: true });
-
-        row.addEventListener('touchend', e => {
-            isSwiping = false;
-            row.style.transition = 'transform 0.3s cubic-bezier(0.18, 0.89, 0.32, 1.28)';
-            if (diff < -60) {
-                row.style.transform = 'translateX(-140px)'; // Stay open
-            } else {
-                row.style.transform = 'translateX(0)';
-            }
-            diff = 0;
-        }, { passive: true });
-
-        // Close on click elsewhere
-        document.addEventListener('touchstart', e => {
-            if (!row.contains(e.target)) row.style.transform = 'translateX(0)';
-        }, { passive: true });
-    });
-}
-
-
-// --- Purchase Indent Report & Bulk Buffer Update ---
-async function renderPurchaseIndentReport() {
-    const [inv, invoices, cats] = await Promise.all([
-        DB.getAll('inventory'),
-        DB.getAll('invoices'),
-        DB.getAll('categories')
-    ]);
-    const sales30d = invoices.filter(i => i.type === 'sale' && i.status !== 'cancelled' && i.date >= daysAgo(30));
-    
-    const salesMap = {};
-    sales30d.forEach(invRec => {
-        (invRec.items || []).forEach(li => {
-            const item = inv.find(x => x.id === li.itemId);
-            let qty = +li.qty || 0;
-            if (item && item.secUom && li.uom === item.secUom) {
-                qty *= (item.conversionFactor || 1);
-            }
-            salesMap[li.itemId] = (salesMap[li.itemId] || 0) + qty;
-        });
-    });
-
-    const el = document.getElementById('report-detail') || document.getElementById('page-content');
-    const catFlt = document.getElementById('r-ind-cat')?.value || '';
-    const subFlt = document.getElementById('r-ind-sub')?.value || '';
-
-    const reportData = inv.map(item => {
-        const s30 = salesMap[item.id] || 0;
-        const avg10 = Math.ceil((s30 / 30) * 10);
-        const stock = item.stock || 0;
-        const indent = Math.max(0, avg10 - stock);
-        return { ...item, s30, avg10, stock, indent };
-    }).filter(p => !catFlt || p.category === catFlt)
-      .filter(p => !subFlt || (p.subcategory && p.subcategory.toLowerCase().includes(subFlt.toLowerCase())));
-
-    window._lastIndentData = reportData;
-
-    el.innerHTML = `
-        <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
-            <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
-                <div class="form-group"><label>Category</label><select id="r-ind-cat" onchange="renderPurchaseIndentReport()"><option value="">All</option>${(cats||[]).map(c=>`<option ${catFlt===c.name?'selected':''}>${c.name}</option>`).join('')}</select></div>
-                <div class="form-group"><label>Sub-category</label><input id="r-ind-sub" value="${subFlt}" placeholder="Filter sub..." oninput="renderPurchaseIndentReport()" style="width:140px"></div>
-                <div class="form-group" style="align-self:flex-end;display:flex;gap:8px">
-                    <button class="btn btn-outline btn-sm" onclick="exportTableToExcel('tbl-indent','PurchaseIndent_${today()}')">📥 Export</button>
-                    <button class="btn btn-primary btn-sm" onclick="updateAllMinStockFromIndent()">🔄 Update Min Stock</button>
-                    <button class="btn btn-outline btn-sm" onclick="showReport('indent')">🔄 Refresh</button>
-                </div>
-            </div>
-        </div></div>
-        <div class="table-wrapper"><table class="data-table" id="tbl-indent">
-            <thead><tr><th>Item Name</th><th>Category</th><th>30d Sales</th><th>10d Buffer (MinReq)</th><th>Current Stock</th><th>Suggest Indent</th><th>UOM</th></tr></thead>
-            <tbody>${reportData.map(p => `<tr>
-                <td style="font-weight:600">${p.name}</td>
-                <td style="font-size:0.8rem">${p.subcategory || p.category}</td>
-                <td>${p.s30}</td>
-                <td style="background:rgba(249,115,22,0.05);font-weight:700">${p.avg10}</td>
-                <td style="color:${p.stock < p.avg10 ? '#ef4444' : '#22c55e'}">${p.stock}</td>
-                <td style="font-weight:700;color:var(--primary)">${p.indent > 0 ? p.indent : '-'}</td>
-                <td style="font-size:0.8rem;color:var(--text-muted)">${p.unit}</td>
-            </tr>`).join('')}</tbody>
-        </table></div>`;
-}
-
-async function updateAllMinStockFromIndent() {
-    if (!window._lastIndentData || !window._lastIndentData.length) return;
-    if (!confirm('Update "Minimum Stock" for ' + window._lastIndentData.length + ' items based on 10-day buffer?')) return;
-    
-    showToast('Updating minimum stocks...', 'info');
-    let updated = 0;
+    if (!confirm(`Reset salary for ${staffName} (${month})? This reverses advance deductions.`)) return;
     try {
-        for (const p of window._lastIndentData) {
-            if (p.avg10 > 0 && p.avg10 !== p.minStock) {
-                await DB.update('inventory', { id: p.id, minStock: p.avg10 });
-                updated++;
-            }
+        const { data: sr } = await supabaseClient.from('salary_records').select('*').eq('staff_id', staffId).eq('month', month).single();
+        if (!sr) return alert('Record not found');
+
+        const { data: allAdvs } = await supabaseClient.from('salary_advances').select('*').eq('staff_id', staffId).order('date', { ascending: false });
+        let toReverse = +(sr.advances || 0);
+        const ops = [];
+
+        for (const adv of (allAdvs || [])) {
+            if (toReverse <= 0) break;
+            const canReverse = adv.deducted || 0;
+            const reverseNow = +Math.min(canReverse, toReverse).toFixed(2);
+            toReverse -= reverseNow;
+            ops.push({ id: adv.id, reverseNow, oldDeducted: canReverse });
         }
-        showToast('Updated Min Stock for ' + updated + ' items', 'success');
-        renderPurchaseIndentReport();
-    } catch (err) {
-        showToast('Error updating min stock: ' + err.message, 'error');
-    }
+
+        await supabaseClient.from('salary_records').update({ status: 'reversing' }).eq('id', sr.id);
+
+        let rollbackNeeded = false;
+        const appliedOps = [];
+        for (const op of ops) {
+            const { error: revErr } = await supabaseClient.from('salary_advances')
+                .update({ deducted: +(op.oldDeducted - op.reverseNow).toFixed(2) }).eq('id', op.id);
+            if (revErr) { rollbackNeeded = true; break; }
+            appliedOps.push(op);
+        }
+
+        if (rollbackNeeded) {
+            for (const rop of appliedOps) {
+                await supabaseClient.from('salary_advances').update({ deducted: rop.oldDeducted }).eq('id', rop.id);
+            }
+            await supabaseClient.from('salary_records').update({ status: 'paid' }).eq('id', sr.id);
+            throw new Error('Failed to reverse deductions entirely. Rolled back.');
+        }
+
+        await supabaseClient.from('salary_records').delete().eq('id', sr.id);
+        showToast('Salary reset successfully', 'success');
+        renderHRPayroll();
+    } catch (err) { alert('Error: ' + err.message); }
 }

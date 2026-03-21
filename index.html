@@ -1,10 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>DistroManager — Distributor Business Management</title>
-    <meta name="description" content="A comprehensive distributor business management app for invoicing, inventory, payments, delivery, packing, and reports.">
+    <meta name="description"
+        content="A comprehensive distributor business management app for invoicing, inventory, payments, delivery, packing, and reports.">
     <link rel="icon" href="logo_prakash.png">
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#f97316">
@@ -14,32 +17,57 @@
     <meta name="apple-mobile-web-app-title" content="DistroMgr">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
+        rel="stylesheet">
     <link rel="stylesheet" href="style.css?v=36">
     <style>
         #app-loading {
-            position: fixed; inset: 0; background: var(--bg-body, #f8fafc);
-            display: flex; flex-direction: column; align-items: center; justify-content: center;
-            z-index: 99999; transition: opacity 0.4s ease, visibility 0.4s;
+            position: fixed;
+            inset: 0;
+            background: var(--bg-body, #f8fafc);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 99999;
+            transition: opacity 0.4s ease, visibility 0.4s;
         }
-        #app-loading.hidden { opacity: 0; visibility: hidden; pointer-events: none; }
+
+        #app-loading.hidden {
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+        }
+
         .spinner {
-            width: 48px; height: 48px; border: 4px solid var(--border, #e2e8f0);
-            border-top-color: var(--primary, #f97316); border-radius: 50%;
-            animation: spin 1s linear infinite; margin-bottom: 16px;
+            width: 48px;
+            height: 48px;
+            border: 4px solid var(--border, #e2e8f0);
+            border-top-color: var(--primary, #f97316);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 16px;
         }
-        @keyframes spin { to { transform: rotate(360deg); } }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
     </style>
 </head>
+
 <body>
     <!-- Initial Loading State -->
     <div id="app-loading">
         <div class="spinner"></div>
-        <p style="font-family:'Inter',sans-serif;font-weight:600;color:var(--text-primary,#1e293b);margin:0">Loading DistroManager...</p>
-        <p style="font-family:'Inter',sans-serif;font-size:0.8rem;color:var(--text-muted,#64748b);margin-top:8px">Initializing database & workspace</p>
+        <p style="font-family:'Inter',sans-serif;font-weight:600;color:var(--text-primary,#1e293b);margin:0">Loading
+            DistroManager...</p>
+        <p style="font-family:'Inter',sans-serif;font-size:0.8rem;color:var(--text-muted,#64748b);margin-top:8px">
+            Initializing database & workspace</p>
         <div id="boot-error-ui" class="hidden" style="margin-top:24px;text-align:center;padding:0 20px">
-             <p style="color:#ef4444;font-weight:600;margin-bottom:12px">⚠️ Failed to start application</p>
-             <button onclick="location.reload()" class="btn btn-primary">Retry Now</button>
+            <p style="color:#ef4444;font-weight:600;margin-bottom:12px">⚠️ Failed to start application</p>
+            <button onclick="location.reload()" class="btn btn-primary">Retry Now</button>
         </div>
     </div>
     <!-- Setup Wizard (first launch) -->
@@ -61,24 +89,30 @@
                 <div class="logo-icon"><img src="logo_prakash.png" alt="Logo"></div>
                 <h1 id="login-company-name">DistroManager</h1>
                 <p>Distributor Business Management</p>
-                <div style="font-size:0.72rem;color:var(--text-muted);margin-top:6px;font-weight:600">App Version: v94</div>
+                <div style="font-size:0.72rem;color:var(--text-muted);margin-top:6px;font-weight:600">App Version: v94
+                </div>
             </div>
             <div class="login-form">
                 <div class="form-group">
                     <label for="login-userid">User ID</label>
-                    <input id="login-userid" placeholder="Enter your User ID" autocomplete="username" style="text-transform:lowercase" oninput="this.value=this.value.toLowerCase().replace(/\s/g,'')">
+                    <input id="login-userid" placeholder="Enter your User ID" autocomplete="username"
+                        style="text-transform:lowercase"
+                        oninput="this.value=this.value.toLowerCase().replace(/\s/g,'')">
                 </div>
                 <div class="form-group">
                     <label for="login-pin">PIN</label>
-                    <input type="password" id="login-pin" placeholder="Enter PIN (4–6 digits)" maxlength="6" inputmode="numeric" autocomplete="current-password">
+                    <input type="password" id="login-pin" placeholder="Enter PIN (4–6 digits)" maxlength="6"
+                        inputmode="numeric" autocomplete="current-password">
                 </div>
                 <button id="btn-login" class="btn btn-primary btn-block">Sign In</button>
                 <div style="text-align:center;margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
                     <p style="font-size:0.78rem;color:var(--text-muted);margin-bottom:10px">Are you a customer?</p>
-                    <button onclick="showCustomerPortal()" class="btn btn-outline btn-block" style="border-color:var(--accent);color:var(--accent)">
+                    <button onclick="showCustomerPortal()" class="btn btn-outline btn-block"
+                        style="border-color:var(--accent);color:var(--accent)">
                         🛍️ Customer Portal
                     </button>
-                    <button onclick="forceHardRefresh()" class="btn btn-outline btn-block" style="border-style:dashed;margin-top:16px;color:var(--text-muted);font-size:0.72rem;opacity:0.8">
+                    <button onclick="forceHardRefresh()" class="btn btn-outline btn-block"
+                        style="border-style:dashed;margin-top:16px;color:var(--text-muted);font-size:0.72rem;opacity:0.8">
                         🔄 Force Restart / Update App
                     </button>
                 </div>
@@ -87,7 +121,8 @@
     </div>
 
     <!-- Customer Portal Root -->
-    <div id="cp-root" style="display:none;position:fixed;inset:0;z-index:9999;background:var(--bg-body);overflow-y:auto"></div>
+    <div id="cp-root"
+        style="display:none;position:fixed;inset:0;z-index:9999;background:var(--bg-body);overflow-y:auto"></div>
 
     <!-- Main App -->
     <div id="app" class="app hidden">
@@ -106,7 +141,9 @@
                     <span class="nav-icon">👥</span><span class="nav-label">Parties</span>
                 </a>
                 <a href="#" class="nav-item" data-page="inventory">
-                    <span class="nav-icon">📦</span><span class="nav-label">Inventory</span><span id="nav-badge-inventory" style="display:none;margin-left:auto;background:#ef4444;color:#fff;font-size:0.65rem;font-weight:700;padding:1px 6px;border-radius:10px;line-height:1.6"></span>
+                    <span class="nav-icon">📦</span><span class="nav-label">Inventory</span><span
+                        id="nav-badge-inventory"
+                        style="display:none;margin-left:auto;background:#ef4444;color:#fff;font-size:0.65rem;font-weight:700;padding:1px 6px;border-radius:10px;line-height:1.6"></span>
                 </a>
                 <a href="#" class="nav-item" data-page="inventorysetup">
                     <span class="nav-icon">⚙️</span><span class="nav-label">Inventory Setup</span>
@@ -172,7 +209,8 @@
                 </a>
             </nav>
             <div class="sidebar-footer">
-                <div class="user-badge" onclick="openChangePinModal()" style="cursor:pointer;flex:1" title="Click to change PIN">
+                <div class="user-badge" onclick="openChangePinModal()" style="cursor:pointer;flex:1"
+                    title="Click to change PIN">
                     <div class="user-avatar" id="sidebar-avatar">A</div>
                     <div class="user-info">
                         <span class="user-name" id="sidebar-username">Admin</span>
@@ -190,7 +228,8 @@
                 <h2 id="page-title" class="page-title">Dashboard</h2>
                 <div class="omnibox-container">
                     <span class="omnibox-icon">🔍</span>
-                    <input type="text" id="global-search" class="omnibox-input" placeholder="Search parties, items, invoices..." oninput="onGlobalSearch(this.value)">
+                    <input type="text" id="global-search" class="omnibox-input"
+                        placeholder="Search parties, items, invoices..." oninput="onGlobalSearch(this.value)">
                 </div>
                 <div class="topbar-right">
                     <span class="current-date" id="current-date"></span>
@@ -245,7 +284,8 @@
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" defer></script>
-    <script src="app.js?v=94"></script>
+    <script src="qrcode.min.js"></script>
+    <script src="app.js?v=100"></script>
     <script>
         // Force fully clear everything and reload
         async function forceHardRefresh() {
@@ -265,7 +305,7 @@
                 navigator.serviceWorker.register('sw.js').then(reg => {
                     console.log('SW registered');
                     reg.update(); // Trigger check
-                    
+
                     reg.onupdatefound = () => {
                         const newWorker = reg.installing;
                         newWorker.onstatechange = () => {
@@ -289,4 +329,5 @@
         }
     </script>
 </body>
+
 </html>

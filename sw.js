@@ -1,5 +1,5 @@
-const CACHE = 'distromanager-v45';
-const STATIC = ['./', './index.html', './style.css', './app.js', './manifest.json', './logo_prakash.png'];
+const CACHE = 'distromanager-v46';
+const STATIC = ['./', './index.html', './style.css', './app.js', './manifest.json', './logo_prakash.png', './qrcode.min.js'];
 
 // Helper to ignore query parameters (like ?v=67) for cache matching
 function cleanURL(url) {
