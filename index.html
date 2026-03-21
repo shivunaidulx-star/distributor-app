@@ -17,10 +17,12 @@
     <meta name="apple-mobile-web-app-title" content="DistroMgr">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
-        rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0" rel="stylesheet" />
     <link rel="stylesheet" href="style.css?v=36">
     <style>
+        .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+
         #app-loading {
             position: fixed;
             inset: 0;
@@ -135,77 +137,77 @@
             </div>
             <nav class="sidebar-nav">
                 <a href="#" class="nav-item active" data-page="dashboard">
-                    <span class="nav-icon">📊</span><span class="nav-label">Dashboard</span>
+                    <span class="nav-icon material-symbols-outlined">bar_chart</span><span class="nav-label">Dashboard</span>
                 </a>
                 <a href="#" class="nav-item" data-page="parties">
-                    <span class="nav-icon">👥</span><span class="nav-label">Parties</span>
+                    <span class="nav-icon material-symbols-outlined">group</span><span class="nav-label">Parties</span>
                 </a>
                 <a href="#" class="nav-item" data-page="inventory">
-                    <span class="nav-icon">📦</span><span class="nav-label">Inventory</span><span
+                    <span class="nav-icon material-symbols-outlined">inventory_2</span><span class="nav-label">Inventory</span><span
                         id="nav-badge-inventory"
                         style="display:none;margin-left:auto;background:#ef4444;color:#fff;font-size:0.65rem;font-weight:700;padding:1px 6px;border-radius:10px;line-height:1.6"></span>
                 </a>
                 <a href="#" class="nav-item" data-page="inventorysetup">
-                    <span class="nav-icon">⚙️</span><span class="nav-label">Inventory Setup</span>
+                    <span class="nav-icon material-symbols-outlined">settings</span><span class="nav-label">Inventory Setup</span>
                 </a>
                 <a href="#" class="nav-item" data-page="catalog">
-                    <span class="nav-icon">🛍️</span><span class="nav-label">Item Catalog</span>
+                    <span class="nav-icon material-symbols-outlined">local_mall</span><span class="nav-label">Item Catalog</span>
                 </a>
                 <a href="#" class="nav-item" data-page="salesorders">
-                    <span class="nav-icon">📝</span><span class="nav-label">Sales Orders</span>
+                    <span class="nav-icon material-symbols-outlined">receipt_long</span><span class="nav-label">Sales Orders</span>
                 </a>
                 <a href="#" class="nav-item" data-page="purchaseorders">
-                    <span class="nav-icon">🛒</span><span class="nav-label">Purchase Orders</span>
+                    <span class="nav-icon material-symbols-outlined">shopping_cart</span><span class="nav-label">Purchase Orders</span>
                 </a>
                 <a href="#" class="nav-item" data-page="invoices">
-                    <span class="nav-icon">🧾</span><span class="nav-label">Invoices</span>
+                    <span class="nav-icon material-symbols-outlined">request_quote</span><span class="nav-label">Invoices</span>
                 </a>
                 <a href="#" class="nav-item" data-page="payments">
-                    <span class="nav-icon">💰</span><span class="nav-label">Payments</span>
+                    <span class="nav-icon material-symbols-outlined">payments</span><span class="nav-label">Payments</span>
                 </a>
                 <a href="#" class="nav-item" data-page="expenses">
-                    <span class="nav-icon">💸</span><span class="nav-label">Expenses</span>
+                    <span class="nav-icon material-symbols-outlined">account_balance_wallet</span><span class="nav-label">Expenses</span>
                 </a>
                 <a href="#" class="nav-item" data-page="packing">
-                    <span class="nav-icon">📋</span><span class="nav-label">Packing</span>
+                    <span class="nav-icon material-symbols-outlined">assignment</span><span class="nav-label">Packing</span>
                 </a>
                 <a href="#" class="nav-item" data-page="delivery">
-                    <span class="nav-icon">🚚</span><span class="nav-label">Delivery</span>
+                    <span class="nav-icon material-symbols-outlined">local_shipping</span><span class="nav-label">Delivery</span>
                 </a>
                 <a href="#" class="nav-item" data-page="reports">
-                    <span class="nav-icon">📈</span><span class="nav-label">Reports</span>
+                    <span class="nav-icon material-symbols-outlined">trending_up</span><span class="nav-label">Reports</span>
                 </a>
                 <div class="nav-divider"></div>
                 <a href="#" class="nav-item" data-page="packers">
-                    <span class="nav-icon">🧑‍🏭</span><span class="nav-label">Packers Master</span>
+                    <span class="nav-icon material-symbols-outlined">engineering</span><span class="nav-label">Packers Master</span>
                 </a>
                 <a href="#" class="nav-item" data-page="deliverypersons">
-                    <span class="nav-icon">🧑‍✈️</span><span class="nav-label">Delivery Persons</span>
+                    <span class="nav-icon material-symbols-outlined">delivery_dining</span><span class="nav-label">Delivery Persons</span>
                 </a>
                 <a href="#" class="nav-item" data-page="customerrequests">
-                    <span class="nav-icon">🛍️</span><span class="nav-label">Customer Requests</span>
+                    <span class="nav-icon material-symbols-outlined">local_mall</span><span class="nav-label">Customer Requests</span>
                 </a>
                 <a href="#" class="nav-item" data-page="staffmaster">
-                    <span class="nav-icon">👤</span><span class="nav-label">Staff Master</span>
+                    <span class="nav-icon material-symbols-outlined">person</span><span class="nav-label">Staff Master</span>
                 </a>
                 <a href="#" class="nav-item" data-page="attendance">
-                    <span class="nav-icon">📅</span><span class="nav-label">Attendance</span>
+                    <span class="nav-icon material-symbols-outlined">calendar_month</span><span class="nav-label">Attendance</span>
                 </a>
                 <a href="#" class="nav-item" data-page="hrpayroll">
-                    <span class="nav-icon">💵</span><span class="nav-label">HR & Payroll</span>
+                    <span class="nav-icon material-symbols-outlined">payments</span><span class="nav-label">HR & Payroll</span>
                 </a>
                 <a href="#" class="nav-item" data-page="users">
-                    <span class="nav-icon">🔐</span><span class="nav-label">Users & Roles</span>
+                    <span class="nav-icon material-symbols-outlined">admin_panel_settings</span><span class="nav-label">Users & Roles</span>
                 </a>
                 <a href="#" class="nav-item" data-page="setup">
-                    <span class="nav-icon">⚙️</span><span class="nav-label">Company Setup</span>
+                    <span class="nav-icon material-symbols-outlined">display_settings</span><span class="nav-label">Company Setup</span>
                 </a>
                 <a href="#" class="nav-item" onclick="forceHardRefresh()">
-                    <span class="nav-icon">🔄</span><span class="nav-label">Hard Refresh</span>
+                    <span class="nav-icon material-symbols-outlined">refresh</span><span class="nav-label">Hard Refresh</span>
                 </a>
                 <div class="nav-divider"></div>
                 <a href="#" class="nav-item" onclick="logout()" style="color:var(--danger)">
-                    <span class="nav-icon">🚪</span><span class="nav-label">Logout</span>
+                    <span class="nav-icon material-symbols-outlined">logout</span><span class="nav-label">Logout</span>
                 </a>
             </nav>
             <div class="sidebar-footer">
@@ -227,7 +229,7 @@
                 <button id="sidebar-toggle" class="sidebar-toggle">☰</button>
                 <h2 id="page-title" class="page-title">Dashboard</h2>
                 <div class="omnibox-container">
-                    <span class="omnibox-icon">🔍</span>
+                    <span class="omnibox-icon material-symbols-outlined">search</span>
                     <input type="text" id="global-search" class="omnibox-input"
                         placeholder="Search parties, items, invoices..." oninput="onGlobalSearch(this.value)">
                 </div>
@@ -244,19 +246,19 @@
     <!-- Bottom Navigation Bar (mobile only) -->
     <nav id="bottom-nav" class="bottom-nav hidden">
         <a class="bn-item active" data-page="dashboard" onclick="navigateTo('dashboard')">
-            <span class="bn-icon">📊</span><span class="bn-label">Home</span>
+            <span class="bn-icon material-symbols-outlined">bar_chart</span><span class="bn-label">Home</span>
         </a>
         <a class="bn-item" data-page="salesorders" onclick="navigateTo('salesorders')">
-            <span class="bn-icon">📝</span><span class="bn-label">Orders</span>
+            <span class="bn-icon material-symbols-outlined">receipt_long</span><span class="bn-label">Orders</span>
         </a>
         <a class="bn-item" data-page="invoices" onclick="navigateTo('invoices')">
-            <span class="bn-icon">🧾</span><span class="bn-label">Invoices</span>
+            <span class="bn-icon material-symbols-outlined">request_quote</span><span class="bn-label">Invoices</span>
         </a>
         <a class="bn-item" data-page="payments" onclick="navigateTo('payments')">
-            <span class="bn-icon">💰</span><span class="bn-label">Payments</span>
+            <span class="bn-icon material-symbols-outlined">payments</span><span class="bn-label">Payments</span>
         </a>
         <a class="bn-item" id="bn-more-btn" onclick="toggleMoreSheet()">
-            <span class="bn-icon">☰</span><span class="bn-label">More</span>
+            <span class="bn-icon material-symbols-outlined">menu</span><span class="bn-label">More</span>
         </a>
     </nav>
 
@@ -268,7 +270,7 @@
     </div>
 
     <!-- FAB -->
-    <button id="app-fab" class="app-fab hidden" onclick="fabAction()">＋</button>
+    <button id="app-fab" class="app-fab hidden" onclick="fabAction()"><span class="material-symbols-outlined">add</span></button>
 
     <!-- Modal Overlay -->
     <div id="modal-overlay" class="modal-overlay hidden">

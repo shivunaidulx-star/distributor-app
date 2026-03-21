@@ -1586,50 +1586,50 @@ window.haversine = function (lat1, lon1, lat2, lon2) {
 //  BOTTOM NAV  More Sheet & FAB
 // =============================================
 const MORE_ITEMS = [
-    { page: 'payments', icon: '', label: 'Payments' },
-    { page: 'parties', icon: '', label: 'Parties' },
-    { page: 'inventory', icon: '', label: 'Inventory' },
-    { page: 'packing', icon: '', label: 'Packing' },
-    { page: 'delivery', icon: '', label: 'Delivery' },
-    { page: 'reports', icon: '', label: 'Reports' },
-    { page: 'expenses', icon: '', label: 'Expenses' },
-    { page: 'purchaseorders', icon: '', label: 'Purchase' },
-    { page: 'catalog', icon: '', label: 'Catalog' },
-    { page: 'packers', icon: '', label: 'Packers' },
-    { page: 'deliverypersons', icon: '', label: 'Del.Persons' },
-    { page: 'users', icon: '', label: 'Users' },
-    { page: 'setup', icon: '', label: 'Setup' },
-    { page: 'staffmaster', icon: '', label: 'Staff' },
-    { page: 'attendance', icon: '', label: 'Attendance' },
-    { page: 'hrpayroll', icon: '', label: 'Payroll' },
-    { fn: 'forceHardRefresh()', icon: '', label: 'Hard Refresh' }
+    { page: 'payments', icon: '💰', label: 'Payments' },
+    { page: 'parties', icon: '👥', label: 'Parties' },
+    { page: 'inventory', icon: '📦', label: 'Inventory' },
+    { page: 'packing', icon: '📋', label: 'Packing' },
+    { page: 'delivery', icon: '🚚', label: 'Delivery' },
+    { page: 'reports', icon: '📈', label: 'Reports' },
+    { page: 'expenses', icon: '💸', label: 'Expenses' },
+    { page: 'purchaseorders', icon: '🛒', label: 'Purchase' },
+    { page: 'catalog', icon: '🛍️', label: 'Catalog' },
+    { page: 'packers', icon: '🧑‍🏭', label: 'Packers' },
+    { page: 'deliverypersons', icon: '🧑‍✈️', label: 'Del.Persons' },
+    { page: 'users', icon: '🔐', label: 'Users' },
+    { page: 'setup', icon: '⚙️', label: 'Setup' },
+    { page: 'staffmaster', icon: '👤', label: 'Staff' },
+    { page: 'attendance', icon: '📅', label: 'Attendance' },
+    { page: 'hrpayroll', icon: '💵', label: 'Payroll' },
+    { fn: 'forceHardRefresh()', icon: '🔄', label: 'Hard Refresh' }
 ];
 
 const BOTTOM_NAV_TABS = {
-    Admin: [{ page: 'dashboard', icon: '', label: 'Home' }, { page: 'catalog', icon: '', label: 'Catalog' }, { page: 'salesorders', icon: '', label: 'Orders' }, { page: 'invoices', icon: '', label: 'Invoices' }, { fn: 'openPaymentModal()', icon: '', label: 'Record' }],
-    Manager: [{ page: 'dashboard', icon: '', label: 'Home' }, { page: 'catalog', icon: '', label: 'Catalog' }, { page: 'salesorders', icon: '', label: 'Orders' }, { page: 'invoices', icon: '', label: 'Invoices' }, { fn: 'openPaymentModal()', icon: '', label: 'Record' }],
-    Salesman: [{ page: 'dashboard', icon: '', label: 'Home' }, { page: 'catalog', icon: '', label: 'Catalog' }, { page: 'salesorders', icon: '', label: 'Orders' }, { page: 'parties', icon: '', label: 'Parties' }, { fn: 'openPaymentModal()', icon: '', label: 'Record' }],
-    Packing: [{ page: 'dashboard', icon: '', label: 'Home' }, { page: 'packing', icon: '', label: 'Packing' }],
-    Delivery: [{ page: 'dashboard', icon: '', label: 'Home' }, { page: 'delivery', icon: '', label: 'Delivery' }],
+    Admin: [{ page: 'dashboard', icon: 'bar_chart', label: 'Home' }, { page: 'catalog', icon: 'local_mall', label: 'Catalog' }, { page: 'salesorders', icon: 'receipt_long', label: 'Orders' }, { page: 'invoices', icon: 'request_quote', label: 'Invoices' }, { fn: 'openPaymentModal()', icon: 'payments', label: 'Record' }],
+    Manager: [{ page: 'dashboard', icon: 'bar_chart', label: 'Home' }, { page: 'catalog', icon: 'local_mall', label: 'Catalog' }, { page: 'salesorders', icon: 'receipt_long', label: 'Orders' }, { page: 'invoices', icon: 'request_quote', label: 'Invoices' }, { fn: 'openPaymentModal()', icon: 'payments', label: 'Record' }],
+    Salesman: [{ page: 'dashboard', icon: 'bar_chart', label: 'Home' }, { page: 'catalog', icon: 'local_mall', label: 'Catalog' }, { page: 'salesorders', icon: 'receipt_long', label: 'Orders' }, { page: 'parties', icon: 'group', label: 'Parties' }, { fn: 'openPaymentModal()', icon: 'payments', label: 'Record' }],
+    Packing: [{ page: 'dashboard', icon: 'bar_chart', label: 'Home' }, { page: 'packing', icon: 'assignment', label: 'Packing' }],
+    Delivery: [{ page: 'dashboard', icon: 'bar_chart', label: 'Home' }, { page: 'delivery', icon: 'local_shipping', label: 'Delivery' }],
 };
 
 //  All available quick actions 
 const ALL_QUICK_ACTIONS = [
-    { key: 'new-sale', icon: '', label: 'New Sale', fn: "openInvoiceModal('sale')" },
-    { key: 'payment-in', icon: '', label: 'Record Payment', fn: "openPaymentModal()" },
-    { key: 'catalog', icon: '', label: 'Catalog', fn: "navigateTo('catalog')" },
-    { key: 'salesorders', icon: '', label: 'Orders', fn: "navigateTo('salesorders')" },
-    { key: 'parties', icon: '', label: 'Parties', fn: "navigateTo('parties')" },
-    { key: 'inventory', icon: '', label: 'Inventory', fn: "navigateTo('inventory')" },
-    { key: 'invoices', icon: '', label: 'Invoices', fn: "navigateTo('invoices')" },
-    { key: 'payments', icon: '', label: 'Payments', fn: "navigateTo('payments')" },
-    { key: 'delivery', icon: '', label: 'Delivery', fn: "navigateTo('delivery')" },
-    { key: 'expenses', icon: '', label: 'Expenses', fn: "navigateTo('expenses')" },
-    { key: 'reports', icon: '', label: 'Reports', fn: "navigateTo('reports')" },
-    { key: 'packing', icon: '', label: 'Packing', fn: "navigateTo('packing')" },
-    { key: 'purchaseorders', icon: '', label: 'Purchase', fn: "navigateTo('purchaseorders')" },
-    { key: 'new-party', icon: '', label: 'New Party', fn: "openPartyModal()" },
-    { key: 'update-party-gps', icon: '', label: 'Update GPS', fn: "openPartyGpsModal()" },
+    { key: 'new-sale', icon: 'add', label: 'New Sale', fn: "openInvoiceModal('sale')" },
+    { key: 'payment-in', icon: 'payments', label: 'Record Payment', fn: "openPaymentModal()" },
+    { key: 'catalog', icon: 'local_mall', label: 'Catalog', fn: "navigateTo('catalog')" },
+    { key: 'salesorders', icon: 'receipt_long', label: 'Orders', fn: "navigateTo('salesorders')" },
+    { key: 'parties', icon: 'group', label: 'Parties', fn: "navigateTo('parties')" },
+    { key: 'inventory', icon: 'inventory_2', label: 'Inventory', fn: "navigateTo('inventory')" },
+    { key: 'invoices', icon: 'request_quote', label: 'Invoices', fn: "navigateTo('invoices')" },
+    { key: 'payments', icon: 'payments', label: 'Payments', fn: "navigateTo('payments')" },
+    { key: 'delivery', icon: 'local_shipping', label: 'Delivery', fn: "navigateTo('delivery')" },
+    { key: 'expenses', icon: 'account_balance_wallet', label: 'Expenses', fn: "navigateTo('expenses')" },
+    { key: 'reports', icon: 'trending_up', label: 'Reports', fn: "navigateTo('reports')" },
+    { key: 'packing', icon: 'assignment', label: 'Packing', fn: "navigateTo('packing')" },
+    { key: 'purchaseorders', icon: 'shopping_cart', label: 'Purchase', fn: "navigateTo('purchaseorders')" },
+    { key: 'new-party', icon: 'group_add', label: 'New Party', fn: "openPartyModal()" },
+    { key: 'update-party-gps', icon: 'location_on', label: 'Update GPS', fn: "openPartyGpsModal()" },
 ];
 const DEFAULT_QUICK_ACTIONS = {
     Admin: ['new-sale', 'payment-in', 'catalog', 'salesorders', 'parties', 'inventory', 'delivery', 'reports', 'update-party-gps'],
@@ -1654,7 +1654,7 @@ function openEditQuickActions() {
     const rows = ALL_QUICK_ACTIONS.map(a =>
         `<label style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border);cursor:pointer">
             <input type="checkbox" id="qa-chk-${a.key}" ${current.includes(a.key) ? 'checked' : ''} style="width:18px;height:18px;accent-color:var(--primary)">
-            <span style="font-size:1.1rem">${a.icon}</span>
+            <span class="material-symbols-outlined" style="font-size:1.1rem">${a.icon}</span>
             <span style="font-weight:600">${a.label}</span>
         </label>`).join('');
     openModal(` Edit Quick Actions (${role})`,
@@ -1681,7 +1681,7 @@ function showBottomNav() {
         else a.setAttribute('data-page', t.page);
         a.href = '#';
         const iconSpan = document.createElement('span');
-        iconSpan.className = 'bn-icon';
+        iconSpan.className = 'bn-icon material-symbols-outlined';
         iconSpan.textContent = t.icon;
         const labelSpan = document.createElement('span');
         labelSpan.className = 'bn-label';
@@ -1738,10 +1738,10 @@ function buildMoreSheet() {
         return allowed.includes(it.page) && !mainTabPages.includes(it.page);
     });
     grid.innerHTML = moreItems.map(it => `<button class="more-sheet-item" onclick="${it.fn || `navigateTo('${it.page}')`}">
-            <span class="more-sheet-icon">${it.icon}</span>
+            <span class="more-sheet-icon material-symbols-outlined">${it.icon}</span>
             <span class="more-sheet-label">${it.label}</span>
         </button>`).join('') + `<button class="more-sheet-item" onclick="logout()" style="border-top:1px solid var(--border)">
-            <span class="more-sheet-icon"></span>
+            <span class="more-sheet-icon material-symbols-outlined">logout</span>
             <span class="more-sheet-label" style="color:var(--danger)">Logout</span>
         </button>`;
     // Hide "More" btn if nothing to show
@@ -2023,10 +2023,10 @@ async function renderDashboard() {
 
             <div class="section-toolbar" style="margin-top:8px"><h3>Quick Actions</h3></div>
             <div class="quick-actions">
-                <button class="quick-action-btn" onclick="navigateTo('salesorders')"><span class="qa-icon">📝</span><span class="qa-label">New Order</span></button>
-                <button class="quick-action-btn" onclick="navigateTo('parties')"><span class="qa-icon">👥</span><span class="qa-label">Parties</span></button>
-                <button class="quick-action-btn" onclick="navigateTo('catalog')"><span class="qa-icon">🛍️</span><span class="qa-label">Catalog</span></button>
-                <button class="quick-action-btn" onclick="openPartyGpsModal()"><span class="qa-icon">📍</span><span class="qa-label">Update GPS</span></button>
+                <button class="quick-action-btn" onclick="navigateTo('salesorders')"><span class="qa-icon material-symbols-outlined">receipt_long</span><span class="qa-label">New Order</span></button>
+                <button class="quick-action-btn" onclick="navigateTo('parties')"><span class="qa-icon material-symbols-outlined">group</span><span class="qa-label">Parties</span></button>
+                <button class="quick-action-btn" onclick="navigateTo('catalog')"><span class="qa-icon material-symbols-outlined">local_mall</span><span class="qa-label">Catalog</span></button>
+                <button class="quick-action-btn" onclick="openPartyGpsModal()"><span class="qa-icon material-symbols-outlined">location_on</span><span class="qa-label">Update GPS</span></button>
             </div>
 
             <div class="card">
@@ -2199,22 +2199,22 @@ async function renderDashboard() {
 
     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px">
         <div class="dash-pulse-tile" onclick="navigateTo('payments')" style="--tile-color:#10b981;animation-delay:0.05s">
-            <div class="dash-pulse-icon">💰</div>
+            <div class="dash-pulse-icon material-symbols-outlined">payments</div>
             <div class="dash-pulse-val dash-count" data-val="${tmPayIn}" style="color:#10b981">${currency(tmPayIn)}</div>
             <div class="dash-pulse-lbl">Collected</div>
         </div>
         <div class="dash-pulse-tile" onclick="navigateTo('expenses')" style="--tile-color:#ef4444;animation-delay:0.1s">
-            <div class="dash-pulse-icon">💸</div>
+            <div class="dash-pulse-icon material-symbols-outlined">account_balance_wallet</div>
             <div class="dash-pulse-val dash-count" data-val="${tmExp}" style="color:#ef4444">${currency(tmExp)}</div>
             <div class="dash-pulse-lbl">Expenses</div>
         </div>
         <div class="dash-pulse-tile${lowStock ? ' dash-pulse-alert' : ''}" onclick="navigateTo('inventory')" style="--tile-color:${lowStock ? '#ef4444' : 'var(--text-primary)'};animation-delay:0.15s">
-            <div class="dash-pulse-icon">📦</div>
+            <div class="dash-pulse-icon material-symbols-outlined">inventory_2</div>
             <div class="dash-pulse-val" style="color:${lowStock ? '#ef4444' : 'var(--text-primary)'}">${lowStock}</div>
             <div class="dash-pulse-lbl">Low Stock</div>
         </div>
         <div class="dash-pulse-tile${pendingCheques ? ' dash-pulse-alert' : ''}" onclick="navigateTo('reports');setTimeout(()=>showReport('chequeregister'),200)" style="--tile-color:${pendingCheques ? '#f59e0b' : 'var(--text-primary)'};animation-delay:0.2s">
-            <div class="dash-pulse-icon">🏦</div>
+            <div class="dash-pulse-icon material-symbols-outlined">account_balance</div>
             <div class="dash-pulse-val" style="color:${pendingCheques ? '#f59e0b' : 'var(--text-primary)'}">${pendingCheques}</div>
             <div class="dash-pulse-lbl">Cheques</div>
         </div>
@@ -2235,12 +2235,12 @@ async function renderDashboard() {
 
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
         <span style="font-weight:700;font-size:0.9rem;color:var(--text-secondary);letter-spacing:0.04em;text-transform:uppercase">Quick Actions</span>
-        <button class="btn-icon" onclick="openEditQuickActions()" title="Edit Quick Actions" style="font-size:1rem;padding:4px 8px">✏️</button>
+        <button class="btn-icon" onclick="openEditQuickActions()" title="Edit Quick Actions" style="font-size:1rem;padding:4px 8px"><span class="material-symbols-outlined">edit</span></button>
     </div>
     <div class="quick-actions" style="margin-bottom:18px">
         ${getQuickActionKeys(currentUser?.role || 'Admin').map(key => {
             const a = ALL_QUICK_ACTIONS.find(x => x.key === key);
-            return a ? `<button class="quick-action-btn" onclick="${a.fn}"><span class="qa-icon">${a.icon}</span><span class="qa-label">${a.label}</span></button>` : '';
+            return a ? `<button class="quick-action-btn" onclick="${a.fn}"><span class="qa-icon material-symbols-outlined">${a.icon}</span><span class="qa-label">${a.label}</span></button>` : '';
         }).join('')}
     </div>
 
@@ -7414,12 +7414,14 @@ async function openPaymentModal(prefillPartyId) {
     partyInput.addEventListener('focus', initPartySearch, { once: true });
 
     // AUTO-CLICK Logic: Automatically focus and trigger search
-    setTimeout(() => {
-        if (partyInput) {
-            partyInput.focus(); // Triggers the keyboard and the 'focus' event
-            initPartySearch();  // Ensures the GPS ping starts immediately
+    // AUTO-CLICK Logic: Fetch GPS first, THEN focus
+    initPartySearch().then(() => {
+        if (!prefillPartyId && partyInput && document.activeElement !== partyInput) {
+            partyInput.focus();
+            const dd = document.getElementById('f-pay-party-dropdown');
+            if (dd) dd.classList.add('open');
         }
-    }, 300);
+    });
 
     // Pre-fill party if provided (e.g. from invoice "Receive Payment" button)
     if (prefillPartyId) {
