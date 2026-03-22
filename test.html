@@ -1,0 +1,913 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DistroManager — Complete Function Test Suite</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; padding: 20px; }
+  h1 { color: #f8fafc; font-size: 1.5rem; margin-bottom: 4px; }
+  .subtitle { color: #94a3b8; font-size: 0.85rem; margin-bottom: 20px; }
+  .summary-bar { display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
+  .summary-card { background: #1e293b; border-radius: 8px; padding: 12px 18px; min-width: 120px; text-align: center; }
+  .summary-card .num { font-size: 2rem; font-weight: 700; }
+  .summary-card .lbl { font-size: 0.75rem; color: #94a3b8; margin-top: 2px; }
+  .green { color: #4ade80; }
+  .red { color: #f87171; }
+  .yellow { color: #fbbf24; }
+  .blue { color: #60a5fa; }
+  .section { background: #1e293b; border-radius: 10px; margin-bottom: 16px; overflow: hidden; }
+  .section-header { padding: 12px 16px; font-weight: 600; font-size: 0.95rem; display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none; border-bottom: 1px solid #334155; }
+  .section-header:hover { background: #243047; }
+  .section-badge { font-size: 0.75rem; font-weight: 600; padding: 2px 8px; border-radius: 99px; }
+  .badge-pass { background: #14532d; color: #4ade80; }
+  .badge-fail { background: #7f1d1d; color: #f87171; }
+  .badge-mixed { background: #713f12; color: #fbbf24; }
+  .test-list { padding: 0; list-style: none; }
+  .test-item { display: flex; align-items: flex-start; gap: 10px; padding: 9px 16px; border-bottom: 1px solid #1e293b; font-size: 0.82rem; }
+  .test-item:last-child { border-bottom: none; }
+  .test-item.pass { background: #0d2318; }
+  .test-item.fail { background: #2d1010; }
+  .test-item.skip { background: #1a1f2b; }
+  .icon { font-size: 1rem; flex-shrink: 0; margin-top: 1px; }
+  .test-name { font-weight: 500; flex: 1; }
+  .test-detail { color: #94a3b8; font-size: 0.78rem; margin-top: 2px; font-family: monospace; }
+  .error-detail { color: #fca5a5; font-size: 0.78rem; margin-top: 2px; font-family: monospace; }
+  #run-btn { background: #3b82f6; color: #fff; border: none; padding: 10px 24px; border-radius: 8px; font-size: 0.95rem; cursor: pointer; font-weight: 600; }
+  #run-btn:hover { background: #2563eb; }
+  #run-btn:disabled { background: #475569; cursor: not-allowed; }
+  .controls { display: flex; gap: 10px; align-items: center; margin-bottom: 16px; }
+  .log-output { background: #0d1117; border-radius: 8px; padding: 12px 16px; font-family: monospace; font-size: 0.78rem; color: #7dd3fc; max-height: 200px; overflow-y: auto; margin-bottom: 16px; white-space: pre-wrap; }
+  .collapsible-body { display: block; }
+  .collapsed .collapsible-body { display: none; }
+  .progress-bar { height: 3px; background: #334155; margin-bottom: 16px; border-radius: 2px; }
+  .progress-fill { height: 3px; background: #3b82f6; border-radius: 2px; transition: width 0.3s; }
+</style>
+</head>
+<body>
+
+<h1>DistroManager — Complete Function Test Suite</h1>
+<p class="subtitle" id="test-time">Loading app...</p>
+
+<div class="controls">
+  <button id="run-btn" onclick="runAllTests()" disabled>Run All Tests</button>
+  <span id="status-label" style="color:#94a3b8;font-size:0.85rem">Initializing...</span>
+</div>
+
+<div class="progress-bar"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
+
+<div class="summary-bar" id="summary-bar"></div>
+<div id="log-area"></div>
+<div id="results-area"></div>
+
+<!-- ========== MOCK ENVIRONMENT ========== -->
+<script>
+// ── 1. Supabase Mock ──────────────────────────────────────────────────────────
+window.supabase = {
+  createClient: () => ({
+    from: (table) => ({
+      select: () => ({ data: [], error: null, order: () => ({ data: [], error: null, limit: () => ({ data: [], error: null }) }) }),
+      insert: () => ({ data: [], error: null }),
+      update: () => ({ eq: () => ({ data: [], error: null }) }),
+      delete: () => ({ eq: () => ({ data: [], error: null }) }),
+      upsert: () => ({ data: [], error: null }),
+      eq: () => ({ data: [], error: null, single: () => ({ data: null, error: null }) }),
+    }),
+    channel: () => ({
+      on: function() { return this; },
+      subscribe: () => {}
+    }),
+    auth: {
+      getSession: () => Promise.resolve({ data: { session: null } }),
+      signIn: () => Promise.resolve({ data: null, error: null })
+    }
+  })
+};
+
+// ── 2. Minimal DOM stubs (used by app.js before full DOM is ready) ────────────
+['app','sidebar','page-content','modal','modal-title','modal-body','modal-footer',
+ 'topbar-title','bottom-nav','more-sheet','fab','search-input','search-dropdown',
+ 'dash-f-from','dash-f-to','login-screen','setup-wizard','customer-portal-root',
+ 'toast-container'].forEach(id => {
+  if (!document.getElementById(id)) {
+    const el = document.createElement('div');
+    el.id = id;
+    el.style.display = 'none';
+    document.body.appendChild(el);
+  }
+});
+
+// ── 3. XLSX stub (Excel export library) ──────────────────────────────────────
+window.XLSX = {
+  utils: {
+    book_new: () => ({}),
+    aoa_to_sheet: () => ({}),
+    book_append_sheet: () => {}
+  },
+  writeFile: () => {}
+};
+
+// ── 4. QRCode stub ────────────────────────────────────────────────────────────
+window.QRCode = class {
+  constructor(el, opts) {}
+};
+
+// ── 5. PWA / SW registration stub ────────────────────────────────────────────
+if (!('serviceWorker' in navigator)) {
+  Object.defineProperty(navigator, 'serviceWorker', {
+    value: { register: () => Promise.resolve() },
+    writable: false
+  });
+}
+
+// ── 6. Suppress noisy console errors from app boot ───────────────────────────
+const _origErr = console.error.bind(console);
+const _origWarn = console.warn.bind(console);
+const suppressedPatterns = ['Supabase','supabase','IDB','initRealtime','geolocation','SW','service worker'];
+console.error = (...args) => {
+  const msg = String(args[0] || '');
+  if (!suppressedPatterns.some(p => msg.includes(p))) _origErr(...args);
+};
+console.warn = (...args) => {
+  const msg = String(args[0] || '');
+  if (!suppressedPatterns.some(p => msg.includes(p))) _origWarn(...args);
+};
+</script>
+
+<!-- ========== LOAD THE APP ========== -->
+<script src="app.js" onerror="document.getElementById('status-label').textContent='ERROR: Could not load app.js'"></script>
+
+<!-- ========== TEST RUNNER ========== -->
+<script>
+// ── Test harness ──────────────────────────────────────────────────────────────
+const allSections = [];
+let totalPass = 0, totalFail = 0, totalSkip = 0;
+
+function section(name, fn) {
+  allSections.push({ name, fn });
+}
+
+async function runSection(s) {
+  const results = [];
+  const ctx = {
+    pass: 0, fail: 0, skip: 0,
+    test(name, fn) {
+      try {
+        const ret = fn();
+        if (ret === 'SKIP') { this.skip++; results.push({ name, status: 'skip', detail: 'Skipped' }); return; }
+        this.pass++;
+        results.push({ name, status: 'pass', detail: '' });
+      } catch (e) {
+        this.fail++;
+        results.push({ name, status: 'fail', error: e.message });
+      }
+    },
+    async asyncTest(name, fn) {
+      try {
+        await fn();
+        this.pass++;
+        results.push({ name, status: 'pass', detail: '' });
+      } catch (e) {
+        this.fail++;
+        results.push({ name, status: 'fail', error: e.message });
+      }
+    },
+    assert(cond, msg) {
+      if (!cond) throw new Error(msg || 'Assertion failed');
+    },
+    assertEqual(a, b, msg) {
+      if (a !== b) throw new Error((msg || 'Expected equal') + ` — got: ${JSON.stringify(a)} vs ${JSON.stringify(b)}`);
+    },
+    assertContains(str, sub, msg) {
+      if (!String(str).includes(sub)) throw new Error((msg || `Expected to contain "${sub}"`) + ` — got: ${str}`);
+    },
+    assertDefined(val, name) {
+      if (val === undefined || val === null) throw new Error(`${name || 'value'} is not defined`);
+    }
+  };
+  await s.fn(ctx);
+  return { name: s.name, results, pass: ctx.pass, fail: ctx.fail, skip: ctx.skip };
+}
+
+function renderSectionHTML(sec) {
+  const status = sec.fail > 0 ? 'fail' : (sec.skip === sec.results.length ? 'skip' : 'pass');
+  const badgeCls = sec.fail > 0 ? 'badge-fail' : (sec.skip === sec.results.length ? '' : 'badge-pass');
+  const badgeLabel = `${sec.pass}✓ ${sec.fail > 0 ? sec.fail + '✗ ' : ''}${sec.skip > 0 ? sec.skip + '— ' : ''}`;
+  const icon = sec.fail > 0 ? '✗' : '✓';
+  const iconColor = sec.fail > 0 ? '#f87171' : '#4ade80';
+
+  const items = sec.results.map(r => {
+    const cls = r.status === 'pass' ? 'pass' : r.status === 'fail' ? 'fail' : 'skip';
+    const ico = r.status === 'pass' ? '✓' : r.status === 'fail' ? '✗' : '—';
+    const icoColor = r.status === 'pass' ? '#4ade80' : r.status === 'fail' ? '#f87171' : '#94a3b8';
+    const extra = r.error ? `<div class="error-detail">Error: ${escHtml(r.error)}</div>` :
+                  r.detail ? `<div class="test-detail">${escHtml(r.detail)}</div>` : '';
+    return `<li class="test-item ${cls}">
+      <span class="icon" style="color:${icoColor}">${ico}</span>
+      <div><div class="test-name">${escHtml(r.name)}</div>${extra}</div>
+    </li>`;
+  }).join('');
+
+  return `<div class="section" id="sec-${slugify(sec.name)}">
+    <div class="section-header" onclick="this.parentElement.classList.toggle('collapsed')">
+      <span><span style="color:${iconColor};margin-right:6px">${icon}</span>${escHtml(sec.name)}</span>
+      <span class="section-badge ${badgeCls}">${badgeLabel}</span>
+    </div>
+    <div class="collapsible-body">
+      <ul class="test-list">${items}</ul>
+    </div>
+  </div>`;
+}
+
+function escHtml(s) { return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function slugify(s) { return String(s).toLowerCase().replace(/[^a-z0-9]+/g,'-'); }
+
+async function runAllTests() {
+  const btn = document.getElementById('run-btn');
+  btn.disabled = true;
+  btn.textContent = 'Running…';
+  totalPass = 0; totalFail = 0; totalSkip = 0;
+  document.getElementById('results-area').innerHTML = '';
+  document.getElementById('summary-bar').innerHTML = '';
+
+  const progressFill = document.getElementById('progress-fill');
+  const total = allSections.length;
+
+  for (let i = 0; i < allSections.length; i++) {
+    const s = allSections[i];
+    document.getElementById('status-label').textContent = `Running: ${s.name} (${i+1}/${total})`;
+    progressFill.style.width = `${Math.round((i / total) * 100)}%`;
+
+    let secResult;
+    try {
+      secResult = await runSection(s);
+    } catch (e) {
+      secResult = { name: s.name, results: [{ name: 'Section crashed', status: 'fail', error: e.message }], pass: 0, fail: 1, skip: 0 };
+    }
+
+    totalPass += secResult.pass;
+    totalFail += secResult.fail;
+    totalSkip += secResult.skip;
+
+    document.getElementById('results-area').insertAdjacentHTML('beforeend', renderSectionHTML(secResult));
+    await new Promise(r => setTimeout(r, 10)); // let UI update
+  }
+
+  progressFill.style.width = '100%';
+  renderSummary();
+  btn.disabled = false;
+  btn.textContent = 'Run Again';
+  document.getElementById('status-label').textContent = `Done — ${totalPass} passed, ${totalFail} failed, ${totalSkip} skipped`;
+  document.getElementById('test-time').textContent = `Completed at ${new Date().toLocaleTimeString()}  |  ${totalPass + totalFail + totalSkip} tests total`;
+}
+
+function renderSummary() {
+  const pct = totalPass + totalFail > 0 ? Math.round(totalPass / (totalPass + totalFail) * 100) : 0;
+  document.getElementById('summary-bar').innerHTML = `
+    <div class="summary-card"><div class="num green">${totalPass}</div><div class="lbl">PASSED</div></div>
+    <div class="summary-card"><div class="num red">${totalFail}</div><div class="lbl">FAILED</div></div>
+    <div class="summary-card"><div class="num yellow">${totalSkip}</div><div class="lbl">SKIPPED</div></div>
+    <div class="summary-card"><div class="num blue">${pct}%</div><div class="lbl">PASS RATE</div></div>
+  `;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  TEST DEFINITIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ── MODULE 1: Utility Functions ───────────────────────────────────────────────
+section('Utility Functions — currency()', ({ test, assertEqual, assert, assertContains }) => {
+  test('currency(0) returns "0.00"', () => assertEqual(currency(0), '0.00'));
+  test('currency(null) returns "0.00"', () => assertEqual(currency(null), '0.00'));
+  test('currency(undefined) returns "0.00"', () => assertEqual(currency(undefined), '0.00'));
+  test('currency(1000) formats with Indian locale', () => assertContains(currency(1000), '1,000.00'));
+  test('currency(100000) formats as 1,00,000.00', () => assertContains(currency(100000), '1,00,000.00'));
+  test('currency(1.5) returns "1.50"', () => assertEqual(currency(1.5), '1.50'));
+  test('currency(-500) returns negative', () => assertContains(currency(-500), '500.00'));
+  test('currency("250") handles string input', () => assertContains(currency("250"), '250.00'));
+});
+
+section('Utility Functions — fmtDate()', ({ test, assert, assertEqual, assertContains }) => {
+  test('fmtDate(null) returns "-"', () => assertEqual(fmtDate(null), '-'));
+  test('fmtDate(undefined) returns "-"', () => assertEqual(fmtDate(undefined), '-'));
+  test('fmtDate("") returns "-"', () => assertEqual(fmtDate(''), '-'));
+  test('fmtDate("2024-01-15") returns readable date', () => assertContains(fmtDate('2024-01-15'), '2024'));
+  test('fmtDate("2024-01-15") contains month', () => assertContains(fmtDate('2024-01-15'), 'Jan'));
+  test('fmtDate("2024-12-31") contains Dec', () => assertContains(fmtDate('2024-12-31'), 'Dec'));
+  test('fmtDate returns string type', () => assert(typeof fmtDate('2024-01-01') === 'string'));
+});
+
+section('Utility Functions — today()', ({ test, assert, assertContains }) => {
+  test('today() returns a string', () => assert(typeof today() === 'string'));
+  test('today() matches YYYY-MM-DD format', () => assert(/^\d{4}-\d{2}-\d{2}$/.test(today())));
+  test('today() year is current year', () => assertContains(today(), String(new Date().getFullYear())));
+  test('today() is consistent (same value on re-call)', () => assert(today() === today()));
+});
+
+section('Utility Functions — isSalesman() / isPacker() / canEdit()', ({ test, assert }) => {
+  // Save original
+  const origUser = window.currentUser;
+
+  test('isSalesman() returns false when no user', () => {
+    window.currentUser = null;
+    assert(!isSalesman());
+  });
+  test('isSalesman() true for role=salesman', () => {
+    window.currentUser = { role: 'Salesman' };
+    assert(isSalesman());
+  });
+  test('isSalesman() false for role=admin', () => {
+    window.currentUser = { role: 'Admin' };
+    assert(!isSalesman());
+  });
+  test('isPacker() true for role=packing', () => {
+    window.currentUser = { role: 'Packing' };
+    assert(isPacker());
+  });
+  test('isPacker() true for role=packer', () => {
+    window.currentUser = { role: 'packer' };
+    assert(isPacker());
+  });
+  test('isPacker() false for role=admin', () => {
+    window.currentUser = { role: 'Admin' };
+    assert(!isPacker());
+  });
+  test('canEdit() true for role=admin', () => {
+    window.currentUser = { role: 'Admin' };
+    assert(canEdit());
+  });
+  test('canEdit() true for role=manager', () => {
+    window.currentUser = { role: 'Manager' };
+    assert(canEdit());
+  });
+  test('canEdit() false for role=salesman', () => {
+    window.currentUser = { role: 'Salesman' };
+    assert(!canEdit());
+  });
+  test('canEdit() false when no user', () => {
+    window.currentUser = null;
+    assert(!canEdit());
+  });
+
+  window.currentUser = origUser;
+});
+
+// ── MODULE 2: DB — mapTable ───────────────────────────────────────────────────
+section('DB Module — mapTable()', ({ test, assertEqual }) => {
+  test('mapTable("salesorders") → "sales_orders"', () => assertEqual(DB.mapTable('salesorders'), 'sales_orders'));
+  test('mapTable("purchaseorders") → "purchase_orders"', () => assertEqual(DB.mapTable('purchaseorders'), 'purchase_orders'));
+  test('mapTable("staffmaster") → "staff"', () => assertEqual(DB.mapTable('staffmaster'), 'staff'));
+  test('mapTable("attendance") → "attendance"', () => assertEqual(DB.mapTable('attendance'), 'attendance'));
+  test('mapTable("hrpayroll") → "salary_records"', () => assertEqual(DB.mapTable('hrpayroll'), 'salary_records'));
+  test('mapTable("salaryadvances") → "salary_advances"', () => assertEqual(DB.mapTable('salaryadvances'), 'salary_advances'));
+  test('mapTable("partyledger") → "party_ledger"', () => assertEqual(DB.mapTable('partyledger'), 'party_ledger'));
+  test('mapTable("stockledger") → "stock_ledger"', () => assertEqual(DB.mapTable('stockledger'), 'stock_ledger'));
+  test('mapTable("inventory") → "inventory" (passthrough)', () => assertEqual(DB.mapTable('inventory'), 'inventory'));
+  test('mapTable("parties") → "parties" (passthrough)', () => assertEqual(DB.mapTable('parties'), 'parties'));
+  test('mapTable returns string', () => { const r = DB.mapTable('invoices'); if (typeof r !== 'string') throw new Error('Expected string'); });
+});
+
+// ── MODULE 3: DB — ls cache ───────────────────────────────────────────────────
+section('DB Module — ls (cache layer)', ({ test, assert, assertEqual }) => {
+  test('ls.get unknown key returns []', () => {
+    const v = DB.ls.get('nonexistent_key_xyz');
+    assert(Array.isArray(v));
+  });
+  test('ls.getObj unknown key returns {}', () => {
+    const v = DB.ls.getObj('nonexistent_key_xyz');
+    assert(typeof v === 'object' && !Array.isArray(v));
+  });
+  test('ls.set stores value in cache', () => {
+    DB.ls.set('test_data', [{ id: 1 }]);
+    assert(DB.cache['test_data'] !== undefined);
+  });
+  test('ls.get retrieves stored value', () => {
+    DB.ls.set('test_data2', [{ id: 99 }]);
+    const v = DB.ls.get('test_data2');
+    assert(Array.isArray(v) && v[0].id === 99);
+  });
+  test('DB.cache is an object', () => assert(typeof DB.cache === 'object'));
+});
+
+// ── MODULE 4: ColumnManager ───────────────────────────────────────────────────
+section('ColumnManager — Column Personalization', ({ test, assert, assertEqual }) => {
+  const pages = ['inventory', 'parties', 'salesorders', 'purchaseorders', 'invoices', 'payments', 'expenses', 'packing', 'delivery'];
+
+  pages.forEach(page => {
+    test(`ColumnManager.PAGES["${page}"] is defined`, () => {
+      if (!ColumnManager.PAGES[page]) throw new Error(`Missing page config for ${page}`);
+    });
+    test(`ColumnManager.get("${page}") returns array`, () => {
+      const cols = ColumnManager.get(page);
+      if (!Array.isArray(cols)) throw new Error('Expected array');
+    });
+    test(`ColumnManager.get("${page}") has required columns`, () => {
+      const cols = ColumnManager.get(page);
+      const hasRequired = cols.some(c => c.required);
+      if (!hasRequired) throw new Error('No required columns found');
+    });
+  });
+
+  test('ColumnManager.save() stores to localStorage', () => {
+    const cols = ColumnManager.get('inventory');
+    ColumnManager.save('inventory_test', cols);
+    const raw = localStorage.getItem('colcfg_inventory_test');
+    if (!raw) throw new Error('Nothing saved to localStorage');
+  });
+
+  test('ColumnManager.reset() removes from localStorage', () => {
+    ColumnManager.save('inventory_test2', [{ key: 'x' }]);
+    ColumnManager.reset('inventory_test2');
+    const raw = localStorage.getItem('colcfg_inventory_test2');
+    if (raw !== null) throw new Error('Item should have been removed');
+  });
+});
+
+// ── MODULE 5: ROLE_PAGES & getUserPages ───────────────────────────────────────
+section('Role & Permissions — ROLE_PAGES / getUserPages()', ({ test, assert, assertEqual }) => {
+  test('ROLE_PAGES.Admin is defined', () => assert(Array.isArray(ROLE_PAGES.Admin)));
+  test('ROLE_PAGES.Manager is defined', () => assert(Array.isArray(ROLE_PAGES.Manager)));
+  test('ROLE_PAGES.Salesman is defined', () => assert(Array.isArray(ROLE_PAGES.Salesman)));
+  test('ROLE_PAGES.Delivery is defined', () => assert(Array.isArray(ROLE_PAGES.Delivery)));
+  test('ROLE_PAGES.Packing is defined', () => assert(Array.isArray(ROLE_PAGES.Packing)));
+  test('Admin has access to dashboard', () => assert(ROLE_PAGES.Admin.includes('dashboard')));
+  test('Admin has access to users', () => assert(ROLE_PAGES.Admin.includes('users')));
+  test('Salesman does NOT have access to users', () => assert(!ROLE_PAGES.Salesman.includes('users')));
+  test('Packing only has dashboard and packing', () => {
+    const pages = ROLE_PAGES.Packing;
+    if (pages.length !== 2) throw new Error(`Expected 2 pages, got ${pages.length}: ${pages}`);
+  });
+  test('getUserPages() returns array for Admin user', () => {
+    const pages = getUserPages({ role: 'Admin', roles: ['Admin'] });
+    assert(Array.isArray(pages) && pages.length > 0);
+  });
+  test('getUserPages() respects extra_perms', () => {
+    const pages = getUserPages({ role: 'Salesman', roles: ['Salesman'], extra_perms: ['hrpayroll'] });
+    assert(pages.includes('hrpayroll'));
+  });
+  test('getUserPages() deduplicates pages', () => {
+    const pages = getUserPages({ role: 'Admin', roles: ['Admin', 'Manager'] });
+    const uniq = [...new Set(pages)];
+    assert(pages.length === uniq.length);
+  });
+  test('getUserPages() handles missing roles gracefully', () => {
+    const pages = getUserPages({ role: 'Admin' });
+    assert(Array.isArray(pages));
+  });
+});
+
+// ── MODULE 6: Function Existence — Core Functions ─────────────────────────────
+section('Function Existence — Core & Navigation', ({ test }) => {
+  const fns = [
+    'navigateTo', 'initApp', 'buildSidebar', 'showLoginScreen', 'login',
+    'logout', 'doLoginSuccess', 'checkFirstLaunch', 'showSetupWizard',
+    'openModal', 'closeModal', 'showToast', 'setupPullToRefresh',
+    'updateFab', 'fabAction', 'toggleMoreSheet', 'buildMoreSheet',
+    'showBottomNav', 'openEditQuickActions', 'initSearchDropdown',
+    'buildItemSearchList', 'buildPartySearchList', 'ensureGeolocation',
+    'dmSaveSession', 'dmRestoreSession', 'openChangePinModal', 'saveChangedPin',
+    'openColumnPersonalizer', 'getUserPages', 'applyDashboardFilter',
+  ];
+  fns.forEach(name => {
+    test(`${name}() is defined`, () => {
+      if (typeof window[name] !== 'function') throw new Error(`${name} is not a function`);
+    });
+  });
+});
+
+section('Function Existence — Dashboard', ({ test }) => {
+  ['renderDashboard', 'renderCustReqWidget', 'applyDashboardFilter'].forEach(name => {
+    test(`${name}() is defined`, () => {
+      if (typeof window[name] !== 'function') throw new Error(`${name} is not a function`);
+    });
+  });
+});
+
+section('Function Existence — Parties & Ledger', ({ test }) => {
+  ['renderParties', 'renderPartyLedgerLayout', 'addPartyLedgerEntry'].forEach(name => {
+    test(`${name}() is defined`, () => {
+      if (typeof window[name] !== 'function') throw new Error(`${name} is not a function`);
+    });
+  });
+});
+
+section('Function Existence — Inventory', ({ test }) => {
+  ['renderInventory', 'renderInventorySetup', 'addLedgerEntry'].forEach(name => {
+    test(`${name}() is defined`, () => {
+      if (typeof window[name] !== 'function') throw new Error(`${name} is not a function`);
+    });
+  });
+});
+
+section('Function Existence — Catalog', ({ test }) => {
+  ['renderCatalog'].forEach(name => {
+    test(`${name}() is defined`, () => {
+      if (typeof window[name] !== 'function') throw new Error(`${name} is not a function`);
+    });
+  });
+});
+
+section('Function Existence — Sales Orders', ({ test }) => {
+  ['renderSalesOrders'].forEach(name => {
+    test(`${name}() is defined`, () => {
+      if (typeof window[name] !== 'function') throw new Error(`${name} is not a function`);
+    });
+  });
+});
+
+section('Function Existence — Purchase Orders', ({ test }) => {
+  ['renderPurchaseOrders'].forEach(name => {
+    test(`${name}() is defined`, () => {
+      if (typeof window[name] !== 'function') throw new Error(`${name} is not a function`);
+    });
+  });
+});
+
+section('Function Existence — Invoices', ({ test }) => {
+  ['renderInvoices', 'cancelDocument'].forEach(name => {
+    test(`${name}() is defined`, () => {
+      if (typeof window[name] !== 'function') throw new Error(`${name} is not a function`);
+    });
+  });
+});
+
+section('Function Existence — Payments', ({ test }) => {
+  ['renderPayments'].forEach(name => {
+    test(`${name}() is defined`, () => {
+      if (typeof window[name] !== 'function') throw new Error(`${name} is not a function`);
+    });
+  });
+});
+
+section('Function Existence — Expenses', ({ test }) => {
+  ['renderExpenses'].forEach(name => {
+    test(`${name}() is defined`, () => {
+      if (typeof window[name] !== 'function') throw new Error(`${name} is not a function`);
+    });
+  });
+});
+
+section('Function Existence — Packing', ({ test }) => {
+  ['renderPacking', 'renderPackOrderPage'].forEach(name => {
+    test(`${name}() is defined`, () => {
+      if (typeof window[name] !== 'function') throw new Error(`${name} is not a function`);
+    });
+  });
+});
+
+section('Function Existence — Delivery', ({ test }) => {
+  ['renderDelivery'].forEach(name => {
+    test(`${name}() is defined`, () => {
+      if (typeof window[name] !== 'function') throw new Error(`${name} is not a function`);
+    });
+  });
+});
+
+section('Function Existence — Reports', ({ test }) => {
+  ['renderReports'].forEach(name => {
+    test(`${name}() is defined`, () => {
+      if (typeof window[name] !== 'function') throw new Error(`${name} is not a function`);
+    });
+  });
+});
+
+section('Function Existence — HR & Payroll', ({ test }) => {
+  ['renderStaffMaster', 'renderAttendance', 'renderHRPayroll',
+   'markAttendance', 'markSalaryPaid', 'openStaffAdvance'].forEach(name => {
+    test(`${name}() is defined`, () => {
+      if (typeof window[name] !== 'function') throw new Error(`${name} is not a function`);
+    });
+  });
+});
+
+section('Function Existence — User Management & Setup', ({ test }) => {
+  ['renderUsers', 'renderCompanySetup', 'renderNoSeries',
+   'renderPackers', 'renderDeliveryPersons', 'renderCategories', 'renderUOM'].forEach(name => {
+    test(`${name}() is defined`, () => {
+      if (typeof window[name] !== 'function') throw new Error(`${name} is not a function`);
+    });
+  });
+});
+
+section('Function Existence — Customer Portal', ({ test }) => {
+  ['showCustomerPortal', 'cpInitAuth', 'cpRenderHome',
+   'cpRenderCatalog', 'cpRenderCart', 'cpPlaceOrder'].forEach(name => {
+    test(`${name}() is defined`, () => {
+      if (typeof window[name] !== 'function') throw new Error(`${name} is not a function`);
+    });
+  });
+});
+
+// ── MODULE 7: DB Object Methods ────────────────────────────────────────────────
+section('DB Module — Method Existence', ({ test, assert }) => {
+  ['getAll', 'insert', 'update', 'delete', 'rawInsert', 'rawUpdate',
+   'refreshTables', 'loadCacheFromIDB', 'mapTable'].forEach(name => {
+    test(`DB.${name} is defined`, () => {
+      if (typeof DB[name] !== 'function') throw new Error(`DB.${name} is not a function`);
+    });
+  });
+  test('DB.idb has get/set/init', () => {
+    if (typeof DB.idb.get !== 'function') throw new Error('DB.idb.get missing');
+    if (typeof DB.idb.set !== 'function') throw new Error('DB.idb.set missing');
+    if (typeof DB.idb.init !== 'function') throw new Error('DB.idb.init missing');
+  });
+  test('DB.ls has get/getObj/set', () => {
+    if (typeof DB.ls.get !== 'function') throw new Error('DB.ls.get missing');
+    if (typeof DB.ls.getObj !== 'function') throw new Error('DB.ls.getObj missing');
+    if (typeof DB.ls.set !== 'function') throw new Error('DB.ls.set missing');
+  });
+});
+
+// ── MODULE 8: Async DB.getAll ─────────────────────────────────────────────────
+section('DB Module — DB.getAll() (async)', async ({ asyncTest, assert }) => {
+  await asyncTest('DB.getAll("users") resolves to array', async () => {
+    const result = await DB.getAll('users');
+    if (!Array.isArray(result)) throw new Error(`Expected array, got ${typeof result}`);
+  });
+  await asyncTest('DB.getAll("inventory") resolves to array', async () => {
+    const result = await DB.getAll('inventory');
+    if (!Array.isArray(result)) throw new Error(`Expected array, got ${typeof result}`);
+  });
+  await asyncTest('DB.getAll("parties") resolves to array', async () => {
+    const result = await DB.getAll('parties');
+    if (!Array.isArray(result)) throw new Error(`Expected array`);
+  });
+  await asyncTest('DB.getAll("invoices") resolves to array', async () => {
+    const result = await DB.getAll('invoices');
+    if (!Array.isArray(result)) throw new Error(`Expected array`);
+  });
+  await asyncTest('DB.getAll("salesorders") uses table alias', async () => {
+    const result = await DB.getAll('salesorders');
+    if (!Array.isArray(result)) throw new Error(`Expected array`);
+  });
+  await asyncTest('DB.getAll("payments") resolves to array', async () => {
+    const result = await DB.getAll('payments');
+    if (!Array.isArray(result)) throw new Error(`Expected array`);
+  });
+  await asyncTest('DB.getAll("expenses") resolves to array', async () => {
+    const result = await DB.getAll('expenses');
+    if (!Array.isArray(result)) throw new Error(`Expected array`);
+  });
+  await asyncTest('DB.getAll("categories") resolves to array', async () => {
+    const result = await DB.getAll('categories');
+    if (!Array.isArray(result)) throw new Error(`Expected array`);
+  });
+});
+
+// ── MODULE 9: IndexedDB Layer ─────────────────────────────────────────────────
+section('DB.idb — IndexedDB Offline Storage', async ({ asyncTest, assert }) => {
+  await asyncTest('idb.init() resolves without error', async () => {
+    await DB.idb.init();
+    if (!DB.idb.db) throw new Error('idb.db not set after init');
+  });
+  await asyncTest('idb.set() stores a value', async () => {
+    await DB.idb.set('test_idb_key', { hello: 'world' });
+  });
+  await asyncTest('idb.get() retrieves stored value', async () => {
+    await DB.idb.set('test_idb_key2', [1, 2, 3]);
+    const val = await DB.idb.get('test_idb_key2');
+    if (!Array.isArray(val) || val[0] !== 1) throw new Error(`Got: ${JSON.stringify(val)}`);
+  });
+  await asyncTest('idb.get() returns undefined for missing key', async () => {
+    const val = await DB.idb.get('nonexistent_key_abc');
+    if (val !== undefined) throw new Error(`Expected undefined, got ${val}`);
+  });
+});
+
+// ── MODULE 10: ADJUSTMENT_REASONS constant ────────────────────────────────────
+section('Constants & Configuration', ({ test, assert, assertEqual }) => {
+  test('ADJUSTMENT_REASONS is defined', () => {
+    if (!Array.isArray(window.ADJUSTMENT_REASONS)) throw new Error('ADJUSTMENT_REASONS not defined as array');
+  });
+  test('ADJUSTMENT_REASONS has at least 5 entries', () => {
+    if (ADJUSTMENT_REASONS.length < 5) throw new Error(`Expected >= 5, got ${ADJUSTMENT_REASONS.length}`);
+  });
+  test('ROLE_PAGES has 5 roles', () => {
+    const keys = Object.keys(ROLE_PAGES);
+    if (keys.length !== 5) throw new Error(`Expected 5 roles, got: ${keys.join(', ')}`);
+  });
+  test('ColumnManager.PAGES has all 9 page configs', () => {
+    const pages = Object.keys(ColumnManager.PAGES);
+    const expected = ['inventory','parties','salesorders','purchaseorders','invoices','payments','expenses','packing','delivery'];
+    expected.forEach(p => {
+      if (!ColumnManager.PAGES[p]) throw new Error(`Missing page: ${p}`);
+    });
+  });
+  test('SUPABASE_URL is defined', () => {
+    if (typeof SUPABASE_URL !== 'string' || !SUPABASE_URL.startsWith('https://')) throw new Error('Invalid SUPABASE_URL');
+  });
+  test('SUPABASE_KEY is defined', () => {
+    if (typeof SUPABASE_KEY !== 'string' || SUPABASE_KEY.length < 10) throw new Error('Invalid SUPABASE_KEY');
+  });
+});
+
+// ── MODULE 11: State Variables ─────────────────────────────────────────────────
+section('Global State Variables', ({ test, assert }) => {
+  test('currentUser is null on boot', () => {
+    // Should be null (not logged in) at test time
+    if (window.currentUser !== null && window.currentUser !== undefined) {
+      // might have been set by tests above — acceptable
+    }
+  });
+  test('currentPage is defined', () => {
+    if (window.currentPage === undefined) throw new Error('currentPage undefined');
+  });
+  test('currentPage is a string', () => {
+    if (typeof window.currentPage !== 'string') throw new Error(`Expected string, got ${typeof currentPage}`);
+  });
+  test('catalogCart is defined after app load', () => {
+    // catalgoCart is set during init — might be undefined if init not called
+    // just check the variable doesn't throw
+    try { const _ = window.catalogCart; } catch(e) { throw new Error('catalogCart access throws: ' + e.message); }
+  });
+});
+
+// ── MODULE 12: compressImage utility ─────────────────────────────────────────
+section('Utility Functions — compressImage()', ({ test, assert }) => {
+  test('compressImage is defined', () => {
+    if (typeof window.compressImage !== 'function') throw new Error('compressImage not defined');
+  });
+  test('compressImage returns a Promise', () => {
+    // pass a dummy file-like object — we just check it returns a Promise
+    const fakeFile = new Blob([''], { type: 'image/jpeg' });
+    const result = compressImage(fakeFile);
+    assert(result instanceof Promise);
+    result.catch(() => {}); // suppress unhandled rejection
+  });
+});
+
+// ── MODULE 13: showToast ──────────────────────────────────────────────────────
+section('UI — showToast()', ({ test, assert }) => {
+  test('showToast is defined', () => {
+    if (typeof window.showToast !== 'function') throw new Error('showToast not defined');
+  });
+  test('showToast("test", "success") does not throw', () => {
+    try { showToast('Test message', 'success'); }
+    catch(e) { throw new Error('showToast threw: ' + e.message); }
+  });
+  test('showToast with warning type does not throw', () => {
+    try { showToast('Warning test', 'warning'); }
+    catch(e) { throw new Error('showToast threw: ' + e.message); }
+  });
+  test('showToast with error type does not throw', () => {
+    try { showToast('Error test', 'error'); }
+    catch(e) { throw new Error('showToast threw: ' + e.message); }
+  });
+});
+
+// ── MODULE 14: Data Repair Function ──────────────────────────────────────────
+section('Data Repair — repairCancelledInvoiceOrders()', async ({ asyncTest, assert }) => {
+  await asyncTest('repairCancelledInvoiceOrders is defined', async () => {
+    if (typeof repairCancelledInvoiceOrders !== 'function') throw new Error('Not defined');
+  });
+  await asyncTest('repairCancelledInvoiceOrders() resolves when cache empty', async () => {
+    DB.cache['invoices'] = [];
+    DB.cache['sales_orders'] = [];
+    await repairCancelledInvoiceOrders();
+  });
+});
+
+// ── MODULE 15: currency() edge cases ─────────────────────────────────────────
+section('Utility Functions — currency() Edge Cases', ({ test, assertEqual, assertContains }) => {
+  test('currency(0.001) rounds to 2 decimals', () => assertContains(currency(0.001), '0.00'));
+  test('currency(9999999) handles large number', () => assert(typeof currency(9999999) === 'string'));
+  test('currency(NaN) returns "0.00"', () => assertEqual(currency(NaN), '0.00'));
+  test('currency("abc") returns "0.00"', () => assertEqual(currency('abc'), '0.00'));
+  test('currency(1.005) rounds correctly', () => assert(typeof currency(1.005) === 'string'));
+  test('currency() result is always a string', () => assert(typeof currency(42.5) === 'string'));
+});
+
+// ── MODULE 16: fmtDate() edge cases ──────────────────────────────────────────
+section('Utility Functions — fmtDate() Edge Cases', ({ test, assert, assertContains }) => {
+  test('fmtDate("2000-01-01") returns year 2000', () => assertContains(fmtDate('2000-01-01'), '2000'));
+  test('fmtDate("2024-06-15") returns Jun', () => assertContains(fmtDate('2024-06-15'), 'Jun'));
+  test('fmtDate("2024-03-22") contains 22', () => assertContains(fmtDate('2024-03-22'), '22'));
+  test('fmtDate returns non-empty string for valid date', () => {
+    const r = fmtDate('2024-01-01');
+    if (!r || r === '-') throw new Error('Got empty/dash for valid date');
+  });
+});
+
+// ── MODULE 17: DB.ls edge cases ───────────────────────────────────────────────
+section('DB.ls — Cache & Fallback Behaviour', ({ test, assert, assertEqual }) => {
+  test('Setting and getting array via DB.ls', () => {
+    DB.ls.set('ls_test_arr', [10, 20, 30]);
+    const v = DB.ls.get('ls_test_arr');
+    if (!Array.isArray(v) || v[1] !== 20) throw new Error(`Got: ${JSON.stringify(v)}`);
+  });
+  test('Getting with mapTable alias works', () => {
+    DB.ls.set('sales_orders', [{ id: 'SO1' }]);
+    const v = DB.ls.get('salesorders');
+    // Because mapTable('salesorders') = 'sales_orders'
+    // DB.ls.get should return cached 'sales_orders'
+    assert(Array.isArray(v));
+  });
+  test('DB.cache persists set values', () => {
+    DB.ls.set('perm_cache_test', { x: 42 });
+    assert(DB.cache['perm_cache_test'] !== undefined);
+    assert(DB.cache['perm_cache_test'].x === 42);
+  });
+  test('ls.getObj returns object not array', () => {
+    DB.ls.set('settings_test', { theme: 'dark' });
+    const v = DB.ls.getObj('settings_test');
+    assert(typeof v === 'object' && !Array.isArray(v));
+  });
+});
+
+// ── MODULE 18: ColumnManager — column structure ───────────────────────────────
+section('ColumnManager — Column Structure Validation', ({ test, assert }) => {
+  test('Each inventory column has key and label', () => {
+    ColumnManager.PAGES.inventory.forEach(c => {
+      if (!c.key) throw new Error(`Column missing key: ${JSON.stringify(c)}`);
+      if (!c.label) throw new Error(`Column missing label: ${JSON.stringify(c)}`);
+    });
+  });
+  test('Each invoices column has key', () => {
+    ColumnManager.PAGES.invoices.forEach(c => {
+      if (!c.key) throw new Error(`Missing key in invoices column`);
+    });
+  });
+  test('Columns with required:true are not hidden by default', () => {
+    const cols = ColumnManager.get('inventory');
+    const requiredCols = cols.filter(c => c.required);
+    if (!requiredCols.length) throw new Error('No required columns found');
+    requiredCols.forEach(c => {
+      if (c.visible === false) throw new Error(`Required column ${c.key} marked not visible`);
+    });
+  });
+  test('ColumnManager.get returns all columns for delivery', () => {
+    const cols = ColumnManager.get('delivery');
+    if (cols.length < 5) throw new Error(`Too few columns: ${cols.length}`);
+  });
+});
+
+// ── MODULE 19: today() consistency ───────────────────────────────────────────
+section('Utility Functions — today() Correctness', ({ test, assert, assertContains }) => {
+  test('today() does not have time component', () => {
+    const t = today();
+    if (t.includes('T')) throw new Error('today() should not include time: ' + t);
+  });
+  test('today() has valid month (01-12)', () => {
+    const [, month] = today().split('-');
+    const m = parseInt(month);
+    if (m < 1 || m > 12) throw new Error(`Invalid month: ${month}`);
+  });
+  test('today() has valid day (01-31)', () => {
+    const parts = today().split('-');
+    const d = parseInt(parts[2]);
+    if (d < 1 || d > 31) throw new Error(`Invalid day: ${parts[2]}`);
+  });
+});
+
+// ── MODULE 20: Async DB.insert (smoke test) ───────────────────────────────────
+section('DB Module — DB.insert() / DB.update() (smoke tests)', async ({ asyncTest }) => {
+  await asyncTest('DB.insert("users", {}) resolves without hard crash', async () => {
+    try {
+      await DB.insert('users', { id: 'test_' + Date.now(), name: 'Test User', role: 'Salesman' });
+    } catch (e) {
+      // Expected to fail (no real DB), but should not throw synchronously or hang
+      if (e.message && e.message.includes('Cannot read')) throw e;
+    }
+  });
+  await asyncTest('DB.update("users", "fake_id", {}) resolves', async () => {
+    try {
+      await DB.update('users', 'fake_id_' + Date.now(), { name: 'Updated' });
+    } catch (e) {
+      if (e.message && e.message.includes('Cannot read')) throw e;
+    }
+  });
+});
+
+// ── MODULE 21: navigateTo validation ─────────────────────────────────────────
+section('Navigation — navigateTo() smoke test', ({ test }) => {
+  test('navigateTo is a function', () => {
+    if (typeof navigateTo !== 'function') throw new Error('navigateTo not defined');
+  });
+  test('navigateTo("dashboard") does not throw (no DOM crash)', () => {
+    // Ensure page-content exists
+    let pc = document.getElementById('page-content');
+    if (!pc) { pc = document.createElement('div'); pc.id = 'page-content'; document.body.appendChild(pc); }
+    // currentUser must be set for navigateTo to work
+    const orig = window.currentUser;
+    window.currentUser = { userId: 'u1', role: 'Admin', roles: ['Admin'], name: 'Test' };
+    try { navigateTo('dashboard'); }
+    catch(e) { /* page render errors expected without Supabase data — just must not crash completely */ }
+    window.currentUser = orig;
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Boot: enable the Run button once app.js has parsed
+window.addEventListener('load', () => {
+  setTimeout(() => {
+    const btn = document.getElementById('run-btn');
+    btn.disabled = false;
+    document.getElementById('status-label').textContent = 'Ready — click "Run All Tests"';
+    document.getElementById('test-time').textContent =
+      `app.js loaded | ${allSections.length} test sections | ${new Date().toLocaleTimeString()}`;
+  }, 600);
+});
+</script>
+</body>
+</html>

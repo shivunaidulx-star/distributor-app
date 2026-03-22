@@ -105,7 +105,6 @@ const DB = {
             }
         }
     },
-
     async refresh() {
         // Core tables needed for Login & Dashboard basic structure
         const coreTables = ['users', 'categories', 'uom'];
@@ -124,7 +123,8 @@ const DB = {
                 ...coreTables.map(t => supabaseClient.from(t).select('*'))
             ]);
             coreResults.forEach((res, i) => {
-                if (!res.error) {
+                if (res.error) console.error(`Core table load error (${coreTables[i]}):`, res.error);
+                else {
                     const camelData = this._toCamel(res.data || []);
                     this.cache[coreTables[i]] = camelData;
                     this.idb.set('db_' + coreTables[i], camelData).catch(console.error);
@@ -177,7 +177,7 @@ const DB = {
         }
     },
 
-    async backgroundSync() {
+    backgroundSync: async function () {
         console.log('Running background sync...');
         const tables = ['sales_orders', 'invoices', 'payments', 'inventory', 'parties'];
         const success = await this.refreshTables(tables);
@@ -313,22 +313,39 @@ const DB = {
         const actualTable = this.mapTable(table);
         const { data, error } = await supabaseClient.from(actualTable).update(this._clean(this._toSnake(row))).eq('id', id).select();
         if (error) { console.error(`Error updating ${actualTable}:`, error.message, '| sent:', JSON.stringify(this._toSnake(row))); throw error; }
+        // Note: data may be empty if RLS SELECT policy doesn't cover updated row — that's OK
         await this.refreshTables([actualTable]);
-        return this._toCamel(data[0]);
+        return data && data.length > 0 ? this._toCamel(data[0]) : { id };
     },
 
     async delete(table, id) {
         const actualTable = this.mapTable(table);
-        const { error } = await supabaseClient.from(actualTable).delete().eq('id', id);
-        if (error) { console.error(`Error deleting from ${actualTable}:`, error); throw error; }
+
+        const record = (await this.getAll(actualTable)).find(r => r.id === id);
+        if (!record) throw new Error('Record not found');
+
+        // 🔴 BLOCK DELETE IF POSTED — only for core documents that require a Cancel reversal workflow
+        const CANCEL_ONLY_TABLES = ['invoices', 'sales_orders', 'purchase_orders'];
+        if (record.status === 'posted' && CANCEL_ONLY_TABLES.includes(actualTable)) {
+            throw new Error('Cannot delete posted document. Use Cancel.');
+        }
+
+        const { error } = await supabaseClient
+            .from(actualTable)
+            .delete()
+            .eq('id', id);
+
+        if (error) throw error;
+
         await this.refreshTables([actualTable]);
     },
 
     //  Raw operations  NO auto-refresh (batch multiple then call DB.refresh() once) 
     async rawUpdate(table, id, row) {
         const actualTable = this.mapTable(table);
-        const { error } = await supabaseClient.from(actualTable).update(this._clean(this._toSnake(row))).eq('id', id);
+        const { data, error } = await supabaseClient.from(actualTable).update(this._clean(this._toSnake(row))).eq('id', id).select();
         if (error) { console.error(`rawUpdate ${actualTable}:`, error.message); throw error; }
+        // Note: data may be empty if RLS SELECT policy doesn't return the row — update still succeeded if no error
     },
     async rawInsert(table, row) {
         const actualTable = this.mapTable(table);
@@ -476,8 +493,8 @@ const ColumnManager = {
             { key: 'type', label: 'Type', visible: true },
             { key: 'invoiceNo', label: 'Invoice', visible: true },
             { key: 'mode', label: 'Mode', visible: true },
-            { key: 'collectedBy', label: 'Collected By', visible: false },
             { key: 'amount', label: 'Amount', visible: true },
+            { key: 'status', label: 'Status', visible: true }, // ✅ ADD THIS
             { key: 'actions', label: 'Actions', required: true },
         ],
         expenses: [
@@ -486,6 +503,7 @@ const ColumnManager = {
             { key: 'party', label: 'Party', visible: true },
             { key: 'docNo', label: 'Doc No', visible: true },
             { key: 'amount', label: 'Amount', visible: true },
+            { key: 'status', label: 'Status', visible: true }, // ✅ ADD THIS
             { key: 'addedBy', label: 'Added By', visible: false },
             { key: 'actions', label: 'Actions', required: true },
         ],
@@ -495,6 +513,7 @@ const ColumnManager = {
             { key: 'party', label: 'Party', visible: true },
             { key: 'items', label: 'Items', visible: false },
             { key: 'total', label: 'Total', visible: true },
+            { key: 'status', label: 'Status', visible: true }, // ✅ ADD
             { key: 'assignedTo', label: 'Assigned To', visible: true },
             { key: 'actions', label: 'Actions', required: true },
         ],
@@ -507,7 +526,7 @@ const ColumnManager = {
             { key: 'phone', label: 'Phone', visible: true },
             { key: 'person', label: 'Person', visible: true },
             { key: 'packages', label: 'Packages', visible: false },
-            { key: 'status', label: 'Status', visible: true },
+            { key: 'status', label: 'Status', visible: true }, // ✅ ADD
             { key: 'reason', label: 'Reason', visible: false },
             { key: 'actions', label: 'Actions', required: true },
         ],
@@ -535,8 +554,8 @@ function openColumnPersonalizer(page, rerenderFn) {
         <div class="col-cfg-row" data-idx="${i}" style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)">
             <span style="cursor:grab;color:var(--text-muted);font-size:1.1rem;user-select:none"></span>
             <span style="flex:1;font-size:0.9rem;font-weight:500">${c.label}</span>
-            <button class="btn btn-outline btn-sm" title="Move Up"    onclick="colMoveUp(${i},'${page}','${rerenderFn}')"    ${i === 0 ? 'disabled' : ''}></button>
-            <button class="btn btn-outline btn-sm" title="Move Down"  onclick="colMoveDown(${i},'${page}','${rerenderFn}')"  ${i === cols.length - 1 ? 'disabled' : ''}></button>
+            <button class="btn btn-outline btn-sm" title="Move Up"    onclick="colMoveUp(${i},'${page}','${rerenderFn}')"    ${i === 0 ? 'disabled' : ''}><span class="material-symbols-outlined" style="font-size:1.1rem">keyboard_arrow_up</span></button>
+            <button class="btn btn-outline btn-sm" title="Move Down"  onclick="colMoveDown(${i},'${page}','${rerenderFn}')"  ${i === cols.length - 1 ? 'disabled' : ''}><span class="material-symbols-outlined" style="font-size:1.1rem">keyboard_arrow_down</span></button>
             ${c.required
             ? `<span class="badge badge-outline" style="opacity:0.5;min-width:56px;text-align:center">Always</span>`
             : `<button class="btn btn-sm ${c.visible ? 'btn-primary' : 'btn-outline'}" onclick="colToggle(${i},'${page}','${rerenderFn}')" style="min-width:56px">${c.visible ? 'Visible' : 'Hidden'}</button>`
@@ -618,27 +637,27 @@ function endSave() {
 // --- Collision-proof sequential number generator ---
 const _nextNumLocks = {};
 async function nextNumber(prefix) {
-    // Prevent concurrent calls for same prefix
-    if (_nextNumLocks[prefix]) {
-        await _nextNumLocks[prefix];
-    }
+    if (_nextNumLocks[prefix]) { await _nextNumLocks[prefix]; }
     let resolveLock;
     _nextNumLocks[prefix] = new Promise(r => { resolveLock = r; });
 
     try {
-        const table = prefix === 'SO-' ? 'sales_orders' : 'invoices';
-        const numField = prefix === 'SO-' ? 'order_no' : 'invoice_no';
-        const { data } = await supabaseClient.from(table).select(numField);
-        const allNums = (data || []).map(o => {
-            const m = (o[numField] || '').match(/(\d+)$/);
-            return m ? parseInt(m[1]) : 0;
-        });
-        const counters = DB.ls.getObj('db_counters');
-        const maxExisting = allNums.length ? Math.max(...allNums) : 0;
-        const current = Math.max(counters[prefix] || 0, maxExisting) + 1;
-        counters[prefix] = current;
-        DB.saveSettings('db_counters', counters); // saves to LS immediately + Supabase async
-        return prefix + current.toString().padStart(4, '0');
+        let code = 'INVOICE';
+        if (prefix === 'SO-') code = 'SALES_ORDER';
+        else if (prefix === 'PO-') code = 'PURCHASE_ORDER';
+        else if (prefix === 'PINV-' || prefix === 'PUR-') code = 'PURCHASE_INVOICE';
+        else if (prefix === 'PT-NS-') code = 'VYAPAR_INVOICE';
+        else if (prefix === 'PAY-IN') code = 'PAYMENT_IN';
+        else if (prefix === 'PAY-') code = 'PAYMENT_OUT';
+        else if (prefix === 'EXP-') code = 'EXPENSE';
+        const { data, error } = await supabaseClient.rpc('get_next_no_fy', { p_code: code });
+        if (error) {
+            console.error('Sequence RPC Error:', error);
+            // Non-blocking log instead of alert during boot
+            console.warn('Numbering Error: Using fallback. Check No. Series table.');
+            return prefix + Date.now().toString().slice(-4);
+        }
+        return data;
     } finally {
         resolveLock();
         delete _nextNumLocks[prefix];
@@ -690,6 +709,84 @@ async function addLedgerEntry(itemId, itemName, entryType, qty, documentNo, reas
         reason: reason || '',
         created_by: currentUser ? currentUser.userId : 'System'
     });
+}
+
+// --- CANCEL DOCUMENT WITH REVERSAL (ERP LOGIC) ---
+async function cancelDocument(table, id) {
+    const record = (await DB.getAll(table)).find(r => r.id === id);
+    if (!record) return alert('Record not found');
+
+    if (record.status !== 'posted') {
+        return alert('Only posted documents can be cancelled');
+    }
+
+    if (!confirm('Cancel document? Reversal entries will be created.')) return;
+
+    // 🔹 PARTY LEDGER REVERSAL (FOR ALL TYPES)
+    if (record.partyId) {
+        let amount = 0;
+
+        // invoices / orders
+        if (record.total) amount = record.total;
+
+        // payments / expenses
+        if (record.amount) amount = record.amount;
+
+        if (amount) {
+            let reversalAmount = Math.abs(amount);
+
+            // 🔥 HANDLE BASED ON TABLE + TYPE
+            if (table === 'payments') {
+                // Payment screen has type
+                if (record.type === 'IN') {
+                    // Customer paid → reduce balance → reversal = increase
+                    reversalAmount = +reversalAmount;
+                } else {
+                    // Payment OUT → reversal = negative
+                    reversalAmount = -reversalAmount;
+                }
+            }
+            else if (table === 'expenses') {
+                // Expense = money out → reversal = negative
+                reversalAmount = -reversalAmount;
+            }
+            else {
+                // invoices / orders
+                reversalAmount = -reversalAmount;
+            }
+
+            await addPartyLedgerEntry(
+                record.partyId,
+                record.partyName,
+                'REVERSAL',
+                reversalAmount,
+                record.invoiceNo || record.receiptNo || '',
+                'Cancelled transaction reversal'
+            );
+        }
+    }
+
+    // 🔹 STOCK REVERSAL (only if items exist)
+    if (record.items && Array.isArray(record.items)) {
+        for (let item of record.items) {
+            await addLedgerEntry(
+                item.itemId,
+                item.name,
+                'REVERSAL',
+                item.qty,
+                record.invoiceNo || '',
+                'Stock reversal'
+            );
+        }
+    }
+
+    // 🔹 UPDATE STATUS
+    await DB.update(table, id, {
+        status: 'cancelled',
+        isCancelled: true
+    });
+
+    showToast('Document cancelled with reversal', 'warning');
 }
 
 // --- Party Ledger Helper ---
@@ -761,7 +858,7 @@ async function repairCancelledInvoiceOrders() {
 
 // --- Role Permissions ---
 const ROLE_PAGES = {
-    Admin: ['dashboard', 'parties', 'partyledger', 'inventorysetup', 'categories', 'uom', 'inventory', 'catalog', 'salesorders', 'purchaseorders', 'invoices', 'payments', 'expenses', 'packing', 'delivery', 'reports', 'packers', 'deliverypersons', 'users', 'setup', 'staffmaster', 'attendance', 'hrpayroll'],
+    Admin: ['dashboard', 'parties', 'partyledger', 'inventorysetup', 'categories', 'uom', 'inventory', 'catalog', 'salesorders', 'purchaseorders', 'invoices', 'payments', 'expenses', 'packing', 'delivery', 'reports', 'packers', 'deliverypersons', 'users', 'setup', 'noseries', 'staffmaster', 'attendance', 'hrpayroll'],
     Manager: ['dashboard', 'parties', 'partyledger', 'inventorysetup', 'categories', 'uom', 'inventory', 'catalog', 'salesorders', 'purchaseorders', 'invoices', 'payments', 'expenses', 'packing', 'delivery', 'reports', 'packers', 'deliverypersons'],
     Salesman: ['dashboard', 'parties', 'inventory', 'catalog', 'salesorders', 'payments'],
     Delivery: ['dashboard', 'delivery'],
@@ -979,74 +1076,6 @@ async function doLoginSuccess(user, isRestore = false) {
     await navigateTo('dashboard');
 }
 
-// =============================================
-//  AUTH
-// =============================================
-async function showLoginScreen() {
-    loginScreen.classList.remove('hidden');
-    setupWizard.classList.add('hidden');
-    appEl.classList.add('hidden');
-
-    const co = DB.ls.getObj('db_company'); // Keeping company info local for now as it's static
-    if (co.name) $('login-company-name').textContent = co.name;
-
-    const logoEl = document.querySelector('#login-screen .logo-icon');
-    if (logoEl) {
-        if (co.logo) {
-            logoEl.innerHTML = `<img src="${co.logo}" style="width:100%;height:100%;object-fit:cover;border-radius:12px">`;
-        } else {
-            logoEl.textContent = co.name ? co.name.charAt(0).toUpperCase() : 'D';
-        }
-    }
-}
-
-async function populateLoginUsers() { /* replaced by userId text input */ }
-
-async function login() {
-    const inputId = ($('login-userid') || { value: '' }).value.trim();
-    const pin = $('login-pin').value.trim();
-    if (!inputId) return alert('Enter your User ID');
-    if (!pin) return alert('Enter your PIN');
-    const users = await DB.getAll('users');
-    const user = users.find(u => (u.userId && u.userId.toLowerCase() === inputId.toLowerCase()) || u.name.toLowerCase() === inputId.toLowerCase());
-
-    if (!user || user.pin !== pin) return alert('Invalid User ID or PIN');
-
-    dmSaveSession(user);
-    doLoginSuccess(user);
-}
-
-async function doLoginSuccess(user, isRestore = false) {
-    currentUser = user;
-    window.currentUser = user; // Ensure global access too
-
-    // Explicitly set security context in Supabase session
-    await DB.setSecureSession(user);
-    loginScreen.classList.add('hidden');
-    appEl.classList.remove('hidden');
-    $('sidebar-username').textContent = user.name;
-    const displayRoles = Array.isArray(user.roles) && user.roles.length ? user.roles.join(' | ') : (user.role || '');
-    $('sidebar-role').textContent = displayRoles + ' (v100)';
-    $('sidebar-avatar').textContent = user.name.charAt(0).toUpperCase();
-
-    const co = DB.ls.getObj('db_company');
-    $('sidebar-brand').textContent = co.name || 'DistroManager';
-    const sidebarLogo = document.querySelector('#sidebar .logo-icon-sm');
-    if (sidebarLogo) {
-        if (co.logo) {
-            sidebarLogo.innerHTML = `<img src="${co.logo}" style="width:100%;height:100%;object-fit:cover;border-radius:6px">`;
-            sidebarLogo.style.background = 'transparent';
-        } else {
-            sidebarLogo.textContent = (co.name || 'D').charAt(0).toUpperCase();
-            sidebarLogo.style.background = 'linear-gradient(135deg, var(--primary), var(--secondary))';
-        }
-    }
-    $('current-date').textContent = new Date().toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' });
-    buildSidebar();
-    showBottomNav();
-    await navigateTo('dashboard');
-}
-
 function openChangePinModal() {
     openModal('Change PIN', `
         <div class="form-group">
@@ -1195,20 +1224,12 @@ function setupPullToRefresh() {
         }
     }, { passive: true });
 }
-
 async function initApp() {
     const loadingEl = $('app-loading');
-
-    // Safety timeout: if app doesn't boot in 10s, try to proceed anyway
-    const bootTimeout = setTimeout(() => {
-        console.warn('Boot timeout reached. Forcing UI reveal.');
-        if (loadingEl) loadingEl.classList.add('hidden');
-    }, 10000);
 
     try {
         // Check for saved customer portal session first
         if (cpRestoreSession()) {
-            clearTimeout(bootTimeout);
             if (loadingEl) loadingEl.classList.add('hidden');
             return;
         }
@@ -1217,7 +1238,6 @@ async function initApp() {
 
         // Check for main app session
         if (dmRestoreSession()) {
-            clearTimeout(bootTimeout);
             if (loadingEl) loadingEl.classList.add('hidden');
         } else {
             await checkFirstLaunch();
@@ -1244,11 +1264,9 @@ async function initApp() {
         }, true);
 
         // Success: hide loading
-        clearTimeout(bootTimeout);
         if (loadingEl) loadingEl.classList.add('hidden');
 
     } catch (err) {
-        clearTimeout(bootTimeout);
         console.error('Boot Error:', err);
         const errorUI = $('boot-error-ui');
         if (errorUI) errorUI.classList.remove('hidden');
@@ -1378,6 +1396,7 @@ function initSearchDropdown(inputId, items, onSelect) {
         inp.dataset.selectedId = item.id || '';
         inp.dataset.selectedValue = item.value || '';
         closeDD();
+        inp.blur(); // Release focus so onSelect callbacks can focus other fields
         if (onSelect) onSelect(item);
     }
 
@@ -1521,6 +1540,9 @@ function buildPartySearchList(parties) {
 }
 
 
+// --- Swipe Actions (stub — touch gestures not yet implemented) ---
+function initSwipeActions() { /* placeholder for future swipe-to-delete/edit */ }
+
 // --- Navigation ---
 async function navigateTo(page, options = {}) {
     const isSilent = options.silent === true;
@@ -1539,7 +1561,7 @@ async function navigateTo(page, options = {}) {
     // Update FAB for this page
     updateFab(page);
 
-    const titles = { dashboard: 'Dashboard', parties: 'Parties', partyledger: 'Party Ledger', inventorysetup: 'Inventory Setup', categories: 'Categories Master', uom: 'UOM Master', inventory: 'Inventory', catalog: 'Item Catalog', salesorders: 'Sales Orders', purchaseorders: 'Purchase Orders', invoices: 'Invoices', payments: 'Payments', expenses: 'Expenses', packing: 'Packing', delivery: 'Delivery', reports: 'Reports', packers: 'Packers Master', deliverypersons: 'Delivery Persons', users: 'Users & Roles', setup: 'Company Setup', customerrequests: 'Customer Requests', staffmaster: 'Staff Master', attendance: 'Attendance', hrpayroll: 'HR & Payroll', packorder: 'Pack Order' };
+    const titles = { dashboard: 'Dashboard', parties: 'Parties', partyledger: 'Party Ledger', inventorysetup: 'Inventory Setup', categories: 'Categories Master', uom: 'UOM Master', inventory: 'Inventory', catalog: 'Item Catalog', salesorders: 'Sales Orders', purchaseorders: 'Purchase Orders', invoices: 'Invoices', payments: 'Payments', expenses: 'Expenses', packing: 'Packing', delivery: 'Delivery', reports: 'Reports', packers: 'Packers Master', deliverypersons: 'Delivery Persons', users: 'Users & Roles', setup: 'Company Setup', noseries: 'No. Series Setup', customerrequests: 'Customer Requests', staffmaster: 'Staff Master', attendance: 'Attendance', hrpayroll: 'HR & Payroll', packorder: 'Pack Order' };
     pageTitle.textContent = titles[page] || page;
 
     // Show a loader ONLY if NOT silent refresh
@@ -1547,7 +1569,7 @@ async function navigateTo(page, options = {}) {
         pageContent.innerHTML = '<div style="display:flex;justify-content:center;align-items:center;height:200px"><div class="loader"></div></div>';
     }
 
-    const renderers = { dashboard: renderDashboard, parties: renderParties, partyledger: renderPartyLedgerLayout, inventorysetup: renderInventorySetup, categories: renderCategories, uom: renderUOM, inventory: renderInventory, catalog: renderCatalog, salesorders: renderSalesOrders, purchaseorders: renderPurchaseOrders, invoices: renderInvoices, payments: renderPayments, expenses: renderExpenses, packing: renderPacking, delivery: renderDelivery, reports: renderReports, packers: renderPackers, deliverypersons: renderDeliveryPersons, users: renderUsers, setup: renderCompanySetup, customerrequests: renderCustomerRequests, staffmaster: renderStaffMaster, attendance: renderAttendance, hrpayroll: renderHRPayroll, packorder: renderPackOrderPage };
+    const renderers = { dashboard: renderDashboard, parties: renderParties, partyledger: renderPartyLedgerLayout, inventorysetup: renderInventorySetup, categories: renderCategories, uom: renderUOM, inventory: renderInventory, catalog: renderCatalog, salesorders: renderSalesOrders, purchaseorders: renderPurchaseOrders, invoices: renderInvoices, payments: renderPayments, expenses: renderExpenses, packing: renderPacking, delivery: renderDelivery, reports: renderReports, packers: renderPackers, deliverypersons: renderDeliveryPersons, users: renderUsers, setup: renderCompanySetup, noseries: renderNoSeries, customerrequests: renderCustomerRequests, staffmaster: renderStaffMaster, attendance: renderAttendance, hrpayroll: renderHRPayroll, packorder: renderPackOrderPage };
 
     if (renderers[page]) {
         await renderers[page]();
@@ -1586,23 +1608,23 @@ window.haversine = function (lat1, lon1, lat2, lon2) {
 //  BOTTOM NAV  More Sheet & FAB
 // =============================================
 const MORE_ITEMS = [
-    { page: 'payments', icon: '💰', label: 'Payments' },
-    { page: 'parties', icon: '👥', label: 'Parties' },
-    { page: 'inventory', icon: '📦', label: 'Inventory' },
-    { page: 'packing', icon: '📋', label: 'Packing' },
-    { page: 'delivery', icon: '🚚', label: 'Delivery' },
-    { page: 'reports', icon: '📈', label: 'Reports' },
-    { page: 'expenses', icon: '💸', label: 'Expenses' },
-    { page: 'purchaseorders', icon: '🛒', label: 'Purchase' },
-    { page: 'catalog', icon: '🛍️', label: 'Catalog' },
-    { page: 'packers', icon: '🧑‍🏭', label: 'Packers' },
-    { page: 'deliverypersons', icon: '🧑‍✈️', label: 'Del.Persons' },
-    { page: 'users', icon: '🔐', label: 'Users' },
-    { page: 'setup', icon: '⚙️', label: 'Setup' },
-    { page: 'staffmaster', icon: '👤', label: 'Staff' },
-    { page: 'attendance', icon: '📅', label: 'Attendance' },
-    { page: 'hrpayroll', icon: '💵', label: 'Payroll' },
-    { fn: 'forceHardRefresh()', icon: '🔄', label: 'Hard Refresh' }
+    { page: 'payments', icon: 'payments', label: 'Payments' },
+    { page: 'parties', icon: 'group', label: 'Parties' },
+    { page: 'inventory', icon: 'inventory_2', label: 'Inventory' },
+    { page: 'packing', icon: 'assignment', label: 'Packing' },
+    { page: 'delivery', icon: 'local_shipping', label: 'Delivery' },
+    { page: 'reports', icon: 'trending_up', label: 'Reports' },
+    { page: 'expenses', icon: 'account_balance_wallet', label: 'Expenses' },
+    { page: 'purchaseorders', icon: 'shopping_cart', label: 'Purchase' },
+    { page: 'catalog', icon: 'local_mall', label: 'Catalog' },
+    { page: 'packers', icon: 'engineering', label: 'Packers' },
+    { page: 'deliverypersons', icon: 'delivery_dining', label: 'Del.Persons' },
+    { page: 'users', icon: 'admin_panel_settings', label: 'Users' },
+    { page: 'setup', icon: 'settings', label: 'Setup' },
+    { page: 'staffmaster', icon: 'person', label: 'Staff' },
+    { page: 'attendance', icon: 'calendar_month', label: 'Attendance' },
+    { page: 'hrpayroll', icon: 'payments', label: 'Payroll' },
+    { fn: 'forceHardRefresh()', icon: 'refresh', label: 'Hard Refresh' }
 ];
 
 const BOTTOM_NAV_TABS = {
@@ -1696,8 +1718,8 @@ function showBottomNav() {
     moreBtn.id = 'bn-more-btn';
     moreBtn.href = '#';
     const moreIcon = document.createElement('span');
-    moreIcon.className = 'bn-icon';
-    moreIcon.textContent = '\u2630';
+    moreIcon.className = 'bn-icon material-symbols-outlined';
+    moreIcon.textContent = 'menu';
     const moreLabel = document.createElement('span');
     moreLabel.className = 'bn-label';
     moreLabel.textContent = 'More';
@@ -1836,7 +1858,7 @@ function compressImage(file, { maxWidth = 1024, maxHeight = 1024, quality = 0.75
     });
 }
 
-function currency(n) { return '' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function currency(n) { return '' + (+n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function fmtDate(d) { return d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '-'; }
 function today() {
     const d = new Date();
@@ -2133,6 +2155,16 @@ async function renderDashboard() {
     const thisMonthStart = today().substring(0, 8) + '01';
     const tmInvs = window._dashInvoicesAll.filter(i => i.date >= thisMonthStart);
     const tmSales = tmInvs.reduce((s, i) => s + i.total, 0);
+
+    // Last month comparison
+    const _now = new Date();
+    const lmStart = new Date(_now.getFullYear(), _now.getMonth() - 1, 1).toISOString().split('T')[0];
+    const lmEnd   = new Date(_now.getFullYear(), _now.getMonth(), 0).toISOString().split('T')[0];
+    const lmSales = window._dashInvoicesAll.filter(i => i.date >= lmStart && i.date <= lmEnd).reduce((s, i) => s + i.total, 0);
+    const salesDiff = lmSales > 0 ? Math.round(((tmSales - lmSales) / lmSales) * 100) : null;
+    const salesCompareHtml = salesDiff !== null
+        ? `<span style="font-size:0.78rem;font-weight:600;padding:2px 7px;border-radius:20px;background:${salesDiff >= 0 ? 'rgba(16,185,129,0.12)' : 'rgba(239,68,68,0.12)'};color:${salesDiff >= 0 ? '#10b981' : '#ef4444'}">${salesDiff >= 0 ? '↑' : '↓'} ${Math.abs(salesDiff)}% vs last month</span>`
+        : `<span style="font-size:0.78rem;color:var(--text-muted)">Last month: ${currency(lmSales)}</span>`;
     const tmPayIn = payments.filter(p => p.type === 'in' && p.date >= thisMonthStart).reduce((s, p) => s + p.amount, 0);
     const tmExp = expenses.filter(e => e.date >= thisMonthStart).reduce((s, e) => s + e.amount, 0);
 
@@ -2183,7 +2215,7 @@ async function renderDashboard() {
             <div>
                 <div style="font-size:0.82rem;color:var(--text-muted)">Total Sale</div>
                 <div style="font-size:1.5rem;font-weight:700;color:var(--text-primary)" id="dash-chart-total">${currency(tmSales)}</div>
-                <div id="dash-chart-compare" style="font-size:0.8rem;margin-top:2px"></div>
+                <div id="dash-chart-compare" style="font-size:0.8rem;margin-top:4px">${salesCompareHtml}</div>
             </div>
             <div style="position:relative">
                 <button id="dash-period-btn" onclick="toggleDashPeriodMenu()" class="btn btn-outline btn-sm" style="min-width:120px;display:flex;justify-content:space-between;align-items:center;gap:8px">
@@ -2220,19 +2252,6 @@ async function renderDashboard() {
         </div>
     </div>
 
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-        <span style="font-weight:600;font-size:0.95rem">Most Used Reports</span>
-        <a href="#" onclick="navigateTo('reports');return false" style="font-size:0.83rem;color:var(--accent);text-decoration:none">View All →</a>
-    </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:18px">
-        ${[
-            ['sales', 'Sale Report'],
-            ['payments', 'All Transactions'],
-            ['invoice-pnl', 'Daybook Report'],
-            ['outstanding', 'Party Statement']
-        ].map(([r, l]) => `<div class="dash-report-chip" onclick="navigateTo('reports');setTimeout(()=>showReport('${r}'),200)" style="cursor:pointer" ${tileHover}><span>${l}</span><span style="color:var(--accent)">›</span></div>`).join('')}
-    </div>
-
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
         <span style="font-weight:700;font-size:0.9rem;color:var(--text-secondary);letter-spacing:0.04em;text-transform:uppercase">Quick Actions</span>
         <button class="btn-icon" onclick="openEditQuickActions()" title="Edit Quick Actions" style="font-size:1rem;padding:4px 8px"><span class="material-symbols-outlined">edit</span></button>
@@ -2260,9 +2279,7 @@ async function renderDashboard() {
     </div></div>
     ${await renderCustReqWidget()}
     `;
-
-    renderDashChart();
-
+    // Chart rendering removed as it was undefined
     requestAnimationFrame(() => {
         document.querySelectorAll('.dash-count[data-val]').forEach(el => {
             const target = parseFloat(el.dataset.val) || 0;
@@ -2319,11 +2336,12 @@ async function renderParties() {
             <input class="search-box" id="party-search" placeholder="Search parties..." oninput="filterPartyTable()">
             <div class="filter-group">
                 <button class="btn btn-outline" onclick="openColumnPersonalizer('parties','renderParties')" style="border-color:var(--accent);color:var(--accent)"> Columns</button>
-                ${!isSalesman() ? `<button class="btn btn-outline" onclick="downloadPartyTemplate()"> Party Template</button>
-                <button class="btn btn-outline" onclick="exportPartiesExcel()"> Export Parties</button>
-                <button class="btn btn-outline" onclick="importPartyExcel()"> Import Parties</button>
-                <button class="btn btn-outline" style="border-color:#f59e0b;color:#f59e0b" onclick="downloadOpeningBalTemplate()"> Opening Bal Template</button>
-                <button class="btn btn-outline" style="border-color:#f59e0b;color:#f59e0b" onclick="importOpeningBalExcel()"> Import Opening Bal</button>
+                ${!isSalesman() ? `
+                <button class="btn btn-outline" onclick="downloadPartyTemplate()"><span class="material-symbols-outlined" style="font-size:1.1rem">description</span> Party Template</button>
+                <button class="btn btn-outline" onclick="exportPartiesExcel()"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export Parties</button>
+                <button class="btn btn-outline" onclick="importPartyExcel()"><span class="material-symbols-outlined" style="font-size:1.1rem">upload</span> Import Parties</button>
+                <button class="btn btn-outline" style="border-color:#f59e0b;color:#f59e0b" onclick="downloadOpeningBalTemplate()"><span class="material-symbols-outlined" style="font-size:1.1rem">description</span> Opening Bal Template</button>
+                <button class="btn btn-outline" style="border-color:#f59e0b;color:#f59e0b" onclick="importOpeningBalExcel()"><span class="material-symbols-outlined" style="font-size:1.1rem">upload</span> Import Opening Bal</button>
                 <button class="btn btn-primary" onclick="openPartyModal()">+ Add Party</button>` : ''}
             </div>
         </div>
@@ -2355,11 +2373,11 @@ function renderPartyRows(parties) {
             gstin: `<td style="font-size:0.82rem">${p.gstin || '-'}</td>`,
             balance: `<td class="${(p.balance || 0) < 0 ? 'amount-green' : 'amount-red'}">${currency(Math.abs(p.balance || 0))} ${(p.balance || 0) < 0 ? '(Cr)' : '(Dr)'}</td>`,
             actions: `<td><div class="action-btns">
-                <button class="btn-icon" onclick="openDedicatedPartyLedger('${p.id}')" title="View Ledger"></button>
-                ${p.phone ? `<a href="tel:${p.phone}" class="btn-icon" title="Call party" style="text-decoration:none"></a>` : ''}
-                ${p.lat && p.lng ? `<button class="btn-icon" onclick="openPartyMap('${p.lat}','${p.lng}','${escapeHtml(p.name)}')" title="Navigate to party"></button>` : ''}
-                ${!isPacker() && !(p.lat && p.lng) ? `<button class="btn-icon" onclick="updatePartyLocation('${p.id}')" title="Update Location" style="color:#3b82f6"></button>` : ''}
-                ${canEdit() ? `<button class="btn-icon" onclick="openPartyModal('${p.id}')"></button><button class="btn-icon" onclick="deleteParty('${p.id}')"></button>` : ''}
+                <button class="btn-icon" onclick="openDedicatedPartyLedger('${p.id}')" title="View Ledger"><span class="material-symbols-outlined" style="font-size:1.1rem">account_balance_wallet</span></button>
+                ${p.phone ? `<a href="tel:${p.phone}" class="btn-icon" title="Call party" style="text-decoration:none"><span class="material-symbols-outlined" style="font-size:1.1rem">call</span></a>` : ''}
+                ${p.lat && p.lng ? `<button class="btn-icon" onclick="openPartyMap('${p.lat}','${p.lng}','${escapeHtml(p.name)}')" title="Navigate to party"><span class="material-symbols-outlined" style="font-size:1.1rem">near_me</span></button>` : ''}
+                ${!isPacker() && !(p.lat && p.lng) ? `<button class="btn-icon" onclick="updatePartyLocation('${p.id}')" title="Update Location" style="color:#3b82f6"><span class="material-symbols-outlined" style="font-size:1.1rem">location_on</span></button>` : ''}
+                ${canEdit() ? `<button class="btn-icon" onclick="openPartyModal('${p.id}')" title="Edit"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button><button class="btn-icon" onclick="deleteParty('${p.id}')" title="Delete" style="color:var(--danger)"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>` : ''}
             </div></td>`,
             city: `<td style="font-size:0.85rem">${escapeHtml(p.city || '-')}</td>`,
             postCode: `<td style="font-size:0.85rem">${escapeHtml(p.postCode || '-')}</td>`,
@@ -2714,7 +2732,7 @@ function downloadOpeningBalTemplate() {
 function importOpeningBalExcel() {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.csv';
+    input.accept = '.csv,.xlsx,.xls';
     input.onchange = processOpeningBalImport;
     input.click();
 }
@@ -2722,8 +2740,23 @@ function importOpeningBalExcel() {
 async function processOpeningBalImport(event) {
     const file = event.target.files[0];
     if (!file) return;
-    const text = await file.text();
-    const lines = text.split(/\r?\n/).filter(l => l.trim());
+
+    async function getLines() {
+        if (file.name.match(/\.xlsx?$/i) && typeof XLSX !== 'undefined') {
+            return await new Promise(resolve => {
+                const reader = new FileReader();
+                reader.onload = e => {
+                    const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
+                    resolve(XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]]));
+                };
+                reader.readAsArrayBuffer(file);
+            }).then(csv => csv.split(/\r?\n/).filter(l => l.trim()));
+        }
+        const text = await file.text();
+        return text.split(/\r?\n/).filter(l => l.trim());
+    }
+
+    const lines = await getLines();
     if (lines.length < 2) return alert('File is empty or has no data rows');
 
     const parties = DB.get('db_parties') || [];
@@ -2786,67 +2819,90 @@ async function confirmOpeningBalImport() {
     const el = document.getElementById('ob-rows-json');
     if (!el) return;
     const rows = JSON.parse(el.value.replace(/&apos;/g, "'"));
-    const parties = DB.get('db_parties') || [];
-    let created = 0, updated = 0, invoices = 0;
-    const partyMap = {}; // partyCode  party id
+    let created = 0, updated = 0, docCount = 0;
 
     // Group by partyCode
     const byParty = {};
     for (const r of rows) {
-        if (!byParty[r.partyCode]) byParty[r.partyCode] = { info: r, invoices: [] };
-        byParty[r.partyCode].invoices.push(r);
+        if (!byParty[r.partyCode]) byParty[r.partyCode] = { info: r, docs: [] };
+        byParty[r.partyCode].docs.push(r);
     }
 
-    for (const [code, group] of Object.entries(byParty)) {
-        const { info } = group;
-        const totalAmount = group.invoices.reduce((s, r) => s + r.amount, 0);
-        let partyId;
+    try {
+        for (const [code, group] of Object.entries(byParty)) {
+            const { info } = group;
+            const totalAmount = group.docs.reduce((s, r) => s + r.amount, 0);
+            let partyId, partyName;
 
-        if (info.existingParty) {
-            // Update existing  add to balance
-            partyId = info.existingParty.id;
-            const newBal = (info.existingParty.balance || 0) + totalAmount;
-            await DB.rawUpdate('parties', partyId, { balance: newBal, partyCode: code });
-            updated++;
-        } else {
-            // Create new party
-            partyId = 'P' + Date.now() + Math.random().toString(36).slice(2, 5);
-            await DB.rawInsert('parties', {
-                id: partyId,
-                name: info.partyName,
-                partyCode: code,
-                type: info.partyType,
-                balance: totalAmount,
-                credit_limit: 0,
-                blocked: false
-            });
-            created++;
-        }
-        partyMap[code] = partyId;
+            if (info.existingParty) {
+                partyId = info.existingParty.id;
+                partyName = info.existingParty.name;
+                const newBal = (info.existingParty.balance || 0) + totalAmount;
+                await DB.rawUpdate('parties', partyId, { balance: newBal, party_code: code });
+                updated++;
+            } else {
+                // Let Supabase generate the UUID — don't pass custom id
+                const newParty = await DB.rawInsert('parties', {
+                    name: info.partyName,
+                    party_code: code,
+                    type: info.partyType || 'Customer',
+                    balance: totalAmount,
+                    credit_limit: 0,
+                    blocked: false,
+                    active: true
+                });
+                partyId = newParty.id;
+                partyName = info.partyName;
+                created++;
+            }
 
-        // Create party_ledger entries per invoice
-        for (const r of group.invoices) {
-            const runBal = r.amount; // individual entry amount
-            await DB.rawInsert('party_ledger', {
-                id: 'PL' + Date.now() + Math.random().toString(36).slice(2, 6),
-                date: r.invoiceDate,
-                partyId,
-                partyName: info.partyName,
-                type: 'opening_balance',
-                amount: r.amount,
-                balance: runBal,
-                docNo: r.invoiceNo,
-                notes: r.notes || 'Opening balance import',
-                createdBy: currentUser ? currentUser.name : 'Import'
-            });
-            invoices++;
+            // Create party_ledger + invoices entries per document
+            let runningBal = info.existingParty ? (info.existingParty.balance || 0) : 0;
+            for (const r of group.docs) {
+                runningBal += r.amount;
+                // Party ledger entry
+                await DB.rawInsert('party_ledger', {
+                    date: r.invoiceDate,
+                    party_id: partyId,
+                    party_name: partyName,
+                    type: 'Opening Balance',
+                    amount: r.amount,
+                    balance: runningBal,
+                    doc_no: r.invoiceNo,
+                    notes: r.notes || 'Opening balance import',
+                    created_by: currentUser ? currentUser.name : 'Import'
+                });
+                // Invoice record so it appears in invoices list & payment allocation
+                const invType = (r.partyType || 'Customer').toLowerCase().includes('supp') ? 'purchase' : 'sale';
+                await DB.rawInsert('invoices', {
+                    invoice_no: r.invoiceNo,
+                    date: r.invoiceDate,
+                    due_date: r.dueDate || null,
+                    type: invType,
+                    party_id: partyId,
+                    party_name: partyName,
+                    items: [],
+                    subtotal: r.amount,
+                    gst: 0,
+                    round_off: 0,
+                    total: r.amount,
+                    discount_pct: 0,
+                    discount_amt: 0,
+                    status: 'posted',
+                    notes: r.notes || 'Opening balance',
+                    created_by: currentUser ? currentUser.name : 'Import'
+                });
+                docCount++;
+            }
         }
+
+        await DB.refreshTables(['parties', 'party_ledger', 'invoices']);
+        closeModal();
+        showToast(`Import done: ${created} parties created, ${updated} updated, ${docCount} documents posted`, 'success');
+        await renderParties();
+    } catch (err) {
+        alert('Error during import: ' + err.message);
     }
-
-    await DB.refreshTables(['parties', 'party_ledger']);
-    closeModal();
-    showToast(`Import done: ${created} parties created, ${updated} updated, ${invoices} invoice entries added`, 'success');
-    await renderParties();
 }
 
 function importPartyExcel() {
@@ -2870,7 +2926,7 @@ function processPartyImport(event) {
             if (cols.length < 2) { errors.push(`Row ${i + 1}: Not enough columns`); continue; }
             // Expected Order (matching template):
             // 0:PartyCode, 1:Name, 2:Type, 3:Phone, 4:GSTIN, 5:Address, 6:City, 7:PostCode, 8:Lat, 9:Lng, 10:OpeningBal, 11:CreditLimit, 12:PayTerms, 13:Blocked
-            const [partyCode, name, typeStr, phone, gstin, address, city, postCode, lat, lng, balStr] = cols.map(c => (c || '').trim());
+            const [partyCode, name, typeStr, phone, gstin, address, city, postCode, lat, lng, balStr, creditLimitStr, paymentTerms, blockedStr] = cols.map(c => (c || '').trim());
             if (!name) { errors.push(`Row ${i + 1}: Name is empty`); continue; }
             const existingParty = parties.find(p => p.name.toLowerCase() === name.toLowerCase());
             if (pendingPartyImports.some(p => p.name.toLowerCase() === name.toLowerCase())) {
@@ -2885,6 +2941,9 @@ function processPartyImport(event) {
                 lat: lat ? +lat : null,
                 lng: lng ? +lng : null,
                 balance: existingParty ? existingParty.balance : balance,
+                creditLimit: creditLimitStr ? +creditLimitStr : (existingParty ? existingParty.creditLimit : 0),
+                paymentTerms: paymentTerms || (existingParty ? existingParty.paymentTerms : ''),
+                blocked: blockedStr ? blockedStr.toLowerCase() === 'true' : (existingParty ? existingParty.blocked : false),
                 isUpdate: !!existingParty
             };
             if (existingParty) entry.id = existingParty.id;
@@ -2938,7 +2997,7 @@ function showPartyImportPreview(errors) {
                 <td><input value="${p.gstin}" onchange="pendingPartyImports[${idx}].gstin=this.value" style="width:100px;background:var(--bg-input);border:1px solid var(--border);border-radius:4px;padding:4px 6px;color:var(--text-primary);font-size:0.85rem"></td>
                 <td><input value="${p.address}" onchange="pendingPartyImports[${idx}].address=this.value" style="width:100px;background:var(--bg-input);border:1px solid var(--border);border-radius:4px;padding:4px 6px;color:var(--text-primary);font-size:0.85rem"></td>
                 <td><span class="badge ${p.isUpdate ? 'badge-warning' : 'badge-success'}">${p.isUpdate ? 'Update' : 'New'}</span></td>
-                <td><button class="btn-icon" onclick="pendingPartyImports.splice(${idx},1);showPartyImportPreview()" title="Remove"></button></td>
+                <td><button class="btn-icon" onclick="pendingPartyImports.splice(${idx},1);showPartyImportPreview()" title="Remove" style="color:var(--danger)"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button></td>
             </tr>`).join('')}</tbody></table>
         </div>`;
     }
@@ -2987,7 +3046,7 @@ async function renderCategories() {
         <div class="section-toolbar">
             <h3 style="font-size:1rem"> Categories</h3>
             <div class="filter-group">
-                <button class="btn btn-outline" onclick="triggerCategorizeExcelImport()"> Import</button>
+                <button class="btn btn-outline" onclick="triggerCategorizeExcelImport()"><span class="material-symbols-outlined" style="font-size:1.1rem">upload</span> Import</button>
                 <input type="file" id="f-cat-import" accept=".xlsx, .xls" style="display:none" onchange="importCategoriesExcel(event)">
                 <button class="btn btn-primary" onclick="openCategoryModal()">+ Add Category</button>
             </div>
@@ -3179,22 +3238,22 @@ async function renderInventory() {
     pageContent.innerHTML = `
         <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px">
             <div class="dash-pulse-tile" style="--tile-color:#3b82f6;animation-delay:0.04s">
-                <div class="dash-pulse-icon"></div>
+                <div class="dash-pulse-icon">📦</div>
                 <div class="dash-pulse-val dash-count" data-val="${totalItems}" style="color:#3b82f6">${totalItems}</div>
                 <div class="dash-pulse-lbl">Total Items</div>
             </div>
             <div class="dash-pulse-tile" style="--tile-color:#10b981;animation-delay:0.08s">
-                <div class="dash-pulse-icon"></div>
+                <div class="dash-pulse-icon">🔢</div>
                 <div class="dash-pulse-val dash-count" data-val="${totalStock}" style="color:#10b981">${totalStock}</div>
                 <div class="dash-pulse-lbl">Stock Qty</div>
             </div>
             <div class="dash-pulse-tile" style="--tile-color:#f59e0b;animation-delay:0.12s">
-                <div class="dash-pulse-icon"></div>
+                <div class="dash-pulse-icon">💰</div>
                 <div class="dash-pulse-val" style="color:#f59e0b;font-size:0.7rem">${currency(totalValue)}</div>
                 <div class="dash-pulse-lbl">Stock Value</div>
             </div>
             <div class="dash-pulse-tile${lowStock ? ' dash-pulse-alert' : ''}" onclick="document.getElementById('inv-search')&&(document.getElementById('inv-cat-filter').value='__low__',filterInvTable())" style="--tile-color:${lowStock ? '#ef4444' : '#10b981'};animation-delay:0.16s;cursor:${lowStock ? 'pointer' : 'default'}">
-                <div class="dash-pulse-icon"></div>
+                <div class="dash-pulse-icon">⚠️</div>
                 <div class="dash-pulse-val" style="color:${lowStock ? '#ef4444' : '#10b981'}">${lowStock}</div>
                 <div class="dash-pulse-lbl">Low Stock</div>
             </div>
@@ -3202,15 +3261,15 @@ async function renderInventory() {
         <div class="section-toolbar">
             <input class="search-box" id="inv-search" placeholder="Search items..." oninput="filterInvTable()">
             <div class="filter-group" style="flex-wrap:wrap">
-                <button class="btn btn-outline" onclick="openColumnPersonalizer('inventory','renderInventory')" style="border-color:var(--accent);color:var(--accent)"> Columns</button>
-                ${canEdit() ? `<button class="btn btn-primary" onclick="openItemModal()">+ Add Item</button>
-                <button class="btn btn-outline" style="border-color:var(--primary);color:var(--primary)" onclick="showReport('indent')"> Generate Indent</button>
-                <button class="btn btn-outline" onclick="openStockAdjustmentModal()"> Stock Adjustment</button>
-                <button class="btn btn-outline" onclick="exportInventoryExcel()"> Export Excel</button>
-                <button class="btn btn-outline" style="border-color:var(--primary);color:var(--primary)" onclick="downloadItemTemplate()"> Item Template</button>
-                <button class="btn btn-outline" style="border-color:var(--primary);color:var(--primary)" onclick="importItemExcel()"> Import Items</button>
-                <button class="btn btn-outline" onclick="downloadStockTemplate()"> Stock Template</button>
-                <button class="btn btn-outline" onclick="importStockExcel()"> Import Stock</button>` : ''}
+                <button class="btn btn-outline" onclick="openColumnPersonalizer('inventory','renderInventory')" style="border-color:var(--accent);color:var(--accent)"><span class="material-symbols-outlined" style="font-size:1.1rem">view_column</span> Columns</button>
+                ${canEdit() ? `<button class="btn btn-primary" onclick="openItemModal()"><span class="material-symbols-outlined" style="font-size:1.1rem">add</span> Add Item</button>
+                <button class="btn btn-outline" style="border-color:var(--primary);color:var(--primary)" onclick="showReport('indent')"><span class="material-symbols-outlined" style="font-size:1.1rem">description</span> Indent</button>
+                <button class="btn btn-outline" onclick="openStockAdjustmentModal()"><span class="material-symbols-outlined" style="font-size:1.1rem">edit_note</span> Stock Adj</button>
+                <button class="btn btn-outline" onclick="exportInventoryExcel()"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button>
+                <button class="btn btn-outline" style="border-color:var(--primary);color:var(--primary)" onclick="downloadItemTemplate()"><span class="material-symbols-outlined" style="font-size:1.1rem">description</span> Item Tpl</button>
+                <button class="btn btn-outline" style="border-color:var(--primary);color:var(--primary)" onclick="importItemExcel()"><span class="material-symbols-outlined" style="font-size:1.1rem">upload</span> Import Items</button>
+                <button class="btn btn-outline" onclick="downloadStockTemplate()"><span class="material-symbols-outlined" style="font-size:1.1rem">description</span> Stock Tpl</button>
+                <button class="btn btn-outline" onclick="importStockExcel()"><span class="material-symbols-outlined" style="font-size:1.1rem">upload</span> Import Stock</button>` : ''}
             </div>
         </div>
         <div id="bulk-bar-inv" style="display:none;align-items:center;gap:8px;background:var(--accent);color:#fff;padding:8px 12px;border-radius:8px;margin-bottom:8px;flex-wrap:wrap">
@@ -3263,7 +3322,7 @@ function renderInvRows(items, reservedMap = {}, abcMap = {}) {
             reserved: `<td>${reserved > 0 ? `<span style="color:var(--danger);font-weight:600">${reserved}</span>` : '0'}</td>`,
             avail: `<td><span class="badge ${available <= (i.lowStockAlert || 5) ? 'badge-danger' : 'badge-success'}">${available}</span></td>`,
             value: `<td>${currency(i.stock * i.purchasePrice)}</td>`,
-            actions: `<td><div class="action-btns">${canEdit() ? `<button class="btn-icon" onclick="openStockAdjustmentModal('${i.id}')" title="Adjust Stock"></button>` : ''}<button class="btn-icon" onclick="viewItemLedger('${i.id}')" title="View Ledger"></button>${canEdit() ? `<button class="btn-icon" onclick="openItemModal('${i.id}')" title="Edit"></button><button class="btn-icon" onclick="deleteItem('${i.id}')" title="Delete"></button>` : ''}</div></td>`,
+            actions: `<td><div class="action-btns">${canEdit() ? `<button class="btn-icon" style="color:var(--primary)" onclick="openStockAdjustmentModal('${i.id}')" title="Adjust Stock"><span class="material-symbols-outlined" style="font-size:1.1rem">inventory</span></button>` : ''}<button class="btn-icon" style="color:var(--info)" onclick="viewItemLedger('${i.id}')" title="View Ledger"><span class="material-symbols-outlined" style="font-size:1.1rem">list_alt</span></button>${canEdit() ? `<button class="btn-icon" style="color:var(--warning)" onclick="openItemModal('${i.id}')" title="Edit"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button><button class="btn-icon" style="color:var(--danger)" onclick="deleteItem('${i.id}')" title="Delete"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>` : ''}</div></td>`,
         };
         return `<tr><td style="width:36px;text-align:center"><input type="checkbox" class="bulk-chk-item" data-id="${i.id}" onchange="toggleBulkItem('${i.id}',this)" style="width:16px;height:16px;cursor:pointer" ${window._bulkItems && window._bulkItems.has(i.id) ? 'checked' : ''}></td>${cols.map(c => cellMap[c.key] || '').join('')}</tr>`;
     }).join('');
@@ -4212,21 +4271,23 @@ function processItemImport(event) {
         for (let i = 1; i < lines.length; i++) {
             const cols = parseCSVLine(lines[i]);
             if (cols.length < 3) { errors.push(`Row ${i + 1}: Not enough columns`); continue; }
-            const [code, name, cat, subcat, hsn, priUnit, secUOM, convStr, ppStr, spStr, mrpStr, stockStr, lowStr, warehouse] = cols.map(c => (c || '').trim());
+            const [code, name, cat, subcat, hsn, priUnit, secUOM, convStr, ppStr, spStr, mrpStr, stockStr, lowStr, warehouse, t1qty, t1price, t2qty, t2price] = cols.map(c => (c || '').trim());
             const existingItem = items.find(it => it.name.toLowerCase() === name.toLowerCase());
             if (pendingItemImports.some(it => it.name.toLowerCase() === name.toLowerCase())) { errors.push(`Row ${i + 1}: Duplicate item "${name}" in file.`); continue; }
             if (!cat) { errors.push(`Row ${i + 1}: Category required for "${name}"`); continue; }
-            if (!subcat) { errors.push(`Row ${i + 1}: Sub-category required for "${name}"`); continue; }
             let catObj = categories.find(c => c.name.toLowerCase() === cat.toLowerCase());
-            let createdCat = !catObj || !catObj.subCategories.find(s => s.toLowerCase() === subcat.toLowerCase());
+            let createdCat = !catObj || (subcat && !catObj.subCategories.find(s => s.toLowerCase() === subcat.toLowerCase()));
             const purchasePrice = parseFloat(ppStr) || 0;
             const salePrice = parseFloat(spStr) || 0;
             const stock = parseInt(stockStr, 10) || 0;
             const lowAlert = parseInt(lowStr, 10) || 5;
             const ratio = parseFloat(convStr) || 0;
+            const priceTiers = [];
+            if (t1qty && t1price) priceTiers.push({ minQty: +t1qty, price: +t1price });
+            if (t2qty && t2price) priceTiers.push({ minQty: +t2qty, price: +t2price });
             const entry = {
                 itemCode: code || (existingItem ? existingItem.itemCode : ''),
-                name, category: cat, subCategory: subcat,
+                name, category: cat, subCategory: subcat || '',
                 hsn: hsn || (existingItem ? existingItem.hsn : ''),
                 unit: priUnit || (existingItem ? existingItem.unit : 'Pcs'),
                 secUom: secUOM || (existingItem ? existingItem.secUom : ''),
@@ -4237,6 +4298,7 @@ function processItemImport(event) {
                 stock: existingItem ? existingItem.stock : stock,
                 lowStockAlert: lowAlert > 0 ? lowAlert : (existingItem ? existingItem.lowStockAlert : 5),
                 warehouse: warehouse || (existingItem ? existingItem.warehouse : 'Main Warehouse'),
+                priceTiers: priceTiers.length ? priceTiers : (existingItem ? existingItem.priceTiers || [] : []),
                 _catNeedsCreation: createdCat, isUpdate: !!existingItem
             };
             if (existingItem) entry.id = existingItem.id;
@@ -4297,12 +4359,15 @@ async function commitItemImport() {
                 const dataToUpdate = { ...p };
                 if (existing) {
                     dataToUpdate.stock = existing.stock;
-                    dataToUpdate.priceTiers = existing.priceTiers || [];
+                    // Keep existing price tiers only if import didn't provide new ones
+                    if (!dataToUpdate.priceTiers || !dataToUpdate.priceTiers.length) {
+                        dataToUpdate.priceTiers = existing.priceTiers || [];
+                    }
                 }
                 await DB.update('inventory', itemId, dataToUpdate);
                 updated++;
             } else {
-                const inserted = await DB.insert('inventory', { ...p, priceTiers: [] });
+                const inserted = await DB.insert('inventory', { ...p });
                 added++;
                 if (p.stock > 0) {
                     // Update the inserted object's stock state for the ledger entry
@@ -4350,7 +4415,8 @@ async function renderSalesOrders() {
             <select id="so-priority-filter" onchange="filterSOTable()"><option value="">All Priority</option><option value="Urgent">Urgent</option><option value="Normal">Normal</option></select>
             <select id="so-sort" onchange="filterSOTable()"><option value="date-desc">Date </option><option value="date-asc">Date </option><option value="delivery-asc">Delivery </option><option value="delivery-desc">Delivery </option></select>
             <input class="search-box" id="so-search" placeholder="Search..." oninput="filterSOTable()" style="width:200px">
-            <button class="btn btn-outline" onclick="openColumnPersonalizer('salesorders','renderSalesOrders')" style="border-color:var(--accent);color:var(--accent)"> Columns</button></div>
+            <button class="btn btn-outline" onclick="DB.exportToExcel('tbl-salesorders', 'sales_orders')" style="border-color:#16a34a;color:#16a34a"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button>
+            <button class="btn btn-outline" onclick="openColumnPersonalizer('salesorders','renderSalesOrders')" style="border-color:var(--accent);color:var(--accent)"><span class="material-symbols-outlined" style="font-size:1.1rem">view_column</span> Columns</button></div>
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
                 ${isApprover && p.length > 0 ? `<button class="btn btn-success" id="btn-bulk-approve" onclick="bulkApproveOrders()" style="display:none"> Approve Selected (<span id="bulk-approve-count">0</span>)</button>` : ''}
                 <button class="btn btn-primary" onclick="openSalesOrderModal()">+ New Sales Order</button>
@@ -4438,10 +4504,10 @@ function renderSORows(orders, isApprover) {
             by: `<td style="font-size:0.82rem">${o.createdBy || '-'}</td>`,
             status: `<td><span class="badge ${disp.class}" style="text-transform:capitalize">${disp.text}</span></td>`,
             actions: `<td><div class="action-btns">
-                <button class="btn-icon" onclick="viewSalesOrder('${o.id}')"></button>
-                <button class="btn-icon" onclick="duplicateSalesOrder('${o.id}')" title="Duplicate"></button>
-                ${o.status === 'pending' && isApprover ? `<button class="btn-icon" style="color:var(--success)" onclick="approveSalesOrder('${o.id}')"></button><button class="btn-icon" style="color:var(--danger)" onclick="rejectSalesOrder('${o.id}')"></button>` : ''}
-                ${o.status === 'pending' && canEdit() ? `<button class="btn-icon" onclick="deleteSalesOrder('${o.id}')"></button>` : ''}
+                <button class="btn-icon" onclick="viewSalesOrder('${o.id}')" title="View"><span class="material-symbols-outlined" style="font-size:1.1rem">visibility</span></button>
+                <button class="btn-icon" onclick="duplicateSalesOrder('${o.id}')" title="Duplicate"><span class="material-symbols-outlined" style="font-size:1.1rem">content_copy</span></button>
+                ${o.status === 'pending' && isApprover ? `<button class="btn-icon" style="color:var(--success)" onclick="approveSalesOrder('${o.id}')" title="Approve"><span class="material-symbols-outlined" style="font-size:1.1rem">check_circle</span></button><button class="btn-icon" style="color:var(--danger)" onclick="rejectSalesOrder('${o.id}')" title="Reject"><span class="material-symbols-outlined" style="font-size:1.1rem">cancel</span></button>` : ''}
+                ${o.status === 'pending' && canEdit() ? `<button class="btn-icon" onclick="deleteSalesOrder('${o.id}')" title="Delete" style="color:var(--danger)"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>` : ''}
             </div></td>`,
         };
         return `<tr${isUrgent ? ' style="background:rgba(239,68,68,0.06);border-left:3px solid var(--danger)"' : ''}>${chkTd}${cols.map(c => cellMap[c.key] || '').join('')}</tr>`;
@@ -4515,8 +4581,8 @@ async function openSalesOrderModal() {
     const orderNo = await nextNumber('SO-');
 
     openModal('Create Sales Order', `
-        <div class="form-row"><div class="form-group"><label>Order #</label><input id="f-so-no" value="${orderNo}" readonly></div><div class="form-group"><label>Date</label><input type="date" id="f-so-date" value="${today()}"></div></div>
-        <div class="form-row"><div class="form-group"><label>Expected Delivery</label><input type="date" id="f-so-delivery" value=""></div><div class="form-group"><label>Priority</label><select id="f-so-priority"><option value="Normal">Normal</option><option value="Urgent"> Urgent</option></select></div></div>
+        <div class="form-row" style="flex-wrap:nowrap"><div class="form-group"><label>Order #</label><input id="f-so-no" value="${orderNo}" readonly></div><div class="form-group"><label>Date</label><input type="date" id="f-so-date" value="${today()}"></div></div>
+        <div class="form-row" style="flex-wrap:nowrap"><div class="form-group"><label>Expected Delivery</label><input type="date" id="f-so-delivery" value=""></div><div class="form-group"><label>Priority</label><select id="f-so-priority"><option value="Normal">Normal</option><option value="Urgent"> Urgent</option></select></div></div>
         <div class="form-group"><label>Customer * <small style="color:var(--text-muted)">(new name = auto-created)</small></label>
             <input id="f-so-party" placeholder="Type customer name or mobile...">
         </div>
@@ -4961,7 +5027,7 @@ function closeInvItemSubModal() { const el = $('inv-item-sub-modal'); if (el) el
 
 async function saveSalesOrder(id) {
     // 1. Edit Restriction: Only Admin or users with 'canEdit' permission can edit existing records
-    if (id && !DB.canEdit()) {
+    if (id && !canEdit()) {
         return alert("Access Denied: You do not have permission to edit existing records. Please contact Admin.");
     }
 
@@ -4985,12 +5051,12 @@ async function saveSalesOrder(id) {
 
     if (!matched) {
         const typedName = pe.value.trim();
-        if (!confirm(`Customer "${typedName}" not found in your party list.\n\nClick OK to create them as a new Customer, or Cancel to go back and select from the dropdown.`)) return;
+        if (!confirm(`Customer "${typedName}" not found in your party list.\n\nClick OK to create them as a new Customer, or Cancel to go back and select from the dropdown.`)) { endSave(); return; }
         try {
             matched = await DB.insert('parties', { name: typedName, type: 'Customer', balance: 0 });
             showToast(`Customer "${typedName}" created!`, 'success');
         } catch (err) {
-            return alert('Could not create customer: ' + (err.message || JSON.stringify(err)));
+            endSave(); return alert('Could not create customer: ' + (err.message || JSON.stringify(err)));
         }
     }
     let partyId = matched.id;
@@ -5019,7 +5085,7 @@ async function saveSalesOrder(id) {
     };
 
     // Blocked customer check
-    if (matched.blocked) return alert(` "${matched.name}" is blocked. Cannot create a Sales Order for a blocked customer. Contact admin to unblock.`);
+    if (matched.blocked) { endSave(); return alert(` "${matched.name}" is blocked. Cannot create a Sales Order for a blocked customer. Contact admin to unblock.`); }
 
     // Credit Limit Check
     const party = parties.find(p => p.id === partyId);
@@ -5028,7 +5094,7 @@ async function saveSalesOrder(id) {
         const netOrderTotal = data.total;
         if ((currentBalance + netOrderTotal) > party.creditLimit) {
             if (!confirm(`Warning: This order will exceed the customer's credit limit of ${currency(party.creditLimit)}. Current Balance: ${currency(currentBalance)}. Total with Order: ${currency(currentBalance + netOrderTotal)}. Proceed anyway?`)) {
-                return;
+                endSave(); return;
             }
         }
     }
@@ -5054,15 +5120,14 @@ async function saveSalesOrder(id) {
         if (window._catalogOrderMode) {
             window._catalogOrderMode = false;
             catalogCart = [];
-            // IMPORTANT: Wait for full sync so catalog shows correct reserved/avail qty
             try {
                 await Promise.all([DB.getAll('sales_orders'), DB.getAll('inventory')]);
             } catch (e) { console.warn('Catalog post-save sync error:', e); }
             await renderCatalog();
         } else {
             await renderSalesOrders();
+            if (andNew && !editId) openSalesOrderModal();
         }
-        if (andNew && !editId) openSalesOrderModal();
     } catch (err) {
         window._saveAndNew = false;
         endSave();
@@ -5135,8 +5200,8 @@ async function editSalesOrder(id) {
 
     openModal(`Edit Order ${orig.orderNo}`, `
         <input type="hidden" id="f-so-edit-id" value="${orig.id}">
-        <div class="form-row"><div class="form-group"><label>Order #</label><input id="f-so-no" value="${orig.orderNo}" readonly style="opacity:0.6"></div><div class="form-group"><label>Date</label><input type="date" id="f-so-date" value="${orig.date}"></div></div>
-        <div class="form-row"><div class="form-group"><label>Expected Delivery</label><input type="date" id="f-so-delivery" value="${orig.expectedDeliveryDate || ''}"></div><div class="form-group"><label>Priority</label><select id="f-so-priority"><option value="Normal" ${(orig.priority || 'Normal') === 'Normal' ? 'selected' : ''}>Normal</option><option value="Urgent" ${orig.priority === 'Urgent' ? 'selected' : ''}> Urgent</option></select></div></div>
+        <div class="form-row" style="flex-wrap:nowrap"><div class="form-group"><label>Order #</label><input id="f-so-no" value="${orig.orderNo}" readonly style="opacity:0.6"></div><div class="form-group"><label>Date</label><input type="date" id="f-so-date" value="${orig.date}"></div></div>
+        <div class="form-row" style="flex-wrap:nowrap"><div class="form-group"><label>Expected Delivery</label><input type="date" id="f-so-delivery" value="${orig.expectedDeliveryDate || ''}"></div><div class="form-group"><label>Priority</label><select id="f-so-priority"><option value="Normal" ${(orig.priority || 'Normal') === 'Normal' ? 'selected' : ''}>Normal</option><option value="Urgent" ${orig.priority === 'Urgent' ? 'selected' : ''}> Urgent</option></select></div></div>
         <div class="form-group"><label>Customer *</label>
             <input id="f-so-party" value="${orig.partyName}" data-selected-id="${orig.partyId}" placeholder="Type customer name or mobile...">
         </div>
@@ -5183,7 +5248,7 @@ async function rejectSalesOrder(id) {
 async function deleteSalesOrder(id) {
     if (!confirm('Delete?')) return;
     try {
-        await DB.delete('salesorders', id);
+        await DB.delete('sales_orders', id);
         await renderSalesOrders();
         showToast(`Order deleted.`, 'success');
     } catch (err) { alert(err.message); }
@@ -5220,8 +5285,8 @@ async function duplicateSalesOrder(id) {
     const orderNo = await nextNumber('SO-');
 
     openModal('Duplicate Sales Order', `
-        <div class="form-row"><div class="form-group"><label>Order #</label><input id="f-so-no" value="${orderNo}"></div><div class="form-group"><label>Date</label><input type="date" id="f-so-date" value="${today()}"></div></div>
-        <div class="form-row"><div class="form-group"><label>Expected Delivery</label><input type="date" id="f-so-delivery" value="${orig.expectedDeliveryDate || ''}"></div><div class="form-group"><label>Priority</label><select id="f-so-priority"><option value="Normal" ${(orig.priority || 'Normal') === 'Normal' ? 'selected' : ''}>Normal</option><option value="Urgent" ${orig.priority === 'Urgent' ? 'selected' : ''}> Urgent</option></select></div></div>
+        <div class="form-row" style="flex-wrap:nowrap"><div class="form-group"><label>Order #</label><input id="f-so-no" value="${orderNo}"></div><div class="form-group"><label>Date</label><input type="date" id="f-so-date" value="${today()}"></div></div>
+        <div class="form-row" style="flex-wrap:nowrap"><div class="form-group"><label>Expected Delivery</label><input type="date" id="f-so-delivery" value="${orig.expectedDeliveryDate || ''}"></div><div class="form-group"><label>Priority</label><select id="f-so-priority"><option value="Normal" ${(orig.priority || 'Normal') === 'Normal' ? 'selected' : ''}>Normal</option><option value="Urgent" ${orig.priority === 'Urgent' ? 'selected' : ''}> Urgent</option></select></div></div>
         <div class="form-group"><label>Customer *</label>
             <input id="f-so-party" value="${orig.partyName}" data-selected-id="${orig.partyId}" placeholder="Type customer name or mobile...">
         </div>
@@ -5373,8 +5438,8 @@ function renderPInvRows(invs) {
         <td class="amount-red" style="text-align:right">${currency(i.total)}</td>
         <td><span class="badge ${i.status === 'cancelled' ? 'badge-danger' : 'badge-success'}">${i.status || 'active'}</span></td>
         <td><div class="action-btns">
-            <button class="btn-icon" onclick="viewPurchaseInvoice('${i.id}')"></button>
-            ${i.status !== 'cancelled' && canEdit() ? `<button class="btn-icon" style="color:var(--danger)" onclick="cancelPurchaseInvoice('${i.id}')"></button>` : ''}
+            <button class="btn-icon" onclick="viewPurchaseInvoice('${i.id}')" title="View"><span class="material-symbols-outlined" style="font-size:1.1rem">visibility</span></button>
+            ${i.status !== 'cancelled' && canEdit() ? `<button class="btn-icon" style="color:var(--danger)" onclick="cancelPurchaseInvoice('${i.id}')" title="Cancel"><span class="material-symbols-outlined" style="font-size:1.1rem">block</span></button>` : ''}
         </div></td>
     </tr>`).join('');
 }
@@ -5416,6 +5481,8 @@ async function cancelPurchaseInvoice(id) {
     if (!confirm('Cancel this purchase invoice? Stock added will NOT be reversed automatically.')) return;
     try {
         await DB.update('invoices', id, { status: 'cancelled' });
+        showToast('Invoice Cancelled', 'success');
+        renderInvoices();
         showToast('Purchase invoice cancelled', 'success');
         await renderPurchaseInvoices();
     } catch (e) { alert(e.message); }
@@ -5500,7 +5567,7 @@ async function saveDirectPurchaseInvoice() {
         const inv = {
             invoiceNo: invNo, date: invDate, type: 'purchase',
             partyId, partyName: party.name, items: [...poItems],
-            subtotal: total, gst: 0, total, status: 'active',
+            subtotal: total, gst: 0, total, status: 'posted',
             notes, createdBy: currentUser.name
         };
         await DB.insert('invoices', inv);
@@ -5655,7 +5722,7 @@ async function receivePO(id) {
         const inv = {
             id: DB.id(), invoiceNo: invNo, date: today(), type: 'purchase',
             partyId: o.partyId, partyName: o.partyName, items: [...o.items],
-            subtotal: o.total, gst: 0, total: o.total, status: 'active', fromOrder: o.poNo,
+            subtotal: o.total, gst: 0, total: o.total, status: 'posted', fromOrder: o.poNo,
             createdBy: currentUser.name
         };
         await DB.insert('invoices', inv);
@@ -5724,18 +5791,22 @@ async function renderInvoices() {
             <div class="stat-card green"><div class="stat-icon"></div><div class="stat-value">${currency(sales.reduce((s, i) => s + i.total, 0))}</div><div class="stat-label">Total Sales</div></div>
             <div class="stat-card blue"><div class="stat-icon"></div><div class="stat-value">${currency(purchases.reduce((s, i) => s + i.total, 0))}</div><div class="stat-label">Total Purchases</div></div>
         </div>
-        <div class="section-toolbar">
-            <div class="filter-group"><select id="inv-type-filter" onchange="filterInvTable2()"><option value="">All</option><option value="sale">Sale</option><option value="purchase">Purchase</option></select>
-            <input class="search-box" id="inv-search2" placeholder="Search..." oninput="filterInvTable2()" style="width:200px">
-            <button class="btn btn-outline" onclick="DB.exportToExcel('tbl-invoices', 'invoices')" style="border-color:#16a34a;color:#16a34a"> Export</button>
-            <button class="detailed-view-btn ${window._detailedInvoices ? 'active' : ''}" onclick="toggleDetailedInvoices()"> Detailed View</button>
-            <button class="btn btn-outline" onclick="openColumnPersonalizer('invoices','renderInvoices')" style="border-color:var(--accent);color:var(--accent)"> Columns</button></div>
-            <div class="filter-group">
-                <button class="btn btn-primary" onclick="openInvoiceModal('sale')">+ Sale Invoice</button>
-                <button class="btn btn-primary" style="background:var(--info)" onclick="openInvoiceModal('purchase')">+ Purchase / Stock In</button>
+        <div class="card" style="margin-bottom:12px"><div class="card-body" style="padding:10px 14px">
+            <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end">
+                <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:0.72rem;font-weight:600;color:var(--text-muted)">FROM</label><input type="date" id="inv-f-from" class="form-control" style="width:130px;padding:5px 8px;font-size:0.82rem" value="${today()}" onchange="filterInvTable2()"></div>
+                <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:0.72rem;font-weight:600;color:var(--text-muted)">TO</label><input type="date" id="inv-f-to" class="form-control" style="width:130px;padding:5px 8px;font-size:0.82rem" value="${today()}" onchange="filterInvTable2()"></div>
+                <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:0.72rem;font-weight:600;color:var(--text-muted)">TYPE</label><select id="inv-type-filter" class="form-control" style="width:120px;padding:5px 8px;font-size:0.82rem" onchange="filterInvTable2()"><option value="">All</option><option value="sale">Sale</option><option value="purchase">Purchase</option></select></div>
+                <div style="display:flex;flex-direction:column;gap:3px;flex:1"><label style="font-size:0.72rem;font-weight:600;color:var(--text-muted)">SEARCH</label><input type="text" id="inv-search2" class="form-control" placeholder="Search invoices..." style="padding:5px 8px;font-size:0.82rem" oninput="filterInvTable2()"></div>
+                <div style="display:flex;gap:8px;align-items:flex-end">
+                    <button class="btn btn-outline" onclick="DB.exportToExcel('tbl-invoices', 'invoices')" style="border-color:#16a34a;color:#16a34a;padding:5px 10px"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button>
+                    <button class="detailed-view-btn ${window._detailedInvoices ? 'active' : ''}" style="padding:5px 10px" onclick="toggleDetailedInvoices()"> Detailed View</button>
+                    <button class="btn btn-outline" onclick="openColumnPersonalizer('invoices','renderInvoices')" style="border-color:var(--accent);color:var(--accent);padding:5px 10px"><span class="material-symbols-outlined" style="font-size:1.1rem">view_column</span> Columns</button>
+                    <button class="btn btn-primary" onclick="openInvoiceModal('sale')" style="padding:5px 12px">+ Sale </button>
+                    <button class="btn btn-primary" style="background:var(--info);padding:5px 12px" onclick="openInvoiceModal('purchase')">+ Purchase </button>
+                </div>
             </div>
-        </div>
-        <div class="card"><div class="card-body">
+        </div></div>
+        <div class="card"><div class="card-body" style="padding:0">
             <div class="table-wrapper">
                 <table class="data-table" id="tbl-invoices"><thead><tr>${ColumnManager.get('invoices').filter(c => c.visible).map(c => `<th>${c.label}</th>`).join('')}</tr></thead>
                 <tbody id="invoice-tbody">${renderInvoiceRows(visibleInvoices)}</tbody></table>
@@ -5777,124 +5848,87 @@ function renderInvoiceRows(invs) {
             invoiceNo: `<td style="font-weight:600;text-decoration:${i.status === 'cancelled' ? 'line-through' : 'none'}">${i.invoiceNo}${i.vyaparInvoiceNo ? `<br><span style="font-size:0.7rem;font-weight:500;color:var(--primary)">V: ${escapeHtml(i.vyaparInvoiceNo)}</span>` : ''}${i.assignedTo ? `<br><span style="font-size:0.68rem;color:var(--info);font-weight:600"> ${escapeHtml(i.assignedTo)}${i.handoverDate ? '  ' + fmtDate(i.handoverDate) : ''}</span>` : ''}</td>`,
             party: `<td>${escapeHtml(i.partyName)}</td>`,
             type: `<td><span class="badge ${i.type === 'sale' ? 'badge-success' : 'badge-info'}">${i.type}</span></td>`,
-            status: `<td>${i.status === 'cancelled' ? '<span class="badge badge-danger">Cancelled</span>' : '<span class="badge badge-success">Active</span>'}</td>`,
+            status: `<td>${i.status === 'cancelled' ? '<span class="badge badge-danger">Cancelled</span>' : i.status === 'draft' ? '<span class="badge badge-warning">Draft</span>' : '<span class="badge badge-success">Posted</span>'}</td>`,
             items: `<td>${(i.items || []).length}</td>`,
             total: `<td class="${i.type === 'sale' ? 'amount-green' : 'amount-red'}">${currency(i.total)}</td>`,
             actions: `<td><div class="action-btns">
-                <button class="btn-icon" onclick="viewInvoice('${i.id}')"></button>
-                ${canEdit() && i.type === 'sale' && i.status !== 'cancelled' ? `<button class="btn-icon" style="color:var(--info)" onclick="openAssignInvoiceModal('${i.id}')" title="Assign to Salesman"></button>` : ''}
-                ${canPay ? `<button class="btn-icon" style="color:var(--success)" onclick="openReceivePaymentForInvoice('${i.id}')" title="Record Payment"></button>` : ''}
-                ${canEdit() && i.status !== 'cancelled' ? `<button class="btn-icon" style="color:var(--danger)" onclick="cancelInvoiceDirectly('${i.id}')" title="Cancel Invoice"></button>` : ''}
-                ${canEdit() ? `<button class="btn-icon" onclick="deleteInvoice('${i.id}')"></button>` : ''}
+                <button class="btn-icon" onclick="viewInvoice('${i.id}')" title="View"><span class="material-symbols-outlined" style="font-size:1.1rem">visibility</span></button>
+                ${canEdit() && i.type === 'sale' && i.status !== 'cancelled' ? `<button class="btn-icon" style="color:var(--warning)" onclick="openEditInvoiceModal('${i.id}')" title="Edit Invoice"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button>` : ''}
+                ${canEdit() && i.type === 'sale' && i.status !== 'cancelled' ? `<button class="btn-icon" style="color:var(--info)" onclick="openAssignInvoiceModal('${i.id}')" title="Assign to Salesman"><span class="material-symbols-outlined" style="font-size:1.1rem">person_add</span></button>` : ''}
+                ${canPay && i.status !== 'cancelled' ? `<button class="btn-icon" style="color:var(--success)" onclick="openReceivePaymentForInvoice('${i.id}')" title="Record Payment"><span class="material-symbols-outlined" style="font-size:1.1rem">payments</span></button>` : ''}
+                <button class="btn-icon" style="font-size:1.1rem" onclick="viewInvoicePaymentHistory('${i.invoiceNo}')" title="Payment History">🧾</button>
+                ${canEdit() && i.status !== 'cancelled' ? `<button class="btn-icon" style="color:var(--danger)" onclick="cancelInvoiceDirectly('${i.id}')" title="Cancel Invoice"><span class="material-symbols-outlined" style="font-size:1.1rem">block</span></button>` : ''}
+                ${canEdit() ? `<button class="btn-icon" onclick="deleteInvoice('${i.id}')" title="Delete" style="color:var(--danger)"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>` : ''}
             </div></td>`,
         };
         return `<tr data-type="${i.type}">${cols.map(c => cellMap[c.key] || '').join('')}</tr>`;
     }).join('');
 }
 async function filterInvTable2() {
-    const s = $('inv-search2').value.toLowerCase(), t = $('inv-type-filter').value;
+    const s = ($('inv-search2') || {}).value?.toLowerCase() || '';
+    const t = ($('inv-type-filter') || {}).value || '';
+    const from = ($('inv-f-from') || {}).value || '';
+    const to = ($('inv-f-to') || {}).value || '';
+    
     let invs = await DB.getAll('invoices');
+    if (from) invs = invs.filter(i => (i.date || '') >= from);
+    if (to) invs = invs.filter(i => (i.date || '') <= to);
     if (s) invs = invs.filter(i => i.invoiceNo.toLowerCase().includes(s) || i.partyName.toLowerCase().includes(s));
     if (t) invs = invs.filter(i => i.type === t);
-    $('invoice-tbody').innerHTML = renderInvoiceRows(invs);
-}
-// ============================================
-//  VYAPAR INVOICE NO HELPERS
-// ============================================
-function getVyaparPrefix() { return DB.ls.getObj('vyapar_settings').prefix || ''; }
-function getVyaparCurrentNo() { return parseInt(DB.ls.getObj('vyapar_settings').currentNo || '1'); }
-function saveVyaparSettings(prefix, currentNo) { DB.saveSettings('vyapar_settings', { prefix, currentNo }); }
-
-function buildVyaparInvoiceNo() {
-    const prefix = getVyaparPrefix();
-    const n = getVyaparCurrentNo();
-    return prefix + n;
-}
-
-function incrementVyaparNo() {
-    const s = DB.ls.getObj('vyapar_settings');
-    const n = parseInt(s.currentNo || '1') + 1;
-    DB.saveSettings('vyapar_settings', { ...s, currentNo: String(n) });
-}
-
-// ============================================
-//  PAYMENT REF NO HELPERS
-// ============================================
-function getPayPrefix() { return DB.ls.getObj('pay_settings').prefix || 'PAY-'; }
-function getPayCurrentNo() { return parseInt(DB.ls.getObj('pay_settings').currentNo || '1'); }
-function savePaySettings(prefix, currentNo) { DB.saveSettings('pay_settings', { prefix, currentNo }); }
-function buildPayRefNo() {
-    const prefix = getPayPrefix();
-    const n = getPayCurrentNo();
-    return prefix + String(n).padStart(4, '0');
-}
-function incrementPayNo() {
-    const s = DB.ls.getObj('pay_settings');
-    const n = parseInt(s.currentNo || '1') + 1;
-    DB.saveSettings('pay_settings', { ...s, currentNo: String(n) });
-}
-
-function openVyaparInvoiceNoModal() {
-    const prefix = getVyaparPrefix();
-    const currentNo = getVyaparCurrentNo();
-    const full = prefix + currentNo;
-    openModal('Change Invoice No.', `
-        <p style="font-size:0.82rem;color:var(--text-muted);margin-bottom:12px">Invoice Prefix</p>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:20px">
-            <button class="vyapar-preset-btn" onclick="applyVyaparPreset('')"${!prefix ? ' data-active="1"' : ''}>None</button>
-            ${prefix ? `<button class="vyapar-preset-btn" onclick="applyVyaparPreset('${escapeHtml(full)}')">${escapeHtml(full)}</button>` : ''}
-            ${prefix ? `<button class="vyapar-preset-btn" data-active="1" onclick="applyVyaparPreset('${escapeHtml(prefix + currentNo)}')">${escapeHtml(prefix)}</button>` : ''}
-            <button class="vyapar-preset-btn vyapar-add-prefix" onclick="document.getElementById('f-vy-prefix').focus()">+ Add Prefix</button>
-        </div>
-        <div class="form-group">
-            <label>Prefix (e.g. PT-NS-)</label>
-            <input id="f-vy-prefix" value="${escapeHtml(prefix)}" placeholder="e.g. PT-NS-" oninput="updateVyaparPreview()">
-        </div>
-        <div class="form-group">
-            <label>Invoice No. *</label>
-            <input id="f-vy-no" value="${currentNo}" type="number" min="1" oninput="updateVyaparPreview()" style="font-size:1.1rem;font-weight:700">
-        </div>
-        <div style="background:rgba(249,115,22,0.06);border:1px solid rgba(249,115,22,0.2);border-radius:10px;padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;gap:10px">
-            <span style="color:var(--text-muted);font-size:0.82rem">Preview:</span>
-            <strong id="vy-preview-lbl" style="font-size:1.1rem;color:var(--primary)">${escapeHtml(full || String(currentNo))}</strong>
-        </div>
-        <div class="modal-actions">
-            <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-            <button class="btn btn-primary" onclick="saveVyaparInvoiceNoFromModal()" style="min-width:120px;font-size:1rem;font-weight:700">SAVE</button>
-        </div>
-    `);
-}
-
-function applyVyaparPreset(val) {
-    // Extract number from value
-    const prefix = getVyaparPrefix();
-    if (!val) {
-        if ($('f-vy-prefix')) $('f-vy-prefix').value = '';
-        updateVyaparPreview();
-        return;
+    
+    // Only run the visible filter based on role AFTER data fetch
+    if (currentUser.role === 'Salesman') {
+        invs = invs.filter(i => i.assignedTo === currentUser.name);
     }
-    if ($('f-vy-prefix')) $('f-vy-prefix').value = prefix;
-    updateVyaparPreview();
+    
+    const tbody = $('invoice-tbody');
+    if (tbody) tbody.innerHTML = renderInvoiceRows(invs);
 }
 
-function updateVyaparPreview() {
-    const prefix = ($('f-vy-prefix') || {}).value || '';
-    const no = ($('f-vy-no') || {}).value || '1';
-    const lbl = $('vy-preview-lbl');
-    if (lbl) lbl.textContent = prefix + no;
+async function viewInvoicePaymentHistory(invoiceNo) {
+    const payments = await DB.getAll('payments');
+    const history = payments.filter(p => p.invoiceNo === invoiceNo || (p.allocations && p.allocations[invoiceNo]));
+    
+    let html = '';
+    if (history.length === 0) {
+        html = '<div style="padding:20px;text-align:center;color:var(--text-muted)">No payment history found for this invoice.</div>';
+    } else {
+        const rows = history.map(p => {
+            const allocatedAmt = p.allocations && p.allocations[invoiceNo] ? Number(p.allocations[invoiceNo]) : p.amount;
+            return `<tr>
+                <td style="font-size:0.85rem">${fmtDate(p.date)}</td>
+                <td style="font-size:0.85rem;font-weight:600;color:var(--accent)">${p.payNo || p.id.substring(0,8)}</td>
+                <td style="font-size:0.85rem">${p.mode || 'Cash'}</td>
+                <td class="amount-green" style="font-size:0.85rem">${currency(allocatedAmt)}</td>
+                <td style="font-size:0.85rem"><span class="badge ${p.status === 'posted' ? 'badge-success' : 'badge-warning'}">${p.status || 'pending'}</span></td>
+                <td style="font-size:0.85rem"><button class="btn btn-outline btn-sm" onclick="navigateTo('payments');setTimeout(()=>$('pay-search').value='${p.payNo || p.id.substring(0,8)}',200);setTimeout(()=>filterPayTable(),300);closeModal()">View</button></td>
+            </tr>`;
+        }).join('');
+        
+        html = `
+        <div class="table-wrapper">
+            <table class="data-table">
+                <thead><tr><th>Date</th><th>Receipt #</th><th>Mode</th><th>Amount</th><th>Status</th><th>Link</th></tr></thead>
+                <tbody>${rows}</tbody>
+            </table>
+        </div>`;
+    }
+    
+    openModal(`Payment History: ${invoiceNo}`, html, `<button class="btn btn-outline" onclick="closeModal()">Close</button>`);
 }
 
-function saveVyaparInvoiceNoFromModal() {
-    const prefix = ($('f-vy-prefix') || {}).value || '';
-    const no = parseInt(($('f-vy-no') || {}).value || '1');
-    if (!no || isNaN(no) || no < 1) return alert('Enter a valid invoice number');
-    saveVyaparSettings(prefix, String(no));
-    // Update the field in invoice modal if open
-    const fld = $('f-vyapar-inv-no');
-    if (fld) fld.value = prefix + no;
-    closeModal();
-    showToast('Vyapar Invoice No. updated: ' + prefix + no, 'success');
+// Payout numbering helper
+async function buildPayoutNo() {
+    const { data, error } = await supabaseClient.rpc('get_next_no_fy', { p_code: 'PAYMENT_OUT' });
+    if (error) { throw error; }
+    return data;
 }
+
+// Vyapar numbering helper
+async function buildVyaparInvoiceNo() {
+    return await nextNumber('PT-NS-');
+}
+// Numbering helpers relocated to No. Series Module
 
 function updateInvDueDate(party) {
     const dueDateEl = $('f-inv-due-date');
@@ -5924,17 +5958,16 @@ async function openInvoiceModal(type = 'sale', preserveItems = false) {
     const filteredParties = parties.filter(p => p.type === ptype);
     const invNo = await nextNumber(type === 'sale' ? 'INV-' : 'PUR-');
 
-    const vyaparNo = buildVyaparInvoiceNo();
+    const vyaparNo = await buildVyaparInvoiceNo();
     openModal(type === 'sale' ? 'Create Sale Invoice' : 'Create Purchase / Stock In', `
-        <div class="form-row"><div class="form-group"><label>Invoice #</label><input id="f-inv-no" value="${invNo}"></div><div class="form-group"><label>Date</label><input type="date" id="f-inv-date" value="${today()}" onchange="updateInvDueDate()"></div><div class="form-group"><label>Due Date <span style="font-size:0.7rem;color:var(--text-muted)">auto from terms</span></label><input type="date" id="f-inv-due-date" placeholder="Select party..."></div></div>
-        <input type="hidden" id="f-inv-type" value="${type}">
+        <div class="form-row" style="flex-wrap:nowrap"><div class="form-group"><label>Invoice #</label><input id="f-inv-no" value="${invNo}"></div><div class="form-group"><label>Date</label><input type="date" id="f-inv-date" value="${today()}" onchange="updateInvDueDate()"></div><div class="form-group"><label>Due Date <span style="font-size:0.7rem;color:var(--text-muted)">auto</span></label><input type="date" id="f-inv-due-date" placeholder="Select party..."></div></div>
         <input type="hidden" id="f-inv-from-order" value="">
+        <input type="hidden" id="f-inv-type" value="${type}">
         ${type === 'sale' ? `
         <div class="form-group">
-            <label>Vyapar Invoice No. <span style="color:var(--error,#ef4444)">*</span> <span style="font-size:0.72rem;color:var(--text-muted)">(auto-increments on save)</span></label>
+            <label>Vyapar Invoice No. <span style="color:var(--error,#ef4444)">*</span></label>
             <div class="vyapar-inv-row">
                 <input id="f-vyapar-inv-no" value="${escapeHtml(vyaparNo)}" placeholder="e.g. PT-NS-1">
-                <button class="vyapar-gear-btn" onclick="openVyaparInvoiceNoModal()" title="Change prefix / number"></button>
             </div>
         </div>` : ''}
         <div class="form-group"><label>${ptype} *</label>
@@ -5967,7 +6000,7 @@ async function openInvoiceModal(type = 'sale', preserveItems = false) {
                 <label style="font-size:0.75rem">Round Off </label>
                 <div style="display:flex;gap:4px">
                     <input type="number" id="f-inv-roundoff" value="0" step="0.01" placeholder="0.00" oninput="updateInvoiceTotal()">
-                    <button class="btn btn-outline btn-sm" onclick="autoRoundOff()" title="Auto" style="padding:0 8px"></button>
+                    <button class="btn btn-outline btn-sm" onclick="autoRoundOff()" title="Auto Round Off" style="padding:0 8px">⟳</button>
                 </div>
             </div>
         </div>
@@ -6406,7 +6439,7 @@ function renderInvoiceLines() {
                 <input type="number" value="${li.discountPct || 0}" min="0" max="100" step="0.01" placeholder="%" title="Discount %" style="width:40px;padding:4px 2px;border-radius:4px;border:1px solid var(--border);text-align:center;font-size:0.75rem" onchange="updateInvoiceLine(${i},'discountPct',this.value)">
                 <input type="number" value="${li.discountAmt || 0}" min="0" step="0.01" placeholder="" title="Discount " style="width:50px;padding:4px 2px;border-radius:4px;border:1px solid var(--border);text-align:center;font-size:0.75rem" onchange="updateInvoiceLine(${i},'discountAmt',this.value)">
                 <span style="width:75px;text-align:right;font-weight:700;font-size:0.8rem;color:${li._priceAlert ? 'var(--danger)' : 'inherit'}">${currency(li.amount)}</span>
-                <button class="btn-icon" onclick="removeInvoiceLine(${i})" style="flex-shrink:0;color:var(--danger);width:24px"></button>
+                <button class="btn-icon" onclick="removeInvoiceLine(${i})" style="flex-shrink:0;color:var(--danger);width:24px"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>
             </div>
             ${gstLabel ? `<div style="padding-left:32px;margin-top:2px">${gstLabel}</div>` : ''}
         </div>`;
@@ -6415,8 +6448,10 @@ function renderInvoiceLines() {
     const invTypeEl = $('f-inv-type');
     if (invTypeEl && invTypeEl.value === 'sale') {
         const sub = invoiceItems.reduce((s, li) => s + li.amount, 0);
+        const discAmt = +(($('f-inv-disc-amt') || {}).value || 0);
+        const net = +(sub - discAmt).toFixed(2);
         const roEl = $('f-inv-roundoff');
-        if (roEl) roEl.value = +(Math.round(sub) - sub).toFixed(2);
+        if (roEl) roEl.value = +(Math.round(net) - net).toFixed(2);
     }
     updateInvoiceTotal();
 }
@@ -6494,14 +6529,15 @@ function updateInvoiceTotal() {
         </div>`;
 }
 function autoRoundOff() {
-    // Prices are GST-inclusive; round off on subtotal directly
     const sub = invoiceItems.reduce((s, li) => s + li.amount, 0);
-    const diff = +(Math.round(sub) - sub).toFixed(2);
+    const discAmt = +(($('f-inv-disc-amt') || {}).value || 0);
+    const net = +(sub - discAmt).toFixed(2);
+    const diff = +(Math.round(net) - net).toFixed(2);
     const el = $('f-inv-roundoff'); if (el) el.value = diff;
     updateInvoiceTotal();
 }
 async function saveInvoice(id) {
-    if (id && !DB.canEdit()) {
+    if (id && !canEdit()) {
         return alert("Access Denied: You do not have permission to edit invoices.");
     }
 
@@ -6584,7 +6620,7 @@ async function saveInvoice(id) {
             ops.push(DB.rawInsert('expenses', {
                 date: dateVal, category: 'Sales Discount', amount: discAmt,
                 party_id: partyId, party_name: partyName, doc_no: invNo,
-                description: `Discount on ${invNo}`, created_by: currentUser.userId
+                description: `Discount on ${invNo}`
             }));
         }
 
@@ -6604,7 +6640,7 @@ async function saveInvoice(id) {
             items: [...invoiceItems], // 🚀 FIX: Removed JSON.stringify so it saves as an array
             subtotal: sub, gst: gst,
             round_off: roundoff, total: total, discount_pct: discPct, discount_amt: discAmt,
-            status: fromOrderId ? 'from-packing' : 'created', created_by: currentUser.userId,
+            status: 'posted', created_by: currentUser.userId,
             vyapar_invoice_no: vyaparInvNo, from_order: fromOrderId ? (orders.find(o => o.id === fromOrderId)?.orderNo || '') : null
         };
 
@@ -6613,7 +6649,6 @@ async function saveInvoice(id) {
 
         await Promise.all(ops);
         await DB.refreshTables(['invoices', 'inventory', 'parties', 'sales_orders']);
-        if (invType === 'sale' && vyaparInvNo) incrementVyaparNo();
         closeModal();
         fromOrderId ? await renderPacking() : await renderInvoices();
         showToast(`Invoice ${invNo} saved!`, 'success');
@@ -6722,7 +6757,154 @@ async function viewInvoice(id) {
             </div>`;
         })()}
         </div>
-        <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Close</button><button class="btn btn-primary" onclick="printInvoice()"> Print</button></div>`);
+        <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Close</button>${canEdit() && i.status !== 'cancelled' && i.type === 'sale' ? `<button class="btn btn-outline" onclick="openEditInvoiceModal('${i.id}')" style="color:var(--warning);border-color:var(--warning)"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">edit</span> Edit Items</button>` : ''}<button class="btn btn-primary" onclick="printInvoice()"> Print</button></div>`);
+}
+
+async function openEditInvoiceModal(id) {
+    if (!canEdit()) return alert('Access Denied');
+    const invoices = await DB.getAll('invoices');
+    const inv = invoices.find(i => i.id === id);
+    if (!inv) return;
+    if (inv.status === 'cancelled') return alert('Cannot edit a cancelled invoice.');
+    if (inv.type !== 'sale') return alert('Only sale invoices can be edited here.');
+
+    invoiceItems = (inv.items || []).map(li => ({...li}));
+
+    openModal(`Edit Invoice ${inv.invoiceNo}`, `
+        <div style="background:rgba(245,158,11,0.1);border:1px solid var(--warning);border-radius:8px;padding:10px;margin-bottom:14px;font-size:0.85rem">
+            <strong> Editing Posted Invoice</strong> — Party: <b>${escapeHtml(inv.partyName)}</b> | Date: <b>${fmtDate(inv.date)}</b>
+            <br><small style="color:var(--text-muted)">Stock and party balance will be automatically adjusted on save.</small>
+        </div>
+        <input type="hidden" id="f-inv-type" value="${inv.type}">
+        <h4 style="margin-bottom:10px;font-size:0.9rem">Items</h4>
+        <button class="btn btn-outline btn-block" onclick="openInvItemSubModal()" style="margin-bottom:16px;border-style:dashed;color:var(--primary);border-color:var(--primary);height:44px;font-weight:600"> Add Item(s)</button>
+        <div class="table-wrapper"><div id="inv-lines-list"></div></div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end;margin-top:12px;background:var(--bg-card);padding:10px;border-radius:6px;border:1px dashed var(--border)">
+            <div class="form-group" style="min-width:70px;margin-bottom:0;flex:1">
+                <label style="font-size:0.75rem">GST %</label>
+                <input type="number" id="f-inv-gst" value="${inv.gst || 0}" min="0" max="100" step="0.1" onchange="updateInvoiceTotal()">
+            </div>
+            <div class="form-group" style="min-width:70px;margin-bottom:0;flex:1">
+                <label style="font-size:0.75rem">Disc %</label>
+                <input type="number" id="f-inv-disc-pct" value="${inv.discountPct || 0}" min="0" max="100" step="0.1" oninput="onInvDiscPctChange()">
+            </div>
+            <div class="form-group" style="min-width:70px;margin-bottom:0;flex:1">
+                <label style="font-size:0.75rem">Disc </label>
+                <input type="number" id="f-inv-disc-amt" value="${inv.discountAmt || 0}" min="0" step="0.01" oninput="onInvDiscAmtChange()">
+            </div>
+        </div>
+        <div style="display:flex;gap:10px;align-items:end;margin-top:10px;justify-content:space-between">
+            <div style="display:flex;gap:10px;align-items:center">
+                <span style="font-size:0.85rem;color:var(--text-muted)">Round Off:</span>
+                <input type="number" id="f-inv-roundoff" value="${inv.roundOff || 0}" step="0.01" style="width:70px" oninput="updateInvoiceTotal()">
+            </div>
+            <div style="text-align:right">
+                <div style="font-size:0.85rem;color:var(--text-muted)">Total</div>
+                <div id="inv-total-display" style="font-size:1.4rem;font-weight:700;color:var(--accent)">...</div>
+            </div>
+        </div>
+    `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="saveEditedInvoice('${id}')"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">save</span> Save Changes</button>`, true);
+
+    renderInvoiceLines();
+    updateInvoiceTotal();
+}
+
+async function saveEditedInvoice(id) {
+    if (!canEdit()) return alert('Access Denied');
+    if (!beginSave()) return;
+    if (!invoiceItems.length) { endSave(); return alert('Invoice must have at least one item.'); }
+
+    try {
+        const [invoices, inventory, parties, expenses] = await Promise.all([
+            DB.getAll('invoices'), DB.getAll('inventory'), DB.getAll('parties'), DB.getAll('expenses')
+        ]);
+        const inv = invoices.find(i => i.id === id);
+        if (!inv) { endSave(); return alert('Invoice not found.'); }
+        if (inv.status === 'cancelled') { endSave(); return alert('Cannot edit a cancelled invoice.'); }
+
+        const party = parties.find(p => p.id === inv.partyId);
+        const gst = +($('f-inv-gst')?.value || 0);
+        const discPct = +($('f-inv-disc-pct')?.value || 0);
+        const discAmt = +($('f-inv-disc-amt')?.value || 0);
+        const roundOff = +($('f-inv-roundoff')?.value || 0);
+        const sub = invoiceItems.reduce((s, li) => s + li.amount, 0);
+        const newTotal = Math.max(0, +(sub + roundOff - discAmt).toFixed(2));
+        const oldTotal = inv.total;
+
+        const ops = [];
+
+        // 1. Reverse original stock effects
+        for (const li of (inv.items || [])) {
+            const item = inventory.find(x => x.id === li.itemId);
+            if (!item) continue;
+            const effectiveQty = li.packedQty !== undefined ? li.packedQty : li.qty;
+            const reverseQty = effectiveQty; // restore sold qty back to stock
+            item.stock = (item.stock || 0) + reverseQty;
+            ops.push(DB.rawUpdate('inventory', item.id, { stock: item.stock }));
+            ops.push(DB.rawInsert('stock_ledger', {
+                date: inv.date, item_id: item.id, item_name: item.name,
+                entry_type: 'Invoice Edit Reversal', qty: reverseQty,
+                running_stock: item.stock, document_no: inv.invoiceNo,
+                reason: `Edit reversal: ${inv.invoiceNo}`, created_by: currentUser.userId
+            }));
+        }
+
+        // 2. Apply new stock effects
+        for (const li of invoiceItems) {
+            const item = inventory.find(x => x.id === li.itemId);
+            if (!item) continue;
+            item.stock = (item.stock || 0) - li.qty;
+            ops.push(DB.rawUpdate('inventory', item.id, { stock: item.stock }));
+            ops.push(DB.rawInsert('stock_ledger', {
+                date: inv.date, item_id: item.id, item_name: item.name,
+                entry_type: 'Sale', qty: -li.qty,
+                running_stock: item.stock, document_no: inv.invoiceNo,
+                reason: `Edited Invoice ${inv.invoiceNo}`, created_by: currentUser.userId
+            }));
+        }
+
+        // 3. Adjust party balance (net difference)
+        if (party) {
+            const balDiff = newTotal - oldTotal;
+            const newBal = +((party.balance || 0) + balDiff).toFixed(2);
+            ops.push(DB.rawUpdate('parties', party.id, { balance: newBal }));
+            if (Math.abs(balDiff) > 0.001) {
+                ops.push(DB.rawInsert('party_ledger', {
+                    date: inv.date, party_id: party.id, party_name: party.name,
+                    type: 'Invoice Edit', amount: balDiff,
+                    balance: newBal, doc_no: inv.invoiceNo,
+                    notes: `Invoice ${inv.invoiceNo} edited`, created_by: currentUser.userId
+                }));
+            }
+        }
+
+        // 4. Update discount expense
+        const oldDiscExp = expenses.find(e => e.category === 'Sales Discount' && e.docNo === inv.invoiceNo);
+        if (oldDiscExp) await DB.delete('expenses', oldDiscExp.id);
+        if (discAmt > 0) {
+            ops.push(DB.rawInsert('expenses', {
+                date: inv.date, category: 'Sales Discount', amount: discAmt,
+                party_id: inv.partyId, party_name: inv.partyName, doc_no: inv.invoiceNo,
+                description: `Discount on ${inv.invoiceNo} (edited)`
+            }));
+        }
+
+        // 5. Update invoice
+        ops.push(DB.rawUpdate('invoices', id, {
+            items: [...invoiceItems],
+            subtotal: sub, gst, discount_pct: discPct, discount_amt: discAmt,
+            round_off: roundOff, total: newTotal
+        }));
+
+        await Promise.all(ops);
+        await DB.refreshTables(['invoices', 'inventory', 'parties', 'expenses', 'stock_ledger', 'party_ledger']);
+        closeModal();
+        await renderInvoices();
+        showToast(`Invoice ${inv.invoiceNo} updated successfully!`, 'success');
+    } catch (err) {
+        endSave();
+        alert('Error saving invoice edits: ' + err.message);
+    }
 }
 
 async function openAssignCollectorModal(invId) {
@@ -6772,10 +6954,15 @@ async function executeAssignCollector(invId) {
     }
 }
 
+// Per-invoice cancel lock — prevents double-cancel even across modal open/close cycles
+const _cancellingInvoices = new Set();
+
 function cancelInvoiceDirectly(id) {
-    const invoices = DB.get('db_invoices');
+    // Check live cache first
+    const invoices = DB.cache['invoices'] || DB.get('db_invoices') || [];
     const inv = invoices.find(i => i.id === id);
     if (!inv || inv.status === 'cancelled') return;
+    if (_cancellingInvoices.has(id)) return; // already in progress
     openModal('Cancel Invoice', `
         <div style="margin-bottom:14px;padding:12px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:8px;font-size:0.9rem">
             <strong>Invoice:</strong> ${inv.invoiceNo}<br>
@@ -6783,13 +6970,19 @@ function cancelInvoiceDirectly(id) {
         </div>
         <p style="margin-bottom:16px;font-size:0.9rem">Cancel this invoice? Stock will be restored and party balance adjusted.</p>
         <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Keep Invoice</button>
-        <button class="btn btn-danger" onclick="executeCancelInvoice('${id}')"> Cancel Invoice</button></div>`);
+        <button id="btn-confirm-cancel" class="btn btn-danger" onclick="executeCancelInvoice('${id}')"> Cancel Invoice</button></div>`);
 }
 async function executeCancelInvoice(id) {
+    if (_cancellingInvoices.has(id)) return;
+    _cancellingInvoices.add(id);
+    // Disable the button immediately to prevent double-click
+    const btn = document.getElementById('btn-confirm-cancel');
+    if (btn) { btn.disabled = true; btn.textContent = 'Cancelling...'; }
+
     const invoices = await DB.getAll('invoices');
     const inv = invoices.find(i => i.id === id);
-    if (!inv) { closeModal(); return; }
-    if (inv.status === 'cancelled') { closeModal(); alert('Invoice is already cancelled.'); return; }
+    if (!inv) { _cancellingInvoices.delete(id); closeModal(); return; }
+    if (inv.status === 'cancelled') { _cancellingInvoices.delete(id); closeModal(); alert('Invoice is already cancelled.'); return; }
 
     try {
         // Restore stock
@@ -6834,16 +7027,31 @@ async function executeCancelInvoice(id) {
             if (exp) await DB.delete('expenses', exp.id);
         }
 
-        // Reset associated sales order
+        // Reset associated sales order — only mark invoiceCancelled, do NOT change order status
         if (inv.fromOrder) {
             const orders = await DB.getAll('salesorders');
             const order = orders.find(o => o.orderNo === inv.fromOrder);
             if (order) {
-                await DB.update('salesorders', order.id, {
-                    packed: false, packedBy: null, packedAt: null,
-                    invoiceNo: null, packedItems: null, packedTotal: null,
-                    invoiceCancelled: true
-                });
+                await DB.update('salesorders', order.id, { invoiceCancelled: true, invoiceNo: null });
+            }
+        }
+
+        // Auto-release any payments allocated to this invoice
+        const allPayments = await DB.getAll('payments');
+        for (const pay of allPayments) {
+            if (!pay.allocations || !pay.allocations[inv.invoiceNo]) continue;
+            const releasedAmt = pay.allocations[inv.invoiceNo];
+            const newAlloc = { ...pay.allocations };
+            delete newAlloc[inv.invoiceNo];
+            const newInvNo = Object.keys(newAlloc).join(',') || '';
+            await DB.rawUpdate('payments', pay.id, { allocations: newAlloc, invoice_no: newInvNo });
+            // Reverse the balance reduction on the party for the released amount
+            const payParties = await DB.getAll('parties');
+            const payParty = payParties.find(p => p.id === pay.partyId);
+            if (payParty) {
+                const reversal = pay.type === 'in' ? releasedAmt : -releasedAmt;
+                await DB.rawUpdate('parties', payParty.id, { balance: +((payParty.balance || 0) + reversal).toFixed(2) });
+                await addPartyLedgerEntry(payParty.id, payParty.name, 'Payment Unallocated', reversal, pay.payNo || pay.id, `Released from cancelled invoice ${inv.invoiceNo}`);
             }
         }
 
@@ -6855,15 +7063,20 @@ async function executeCancelInvoice(id) {
             }
         }
 
+        // Mark invoice as cancelled
+        await DB.update('invoices', id, { status: 'cancelled' });
+
+        _cancellingInvoices.delete(id);
         closeModal();
         await renderInvoices();
         showToast('Invoice ' + inv.invoiceNo + ' cancelled!', 'warning');
     } catch (err) {
+        _cancellingInvoices.delete(id);
         alert('Error cancelling invoice: ' + err.message);
     }
 }
 async function deleteInvoice(id) {
-    if (!DB.canEdit()) {
+    if (!canEdit()) {
         return alert("Access Denied: Only Admin or users with Edit permission can delete records.");
     }
     const invoices = await DB.getAll('invoices');
@@ -6872,14 +7085,22 @@ async function deleteInvoice(id) {
     if (!confirm('Delete this invoice permanently? Effects will be reversed.')) return;
 
     try {
-        if (inv.status !== 'cancelled') {
-            await executeCancelInvoice(id);
+        const inv = (await DB.getAll('invoices')).find(r => r.id === id);
+        if (!inv) throw new Error('Invoice not found');
+
+        if (inv.status === 'posted') {
+            // ✅ Cancel instead of delete
+            await cancelDocument('invoices', id);
+        } else {
+            // ✅ Allow delete only for draft
+            await DB.delete('invoices', id);
+            showToast('Invoice deleted!', 'warning');
         }
-        await DB.delete('invoices', id);
+
         await renderInvoices();
-        showToast('Invoice deleted!', 'warning');
+
     } catch (err) {
-        alert('Error deleting invoice: ' + err.message);
+        alert('Error: ' + err.message);
     }
 }
 
@@ -7096,7 +7317,7 @@ async function renderPayments() {
         `<div class="pay-mode-chip"><span>${m}</span><strong>${currency(a)}</strong></div>`).join('');
 
     const today1 = today();
-    const monthStart = today1.substring(0, 8) + '01';
+    const monthStart = today1; // User requested today as default
 
     pageContent.innerHTML = `
         <div class="stats-grid" style="margin-bottom:14px" id="pay-stat-tiles">
@@ -7123,8 +7344,8 @@ async function renderPayments() {
                 <div class="pay-filter-group"><label>Mode</label><select id="pay-mode-filter" onchange="filterPayTable()"><option value="">All Modes</option><option>Cash</option><option>UPI</option><option>Cheque</option><option>Bank Transfer</option></select></div>
                 ${!isSalesman ? `<div class="pay-filter-group"><label>Collector</label><select id="pay-collector-filter" onchange="filterPayTable()"><option value="">All</option>${[...new Set(visiblePayments.map(p => p.collectedBy || p.createdBy).filter(Boolean))].map(n => `<option>${n}</option>`).join('')}</select></div>` : ''}
                 <div style="display:flex;gap:6px;align-items:center;padding-top:14px">
-                    <button class="btn btn-outline btn-sm" onclick="DB.exportToExcel('tbl-payments', 'payments')" title="Export Excel" style="border-color:#16a34a;color:#16a34a"></button>
-                    <button class="btn btn-outline btn-sm" onclick="openColumnPersonalizer('payments','renderPayments')" title="Column Config" style="border-color:var(--accent);color:var(--accent)"></button>
+                    <button class="btn btn-outline btn-sm" onclick="DB.exportToExcel('tbl-payments', 'payments')" title="Export Excel" style="border-color:#16a34a;color:#16a34a"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span></button>
+                    <button class="btn btn-outline btn-sm" onclick="openColumnPersonalizer('payments','renderPayments')" title="Column Config" style="border-color:var(--accent);color:var(--accent)"><span class="material-symbols-outlined" style="font-size:1.1rem">view_column</span></button>
                     <button class="btn btn-primary" onclick="openPaymentModal()" style="white-space:nowrap;padding:8px 16px">+ Record</button>
                 </div>
             </div>
@@ -7146,10 +7367,10 @@ function buildPayInvoiceCell(p) {
 function AMT(v) { return (+v).toFixed(0); }
 
 function renderPayRows(pays) {
-    if (!pays.length) return '<tr><td colspan="8" class="empty-state"><p>No payments found</p></td></tr>';
+    if (!pays.length) return '<tr><td colspan="9" class="empty-state"><p>No payments found</p></td></tr>';
     const cols = ColumnManager.get('payments').filter(c => c.visible);
     return pays.map(p => {
-        const editBtn = canEdit() ? `<button class="btn-icon" onclick="openEditPaymentModal('${p.id}')" title="Edit"></button>` : '';
+        const editBtn = canEdit() ? `<button class="btn-icon" onclick="openEditPaymentModal('${p.id}')" title="Edit"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button>` : '';
         const cellMap = {
             date: `<td>${fmtDate(p.date)}</td>`,
             receiptNo: `<td style="font-weight:600;color:var(--accent)">${p.payNo || (p.id ? p.id.substring(0, 8) : '-')}</td>`,
@@ -7159,7 +7380,8 @@ function renderPayRows(pays) {
             mode: `<td>${p.mode || 'Cash'}${p.mode === 'Cheque' && p.chequeNo ? `<br><span style="font-size:0.75rem;color:var(--text-muted)">#${p.chequeNo} | ${p.chequeBank || ''}</span><br><span class="badge ${p.chequeStatus === 'Cleared' ? 'badge-success' : p.chequeStatus === 'Deposited' ? 'badge-warning' : 'badge-danger'}" style="font-size:0.65rem">${p.chequeStatus || 'Pending'}</span>` : ''}</td>`,
             collectedBy: `<td style="font-size:0.82rem;color:var(--text-secondary)">${escapeHtml(p.collectedBy || p.createdBy || '-')}</td>`,
             amount: `<td class="${p.type === 'in' ? 'amount-green' : 'amount-red'}">${currency(p.amount)}</td>`,
-            actions: `<td><div class="action-btns">${editBtn}${canEdit() ? `<button class="btn-icon" onclick="deletePayment('${p.id}')" title="Delete Payment"></button>` : ''}</div></td>`,
+            status: `<td><span class="badge ${p.status === 'posted' ? 'badge-success' : p.status === 'cancelled' ? 'badge-danger' : 'badge-warning'}" style="font-size:0.72rem">${p.status || 'pending'}</span></td>`,
+            actions: `<td><div class="action-btns">${editBtn}${canEdit() ? `<button class="btn-icon" onclick="deletePayment('${p.id}')" title="Delete Payment" style="color:var(--danger)"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>` : ''}</div></td>`,
         };
         return `<tr>${cols.map(c => cellMap[c.key] || '').join('')}</tr>`;
     }).join('');
@@ -7277,7 +7499,7 @@ async function openPaymentModal(prefillPartyId) {
     pageContent.innerHTML = `
         <!-- Sticky top bar -->
         <div class="pay-page-header">
-            <button class="btn-icon pay-back-btn" onclick="renderPayments()"></button>
+            <button class="btn-icon pay-back-btn" onclick="renderPayments()"><span class="material-symbols-outlined">arrow_back</span></button>
             <div style="flex:1">
                 <div style="font-size:1rem;font-weight:700;color:var(--text-primary)">Record Payment</div>
                 <div style="font-size:0.75rem;color:var(--text-muted)" id="pay-co-name">${escapeHtml(co.name || '')}</div>
@@ -7314,7 +7536,7 @@ async function openPaymentModal(prefillPartyId) {
                 <div class="pay-mode-row" style="display:grid;grid-template-columns:1fr 120px 40px;gap:8px;margin-bottom:8px;align-items:end">
                     <div class="form-group" style="margin-bottom:0">
                         <label style="font-size:0.75rem">Amount </label>
-                        <input type="number" class="f-pay-row-amount" placeholder="0.00" oninput="onPayAmountChange()">
+                        <input type="number" id="f-pay-amount-0" class="f-pay-row-amount" placeholder="0.00" oninput="onPayAmountChange()">
                     </div>
                     <div class="form-group" style="margin-bottom:0">
                         <label style="font-size:0.75rem">Mode</label>
@@ -7451,7 +7673,7 @@ window.addPaymentModeRow = function () {
         <div class="form-group" style="margin-bottom:0">
             <select class="f-pay-row-mode" onchange="onPayModeChange()"><option>Cash</option><option>UPI</option><option>Bank Transfer</option><option>Cheque</option></select>
         </div>
-        <button class="btn-icon" onclick="this.parentNode.remove();onPayAmountChange()" style="height:38px;color:var(--danger)"></button>
+        <button class="btn-icon" onclick="this.parentNode.remove();onPayAmountChange()" style="height:38px;color:var(--danger)"><span class="material-symbols-outlined">delete</span></button>
     `;
     container.appendChild(div);
 };
@@ -7507,9 +7729,22 @@ async function onPayPartyTypeChange() {
     const customers = parties.filter(p => p.type === ptype);
     const sortedParties = await getFreshLocationAndSort(customers, 'party');
 
-    initSearchDropdown('f-pay-party', sortedParties, (party) => {
+    initSearchDropdown('f-pay-party', sortedParties, async (party) => {
         if ($('f-pay-party-id')) $('f-pay-party-id').value = party.id || '';
-        onPayPartyChange();
+        try {
+            await onPayPartyChange();
+        } catch (e) { console.warn('onPayPartyChange error:', e); }
+        // Auto-focus amount column after party selection
+        const focusAmount = () => {
+            const amtInp = $('f-pay-amount-0');
+            if (amtInp) {
+                amtInp.focus();
+                try { amtInp.select(); } catch (e) { }
+            }
+        };
+        requestAnimationFrame(focusAmount);
+        // Fallback in case rAF doesn't work
+        setTimeout(focusAmount, 500);
     });
 
     onPayPartyChange();
@@ -7720,6 +7955,17 @@ window.updatePaymentQR = function () {
 window.onPayModeChange = function () {
     updatePaymentQR();
     const modes = [...document.querySelectorAll('.f-pay-row-mode')].map(s => s.value);
+
+    // Auto-scroll to QR if UPI selected
+    if (modes.some(m => m.includes('UPI'))) {
+        const qrBox = $('pay-qr-box');
+        if (qrBox) {
+            setTimeout(() => {
+                qrBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }, 500);
+        }
+    }
+
     const chequeFields = $('pay-cheque-fields');
     if (chequeFields) {
         chequeFields.style.display = modes.includes('Cheque') ? 'block' : 'none';
@@ -7734,7 +7980,7 @@ window.calcTotalAllocation = function () {
 };
 async function savePayment(id) {
     // 1. Security & Permission Check
-    if (id && !DB.canEdit()) {
+    if (id && !canEdit()) {
         return alert("Access Denied: You do not have permission to edit payments. Please contact Admin.");
     }
 
@@ -7793,7 +8039,7 @@ async function savePayment(id) {
     const invNoStr = Object.keys(allocations).join(', ');
 
     try {
-        const payRefNo = buildPayRefNo();
+        const payRefNo = await nextNumber(payType === 'in' ? 'PAY-IN' : 'PAY-');
         const ops = [];
 
         // 5. Create Database Records per Payment Mode
@@ -7814,9 +8060,18 @@ async function savePayment(id) {
                 note: $('f-pay-note').value.trim(),
                 invoice_no: invNoStr || (rowDisc > 0 ? 'Multi/Disc' : 'Advance'),
                 allocations: allocations, // Store full allocation map in each row for reference
-                created_by: currentUser.userId, // Tied to RLS get_my_user_id()
-                collected_by: $('f-pay-collected-by')?.value || currentUser.name
+                collected_by: $('f-pay-collected-by')?.value || currentUser.name,
+                created_by: currentUser ? currentUser.userId : 'System',
+                status: 'posted'
             };
+
+            // Attach cheque details if mode is Cheque
+            if (row.mode === 'Cheque') {
+                payData.cheque_no = $('f-pay-cheque-no')?.value?.trim() || null;
+                payData.cheque_bank = $('f-pay-cheque-bank')?.value?.trim() || null;
+                payData.cheque_deposit_date = $('f-pay-cheque-date')?.value || null;
+                payData.cheque_status = 'Pending';
+            }
 
             ops.push(DB.rawInsert('payments', payData));
         }
@@ -7841,7 +8096,7 @@ async function savePayment(id) {
                 balance: newBal,
                 doc_no: payRefNo,
                 notes: `${payRows.map(r => r.mode).join('+')} | Disc: ${currency(disc)}`,
-                created_by: currentUser.userId
+                created_by: currentUser ? currentUser.userId : 'System'
             }));
         }
 
@@ -7855,22 +8110,28 @@ async function savePayment(id) {
                 party_name: payPartyName,
                 doc_no: payRefNo,
                 description: `Payment Discount for ${payPartyName} (${payRefNo})`,
-                created_by: currentUser.userId
+                status: 'posted'
             }));
         }
 
         // 8. Execute all operations
         await Promise.all(ops);
-        incrementPayNo();
 
         const andNew = window._saveAndNew;
         window._saveAndNew = false;
 
-        await renderPayments();
         showToast(`Payment ${payRefNo} saved successfully!`, 'success');
+        endSave(); // Reset saving flag after success
 
         if (andNew) {
             openPaymentModal();
+        } else if (currentPage === 'payments') {
+            await renderPayments();
+        } else {
+            // Navigate back to the current page (e.g., Dashboard) which closes the payment form
+            navigateTo(currentPage);
+            // Refresh related caches in background
+            DB.refreshTables(['payments', 'parties', 'party_ledger', 'expenses']).catch(console.error);
         }
 
     } catch (err) {
@@ -7974,7 +8235,7 @@ async function saveDirectPayment() {
     const isSale = inv.type === 'sale';
     const payType = isSale ? 'in' : 'out';
 
-    const payRefNo = buildPayRefNo();
+    const payRefNo = await nextNumber(payType === 'in' ? 'PAY-IN' : 'PAY-');
     const payData = {
         pay_no: payRefNo,
         date: $('f-pay-date').value,
@@ -7992,8 +8253,10 @@ async function saveDirectPayment() {
     };
 
     try {
+        // ✅ ADD STATUS HERE
+        payData.status = 'posted';
+
         await DB.insert('payments', payData);
-        incrementPayNo();
 
         // Automatic Expense Entry for Discount
         if (disc > 0 && payType === 'in') {
@@ -8001,10 +8264,11 @@ async function saveDirectPayment() {
                 date: $('f-pay-date').value,
                 category: 'Payment Discount',
                 amount: disc,
-                partyId: payPartyId || inv.partyId || '',
+                partyId: inv.partyId || '',
                 partyName: inv.partyName || '',
                 docNo: payRefNo,
-                description: `Payment Discount for ${inv.partyName} (${payRefNo})`
+                description: `Payment Discount for ${inv.partyName} (${payRefNo})`,
+                status: 'posted' // ✅ ALSO ADD HERE
             });
         }
 
@@ -8020,11 +8284,14 @@ async function saveDirectPayment() {
         closeModal();
         if ($('invoice-tbody')) {
             await filterInvTable2();
-        } else {
+        } else if (currentPage === 'payments') {
             await renderPayments();
+        } else {
+            DB.refreshTables(['payments', 'parties', 'party_ledger', 'expenses']).catch(console.error);
         }
         showToast('Payment recorded successfully', 'success');
     } catch (err) {
+        console.error('Save Payment Error:', err);
         alert('Error: ' + err.message);
     }
 }
@@ -8121,7 +8388,7 @@ async function linkPaymentToInvoice(payId) {
     }
 }
 async function deletePayment(id) {
-    if (!DB.canEdit()) {
+    if (!canEdit()) {
         return alert("Access Denied: Only Admin or users with Edit permission can delete records.");
     }
     if (!confirm('Delete payment? Effects will be reversed.')) return;
@@ -8129,18 +8396,36 @@ async function deletePayment(id) {
         const payments = await DB.getAll('payments');
         const pay = payments.find(p => p.id === id);
         if (pay) {
+            // 1. Reverse party balance (use totalReduction = amount + discount)
+            const totalReduction = (pay.amount || 0) + (pay.discount || 0);
             const parties = await DB.getAll('parties');
             const party = parties.find(p => p.id === pay.partyId);
             if (party) {
-                const balChange = pay.type === 'in' ? pay.amount : -pay.amount;
+                const balChange = pay.type === 'in' ? totalReduction : -totalReduction;
                 const newBal = (party.balance || 0) + balChange;
                 await DB.update('parties', party.id, { balance: newBal });
-                await addPartyLedgerEntry(party.id, party.name, 'Payment Deleted', balChange, pay.invoiceNo || 'Advance', 'Payment Deleted');
+            }
+
+            // 2. Delete related party_ledger entries
+            const payRefNo = pay.payNo || pay.id.substring(0, 8);
+            const ledger = await DB.getAll('party_ledger');
+            const ledgerEntries = ledger.filter(e => e.docNo === payRefNo && e.partyId === pay.partyId);
+            for (const entry of ledgerEntries) {
+                await DB.delete('party_ledger', entry.id);
+            }
+
+            // 3. Delete related expense entries (discount expenses)
+            if (pay.discount > 0 && pay.type === 'in') {
+                const expenses = await DB.getAll('expenses');
+                const discExp = expenses.find(e => e.category === 'Payment Discount' && e.docNo === payRefNo);
+                if (discExp) {
+                    await DB.delete('expenses', discExp.id);
+                }
             }
         }
         await DB.delete('payments', id);
         await renderPayments();
-        showToast('Payment deleted!', 'warning');
+        showToast('Payment deleted and all related entries reversed!', 'warning');
     } catch (err) {
         alert('Error: ' + err.message);
     }
@@ -8209,13 +8494,35 @@ async function openEditPaymentModal(id) {
 
         <div class="form-row">
             <div class="form-group"><label>Mode</label>
-                <select id="f-pay-mode"><option ${pay.mode === 'Cash' ? 'selected' : ''}>Cash</option><option ${pay.mode === 'UPI' ? 'selected' : ''}>UPI</option><option ${pay.mode === 'Bank Transfer' ? 'selected' : ''}>Bank Transfer</option><option ${pay.mode === 'Cheque' ? 'selected' : ''}>Cheque</option></select>
+                <select id="f-pay-mode" onchange="toggleEditChequeFields()"><option ${pay.mode === 'Cash' ? 'selected' : ''}>Cash</option><option ${pay.mode === 'UPI' ? 'selected' : ''}>UPI</option><option ${pay.mode === 'Bank Transfer' ? 'selected' : ''}>Bank Transfer</option><option ${pay.mode === 'Cheque' ? 'selected' : ''}>Cheque</option></select>
             </div>
-            <div class="form-group"><label>Collected By</label><input id="f-pay-collected-by" value="${pay.collectedBy || ''}"></div>
+            <div class="form-group"><label>Collected By</label><input id="f-pay-collected-by" value="${escapeHtml(pay.collectedBy || '')}"></div>
+        </div>
+        <div id="edit-cheque-fields" style="display:${pay.mode === 'Cheque' ? 'block' : 'none'}">
+            <div class="form-row">
+                <div class="form-group"><label>Cheque No</label><input id="f-pay-cheque-no" value="${escapeHtml(pay.chequeNo || '')}" placeholder="Cheque number"></div>
+                <div class="form-group"><label>Bank</label><input id="f-pay-cheque-bank" value="${escapeHtml(pay.chequeBank || '')}" placeholder="Bank name"></div>
+            </div>
+            <div class="form-row">
+                <div class="form-group"><label>Cheque Date</label><input type="date" id="f-pay-cheque-date" value="${pay.chequeDepositDate || pay.chequeDate || ''}"></div>
+                <div class="form-group"><label>Status</label>
+                    <select id="f-pay-cheque-status">
+                        <option ${(pay.chequeStatus || 'Pending') === 'Pending' ? 'selected' : ''}>Pending</option>
+                        <option ${pay.chequeStatus === 'Deposited' ? 'selected' : ''}>Deposited</option>
+                        <option ${pay.chequeStatus === 'Cleared' ? 'selected' : ''}>Cleared</option>
+                        <option ${pay.chequeStatus === 'Bounced' ? 'selected' : ''}>Bounced</option>
+                    </select>
+                </div>
+            </div>
         </div>
         <div class="form-group"><label>Note</label><input id="f-pay-note" placeholder="Optional note" value="${escapeHtml(pay.note || '')}"></div>
         <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="saveEditedPayment('${pay.id}')">Save Changes</button></div>
     `);
+
+    window.toggleEditChequeFields = function () {
+        const cf = $('edit-cheque-fields');
+        if (cf) cf.style.display = $('f-pay-mode').value === 'Cheque' ? 'block' : 'none';
+    };
 
     window.onEditPayAmountChange = function () {
         const amt = +($('f-pay-amount').value) || 0;
@@ -8278,13 +8585,17 @@ window.saveEditedPayment = async function (id) {
         if (oldPay.type === 'in') {
             const expenses = await DB.getAll('expenses');
             const payRefNo = oldPay.payNo || oldPay.id.substring(0, 8);
-            const discExp = expenses.find(e => e.category === 'Payment Discount' && e.description && e.description.includes(`(${payRefNo})`));
+            // Find by doc_no, which is much safer than matching a generated description string
+            const discExp = expenses.find(e => e.category === 'Payment Discount' && e.docNo === payRefNo);
 
             if (disc > 0) {
                 const expData = {
                     date: $('f-pay-date').value,
                     category: 'Payment Discount',
                     amount: disc,
+                    party_id: party ? party.id : null,
+                    party_name: party ? party.name : null,
+                    doc_no: payRefNo,
                     description: `Payment Discount for ${oldPay.partyName} (${payRefNo})`
                 };
                 if (discExp) {
@@ -8299,17 +8610,31 @@ window.saveEditedPayment = async function (id) {
         }
 
         // Update payment record
-        await DB.update('payments', id, {
+        const modeVal = $('f-pay-mode').value;
+        const updateData = {
             date: $('f-pay-date').value,
             amount: amt,
             discount: disc,
-            totalReduction: totalReduction,
-            mode: $('f-pay-mode').value,
+            total_reduction: totalReduction,
+            mode: modeVal,
             note: $('f-pay-note').value.trim(),
-            collectedBy: $('f-pay-collected-by')?.value || oldPay.collectedBy,
-            invoiceNo: invNo,
+            collected_by: $('f-pay-collected-by')?.value || oldPay.collectedBy,
+            invoice_no: invNo,
             allocations: Object.keys(allocations).length > 0 ? allocations : null
-        });
+        };
+        if (modeVal === 'Cheque') {
+            updateData.cheque_no = $('f-pay-cheque-no')?.value?.trim() || null;
+            updateData.cheque_bank = $('f-pay-cheque-bank')?.value?.trim() || null;
+            updateData.cheque_deposit_date = $('f-pay-cheque-date')?.value || null;
+            updateData.cheque_status = $('f-pay-cheque-status')?.value || 'Pending';
+        } else {
+            // Clear cheque fields when switching away from Cheque mode
+            updateData.cheque_no = null;
+            updateData.cheque_bank = null;
+            updateData.cheque_deposit_date = null;
+            updateData.cheque_status = null;
+        }
+        await DB.update('payments', id, updateData);
 
         closeModal();
         await renderPayments();
@@ -8345,11 +8670,12 @@ function renderExpRows(expenses) {
             party: `<td>${partyDisplay}</td>`,
             docNo: `<td>${docLink}</td>`,
             amount: `<td class="amount-red" style="font-weight:700">${currency(e.amount)}</td>`,
+            status: `<td><span class="badge ${e.status === 'posted' ? 'badge-success' : e.status === 'cancelled' ? 'badge-danger' : 'badge-warning'}" style="font-size:0.72rem">${e.status || 'manual'}</span></td>`,
             addedBy: `<td style="font-size:0.82rem;color:var(--text-muted)">${escapeHtml(e.createdBy || '-')}</td>`,
             actions: `<td><div class="action-btns">
-                ${isAdm && e.docNo ? `<button class="btn-icon" title="View Document" onclick="viewExpenseDoc('${escapeHtml(e.docNo)}','${e.docNo.startsWith('PAY-') ? 'payment' : 'invoice'}')"></button>` : ''}
-                ${!e.docNo && canEdit() ? `<button class="btn-icon" onclick="openEditExpenseModal('${e.id}')"></button>` : ''}
-                ${canEdit() ? `<button class="btn-icon" onclick="deleteExpense('${e.id}')"></button>` : ''}
+                ${isAdm && e.docNo ? `<button class="btn-icon" title="View Document" onclick="viewExpenseDoc('${escapeHtml(e.docNo)}','${e.docNo.startsWith('PAY-') ? 'payment' : 'invoice'}')"><span class="material-symbols-outlined" style="font-size:1.1rem">visibility</span></button>` : ''}
+                ${!e.docNo && canEdit() ? `<button class="btn-icon" onclick="openEditExpenseModal('${e.id}')" title="Edit Expense"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button>` : ''}
+                ${canEdit() ? `<button class="btn-icon" onclick="deleteExpense('${e.id}')" title="Delete Expense" style="color:var(--danger)"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>` : ''}
             </div></td>`,
         };
         return `<tr>${cols.map(c => cellMap[c.key] || '').join('')}</tr>`;
@@ -8423,14 +8749,15 @@ async function renderExpenses() {
         </div>
         <div class="card" style="margin-bottom:10px"><div class="card-body" style="padding:10px 14px">
             <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end">
-                <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:0.72rem;font-weight:600;color:var(--text-muted)">FROM</label><input type="date" id="exp-f-from" class="form-control" style="width:130px;padding:5px 8px;font-size:0.82rem" onchange="filterExpTable()"></div>
-                <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:0.72rem;font-weight:600;color:var(--text-muted)">TO</label><input type="date" id="exp-f-to" class="form-control" style="width:130px;padding:5px 8px;font-size:0.82rem" onchange="filterExpTable()"></div>
+                <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:0.72rem;font-weight:600;color:var(--text-muted)">FROM</label><input type="date" id="exp-f-from" class="form-control" style="width:130px;padding:5px 8px;font-size:0.82rem" value="${today()}" onchange="filterExpTable()"></div>
+                <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:0.72rem;font-weight:600;color:var(--text-muted)">TO</label><input type="date" id="exp-f-to" class="form-control" style="width:130px;padding:5px 8px;font-size:0.82rem" value="${today()}" onchange="filterExpTable()"></div>
                 <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:0.72rem;font-weight:600;color:var(--text-muted)">CATEGORY</label><select id="exp-f-cat" class="form-control" style="width:160px;padding:5px 8px;font-size:0.82rem" onchange="filterExpTable()"><option value="">All Categories</option>${cats.map(c => `<option>${escapeHtml(c)}</option>`).join('')}</select></div>
                 <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:0.72rem;font-weight:600;color:var(--text-muted)">PARTY</label><input type="text" id="exp-f-party" class="form-control" placeholder="Party name..." style="width:150px;padding:5px 8px;font-size:0.82rem" oninput="filterExpTable()"></div>
                 <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:0.72rem;font-weight:600;color:var(--text-muted)">DOC NO</label><input type="text" id="exp-f-doc" class="form-control" placeholder="INV-0001..." style="width:130px;padding:5px 8px;font-size:0.82rem" oninput="filterExpTable()"></div>
                 <button class="btn btn-outline btn-sm" onclick="clearExpFilters()" style="align-self:flex-end"> Clear</button>
                 <div style="margin-left:auto;align-self:flex-end;display:flex;gap:8px">
-                    <button class="btn btn-outline" onclick="openColumnPersonalizer('expenses','renderExpenses')" style="border-color:var(--accent);color:var(--accent)"> Columns</button>
+                    <button class="btn btn-outline" onclick="DB.exportToExcel('exp-table', 'expenses')" style="border-color:#16a34a;color:#16a34a"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button>
+                    <button class="btn btn-outline" onclick="openColumnPersonalizer('expenses','renderExpenses')" style="border-color:var(--accent);color:var(--accent)"><span class="material-symbols-outlined" style="font-size:1.1rem">view_column</span> Columns</button>
                     <button class="btn btn-primary" onclick="openExpenseModal()">+ Add Expense</button>
                 </div>
             </div>
@@ -8477,7 +8804,7 @@ function openExpenseModal() {
 }
 
 async function saveExpense(id) {
-    if (id && !DB.canEdit()) {
+    if (id && !canEdit()) {
         return alert("Access Denied: You do not have permission to edit expenses. Please contact Admin.");
     }
     if (!beginSave()) return;
@@ -8487,7 +8814,9 @@ async function saveExpense(id) {
         return alert("Access Denied: Only Admin can post expenses for a past date.");
     }
     const amt = +$('f-exp-amt').value; if (!amt) { endSave(); return alert('Enter amount'); }
+    const docNo = await buildPayoutNo();
     const expData = {
+        doc_no: docNo,
         date: $('f-exp-date').value,
         category: $('f-exp-cat').value,
         amount: amt,
@@ -8500,7 +8829,7 @@ async function saveExpense(id) {
         await renderExpenses();
         showToast('Expense saved', 'success');
         if (andNew) openExpenseModal();
-    } catch (err) { window._saveAndNew = false; alert('Error: ' + err.message); }
+    } catch (err) { endSave(); window._saveAndNew = false; alert('Error: ' + err.message); }
 }
 
 async function deleteExpense(id) {
@@ -8839,7 +9168,7 @@ function packViewPhoto(itemId, itemName, orderId) {
         <div style="text-align:center;padding:8px">
             <img src="${item.photo}" style="max-width:100%;max-height:70vh;border-radius:10px;object-fit:contain">
         </div>
-        <div class="modal-actions"><button class="btn btn-outline" onclick="${orderId ? `openPackModal('${orderId}')` : 'closeModal()'}"> Back to Order</button></div>`);
+        <div class="modal-actions"><button class="btn btn-outline" onclick="${orderId ? `startPacking('${orderId}')` : 'closeModal()'}"> Back to Order</button></div>`);
 }
 
 function packAddItemPhoto(itemId, rowIdx) {
@@ -9085,13 +9414,14 @@ async function confirmCannotComplete(orderId, lineStatus) {
             cannotCompleteBy: currentUser.name, cannotCompleteAt: new Date().toISOString(),
             cannotCompleteLines: lineStatus
         });
-        closeModal(); renderPacking();
+        closeModal(); await renderPacking();
         showToast(`Order flagged as Cannot Complete  ${reason}`, 'warning', 4000);
     } catch (err) { alert('Error: ' + err.message); }
 }
 
 function completePacking(orderId) {
-    const packer = $('f-pack-packer').value;
+    const packerEl = $('f-pack-packer');
+    const packer = packerEl ? packerEl.value : (currentUser.name || 'Staff');
     const orders = DB.get('db_salesorders');
     const o = orders.find(x => x.id === orderId); if (!o) return;
 
@@ -9179,7 +9509,7 @@ function completePacking(orderId) {
         <input type="hidden" id="f-pkg-items" value="${encodeURIComponent(JSON.stringify(packedItems))}">
 
         <div class="modal-actions" style="margin-top:20px">
-            <button class="btn btn-outline" onclick="openPackModal('${orderId}')">\u2190 Back to Items</button>
+            <button class="btn btn-outline" onclick="startPacking('${orderId}')">\u2190 Back to Items</button>
             <button class="btn btn-primary" onclick="finalizePacking()">\u2705 Save & Complete</button>
         </div>`);
 }
@@ -9207,7 +9537,7 @@ function syncPkgInputRows(type, count) {
             div.style.cssText = 'display:flex;gap:8px;margin-bottom:8px;align-items:center';
             div.innerHTML = `<span style="min-width:24px;color:var(--text-muted);font-size:0.85rem">${rowNum}.</span>
                 <input type="text" id="${className}-${rowNum}" name="${className}-${rowNum}" class="${className}" value="" placeholder="${type === 'box' ? 'Box' : 'Crate'} number (required)" required style="flex:1">
-                <button type="button" class="btn-icon" onclick="removePkgInputRow(this,'${type}')" style="color:var(--danger)"></button>`;
+                <button type="button" class="btn-icon" onclick="removePkgInputRow(this,'${type}')" style="color:var(--danger)"><span class="material-symbols-outlined">delete</span></button>`;
             container.appendChild(div);
         }
     } else if (count < currentCount) {
@@ -9360,9 +9690,7 @@ async function bulkGenerateInvoicesFromPacked() {
             DB.getAll('salesorders'), DB.getAll('parties'), DB.getAll('inventory')
         ]);
 
-        let startInvNumber = parseInt((await nextNumber('INV-')).split('-')[1]);
-        let startVyaparNumber = parseInt((buildVyaparInvoiceNo()).split('-').pop()) || 1;
-        const autoPrefix = buildVyaparInvoiceNo().substring(0, buildVyaparInvoiceNo().lastIndexOf('-') + 1) || 'PT-NS-';
+        // Prepare for bulk generation
 
         // Build preview list  skip already invoiced / no stock
         const rows = [];
@@ -9381,12 +9709,10 @@ async function bulkGenerateInvoicesFromPacked() {
             }
             if (!hasStock && !DB.getObj('db_company').allowNegativeStock) { skipCount++; continue; }
 
-            const invNo = 'INV-' + String(startInvNumber).padStart(4, '0');
-            const vyaparNo = autoPrefix + startVyaparNumber;
+            const invNo = await nextNumber('INV-');
+            const vyaparNo = await buildVyaparInvoiceNo();
             const sub = packedItems.reduce((s, li) => { const q = li.packedQty !== undefined ? li.packedQty : li.qty; return s + q * (li.price || li.salePrice || 0); }, 0);
             rows.push({ orderId, orderNo: o.orderNo, partyId: o.partyId, partyName: o.partyName, invNo, vyaparNo, sub });
-            startInvNumber++;
-            startVyaparNumber++;
         }
 
         if (!rows.length) return alert('No eligible orders found (check stock or already invoiced).');
@@ -9508,13 +9834,12 @@ async function confirmBulkInvoices() {
                 party.balance = newBal;
             }
 
-            const invData = { invoiceNo: r.invNo, date: today(), dueDate: null, type: 'sale', partyId: o.partyId, partyName: o.partyName, items: invoiceItems, subtotal: sub, gst: 0, roundOff: roundoff, total, status: 'from-packing', createdBy: currentUser.name, vyaparInvoiceNo: r.vyaparNo, fromOrder: o.orderNo };
+            const invData = { invoiceNo: r.invNo, date: today(), dueDate: null, type: 'sale', partyId: o.partyId, partyName: o.partyName, items: invoiceItems, subtotal: sub, gst: 0, roundOff: roundoff, total, status: 'posted', createdBy: currentUser.name, vyaparInvoiceNo: r.vyaparNo, fromOrder: o.orderNo };
             ops.push(DB.rawInsert('invoices', invData));
             ops.push(DB.rawUpdate('salesorders', o.id, { invoiceNo: r.invNo }));
 
             try {
                 await Promise.all(ops);
-                incrementVyaparNo();
                 successCount++;
             } catch (pErr) {
                 console.error(`Failed to commit invoice ${r.invNo}:`, pErr);
@@ -9614,9 +9939,9 @@ function renderDelRows(dels, parties) {
         const statusBadge = d.status === 'Delivered' ? 'badge-success' : d.status === 'Returned' ? 'badge-danger' : 'badge-warning';
         const pkgNums = d.packageNumbers || [];
         const pkgDisplay = pkgNums.slice(0, 3).map(n => `<span class="badge badge-outline" style="font-size:0.68rem">${n}</span>`).join(' ') + (pkgNums.length > 3 ? ` +${pkgNums.length - 3}` : '');
-        const gpsBtn = party && party.lat && party.lng ? `<button class="btn-icon" onclick="openPartyMap('${party.lat}','${party.lng}','${escapeHtml(d.partyName)}')" title="Navigate" style="font-size:0.8rem"></button>` : '';
+        const gpsBtn = party && party.lat && party.lng ? `<button class="btn-icon" onclick="openPartyMap('${party.lat}','${party.lng}','${escapeHtml(d.partyName)}')" title="Navigate" style="font-size:0.8rem"><span class="material-symbols-outlined" style="font-size:1.1rem">map</span></button>` : '';
         const actions = `<div class="action-btns">
-            <button class="btn-icon" onclick="viewDeliveryDetail('${d.id}')"></button>
+            <button class="btn-icon" onclick="viewDeliveryDetail('${d.id}')" title="View Detail"><span class="material-symbols-outlined" style="font-size:1.1rem">visibility</span></button>
             ${d.status !== 'Delivered' ? `<button class="btn btn-primary btn-sm" onclick="markDelivered('${d.id}')"> Delivered</button>` : ''}
             ${d.status !== 'Returned' && d.status !== 'Delivered' ? `<button class="btn btn-outline btn-sm" onclick="openUndeliveredModal('${d.id}')"> Return</button>` : ''}
         </div>`;
@@ -10427,26 +10752,26 @@ function exportTableToExcel(tableId, filename) {
 function renderReports() {
     pageContent.innerHTML = `
         <div class="report-grid">
-            <div class="report-card" onclick="showReport('payment-report')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(16,185,129,0.12),rgba(249,115,22,0.08))"><div class="report-icon"></div></div><div class="report-text"><h4>Payment Report</h4><p>Pay In / Pay Out with filters</p></div></div>
-            <div class="report-card" onclick="showReport('sales')"><div class="report-icon-wrap"><div class="report-icon"></div></div><div class="report-text"><h4>Sales Report</h4><p>Sales invoices summary</p></div></div>
-            <div class="report-card" onclick="showReport('purchases')"><div class="report-icon-wrap"><div class="report-icon"></div></div><div class="report-text"><h4>Purchase Report</h4><p>Purchase invoices summary</p></div></div>
-            <div class="report-card" onclick="showReport('usersales')"><div class="report-icon-wrap"><div class="report-icon"></div></div><div class="report-text"><h4>User Sales</h4><p>Detailed salesman performance</p></div></div>
-            <div class="report-card" onclick="showReport('userpayments')"><div class="report-icon-wrap"><div class="report-icon"></div></div><div class="report-text"><h4>User Collections</h4><p>Detailed salesman collections</p></div></div>
-            <div class="report-card" onclick="showReport('pnl')"><div class="report-icon-wrap"><div class="report-icon"></div></div><div class="report-text"><h4>Profit & Loss</h4><p>Revenue vs expenses</p></div></div>
-            <div class="report-card" onclick="showReport('invoice-pnl')"><div class="report-icon-wrap"><div class="report-icon"></div></div><div class="report-text"><h4>Invoice P&L</h4><p>Profit per invoice</p></div></div>
-            <div class="report-card" onclick="showReport('stock')"><div class="report-icon-wrap"><div class="report-icon"></div></div><div class="report-text"><h4>Stock Summary</h4><p>Current inventory levels</p></div></div>
-            <div class="report-card" onclick="showReport('outstanding')"><div class="report-icon-wrap"><div class="report-icon"></div></div><div class="report-text"><h4>Outstanding</h4><p>Party balances</p></div></div>
-            <div class="report-card" onclick="showReport('expenses')"><div class="report-icon-wrap"><div class="report-icon"></div></div><div class="report-text"><h4>Expense Summary</h4><p>Category-wise breakdown</p></div></div>
-            <div class="report-card" onclick="showReport('chequeregister')"><div class="report-icon-wrap"><div class="report-icon"></div></div><div class="report-text"><h4>Cheque Register</h4><p>Track cheque deposits & clearance</p></div></div>
-            <div class="report-card" onclick="showReport('salesman')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(124,58,237,0.12),rgba(99,102,241,0.08))"><div class="report-icon"></div></div><div class="report-text"><h4>Salesman Performance</h4><p>Invoices + collections by salesman</p></div></div>
-            <div class="report-card" onclick="showReport('user-outstanding')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(239,68,68,0.12),rgba(249,115,22,0.08))"><div class="report-icon"></div></div><div class="report-text"><h4>Outstanding by User</h4><p>Pending bills grouped by salesman</p></div></div>
-            <div class="report-card" onclick="showReport('collection-allocations')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(59,130,246,0.12),rgba(37,99,235,0.08))"><div class="report-icon"></div></div><div class="report-text"><h4>Collection Allocations</h4><p>Track assigned invoices & payments</p></div></div>
-            <div class="report-card" onclick="showReport('daybook')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(20,184,166,0.12),rgba(6,182,212,0.08))"><div class="report-icon"></div></div><div class="report-text"><h4>Day Book</h4><p>Date-wise transaction summary</p></div></div>
-            <div class="report-card" onclick="showReport('stock-aging')"><div class="report-icon-wrap" style="background:var(--bg-primary)"><div class="report-icon"></div></div><div class="report-text"><h4>Stock Aging</h4><p>Stock staying >30/60/90 days</p></div></div>
-            <div class="report-card" onclick="showReport('salesman-ach')"><div class="report-icon-wrap" style="background:var(--bg-primary)"><div class="report-icon"></div></div><div class="report-text"><h4>Target vs Achievement</h4><p>Salesman performance vs targets</p></div></div>
-            <div class="report-card" onclick="showReport('party-soa')"><div class="report-icon-wrap" style="background:var(--bg-primary)"><div class="report-icon"></div></div><div class="report-text"><h4>Statement of Account</h4><p>Full party ledger with print</p></div></div>
-            <div class="report-card" onclick="showReport('abc-analysis')"><div class="report-icon-wrap" style="background:var(--bg-primary)"><div class="report-icon"></div></div><div class="report-text"><h4>ABC Analysis</h4><p>Revenue-based item classification</p></div></div>
-            <div class="report-card" onclick="showReport('indent')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(249,115,22,0.12),rgba(234,88,12,0.08))"><div class="report-icon"></div></div><div class="report-text"><h4>Purchase Indent</h4><p>Suggested PO based on 30d sales</p></div></div>
+            <div class="report-card" onclick="showReport('payment-report')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(16,185,129,0.12),rgba(249,115,22,0.08))"><div class="report-icon">💸</div></div><div class="report-text"><h4>Payment Report</h4><p>Pay In / Pay Out with filters</p></div></div>
+            <div class="report-card" onclick="showReport('sales')"><div class="report-icon-wrap"><div class="report-icon">📈</div></div><div class="report-text"><h4>Sales Report</h4><p>Sales invoices summary</p></div></div>
+            <div class="report-card" onclick="showReport('purchases')"><div class="report-icon-wrap"><div class="report-icon">🛒</div></div><div class="report-text"><h4>Purchase Report</h4><p>Purchase invoices summary</p></div></div>
+            <div class="report-card" onclick="showReport('usersales')"><div class="report-icon-wrap"><div class="report-icon">🧑‍💼</div></div><div class="report-text"><h4>User Sales</h4><p>Detailed salesman performance</p></div></div>
+            <div class="report-card" onclick="showReport('userpayments')"><div class="report-icon-wrap"><div class="report-icon">💰</div></div><div class="report-text"><h4>User Collections</h4><p>Detailed salesman collections</p></div></div>
+            <div class="report-card" onclick="showReport('pnl')"><div class="report-icon-wrap"><div class="report-icon">⚖️</div></div><div class="report-text"><h4>Profit & Loss</h4><p>Revenue vs expenses</p></div></div>
+            <div class="report-card" onclick="showReport('invoice-pnl')"><div class="report-icon-wrap"><div class="report-icon">🧾</div></div><div class="report-text"><h4>Invoice P&L</h4><p>Profit per invoice</p></div></div>
+            <div class="report-card" onclick="showReport('stock')"><div class="report-icon-wrap"><div class="report-icon">📦</div></div><div class="report-text"><h4>Stock Summary</h4><p>Current inventory levels</p></div></div>
+            <div class="report-card" onclick="showReport('outstanding')"><div class="report-icon-wrap"><div class="report-icon">⏳</div></div><div class="report-text"><h4>Outstanding</h4><p>Party balances</p></div></div>
+            <div class="report-card" onclick="showReport('expenses')"><div class="report-icon-wrap"><div class="report-icon">📉</div></div><div class="report-text"><h4>Expense Summary</h4><p>Category-wise breakdown</p></div></div>
+            <div class="report-card" onclick="showReport('chequeregister')"><div class="report-icon-wrap"><div class="report-icon">🏦</div></div><div class="report-text"><h4>Cheque Register</h4><p>Track cheque deposits & clearance</p></div></div>
+            <div class="report-card" onclick="showReport('salesman')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(124,58,237,0.12),rgba(99,102,241,0.08))"><div class="report-icon">🏅</div></div><div class="report-text"><h4>Salesman Performance</h4><p>Invoices + collections by salesman</p></div></div>
+            <div class="report-card" onclick="showReport('user-outstanding')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(239,68,68,0.12),rgba(249,115,22,0.08))"><div class="report-icon">👥</div></div><div class="report-text"><h4>Outstanding by User</h4><p>Pending bills grouped by salesman</p></div></div>
+            <div class="report-card" onclick="showReport('collection-allocations')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(59,130,246,0.12),rgba(37,99,235,0.08))"><div class="report-icon">🔗</div></div><div class="report-text"><h4>Collection Allocations</h4><p>Track assigned invoices & payments</p></div></div>
+            <div class="report-card" onclick="showReport('daybook')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(20,184,166,0.12),rgba(6,182,212,0.08))"><div class="report-icon">📅</div></div><div class="report-text"><h4>Day Book</h4><p>Date-wise transaction summary</p></div></div>
+            <div class="report-card" onclick="showReport('stock-aging')"><div class="report-icon-wrap" style="background:var(--bg-primary)"><div class="report-icon">🕰️</div></div><div class="report-text"><h4>Stock Aging</h4><p>Stock staying >30/60/90 days</p></div></div>
+            <div class="report-card" onclick="showReport('salesman-ach')"><div class="report-icon-wrap" style="background:var(--bg-primary)"><div class="report-icon">🎯</div></div><div class="report-text"><h4>Target vs Achievement</h4><p>Salesman performance vs targets</p></div></div>
+            <div class="report-card" onclick="showReport('party-soa')"><div class="report-icon-wrap" style="background:var(--bg-primary)"><div class="report-icon">📜</div></div><div class="report-text"><h4>Statement of Account</h4><p>Full party ledger with print</p></div></div>
+            <div class="report-card" onclick="showReport('abc-analysis')"><div class="report-icon-wrap" style="background:var(--bg-primary)"><div class="report-icon">🔠</div></div><div class="report-text"><h4>ABC Analysis</h4><p>Revenue-based item classification</p></div></div>
+            <div class="report-card" onclick="showReport('indent')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(249,115,22,0.12),rgba(234,88,12,0.08))"><div class="report-icon">📝</div></div><div class="report-text"><h4>Purchase Indent</h4><p>Suggested PO based on 30d sales</p></div></div>
         </div>
 
         <div class="section-toolbar" style="margin-top:28px">
@@ -10454,11 +10779,11 @@ function renderReports() {
         </div>
         <p style="font-size:0.82rem;color:var(--text-muted);margin-bottom:14px">Line-wise detailed reports for re-entry into Vyapar accounting software.</p>
         <div class="report-grid">
-            <div class="report-card" onclick="showReport('vyapar-sales')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(22,163,74,0.12),rgba(16,185,129,0.08))"><div class="report-icon"></div></div><div class="report-text"><h4>Vyapar Sales Import</h4><p>Sales invoices  line-wise for Vyapar entry</p></div></div>
-            <div class="report-card" onclick="showReport('vyapar-payments')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(37,99,235,0.12),rgba(99,102,241,0.08))"><div class="report-icon"></div></div><div class="report-text"><h4>Vyapar Payment In Import</h4><p>Payment receipts  line-wise for Vyapar entry</p></div></div>
+            <div class="report-card" onclick="showReport('vyapar-sales')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(22,163,74,0.12),rgba(16,185,129,0.08))"><div class="report-icon">🟢</div></div><div class="report-text"><h4>Vyapar Sales Import</h4><p>Sales invoices  line-wise for Vyapar entry</p></div></div>
+            <div class="report-card" onclick="showReport('vyapar-payments')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(37,99,235,0.12),rgba(99,102,241,0.08))"><div class="report-icon">🔵</div></div><div class="report-text"><h4>Vyapar Payment In Import</h4><p>Payment receipts  line-wise for Vyapar entry</p></div></div>
             <div class="report-card" onclick="showReport('payment-trend')">
                 <div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(124,45,18,0.12),rgba(249,115,22,0.08))">
-                    <div class="report-icon"></div>
+                    <div class="report-icon">📊</div>
                 </div>
                 <div class="report-text">
                     <h4>Customer Payment Trend</h4>
@@ -10490,16 +10815,17 @@ async function showReport(type) {
 
     if (type === 'sales') {
         window._rSalesAll = invoices.filter(i => i.type === 'sale' && i.status !== 'cancelled');
-        const monthStart = today().substring(0, 8) + '01';
+        const monthStart = today();
         const salesUsers = users.filter(u => ['Admin', 'Manager', 'Salesman'].includes(u.role));
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
             <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
                 <div class="form-group"><label>From Date</label><input type="date" id="r-s-from" value="${monthStart}" onchange="renderSalesRpt()"></div>
+                <button class="btn btn-outline" onclick="DB.exportToExcel('tbl-sales-rpt', 'sales_report')" style="border-color:#16a34a;color:#16a34a;margin-top:24px"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button>
                 <div class="form-group"><label>To Date</label><input type="date" id="r-s-to" value="${today()}" onchange="renderSalesRpt()"></div>
                 <div class="form-group"><label>Party</label><input id="r-s-party" placeholder="All parties..." oninput="renderSalesRpt()" style="width:160px"></div>
                 <div class="form-group"><label>Salesman</label><select id="r-s-user" onchange="renderSalesRpt()"><option value="">All</option>${salesUsers.map(u => `<option>${u.name}</option>`).join('')}</select></div>
-                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-sales','SalesReport_${today()}')"> Export</button></div>
+                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-sales','SalesReport_${today()}')"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button></div>
             </div>
         </div></div>
         <div id="r-s-out"></div>`;
@@ -10515,7 +10841,7 @@ async function showReport(type) {
             <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
                 <div class="form-group"><label>Filter Collector</label><select id="r-ca-user" onchange="renderCollectionAllocationsRpt()"><option value="">All</option><option value="Unassigned">Unassigned</option>${collectors.map(c => `<option>${c}</option>`).join('')}</select></div>
                 <div class="form-group"><label>Status</label><select id="r-ca-status" onchange="renderCollectionAllocationsRpt()"><option value="">All Assigned</option><option value="pending">Pending Balance</option><option value="paid">Fully Paid</option></select></div>
-                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-allocations','CollectionAllocations_${today()}')"> Export</button></div>
+                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-allocations','CollectionAllocations_${today()}')"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button></div>
             </div>
         </div></div>
         <div id="r-ca-out"></div>`;
@@ -10564,9 +10890,9 @@ async function showReport(type) {
                     <td style="font-size:0.8rem;color:var(--text-muted)">${assignDate}</td>
                     <td>
                         <div class="action-btns">
-                            <button class="btn-icon" style="color:var(--info)" title="Assign Salesman" onclick="openAssignCollectorModal('${inv.id}')"></button>
-                            <button class="btn-icon" style="color:var(--primary)" title="Assign Collector" onclick="openAssignCollectorModal('${inv.id}')"></button>
-                            <button class="btn-icon" style="color:var(--success)" title="Payment History" onclick="showPaymentHistory('${inv.partyId}', '${inv.invoiceNo}')"></button>
+                            <button class="btn-icon" style="color:var(--info)" title="Assign Salesman" onclick="openAssignCollectorModal('${inv.id}')"><span class="material-symbols-outlined" style="font-size:1.1rem">person_add</span></button>
+                            <button class="btn-icon" style="color:var(--primary)" title="Assign Collector" onclick="openAssignCollectorModal('${inv.id}')"><span class="material-symbols-outlined" style="font-size:1.1rem">assignment_ind</span></button>
+                            <button class="btn-icon" style="color:var(--success)" title="Payment History" onclick="showPaymentHistory('${inv.partyId}', '${inv.invoiceNo}')"><span class="material-symbols-outlined" style="font-size:1.1rem">history</span></button>
                         </div>
                     </td>
                 </tr>`;
@@ -10590,7 +10916,7 @@ async function showReport(type) {
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px; display:flex; justify-content:space-between; align-items:center">
             <h3 style="margin:0"> Stock Aging & Expiry Report</h3>
-            <button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-aging','StockAging_${today()}')"> Export</button>
+            <button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-aging','StockAging_${today()}')"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button>
         </div></div>
         <div id="r-aging-out"></div>`;
 
@@ -10642,28 +10968,29 @@ async function showReport(type) {
 
     if (type === 'purchases') {
         window._rPurchAll = invoices.filter(i => i.type === 'purchase' && i.status !== 'cancelled');
-        const monthStart = today().substring(0, 8) + '01';
+        const monthStart = today();
         const poUsers = users.filter(u => ['Admin', 'Manager'].includes(u.role));
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
             <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
                 <div class="form-group"><label>From Date</label><input type="date" id="r-p-from" value="${monthStart}" onchange="renderPurchaseRpt()"></div>
+                <button class="btn btn-outline" onclick="DB.exportToExcel('tbl-purchase-rpt', 'purchase_report')" style="border-color:#16a34a;color:#16a34a;margin-top:24px"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button>
                 <div class="form-group"><label>To Date</label><input type="date" id="r-p-to" value="${today()}" onchange="renderPurchaseRpt()"></div>
                 <div class="form-group"><label>Supplier</label><input id="r-p-party" placeholder="All suppliers..." oninput="renderPurchaseRpt()" style="width:160px"></div>
                 <div class="form-group"><label>Created By</label><select id="r-p-user" onchange="renderPurchaseRpt()"><option value="">All</option>${poUsers.map(u => `<option>${u.name}</option>`).join('')}</select></div>
-                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-purchases','PurchaseReport_${today()}')"> Export</button></div>
+                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-purchases','PurchaseReport_${today()}')"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button></div>
             </div>
         </div></div>
         <div id="r-p-out"></div>`;
         renderPurchaseRpt();
     }
     if (type === 'salesman-ach') {
-        const monthStart = today().substring(0, 8) + '01';
+        const monthStart = today();
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
             <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
                 <div class="form-group"><label>Month</label><input type="month" id="r-sa-month" value="${today().substring(0, 7)}" onchange="renderSalesmanAchRpt()"></div>
-                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-salesman-ach','SalesmanPerformance_${today()}')"> Export</button></div>
+                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-salesman-ach','SalesmanPerformance_${today()}')"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button></div>
             </div>
         </div></div>
         <div id="r-sa-out"></div>`;
@@ -10708,15 +11035,16 @@ async function showReport(type) {
     }
 
     if (type === 'party-soa') {
-        const monthStart = today().substring(0, 8) + '01';
+        const monthStart = today();
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
             <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
                 <div class="form-group"><label>Select Party</label><input id="r-soa-party-input" placeholder="Type party name..." style="width:200px"></div>
                 <div class="form-group"><label>From Date</label><input type="date" id="r-soa-from" value="${monthStart}" onchange="renderPartySOARpt()"></div>
+                <button class="btn btn-outline" onclick="DB.exportToExcel('tbl-soa-rpt', 'party_soa')" style="border-color:#16a34a;color:#16a34a;margin-top:24px"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button>
                 <div class="form-group"><label>To Date</label><input type="date" id="r-soa-to" value="${today()}" onchange="renderPartySOARpt()"></div>
                 <div class="form-group" style="align-self:flex-end">
-                    <button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-soa','Statement_${today()}')"> Export</button>
+                    <button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-soa','Statement_${today()}')"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button>
                     <button class="btn btn-outline btn-sm" onclick="window.print()"> Print</button>
                 </div>
             </div>
@@ -10767,7 +11095,7 @@ async function showReport(type) {
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px; display:flex; justify-content:space-between; align-items:center">
             <h3 style="margin:0"> ABC Inventory Analysis</h3>
-            <button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-abc','ABCAnalysis_${today()}')"> Export</button>
+            <button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-abc','ABCAnalysis_${today()}')"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button>
         </div></div>
         <div id="r-abc-out"></div>`;
 
@@ -10820,11 +11148,12 @@ async function showReport(type) {
         window._rPnlInv = invoices.filter(i => i.status !== 'cancelled');
         window._rPnlExp = expenses;
         window._rPnlInvt = inventory;
-        const monthStart = today().substring(0, 8) + '01';
+        const monthStart = today();
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
             <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
                 <div class="form-group"><label>From Date</label><input type="date" id="r-pnl-from" value="${monthStart}" onchange="renderPnlRpt()"></div>
+                <button class="btn btn-outline" onclick="DB.exportToExcel('tbl-pnl-rpt', 'pnl_report')" style="border-color:#16a34a;color:#16a34a;margin-top:24px"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button>
                 <div class="form-group"><label>To Date</label><input type="date" id="r-pnl-to" value="${today()}" onchange="renderPnlRpt()"></div>
             </div>
         </div></div>
@@ -10834,7 +11163,7 @@ async function showReport(type) {
     if (type === 'invoice-pnl') {
         window._rInvPnlAll = invoices.filter(i => i.type === 'sale' && i.status !== 'cancelled');
         window._rInvPnlInvt = inventory;
-        const monthStart = today().substring(0, 8) + '01';
+        const monthStart = today();
         const salesUsers = users.filter(u => ['Admin', 'Manager', 'Salesman'].includes(u.role));
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
@@ -10843,7 +11172,7 @@ async function showReport(type) {
                 <div class="form-group"><label>To Date</label><input type="date" id="r-ip-to" value="${today()}" onchange="renderInvPnlRpt()"></div>
                 <div class="form-group"><label>Party</label><input id="r-ip-party" placeholder="All parties..." oninput="renderInvPnlRpt()" style="width:160px"></div>
                 <div class="form-group"><label>Salesman</label><select id="r-ip-user" onchange="renderInvPnlRpt()"><option value="">All</option>${salesUsers.map(u => `<option>${u.name}</option>`).join('')}</select></div>
-                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-invpnl','InvoicePnL_${today()}')"> Export</button></div>
+                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-invpnl','InvoicePnL_${today()}')"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button></div>
             </div>
         </div></div>
         <div id="r-ip-out"></div>`;
@@ -10858,7 +11187,7 @@ async function showReport(type) {
                 <div class="form-group"><label>Category</label><select id="r-st-cat" onchange="renderStockRpt()"><option value="">All Categories</option>${catList.map(c => `<option>${c}</option>`).join('')}</select></div>
                 <div class="form-group"><label>Stock Status</label><select id="r-st-status" onchange="renderStockRpt()"><option value="">All</option><option value="low">Low / Out of Stock</option><option value="out">Out of Stock Only</option><option value="ok">In Stock</option></select></div>
                 <div class="form-group"><label>Search</label><input id="r-st-search" placeholder="Item name..." oninput="renderStockRpt()" style="width:160px"></div>
-                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-stock','StockSummary_${today()}')"> Export</button></div>
+                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-stock','StockSummary_${today()}')"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button></div>
             </div>
         </div></div>
         <div id="r-st-out"></div>`;
@@ -10875,7 +11204,7 @@ async function showReport(type) {
                 <div class="form-group"><label>Search</label><input id="r-out-search" placeholder="Party name..." oninput="renderOutstandingRpt()" style="width:180px"></div>
                 <div class="form-group"><label>Balance</label><select id="r-out-bal" onchange="renderOutstandingRpt()"><option value="">All</option><option value="dr">Receivable (Customer owes us)</option><option value="cr">Payable (We owe them)</option></select></div>
                 <div class="form-group"><label>Age</label><select id="r-out-age" onchange="renderOutstandingRpt()"><option value="">All</option><option value="0-30">030 days</option><option value="31-60">3160 days</option><option value="61-90">6190 days</option><option value="90+">90+ days</option></select></div>
-                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-outstanding','Outstanding_${today()}')"> Export</button></div>
+                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-outstanding','Outstanding_${today()}')"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button></div>
             </div>
         </div></div>
         <div id="r-out-out"></div>`;
@@ -10883,17 +11212,18 @@ async function showReport(type) {
     }
     if (type === 'expenses') {
         window._rExpAll = expenses;
-        const monthStart = today().substring(0, 8) + '01';
+        const monthStart = today();
         const expCats = [...new Set(expenses.map(e => e.category || 'General'))].sort();
         const expUsers = [...new Set(expenses.map(e => e.createdBy).filter(Boolean))].sort();
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
             <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
                 <div class="form-group"><label>From Date</label><input type="date" id="r-exp-from" value="${monthStart}" onchange="renderExpenseRpt()"></div>
+                <button class="btn btn-outline" onclick="DB.exportToExcel('tbl-exp-rpt', 'expense_report')" style="border-color:#16a34a;color:#16a34a;margin-top:24px"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button>
                 <div class="form-group"><label>To Date</label><input type="date" id="r-exp-to" value="${today()}" onchange="renderExpenseRpt()"></div>
                 <div class="form-group"><label>Category</label><select id="r-exp-cat" onchange="renderExpenseRpt()"><option value="">All Categories</option>${expCats.map(c => `<option>${c}</option>`).join('')}</select></div>
                 <div class="form-group"><label>Added By</label><select id="r-exp-user" onchange="renderExpenseRpt()"><option value="">All</option>${expUsers.map(u => `<option>${u}</option>`).join('')}</select></div>
-                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-expenses','ExpenseSummary_${today()}')"> Export</button></div>
+                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-expenses','ExpenseSummary_${today()}')"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button></div>
             </div>
         </div></div>
         <div id="r-exp-out"></div>`;
@@ -10908,7 +11238,7 @@ async function showReport(type) {
     }
     if (type === 'chequeregister') {
         window._rChqAll = payments.filter(p => p.mode === 'Cheque');
-        const monthStart = today().substring(0, 8) + '01';
+        const monthStart = today();
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
             <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
@@ -10916,7 +11246,7 @@ async function showReport(type) {
                 <div class="form-group"><label>To Date</label><input type="date" id="r-chq-to" value="${today()}" onchange="renderChequeRpt()"></div>
                 <div class="form-group"><label>Party</label><input id="r-chq-party" placeholder="All parties..." oninput="renderChequeRpt()" style="width:160px"></div>
                 <div class="form-group"><label>Status</label><select id="r-chq-status" onchange="renderChequeRpt()"><option value="">All</option><option>Pending</option><option>Deposited</option><option>Cleared</option></select></div>
-                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('cheque-reg-table','ChequeRegister_${today()}')"> Export</button></div>
+                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('cheque-reg-table','ChequeRegister_${today()}')"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button></div>
             </div>
         </div></div>
         <div id="r-chq-out"></div>`;
@@ -10926,7 +11256,7 @@ async function showReport(type) {
     //  VYAPAR SALES IMPORT REPORT 
     if (type === 'vyapar-sales') {
         window._vySalesAll = invoices.filter(i => i.type === 'sale' && i.status !== 'cancelled');
-        const monthStart = today().substring(0, 8) + '01';
+        const monthStart = today();
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
             <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
@@ -10949,7 +11279,7 @@ async function showReport(type) {
     //  VYAPAR PAYMENT IN IMPORT REPORT 
     if (type === 'vyapar-payments') {
         window._vyPayAll = payments.filter(p => p.type === 'in');
-        const monthStart = today().substring(0, 8) + '01';
+        const monthStart = today();
         const collectors = [...new Set(window._vyPayAll.map(p => p.collectedBy || p.createdBy).filter(Boolean))].sort();
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
@@ -10974,13 +11304,14 @@ async function showReport(type) {
         window._rSlsInv = invoices.filter(i => i.type === 'sale' && i.status !== 'cancelled');
         window._rSlsPay = payments.filter(p => p.type === 'in');
         const salesUsers = users.filter(u => ['Admin', 'Manager', 'Salesman'].includes(u.role));
-        const monthStart = today().substring(0, 8) + '01';
+        const monthStart = today();
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
             <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
                 <div class="form-group"><label>From Date</label><input type="date" id="r-sl-from" value="${monthStart}" onchange="renderSalesmanRpt()"></div>
+                <button class="btn btn-outline" onclick="DB.exportToExcel('tbl-salesman-rpt', 'salesman_report')" style="border-color:#16a34a;color:#16a34a;margin-top:24px"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button>
                 <div class="form-group"><label>To Date</label><input type="date" id="r-sl-to" value="${today()}" onchange="renderSalesmanRpt()"></div>
-                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-salesman','SalesmanPerformance_${today()}')"> Export</button></div>
+                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-salesman','SalesmanPerformance_${today()}')"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button></div>
             </div>
         </div></div>
         <div id="r-sl-out"></div>`;
@@ -10997,7 +11328,7 @@ async function showReport(type) {
                 <div class="form-group"><label>From Date</label><input type="date" id="r-db-from" value="${today()}" onchange="renderDayBook()"></div>
                 <div class="form-group"><label>To Date</label><input type="date" id="r-db-to" value="${today()}" onchange="renderDayBook()"></div>
                 <div class="form-group"><label>Type</label><select id="r-db-type" onchange="renderDayBook()"><option value="">All</option><option>Sale Invoice</option><option>Purchase Invoice</option><option>Payment In</option><option>Payment Out</option><option>Expense</option></select></div>
-                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-daybook','DayBook_${today()}')"> Export</button></div>
+                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-daybook','DayBook_${today()}')"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button></div>
             </div>
         </div></div>
         <div id="r-db-out"></div>`;
@@ -11014,7 +11345,7 @@ async function showReport(type) {
                 <div class="form-group"><label>Salesman</label><select id="r-uo-user" onchange="renderUserOutstandingRpt()"><option value="">All Salesmen</option>${users.filter(u => ['Admin', 'Manager', 'Salesman'].includes(u.role)).map(u => `<option>${escapeHtml(u.name)}</option>`).join('')}</select></div>
                 <div class="form-group"><label>Age</label><select id="r-uo-age" onchange="renderUserOutstandingRpt()"><option value="">All</option><option value="0-30">030 days</option><option value="31-60">3160 days</option><option value="61-90">6190 days</option><option value="90+">90+ days</option></select></div>
                 <div class="form-group"><label>Search Party</label><input id="r-uo-party" placeholder="Party name..." oninput="renderUserOutstandingRpt()" style="width:160px"></div>
-                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-user-outstanding','OutstandingByUser_${today()}')"> Export</button></div>
+                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-user-outstanding','OutstandingByUser_${today()}')"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button></div>
             </div>
         </div></div>
         <div id="r-uo-out"></div>`;
@@ -11054,7 +11385,7 @@ async function showReport(type) {
     }
 
     if (type === 'payment-report') {
-        const monthStart = today().substring(0, 8) + '01';
+        const monthStart = today();
         const collectors = users.filter(u => ['Admin', 'Manager', 'Salesman'].includes(u.role));
         window._rPayAll = payments;
         el.innerHTML = `
@@ -11086,7 +11417,7 @@ async function showReport(type) {
                     </select>
                 </div>
                 <div class="form-group" style="align-self:flex-end">
-                    <button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-pay-rpt','PaymentReport_${today()}')"> Export</button>
+                    <button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-pay-rpt','PaymentReport_${today()}')"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button>
                 </div>
             </div>
         </div></div>
@@ -11143,23 +11474,45 @@ function renderPaymentRpt() {
 
     out.innerHTML = `<div class="card"><div class="card-body">
         <div class="table-wrapper">
-        <table class="data-table" id="tbl-pay-rpt" style="min-width:700px">
+        <table class="data-table" id="tbl-pay-rpt" style="min-width:900px">
             <thead><tr>
-                <th>Date</th><th>Receipt #</th><th>Party</th>
-                <th>Type</th><th>Mode</th><th>Amount</th>
+                <th>Date</th><th>Voucher No</th><th>Party</th>
+                <th>Type</th><th>Mode</th><th>Allocated Invoices</th>
+                <th style="text-align:right">Amt Received</th><th style="text-align:right">Discount</th><th style="text-align:right">Total Payment</th>
                 <th>Collected By</th><th>Note</th>
             </tr></thead>
             <tbody>
-            ${rows.map(p => `<tr>
+            ${rows.map(p => {
+                const allocKeys = p.allocations ? Object.keys(p.allocations) : [];
+                const isMulti = allocKeys.length > 1;
+                const refCell = allocKeys.length > 0
+                    ? allocKeys.map(inv => {
+                        const link = `<a href="#" onclick="viewInvoiceByNo('${inv}');return false" style="color:var(--primary);text-decoration:underline">${inv}</a>`;
+                        return isMulti ? `${link} <span style="color:var(--text-muted);font-size:0.8rem">${currency(p.allocations[inv])}</span>` : link;
+                      }).join('<br>')
+                    : (p.invoiceNo && p.invoiceNo !== 'Multi/Disc' && p.invoiceNo !== 'Advance'
+                        ? `<a href="#" onclick="viewInvoiceByNo('${p.invoiceNo}');return false" style="color:var(--primary);text-decoration:underline">${p.invoiceNo}</a>`
+                        : `<span style="color:var(--text-muted)">${p.invoiceNo || p.note || '-'}</span>`);
+                return `<tr>
                 <td>${fmtDate(p.date)}</td>
-                <td style="font-weight:600;font-size:0.82rem">${escapeHtml(p.receiptNo || '-')}</td>
+                <td style="font-family:monospace;font-weight:600;color:var(--primary);font-size:0.82rem">${escapeHtml(p.payNo || p.receiptNo || p.id?.substring(0,8) || '-')}</td>
                 <td>${escapeHtml(p.partyName || '-')}</td>
                 <td><span class="badge ${p.type === 'in' ? 'badge-success' : 'badge-danger'}">${p.type === 'in' ? 'Pay In' : 'Pay Out'}</span></td>
                 <td><span class="badge badge-info">${escapeHtml(p.mode || '-')}</span></td>
-                <td class="${p.type === 'in' ? 'amount-green' : 'amount-red'}" style="font-weight:700">${currency(p.amount)}</td>
+                <td>${refCell}</td>
+                <td class="${p.type === 'in' ? 'amount-green' : 'amount-red'}" style="text-align:right">${currency(p.amount)}</td>
+                <td style="text-align:right;color:var(--danger)">${p.discount > 0 ? currency(p.discount) : '-'}</td>
+                <td class="${p.type === 'in' ? 'amount-green' : 'amount-red'}" style="text-align:right;font-weight:700">${currency(p.totalReduction || p.amount)}</td>
                 <td style="font-size:0.82rem">${escapeHtml(p.collectedBy || p.createdBy || '-')}</td>
                 <td style="font-size:0.8rem;color:var(--text-muted)">${escapeHtml(p.notes || p.note || '-')}</td>
-            </tr>`).join('')}
+            </tr>`;}).join('')}
+            <tr style="font-weight:800;background:rgba(249,115,22,0.04);border-top:2px solid var(--border)">
+                <td colspan="6" style="text-align:right;font-size:0.85rem;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted)">Grand Total</td>
+                <td class="amount-green" style="text-align:right">${currency(rows.filter(p=>p.type==='in').reduce((s,p)=>s+(p.amount||0),0))}</td>
+                <td style="text-align:right;color:var(--danger)">${currency(rows.reduce((s,p)=>s+(p.discount||0),0))}</td>
+                <td class="amount-green" style="text-align:right;font-size:1rem">${currency(rows.filter(p=>p.type==='in').reduce((s,p)=>s+(p.totalReduction||p.amount||0),0))}</td>
+                <td colspan="2"></td>
+            </tr>
             </tbody>
         </table></div>
     </div></div>`;
@@ -12032,19 +12385,38 @@ async function generateUserPaymentReport() {
             <div class="card-body">
                 <table class="data-table" id="tbl-pay-report" style="font-size:0.85rem">
                     <thead>
-                        <tr><th>Date</th><th>Mode</th><th>Reference / Invoice</th><th>Party</th><th>Collected By</th><th style="text-align:right">Amount</th></tr>
+                        <tr><th>Date</th><th>Voucher No</th><th>Mode</th><th>Allocated Invoices</th><th>Party</th><th>Collected By</th><th style="text-align:right">Amt Received</th><th style="text-align:right">Discount</th><th style="text-align:right">Total Payment</th></tr>
                     </thead>
-                    <tbody>${payments.map(p => `
+                    <tbody>${payments.map(p => {
+                        const allocKeys = p.allocations ? Object.keys(p.allocations) : [];
+                        const isMulti = allocKeys.length > 1;
+                        const refCell = allocKeys.length > 0
+                            ? allocKeys.map(inv => {
+                                const link = `<a href="#" onclick="viewInvoiceByNo('${inv}');return false" style="color:var(--primary);text-decoration:underline">${inv}</a>`;
+                                return isMulti ? `${link} <span style="color:var(--text-muted);font-size:0.8rem">${currency(p.allocations[inv])}</span>` : link;
+                              }).join('<br>')
+                            : (p.invoiceNo && p.invoiceNo !== 'Multi/Disc' && p.invoiceNo !== 'Advance'
+                                ? `<a href="#" onclick="viewInvoiceByNo('${p.invoiceNo}');return false" style="color:var(--primary);text-decoration:underline">${p.invoiceNo}</a>`
+                                : `<span style="color:var(--text-muted)">${p.invoiceNo || p.note || '-'}</span>`);
+                        return `
                         <tr>
                             <td>${fmtDate(p.date)}</td>
+                            <td style="font-family:monospace;font-weight:600;color:var(--primary)">${escapeHtml(p.payNo || p.id?.substring(0,8) || '-')}</td>
                             <td><span class="badge badge-info">${p.mode || 'Cash'}</span></td>
-                            <td>${p.invoiceNo ? `<a href="#" onclick="viewInvoiceByNo('${p.invoiceNo}');return false" style="color:var(--primary);text-decoration:underline">${p.invoiceNo}</a>` : p.note || '-'}</td>
+                            <td>${refCell}</td>
                             <td style="font-weight:600">${escapeHtml(p.partyName)}</td>
-                            <td>${escapeHtml(p.createdBy || 'System')}</td>
-                            <td class="amount-green" style="text-align:right;font-weight:700">${currency(p.amount)}</td>
-                        </tr>
-                    `).join('') || '<tr><td colspan="6"><div class="empty-state"><span class="empty-icon"></span><p>No payments collected in this range</p></div></td></tr>'}
-                    ${payments.length ? `<tr style="font-weight:800;background:rgba(249,115,22,0.04);border-top:2px solid var(--border)"><td colspan="5" style="text-align:right;font-size:0.85rem;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted)">Grand Total</td><td class="amount-green" style="text-align:right;font-size:1rem">${currency(totalCollected)}</td></tr>` : ''}
+                            <td>${escapeHtml(p.collectedBy || p.createdBy || 'System')}</td>
+                            <td class="amount-green" style="text-align:right">${currency(p.amount)}</td>
+                            <td style="text-align:right;color:var(--danger)">${p.discount > 0 ? currency(p.discount) : '-'}</td>
+                            <td class="amount-green" style="text-align:right;font-weight:700">${currency(p.totalReduction || p.amount)}</td>
+                        </tr>`;
+                    }).join('') || '<tr><td colspan="9"><div class="empty-state"><span class="empty-icon"></span><p>No payments collected in this range</p></div></td></tr>'}
+                    ${payments.length ? `<tr style="font-weight:800;background:rgba(249,115,22,0.04);border-top:2px solid var(--border)">
+                        <td colspan="6" style="text-align:right;font-size:0.85rem;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted)">Grand Total</td>
+                        <td class="amount-green" style="text-align:right">${currency(payments.reduce((s,p)=>s+(p.amount||0),0))}</td>
+                        <td style="text-align:right;color:var(--danger)">${currency(payments.reduce((s,p)=>s+(p.discount||0),0))}</td>
+                        <td class="amount-green" style="text-align:right;font-size:1rem">${currency(totalCollected)}</td>
+                    </tr>` : ''}
                     </tbody>
                 </table>
             </div>
@@ -12067,7 +12439,7 @@ function renderPackers() {
                 <table class="data-table"><thead><tr><th>Name</th><th>Phone</th><th>Actions</th></tr></thead>
                 <tbody>${packers.length ? packers.map(p => `<tr>
                     <td style="color:var(--text-primary);font-weight:600">${p.name}</td><td>${p.phone || '-'}</td>
-                    <td><div class="action-btns"><button class="btn-icon" onclick="openPackerModal('${p.id}')"></button><button class="btn-icon" onclick="deletePacker('${p.id}')"></button></div></td>
+                    <td><div class="action-btns"><button class="btn-icon" onclick="openPackerModal('${p.id}')" title="Edit"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button><button class="btn-icon" onclick="deletePacker('${p.id}')" title="Delete" style="color:var(--danger)"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button></div></td>
                 </tr>`).join('') : '<tr><td colspan="3"><div class="empty-state"><div class="empty-icon"></div><p>No packers added yet</p></div></td></tr>'}</tbody></table>
             </div>
         </div></div>`;
@@ -12111,7 +12483,7 @@ function renderDeliveryPersons() {
                 <table class="data-table"><thead><tr><th>Name</th><th>Phone</th><th>Vehicle</th><th>Actions</th></tr></thead>
                 <tbody>${persons.length ? persons.map(p => `<tr>
                     <td style="color:var(--text-primary);font-weight:600">${p.name}</td><td>${p.phone || '-'}</td><td>${p.vehicle || '-'}</td>
-                    <td><div class="action-btns"><button class="btn-icon" onclick="openDelPersonModal('${p.id}')"></button><button class="btn-icon" onclick="deleteDelPerson('${p.id}')"></button></div></td>
+                    <td><div class="action-btns"><button class="btn-icon" onclick="openDelPersonModal('${p.id}')" title="Edit"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button><button class="btn-icon" onclick="deleteDelPerson('${p.id}')" title="Delete" style="color:var(--danger)"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button></div></td>
                 </tr>`).join('') : '<tr><td colspan="4"><div class="empty-state"><div class="empty-icon"></div><p>No delivery persons added yet</p></div></td></tr>'}</tbody></table>
             </div>
         </div></div>`;
@@ -12165,8 +12537,8 @@ function renderUsers() {
                             <td>${roles.map(r => `<span class="badge ${roleBadgeClass[r] || 'badge-info'}" style="margin-right:4px">${r}</span>`).join('')}</td>
                             <td style="color:var(--text-muted);letter-spacing:3px">${''.repeat((u.pin || '').length)}</td>
                             <td><div class="action-btns">
-                                <button class="btn-icon" onclick="openUserModal('${u.id}')"></button>
-                                ${users.length > 1 ? `<button class="btn-icon" onclick="deleteUser('${u.id}')"></button>` : ''}
+                                <button class="btn-icon" onclick="openUserModal('${u.id}')" title="Edit"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button>
+                                ${users.length > 1 ? `<button class="btn-icon" onclick="deleteUser('${u.id}')" title="Delete" style="color:var(--danger)"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>` : ''}
                             </div></td>
                         </tr>`;
     }).join('')}</tbody>
@@ -12552,6 +12924,179 @@ async function autoAssignPartyCodes() {
     }
 }
 
+// =============================================
+//  NO. SERIES SETUP (Business Central Style)
+// =============================================
+
+async function renderNoSeries() {
+    pageTitle.textContent = 'No. Series Setup';
+    const data = await DB.getAll('no_series');
+
+    let html = `
+        <div class="card">
+            <div class="card-header" style="display:flex; justify-content:space-between; align-items:center; padding-bottom:12px; border-bottom:1px solid var(--border)">
+                <h3 style="margin:0">No. Series Configuration</h3>
+                <button class="btn btn-primary btn-sm" onclick="openNoSeriesModal()">+ Add Series</button>
+            </div>
+
+            <div class="table-wrapper">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Code</th>
+                            <th>Description</th>
+                            <th>Prefix</th>
+                            <th>FY</th>
+                            <th>Last No</th>
+                            <th>Status</th>
+                            <th style="text-align:right">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+    `;
+
+    data.forEach(s => {
+        html += `
+            <tr>
+                <td style="font-weight:600">${escapeHtml(s.code || '')}</td>
+                <td style="color:var(--text-muted)">${escapeHtml(s.description || '')}</td>
+                <td style="font-family:monospace; font-weight:700">${escapeHtml(s.prefix || '')}</td>
+                <td><span class="badge" style="background:#e0e7ff; color:#3730a3">${escapeHtml(s.fy || '-')}</span></td>
+                <td style="font-family:monospace">${s.lastNo || 0}</td>
+                <td>
+                    <span class="badge" style="background:${s.active ? '#dcfce7' : '#fee2e2'}; color:${s.active ? '#166534' : '#991b1b'}">
+                        ${s.active ? 'Active' : 'Inactive'}
+                    </span>
+                </td>
+                <td style="text-align:right; display:flex; gap:8px; justify-content:flex-end">
+                    <button class="action-btn" title="Edit Series" onclick='openNoSeriesModal(${JSON.stringify(s.id)})'>
+                        <span class="material-symbols-outlined" style="font-size:1.1rem; color:var(--primary)">edit</span>
+                    </button>
+                    <button class="action-btn" title="Roll FY (Reset)" onclick='resetSeries(${JSON.stringify(s.code)})'>
+                        <span class="material-symbols-outlined" style="font-size:1.1rem; color:var(--warning)">update</span>
+                    </button>
+                </td>
+            </tr>
+        `;
+    });
+
+    html += `</tbody></table></div></div>`;
+    pageContent.innerHTML = html;
+}
+
+async function openNoSeriesModal(id = null) {
+    let data = {};
+    if (id) {
+        const rows = await DB.getAll('no_series');
+        data = rows.find(r => r.id === id) || {};
+    }
+
+    openModal(id ? 'Edit No. Series' : 'Create No. Series', `
+        <div class="form-group">
+            <label>Code * <span style="font-size:0.75rem;color:var(--text-muted)">(e.g. SALES_ORDER)</span></label>
+            <input id="ns-code" value="${escapeHtml(data.code || '')}" ${data.code ? 'disabled style="background:#f1f5f9;cursor:not-allowed"' : ''}>
+        </div>
+
+        <div class="form-group">
+            <label>Description</label>
+            <input id="ns-desc" value="${escapeHtml(data.description || '')}" placeholder="Optional info">
+        </div>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label>Prefix * <span style="font-size:0.75rem;color:var(--text-muted)">(e.g. SO-)</span></label>
+                <input id="ns-prefix" value="${escapeHtml(data.prefix || '')}">
+            </div>
+            <div class="form-group">
+                <label>FY <span style="font-size:0.75rem;color:var(--text-muted)">(Optional, e.g. 25-26)</span></label>
+                <input id="ns-fy" placeholder="25-26" value="${escapeHtml(data.fy || '')}">
+            </div>
+        </div>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label>Starting / Last No.</label>
+                <input type="number" id="ns-start" value="${data.lastNo || 0}">
+            </div>
+            <div class="form-group">
+                <label>Padding</label>
+                <input type="number" id="ns-padding" value="${data.padding || 4}" min="1" max="10">
+            </div>
+        </div>
+
+        <div class="form-group" style="display:flex; align-items:center; gap:8px; margin-top:8px">
+            <input type="checkbox" id="ns-active" ${data.active !== false ? 'checked' : ''} style="width:18px;height:18px">
+            <label for="ns-active" style="margin:0; font-weight:600">Active Series</label>
+        </div>
+        <div class="modal-actions" style="margin-top:20px">
+            <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="saveNoSeries('${data.id || ''}')">Save</button>
+        </div>
+    `);
+}
+
+async function saveNoSeries(id) {
+    const row = {
+        code: $('ns-code').value.trim().toUpperCase(),
+        description: $('ns-desc').value.trim(),
+        prefix: $('ns-prefix').value.trim(),
+        fy: $('ns-fy').value.trim().toUpperCase(),
+        lastNo: parseInt($('ns-start').value || 0),
+        padding: parseInt($('ns-padding').value || 4),
+        active: $('ns-active').checked
+    };
+
+    if (!row.code || !row.prefix) {
+        return alert('Code and Prefix required');
+    }
+
+    try {
+        if (id) {
+            await DB.update('no_series', id, row);
+        } else {
+            await DB.insert('no_series', row);
+        }
+
+        closeModal();
+        showToast('No. Series saved!', 'success');
+        renderNoSeries();
+    } catch (e) {
+        alert('Error saving No. Series: ' + e.message);
+    }
+}
+
+async function resetSeries(code) {
+    const fy = prompt('Enter new FY (e.g., 26-27):\\nThis will start counter from 0 for the new FY.');
+    if (!fy) return;
+
+    try {
+        const existing = await DB.getAll('no_series');
+        const base = existing.find(s => s.code === code && s.active);
+        if (!base) return alert('Source active series not found');
+
+        const alreadyExists = existing.find(s => s.code === code && s.fy === fy);
+        if (alreadyExists) return alert('This FY already exists for this series!');
+
+        await DB.insert('no_series', {
+            code,
+            description: base.description,
+            prefix: base.prefix,
+            fy: fy.trim().toUpperCase(),
+            lastNo: 0,
+            padding: base.padding,
+            active: true
+        });
+
+        // Optional: Deactivate the old one?
+        // await DB.update('no_series', base.id, { active: false });
+
+        showToast('New FY Series created', 'success');
+        renderNoSeries();
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+}
+
 async function renderCompanySetup() {
     // Always reload from Supabase so UPI / settings are fresh on any device
     await DB.loadSettings();
@@ -12585,74 +13130,7 @@ async function renderCompanySetup() {
             </div>
             <button class="btn btn-primary" onclick="saveCompanySetup()">Save Changes</button>
         </div></div>
-        <div class="card" style="margin-top:20px"><div class="card-body padded">
-    <h3 style="margin-bottom:16px;font-size:1rem"> Vyapar Invoice Settings</h3>
-    <p style="font-size:0.82rem;color:var(--text-muted);margin-bottom:14px">Set the prefix and current number for Vyapar Invoice No. This auto-increments on each sale invoice save.</p>
-    <div class="form-row">
-        <div class="form-group">
-            <label>Invoice Prefix <span style="font-size:0.75rem;color:var(--text-muted)">(e.g. PT-NS-)</span></label>
-            <input id="f-vy-setup-prefix" value="${escapeHtml(getVyaparPrefix())}" placeholder="e.g. PT-NS-" oninput="const p=this.value,n=$('f-vy-setup-no').value,lbl=$('vy-setup-preview');if(lbl)lbl.textContent=p+n">
-        </div>
-        <div class="form-group">
-            <label>Current Invoice No.</label>
-            <input id="f-vy-setup-no" type="number" min="1" value="${getVyaparCurrentNo()}" style="font-weight:700" oninput="const p=$('f-vy-setup-prefix').value,n=this.value,lbl=$('vy-setup-preview');if(lbl)lbl.textContent=p+n">
-        </div>
-    </div>
-    <div style="background:rgba(249,115,22,0.06);border:1px solid rgba(249,115,22,0.2);border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:0.9rem">
-        Next invoice will be: <strong id="vy-setup-preview" style="color:var(--primary)">${escapeHtml(buildVyaparInvoiceNo())}</strong>
-    </div>
-    <button class="btn btn-primary" onclick="saveVyaparSetup()">Save Vyapar Settings</button>
-</div></div>
-        <div class="card" style="margin-top:20px"><div class="card-body padded">
-    <h3 style="margin-bottom:6px;font-size:1rem"> Number Series Setup</h3>
-    <p style="font-size:0.82rem;color:var(--text-muted);margin-bottom:16px">Configure prefixes and starting numbers for all auto-generated codes.</p>
-    ${(() => {
-            const ns = DB.ls.getObj('db_number_series') || {};
-            const rows = [
-                { key: 'inv', label: 'Sale Invoice', defPrefix: 'INV-', defStart: 1 },
-                { key: 'pur', label: 'Purchase Invoice', defPrefix: 'PUR-', defStart: 1 },
-                { key: 'so', label: 'Sales Order', defPrefix: 'SO-', defStart: 1 },
-                { key: 'po', label: 'Purchase Order', defPrefix: 'PO-', defStart: 1 },
-                { key: 'cust', label: 'Customer Code', defPrefix: 'CUST-', defStart: 1 },
-                { key: 'supp', label: 'Supplier Code', defPrefix: 'SUP-', defStart: 1 },
-            ];
-            return `<div class="table-wrapper"><table class="data-table">
-            <thead><tr><th>Series</th><th>Prefix</th><th>Padding (digits)</th><th>Next No.</th><th>Preview</th></tr></thead>
-            <tbody>${rows.map(r => {
-                const prefix = ns[r.key + '_prefix'] !== undefined ? ns[r.key + '_prefix'] : r.defPrefix;
-                const start = ns[r.key + '_start'] !== undefined ? ns[r.key + '_start'] : r.defStart;
-                const pad = ns[r.key + '_pad'] !== undefined ? ns[r.key + '_pad'] : 5;
-                const preview = prefix + String(start).padStart(pad, '0');
-                return `<tr>
-                    <td style="font-weight:600;font-size:0.88rem">${r.label}</td>
-                    <td><input id="ns-${r.key}-prefix" value="${escapeHtml(prefix)}" style="width:90px;font-family:monospace" oninput="updateNsPreview('${r.key}')"></td>
-                    <td><input id="ns-${r.key}-pad" type="number" min="1" max="8" value="${pad}" style="width:60px;text-align:center" oninput="updateNsPreview('${r.key}')"></td>
-                    <td><input id="ns-${r.key}-start" type="number" min="1" value="${start}" style="width:80px;font-weight:700" oninput="updateNsPreview('${r.key}')"></td>
-                    <td><span id="ns-${r.key}-preview" style="font-family:monospace;color:var(--accent);font-weight:700">${escapeHtml(preview)}</span></td>
-                </tr>`;
-            }).join('')}</tbody>
-        </table></div>
-        <button class="btn btn-primary" style="margin-top:14px" onclick="saveNumberSeries()">Save Number Series</button>`;
-        })()}
-</div></div>
-        <div class="card" style="margin-top:20px"><div class="card-body padded">
-    <h3 style="margin-bottom:16px;font-size:1rem"> Payment Reference No. Settings</h3>
-    <p style="font-size:0.82rem;color:var(--text-muted);margin-bottom:14px">Set the prefix and starting number for Payment receipts. Auto-increments on each payment saved.</p>
-    <div class="form-row">
-        <div class="form-group">
-            <label>Payment Prefix <span style="font-size:0.75rem;color:var(--text-muted)">(e.g. PAY-, RCP-)</span></label>
-            <input id="f-pay-setup-prefix" value="${escapeHtml(getPayPrefix())}" placeholder="e.g. PAY-" oninput="const p=this.value,n=$('f-pay-setup-no').value,lbl=$('pay-setup-preview');if(lbl)lbl.textContent=p+String(n).padStart(4,'0')">
-        </div>
-        <div class="form-group">
-            <label>Current Number</label>
-            <input id="f-pay-setup-no" type="number" min="1" value="${getPayCurrentNo()}" style="font-weight:700" oninput="const p=$('f-pay-setup-prefix').value,n=this.value,lbl=$('pay-setup-preview');if(lbl)lbl.textContent=p+String(n).padStart(4,'0')">
-        </div>
-    </div>
-    <div style="background:rgba(99,102,241,0.06);border:1px solid rgba(99,102,241,0.2);border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:0.9rem">
-        Next payment will be: <strong id="pay-setup-preview" style="color:var(--accent)">${escapeHtml(buildPayRefNo())}</strong>
-    </div>
-    <button class="btn btn-primary" onclick="savePaySetup()">Save Payment Settings</button>
-</div></div>
+        <!-- Number Sequence Configs have been relocated to the dedicated 'No. Series' Module -->
         <div class="card" style="margin-top:20px"><div class="card-body padded">
             <h3 style="margin-bottom:6px;font-size:1rem"> Payment Terms Master</h3>
             <p style="font-size:0.82rem;color:var(--text-muted);margin-bottom:14px">Define payment terms used on party accounts. These drive due date and aging calculations automatically.</p>
@@ -12730,6 +13208,71 @@ async function saveCompanySetup() {
     $('sidebar-brand').textContent = name;
     showToast('Company info saved!', 'success');
 }
+
+async function downloadFullDatabaseBackup() {
+    try {
+        const keys = ['parties', 'inventory', 'salesorders', 'invoices', 'payments', 'expenses', 'delivery', 'brands', 'categories', 'packers', 'users', 'stock_ledger', 'no_series'];
+        const data = {};
+        for (const k of keys) {
+            data[k] = await DB.getAll(k);
+        }
+        const lsKeys = ['db_company', 'db_tax_settings'];
+        for (const k of lsKeys) {
+            const v = DB.ls.getObj(k);
+            if (v) data[k] = v;
+        }
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `distributor_backup_${new Date().toISOString().split('T')[0]}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+        showToast('Backup downloaded successfully', 'success');
+    } catch (err) {
+        alert('Error creating backup: ' + err.message);
+    }
+}
+
+function importDataBackup() {
+    const fileInput = document.getElementById('backup-file-input');
+    if (fileInput) fileInput.click();
+}
+
+async function processBackupImport(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    if (!confirm('WARNING: Importing a backup will overwrite local data. Since this app syncs with the cloud, a manual cloud database wipe might also be required. Continue?')) {
+        event.target.value = '';
+        return;
+    }
+    try {
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+            try {
+                const data = JSON.parse(e.target.result);
+                DB.showSkeleton(pageContent, 5); // Show loading
+                for (const key of Object.keys(data)) {
+                    if (Array.isArray(data[key])) {
+                        DB.cache[key] = data[key];
+                        await DB.idb.set('db_' + key, data[key]);
+                    } else if (key.startsWith('db_')) {
+                        DB.ls.set(key, JSON.stringify(data[key]));
+                    }
+                }
+                showToast('Local backup restored! Refreshing...', 'success');
+                setTimeout(() => window.location.reload(), 1500);
+            } catch (err) {
+                alert('Error parsing backup file: ' + err.message);
+            }
+        };
+        reader.readAsText(file);
+    } catch (err) {
+        alert('Error reading backup file: ' + err.message);
+    } finally {
+        event.target.value = '';
+    }
+}
 function captureWarehouseGps() {
     if (!navigator.geolocation) return alert('Geolocation not supported.');
     navigator.geolocation.getCurrentPosition(pos => {
@@ -12781,42 +13324,7 @@ function addPaymentTermRow() {
     const inp = document.getElementById('pt-name-' + i);
     if (inp) inp.focus();
 }
-async function deletePayment(id) {
-    if (!DB.canEdit()) {
-        return alert("Access Denied: Only Admin or users with Edit permission can delete records.");
-    }
-    if (!confirm('Delete payment? Effects will be reversed.')) return;
-    try {
-        const payments = await DB.getAll('payments');
-        const pay = payments.find(p => p.id === id);
-        if (pay) {
-            const parties = await DB.getAll('parties');
-            const party = parties.find(p => p.id === pay.partyId);
-
-            // 1. Correctly calculate the total reduction to reverse
-            const reductionToReverse = pay.total_reduction || pay.totalReduction || (pay.amount + (pay.discount || 0));
-
-            if (party) {
-                const balChange = pay.type === 'in' ? reductionToReverse : -reductionToReverse;
-                const newBal = (party.balance || 0) + balChange;
-                await DB.update('parties', party.id, { balance: newBal });
-                await addPartyLedgerEntry(party.id, party.name, 'Payment Deleted', balChange, pay.invoiceNo || 'Advance', 'Payment Deleted');
-            }
-
-            // 2. Delete the associated discount expense from P&L if it exists
-            if (pay.discount > 0 && pay.type === 'in') {
-                const expenses = await DB.getAll('expenses');
-                const exp = expenses.find(e => e.category === 'Payment Discount' && e.docNo === (pay.payNo || pay.id));
-                if (exp) await DB.delete('expenses', exp.id);
-            }
-        }
-        await DB.delete('payments', id);
-        await renderPayments();
-        showToast('Payment deleted!', 'warning');
-    } catch (err) {
-        alert('Error: ' + err.message);
-    }
-}
+// deletePayment is defined earlier (near renderPayments) with proper cascade logic
 async function healStockLedger() {
     if (!confirm('This will scan all items and create correction ledger entries for any discrepancies. Continue?')) return;
     const [items, ledger] = await Promise.all([DB.getAll('inventory'), DB.getAll('stock_ledger')]);
@@ -13036,7 +13544,7 @@ async function renderPartyLedgerLayout() {
     pageContent.innerHTML = `
         <div class="section-toolbar">
             <h3 style="font-size:1rem;display:flex;align-items:center;gap:10px">
-                <button class="btn-icon" onclick="navigateTo('parties')" title="Back to Parties"></button>
+                <button class="btn-icon" onclick="navigateTo('parties')" title="Back to Parties"><span class="material-symbols-outlined">arrow_back</span></button>
                  Ledger: ${party.name} <span class="badge ${party.type === 'Customer' ? 'badge-success' : 'badge-info'}" style="font-size:0.7rem">${party.type}</span>
             </h3>
             <div class="filter-group">
@@ -13135,8 +13643,10 @@ async function renderPartyLedgerLayout() {
                                 <td style="font-size:0.8rem">${e.createdBy || '-'}</td>
                                 <td>
                                     <div class="action-btns" style="flex-wrap:nowrap">
-                                        ${entryType.includes('Invoice') && docNo ? `<button class="btn-icon" onclick="showPaymentHistory('${partyId}', '${docNo}')" title="Payment History"></button>` : ''}
-                                        ${canEdit() ? `<button class="btn-icon" onclick="editPartyLedgerEntry('${partyId}','${e.id}')" title="Edit Entry"></button><button class="btn-icon" onclick="deletePartyLedgerEntry('${partyId}','${e.id}')" title="Delete Entry" style="color:var(--danger)"></button>` : ''}
+                                        ${entryType.includes('Invoice') ? `<button class="btn-icon" onclick="showPaymentHistory('${partyId}', '${docNo}')" title="Payment History"><span class="material-symbols-outlined" style="font-size:1.1rem">history</span></button>` : ''}
+                                        <div style="display:flex;gap:4px;justify-content:flex-end">
+                                        ${canEdit() ? `<button class="btn-icon" onclick="editPartyLedgerEntry('${partyId}','${e.id}')" title="Edit Entry"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button><button class="btn-icon" onclick="deletePartyLedgerEntry('${partyId}','${e.id}')" title="Delete Entry" style="color:var(--danger)"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>` : ''}
+                                    </div>
                                     </div>
                                 </td>
                             </tr>`;
@@ -13387,7 +13897,7 @@ async function renderUOM() {
         <div class="section-toolbar">
             <h3 style="font-size:1rem"> Unit of Measurement Master</h3>
             <div class="filter-group">
-                <button class="btn btn-outline" onclick="triggerUomExcelImport()"> Import</button>
+                <button class="btn btn-outline" onclick="triggerUomExcelImport()"><span class="material-symbols-outlined" style="font-size:1.1rem">upload</span> Import</button>
                 <input type="file" id="f-uom-import" accept=".xlsx, .xls" style="display:none" onchange="importUomExcel(event)">
                 <button class="btn btn-primary" onclick="openUOMModal()">+ Add UOM</button>
             </div>
@@ -13399,7 +13909,7 @@ async function renderUOM() {
                     <td style="color:var(--text-primary);font-weight:600">${u.name}</td>
                     <td><span class="badge badge-info">${u.code || u.name}</span></td>
                     <td style="font-size:0.85rem;color:var(--text-muted)">${u.description || '-'}</td>
-                    <td><div class="action-btns"><button class="btn-icon" onclick="openUOMModal('${u.id}')"></button><button class="btn-icon" onclick="deleteUOM('${u.id}')"></button></div></td>
+                    <td><div class="action-btns"><button class="btn-icon" onclick="openUOMModal('${u.id}')" title="Edit"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button><button class="btn-icon" onclick="deleteUOM('${u.id}')" title="Delete" style="color:var(--danger)"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button></div></td>
                 </tr>`).join('') : '<tr><td colspan="4"><div class="empty-state"><div class="empty-icon"></div><p>No UOM entries yet. Add units like Pcs, Kg, Box, Ltr, Pack etc.</p></div></td></tr>'}</tbody></table>
             </div>
         </div></div>`;
@@ -13974,55 +14484,69 @@ async function createOrderFromCatalog() {
     // Flag so saveSalesOrder knows to clear cart + go back to catalog
     window._catalogOrderMode = true;
 
-    // Open the standard SO modal
+    // Load data for the full page
     const allParties = await DB.getAll('parties');
     const customers = allParties.filter(p => p.type === 'Customer');
     const categories = await DB.getAll('categories');
     const orderNo = await nextNumber('SO-');
 
-    openModal('Create Sales Order (from Catalog)', `
-        <div class="form-row"><div class="form-group"><label>Order #</label><input id="f-so-no" value="${orderNo}" readonly></div><div class="form-group"><label>Date</label><input type="date" id="f-so-date" value="${today()}"></div></div>
-        <div class="form-row"><div class="form-group"><label>Expected Delivery</label><input type="date" id="f-so-delivery" value=""></div><div class="form-group"><label>Priority</label><select id="f-so-priority"><option value="Normal">Normal</option><option value="Urgent"> Urgent</option></select></div></div>
-        <div class="form-group"><label>Customer * <small style="color:var(--text-muted)">(new name = auto-created)</small></label>
-            <input id="f-so-party" placeholder="Type customer name or mobile...">
-        </div>
-        
-        <hr style="border-color:var(--border);margin:16px 0"><h4 style="margin-bottom:10px;font-size:0.9rem">Items</h4>
-        
-        <div class="form-row" style="margin-bottom:8px">
-            <div class="form-group">
-                <label>Category Filter</label>
-                <select id="f-so-cat-filter" onchange="onSOCatFilterChange()">
-                    <option value="">All Categories</option>
-                    ${categories.map(c => `<option value="${c.name}">${c.name}</option>`).join('')}
-                </select>
-            </div>
-            <div class="form-group">
-                <label>Sub-Category Filter</label>
-                <select id="f-so-subcat-filter" onchange="onSOSubcatFilterChange()">
-                    <option value="">All Sub-Categories</option>
-                </select>
+    // Render as a full dedicated page instead of a popup
+    pageTitle.textContent = 'New Sales Order';
+    pageContent.innerHTML = `
+        <div class="card">
+            <div class="card-body">
+                <div class="form-row" style="flex-wrap:nowrap">
+                    <div class="form-group"><label>Order #</label><input id="f-so-no" value="${orderNo}" readonly></div>
+                    <div class="form-group"><label>Date</label><input type="date" id="f-so-date" value="${today()}"></div>
+                </div>
+                <div class="form-row" style="flex-wrap:nowrap">
+                    <div class="form-group"><label>Expected Delivery</label><input type="date" id="f-so-delivery" value=""></div>
+                    <div class="form-group"><label>Priority</label><select id="f-so-priority"><option value="Normal">Normal</option><option value="Urgent"> Urgent</option></select></div>
+                </div>
+                <div class="form-group"><label>Customer * <small style="color:var(--text-muted)">(new name = auto-created)</small></label>
+                    <input id="f-so-party" placeholder="Type customer name or mobile...">
+                </div>
             </div>
         </div>
 
-        <div class="form-row-3" style="margin-bottom:8px">
-            <div class="form-group">
-                <label>Item</label>
-                <input id="f-so-item-input" placeholder="Type item name or code...">
+        <div class="card" style="margin-top:12px">
+            <div class="card-body">
+                <h4 style="margin-bottom:10px;font-size:0.9rem">Items</h4>
+                <div class="form-row" style="margin-bottom:8px">
+                    <div class="form-group">
+                        <label>Category Filter</label>
+                        <select id="f-so-cat-filter" onchange="onSOCatFilterChange()">
+                            <option value="">All Categories</option>
+                            ${categories.map(c => `<option value="${c.name}">${c.name}</option>`).join('')}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Sub-Category Filter</label>
+                        <select id="f-so-subcat-filter" onchange="onSOSubcatFilterChange()">
+                            <option value="">All Sub-Categories</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-row-3" style="margin-bottom:8px">
+                    <div class="form-group"><label>Item</label><input id="f-so-item-input" placeholder="Type item name or code..."></div>
+                    <div class="form-group"><label>Qty</label><input type="number" id="f-so-qty" value="1" min="1"></div>
+                    <div class="form-group"><label>UOM</label><select id="f-so-uom" onchange="onSOUomChange()"><option value="">--</option></select></div>
+                    <div class="form-group"><label>Price</label><input type="number" id="f-so-price" value="" min="0" step="0.01" placeholder="Listed"></div>
+                    <div class="form-group"><label>&nbsp;</label><button class="btn btn-primary btn-block" onclick="addSOLine()">Add</button></div>
+                </div>
+                <div class="table-wrapper"><div id="so-lines-list"></div></div>
+                <div style="text-align:right;font-size:1.1rem;font-weight:700;color:var(--accent);margin-top:8px" id="so-total-display">Total: ${currency(soItems.reduce((s, li) => s + li.amount, 0))}</div>
+                <div class="form-group" style="margin-top:12px"><label>Notes</label><input id="f-so-notes" placeholder="Instructions..."></div>
             </div>
-            <div class="form-group"><label>Qty</label><input type="number" id="f-so-qty" value="1" min="1"></div>
-            <div class="form-group"><label>UOM</label><select id="f-so-uom" onchange="onSOUomChange()"><option value="">--</option></select></div>
-            <div class="form-group"><label>Price </label><input type="number" id="f-so-price" value="" min="0" step="0.01" placeholder="Listed"></div>
-            <div class="form-group"><label>&nbsp;</label><button class="btn btn-primary btn-block" onclick="addSOLine()">Add</button></div>
         </div>
-        
-        <div class="table-wrapper"><div id="so-lines-list"></div></div>
-        <div style="text-align:right;font-size:1.1rem;font-weight:700;color:var(--accent)" id="so-total-display">Total: ${currency(soItems.reduce((s, li) => s + li.amount, 0))}</div>
-        
-        <div class="form-group" style="margin-top:12px"><label>Notes</label><input id="f-so-notes" placeholder="Instructions..."></div>
-    `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveSalesOrder()"> Save & New</button><button class="btn btn-primary" onclick="saveSalesOrder()"> Submit Order</button>`);
 
-    // Initialize party search and item list search
+        <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end;flex-wrap:wrap">
+            <button class="btn btn-outline" onclick="window._catalogOrderMode=false;catalogCart=[];renderCatalog()"> Cancel</button>
+            <button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveSalesOrder()"> Save & New</button>
+            <button class="btn btn-primary" onclick="saveSalesOrder()"> Submit Order</button>
+        </div>`;
+
+    // Initialize party and item search dropdowns
     initSearchDropdown('f-so-party', buildPartySearchList(customers));
     _soItemDropdown = initSearchDropdown('f-so-item-input', buildItemSearchList(inv), function (item) {
         $('f-so-price').value = item.salePrice || '';
@@ -14067,7 +14591,7 @@ async function renderBrands() {
         <div class="section-toolbar">
             <h3 style="font-size:1rem"> Brand Master</h3>
             <div class="filter-group">
-                <button class="btn btn-outline" onclick="triggerBrandExcelImport()"> Import</button>
+                <button class="btn btn-outline" onclick="triggerBrandExcelImport()"><span class="material-symbols-outlined" style="font-size:1.1rem">upload</span> Import</button>
                 <input type="file" id="f-brand-import" accept=".xlsx, .xls" style="display:none" onchange="importBrandsExcel(event)">
                 <button class="btn btn-primary" onclick="openBrandModal()">+ Add Brand</button>
             </div>
@@ -14078,7 +14602,7 @@ async function renderBrands() {
                 <tbody>${brands.length ? brands.map(b => `<tr>
                     <td style="color:var(--text-primary);font-weight:600">${b.name}</td>
                     <td style="font-size:0.85rem;color:var(--text-muted)">${b.description || '-'}</td>
-                    <td><div class="action-btns"><button class="btn-icon" onclick="openBrandModal('${b.id}')"></button><button class="btn-icon" onclick="deleteBrand('${b.id}')"></button></div></td>
+                    <td><div class="action-btns"><button class="btn-icon" onclick="openBrandModal('${b.id}')" title="Edit"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button><button class="btn-icon" onclick="deleteBrand('${b.id}')" title="Delete" style="color:var(--danger)"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button></div></td>
                 </tr>`).join('') : '<tr><td colspan="3"><div class="empty-state"><div class="empty-icon"></div><p>No brands yet. Add brands to categorize products by manufacturer.</p></div></td></tr>'}</tbody></table>
             </div>
         </div></div>`;
@@ -14384,7 +14908,6 @@ async function cpSendOTP(phone, forRegister, regData) {
         }
     }
 
-    console.log(`OTP for ${phone}: ${otp}`);
     cpRenderOTP(phone, otp, forRegister, regData, smsSent);
 }
 
@@ -15411,7 +15934,7 @@ async function renderHRPayroll() {
                 <td style="text-align:right;color:#22c55e">${(a.deducted || 0) > 0 ? currency(a.deducted) : '-'}</td>
                 <td style="text-align:right;font-weight:700;color:${statusColor}">${bal > 0 ? currency(bal) : 'Cleared'}</td>
                 <td style="color:var(--text-muted);font-size:0.85rem">${escapeHtml(a.notes || '-')}</td>
-                <td>${bal > 0 ? `<button class="btn-icon" onclick="deleteAdvance('${a.id}')" title="Delete"></button>` : ''}</td>
+                <td>${bal > 0 ? `<button class="btn-icon" onclick="deleteAdvance('${a.id}')" title="Delete" style="color:var(--danger)"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>` : ''}</td>
             </tr>`;
         }).join('') : '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:20px">No advance records</td></tr>'}
         </tbody>
