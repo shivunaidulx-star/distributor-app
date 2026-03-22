@@ -1,5 +1,5 @@
 /* ============================================
-   DistroManager  Core Application (Refactored)
+   Prakash Traders  Core Application (Refactored)
    ============================================ */
 
 // --- Supabase Config ---
@@ -619,6 +619,7 @@ function escapeHtml(str) {
 // --- Global save guard (prevents double-submit on mobile) ---
 let _isSaving = false;
 window._saveAndNew = false; // set true by "Save & New" buttons
+window._printAndNew = false; // set true by "Print & New" buttons
 function beginSave(btnSelector) {
     if (_isSaving) return false;
     _isSaving = true;
@@ -632,6 +633,14 @@ function endSave() {
     document.querySelectorAll('.modal-footer .btn-primary, .modal-actions .btn-primary').forEach(b => {
         b.disabled = false; b.style.opacity = '';
     });
+}
+
+// --- UOM dropdown helper ---
+function populateUomSelect(uomSel, item) {
+    if (!uomSel) return;
+    const u = item.unit || 'Pcs';
+    uomSel.innerHTML = `<option value="${u}">${u}</option>`;
+    if (item.secUom) uomSel.innerHTML += `<option value="${item.secUom}">${item.secUom}</option>`;
 }
 
 // --- Collision-proof sequential number generator ---
@@ -1046,7 +1055,7 @@ async function doLoginSuccess(user, isRestore = false) {
     $('sidebar-avatar').textContent = user.name.charAt(0).toUpperCase();
 
     const co = DB.ls.getObj('db_company');
-    $('sidebar-brand').textContent = co.name || 'DistroManager';
+    $('sidebar-brand').textContent = co.name || 'Prakash Traders';
     const sidebarLogo = document.querySelector('#sidebar .logo-icon-sm');
     if (sidebarLogo) {
         if (co.logo) {
@@ -1066,6 +1075,8 @@ async function doLoginSuccess(user, isRestore = false) {
         const lastBackup = DB.ls.get('last_backup_date');
         if (lastBackup !== today()) {
             setTimeout(() => {
+                // Mark today immediately so the reminder doesn't repeat on every app open
+                DB.ls.set('last_backup_date', today());
                 if (confirm(" Daily Backup Reminder\n\nYou haven't downloaded a database backup today. Would you like to download one now to keep your data safe?")) {
                     downloadFullDatabaseBackup();
                 }
@@ -1321,6 +1332,7 @@ function closeModal() {
     const footerEl = $('modal-footer');
     if (footerEl) { footerEl.innerHTML = ''; footerEl.classList.add('hidden'); }
     endSave(); // Always reset save guard when modal closes
+    if (window._invKbHandler) { document.removeEventListener('keydown', window._invKbHandler); window._invKbHandler = null; }
     // Restore FAB visibility for current page
     updateFab(currentPage);
 }
@@ -1478,7 +1490,7 @@ function buildItemSearchList(inventoryItems) {
 
 
 // Helper to ensure we have user coordinates for proximity sorting
-async function ensureGeolocation() {
+async function ensureGeolocation(maximumAge = 300000) {
     if (window._userCoords) return window._userCoords;
     if (!navigator.geolocation) return null;
     return new Promise((resolve) => {
@@ -1488,7 +1500,7 @@ async function ensureGeolocation() {
                 resolve(window._userCoords);
             },
             () => resolve(null),
-            { timeout: 6000, maximumAge: 300000, enableHighAccuracy: false }
+            { timeout: 6000, maximumAge, enableHighAccuracy: false }
         );
     });
 }
@@ -1506,9 +1518,10 @@ window.forceHardRefresh = async function () {
 //  NEW: Ensures GPS is fresh before sorting
 async function getFreshLocationAndSort(items, buildType = 'party') {
     showToast('Refreshing location...', 'info', 1000);
-    // Force a fresh GPS ping
+    // Force a truly fresh GPS ping — maximumAge:0 bypasses the browser OS cache
+    // so after moving to a new location the sort reflects the current position
     window._userCoords = null;
-    await ensureGeolocation();
+    await ensureGeolocation(0);
 
     if (buildType === 'party') {
         return buildPartySearchList(items);
@@ -2466,20 +2479,20 @@ function renderPartyRows(parties) {
     const cols = ColumnManager.get('parties').filter(c => c.visible);
     return parties.map(p => {
         const cellMap = {
-            name: `<td style="color:var(--text-primary);font-weight:600">${escapeHtml(p.name)}${p.blocked ? ' <span class="badge badge-danger" style="font-size:0.7rem;padding:2px 5px"> Blocked</span>' : ''}${p.active === false ? ' <span class="badge badge-danger" style="font-size:0.7rem;padding:2px 5px">Inactive</span>' : ''}</td>`,
-            partyCode: `<td style="font-family:monospace;font-size:0.82rem;color:var(--accent)">${p.partyCode || '-'}</td>`,
-            type: `<td><span class="badge ${p.type === 'Customer' ? 'badge-success' : 'badge-info'}">${p.type}</span></td>`,
-            phone: `<td>${p.phone || '-'}</td>`,
-            gstin: `<td style="font-size:0.82rem">${p.gstin || '-'}</td>`,
-            balance: `<td class="${(p.balance || 0) < 0 ? 'amount-green' : 'amount-red'}">${currency(Math.abs(p.balance || 0))} ${(p.balance || 0) < 0 ? '(Cr)' : '(Dr)'}</td>`,
-            actions: `<td><div class="action-btns">
+            name: `<td style="min-width:200px;color:var(--text-primary);font-weight:600">${escapeHtml(p.name)}${p.blocked ? ' <span class="badge badge-danger" style="font-size:0.7rem;padding:2px 5px"> Blocked</span>' : ''}${p.active === false ? ' <span class="badge badge-danger" style="font-size:0.7rem;padding:2px 5px">Inactive</span>' : ''}</td>`,
+            partyCode: `<td style="min-width:100px;font-family:monospace;font-size:0.82rem;color:var(--accent)">${p.partyCode || '-'}</td>`,
+            type: `<td style="min-width:90px"><span class="badge ${p.type === 'Customer' ? 'badge-success' : 'badge-info'}">${p.type}</span></td>`,
+            phone: `<td style="min-width:120px">${p.phone || '-'}</td>`,
+            gstin: `<td style="min-width:130px;font-size:0.82rem">${p.gstin || '-'}</td>`,
+            balance: `<td style="min-width:120px;text-align:right" class="${(p.balance || 0) < 0 ? 'amount-green' : 'amount-red'}">${currency(Math.abs(p.balance || 0))} ${(p.balance || 0) < 0 ? '(Cr)' : '(Dr)'}</td>`,
+            actions: `<td style="min-width:150px"><div class="action-btns">
                 <button class="btn-icon" onclick="openDedicatedPartyLedger('${p.id}')" title="View Ledger"><span class="material-symbols-outlined" style="font-size:1.1rem">account_balance_wallet</span></button>
                 ${p.phone ? `<a href="tel:${p.phone}" class="btn-icon" title="Call party" style="text-decoration:none"><span class="material-symbols-outlined" style="font-size:1.1rem">call</span></a>` : ''}
                 ${p.lat && p.lng ? `<button class="btn-icon" onclick="openPartyMap('${p.lat}','${p.lng}','${escapeHtml(p.name)}')" title="Navigate to party"><span class="material-symbols-outlined" style="font-size:1.1rem">near_me</span></button>` : ''}
                 ${!isPacker() && !(p.lat && p.lng) ? `<button class="btn-icon" onclick="updatePartyLocation('${p.id}')" title="Update Location" style="color:#3b82f6"><span class="material-symbols-outlined" style="font-size:1.1rem">location_on</span></button>` : ''}
                 ${canEdit() ? `<button class="btn-icon" onclick="openPartyModal('${p.id}')" title="Edit"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button><button class="btn-icon" onclick="deleteParty('${p.id}')" title="Delete" style="color:var(--danger)"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>` : ''}
             </div></td>`,
-            city: `<td style="font-size:0.85rem">${escapeHtml(p.city || '-')}</td>`,
+            city: `<td style="min-width:100px;font-size:0.85rem">${escapeHtml(p.city || '-')}</td>`,
             postCode: `<td style="font-size:0.85rem">${escapeHtml(p.postCode || '-')}</td>`,
             paymentTerms: `<td style="font-size:0.82rem">${p.paymentTerms ? `<span class="badge badge-info" style="font-size:0.72rem">${escapeHtml(p.paymentTerms)}</span>` : '<span style="color:var(--text-muted)">-</span>'}</td>`,
             address: `<td style="font-size:0.82rem;color:var(--text-muted);max-width:220px;white-space:normal">${escapeHtml(p.address || '-')}</td>`,
@@ -3410,19 +3423,19 @@ function renderInvRows(items, reservedMap = {}, abcMap = {}) {
         const abc = abcMap[i.id] || 'C';
         const abcClass = abc === 'A' ? 'badge-primary' : abc === 'B' ? 'badge-info' : 'badge-outline';
         const cellMap = {
-            name: `<td><div style="display:flex;align-items:center;gap:8px">${(i.imageUrl || i.photo) ? `<img src="${i.imageUrl || i.photo}" style="width:32px;height:32px;border-radius:6px;object-fit:cover;flex-shrink:0">` : ''}<div><div style="color:var(--text-primary);font-weight:600">${i.name}${i.active === false ? ' <span class="badge badge-danger" style="font-size:0.7rem;padding:2px 5px">Inactive</span>' : ''}</div>${i.itemCode ? `<div style="font-size:0.75rem;color:var(--text-muted)">Code: ${i.itemCode}</div>` : ''}</div></div></td>`,
-            abc: `<td><span class="badge ${abcClass}" style="width:24px;text-align:center">${abc}</span></td>`,
-            warehouse: `<td style="font-size:0.85rem;color:var(--text-muted)">${i.warehouse || 'Main Warehouse'}</td>`,
-            hsn: `<td>${i.hsn || '-'}</td>`,
-            unit: `<td>${i.unit || 'Pcs'}${i.secUom ? `<br><span style="font-size:0.75rem;color:var(--text-muted)">1 ${i.unit} = ${i.secUomRatio || 0} ${i.secUom}</span>` : ''}</td>`,
-            purchasePrice: `<td>${currency(i.purchasePrice)}${(() => { const nb = getLastActiveBatch(i); return nb && nb.purchasePrice !== i.purchasePrice ? `<br><span style="font-size:0.7rem;color:var(--text-muted)">Latest batch</span>` : ''; })()}</td>`,
-            salePrice: `<td>${currency(i.salePrice)}${(() => { const fb = getFifoBatch(i); return fb && (fb.qty || 0) > 0 ? `<br><span style="font-size:0.7rem;color:var(--accent)">MRP ${fb.mrp}</span>` : ''; })()}</td>`,
-            mrp: `<td>${(() => { const fb = getFifoBatch(i); return fb ? currency(fb.mrp) : (i.mrp ? currency(i.mrp) : '-'); })()}${i.batches && i.batches.filter(b => b.isActive !== false).length > 1 ? `<br><span style="font-size:0.7rem;color:var(--text-muted)">${i.batches.filter(b => b.isActive !== false).length} batches</span>` : ''}</td>`,
-            stock: `<td>${i.stock}</td>`,
-            reserved: `<td>${reserved > 0 ? `<span style="color:var(--danger);font-weight:600">${reserved}</span>` : '0'}</td>`,
-            avail: `<td><span class="badge ${available <= (i.lowStockAlert || 5) ? 'badge-danger' : 'badge-success'}">${available}</span></td>`,
-            value: `<td>${currency(i.stock * i.purchasePrice)}</td>`,
-            actions: `<td><div class="action-btns">${canEdit() ? `<button class="btn-icon" style="color:var(--primary)" onclick="openStockAdjustmentModal('${i.id}')" title="Adjust Stock"><span class="material-symbols-outlined" style="font-size:1.1rem">inventory</span></button>` : ''}<button class="btn-icon" style="color:var(--info)" onclick="viewItemLedger('${i.id}')" title="View Ledger"><span class="material-symbols-outlined" style="font-size:1.1rem">list_alt</span></button>${canEdit() ? `<button class="btn-icon" style="color:var(--warning)" onclick="openItemModal('${i.id}')" title="Edit"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button><button class="btn-icon" style="color:var(--danger)" onclick="deleteItem('${i.id}')" title="Delete"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>` : ''}</div></td>`,
+            name: `<td style="min-width:200px"><div style="display:flex;align-items:center;gap:8px">${(i.imageUrl || i.photo) ? `<img src="${i.imageUrl || i.photo}" style="width:32px;height:32px;border-radius:6px;object-fit:cover;flex-shrink:0">` : ''}<div><div style="color:var(--text-primary);font-weight:600">${i.name}${i.active === false ? ' <span class="badge badge-danger" style="font-size:0.7rem;padding:2px 5px">Inactive</span>' : ''}</div>${i.itemCode ? `<div style="font-size:0.75rem;color:var(--text-muted)">Code: ${i.itemCode}</div>` : ''}</div></div></td>`,
+            abc: `<td style="min-width:40px;text-align:center"><span class="badge ${abcClass}" style="width:24px;text-align:center">${abc}</span></td>`,
+            warehouse: `<td style="min-width:120px;font-size:0.85rem;color:var(--text-muted)">${i.warehouse || 'Main Warehouse'}</td>`,
+            hsn: `<td style="min-width:80px">${i.hsn || '-'}</td>`,
+            unit: `<td style="min-width:120px">${i.unit || 'Pcs'}${i.secUom ? `<br><span style="font-size:0.75rem;color:var(--text-muted)">1 ${i.unit} = ${i.secUomRatio || 0} ${i.secUom}</span>` : ''}</td>`,
+            purchasePrice: `<td style="min-width:100px;text-align:right">${currency(i.purchasePrice)}${(() => { const nb = getLastActiveBatch(i); return nb && nb.purchasePrice !== i.purchasePrice ? `<br><span style="font-size:0.7rem;color:var(--text-muted)">Latest batch</span>` : ''; })()}</td>`,
+            salePrice: `<td style="min-width:100px;text-align:right">${currency(i.salePrice)}${(() => { const fb = getFifoBatch(i); return fb && (fb.qty || 0) > 0 ? `<br><span style="font-size:0.7rem;color:var(--accent)">MRP ${fb.mrp}</span>` : ''; })()}</td>`,
+            mrp: `<td style="min-width:100px;text-align:right">${(() => { const fb = getFifoBatch(i); return fb ? currency(fb.mrp) : (i.mrp ? currency(i.mrp) : '-'); })()}${i.batches && i.batches.filter(b => b.isActive !== false).length > 1 ? `<br><span style="font-size:0.7rem;color:var(--text-muted)">${i.batches.filter(b => b.isActive !== false).length} batches</span>` : ''}</td>`,
+            stock: `<td style="min-width:60px;text-align:center">${i.stock}</td>`,
+            reserved: `<td style="min-width:60px;text-align:center">${reserved > 0 ? `<span style="color:var(--danger);font-weight:600">${reserved}</span>` : '0'}</td>`,
+            avail: `<td style="min-width:80px;text-align:center"><span class="badge ${available <= (i.lowStockAlert || 5) ? 'badge-danger' : 'badge-success'}">${available}</span></td>`,
+            value: `<td style="min-width:110px;text-align:right">${currency(i.stock * i.purchasePrice)}</td>`,
+            actions: `<td style="min-width:150px"><div class="action-btns">${canEdit() ? `<button class="btn-icon" style="color:var(--primary)" onclick="openStockAdjustmentModal('${i.id}')" title="Adjust Stock"><span class="material-symbols-outlined" style="font-size:1.1rem">inventory</span></button>` : ''}<button class="btn-icon" style="color:var(--info)" onclick="viewItemLedger('${i.id}')" title="View Ledger"><span class="material-symbols-outlined" style="font-size:1.1rem">list_alt</span></button>${canEdit() ? `<button class="btn-icon" style="color:var(--warning)" onclick="openItemModal('${i.id}')" title="Edit"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button><button class="btn-icon" style="color:var(--danger)" onclick="deleteItem('${i.id}')" title="Delete"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>` : ''}</div></td>`,
         };
         return `<tr><td style="width:36px;text-align:center"><input type="checkbox" class="bulk-chk-item" data-id="${i.id}" onchange="toggleBulkItem('${i.id}',this)" style="width:16px;height:16px;cursor:pointer" ${window._bulkItems && window._bulkItems.has(i.id) ? 'checked' : ''}></td>${cols.map(c => cellMap[c.key] || '').join('')}</tr>`;
     }).join('');
@@ -4595,15 +4608,15 @@ function renderSORows(orders, isApprover) {
         const delDate = o.expectedDeliveryDate ? `<span style="font-size:0.8rem;color:${new Date(o.expectedDeliveryDate) < new Date() && o.status !== 'delivered' ? 'var(--danger)' : 'var(--text-muted)'}">${fmtDate(o.expectedDeliveryDate)}</span>` : '-';
         const chkTd = isApprover ? `<td><input type="checkbox" class="so-select-chk" data-id="${o.id}" onchange="soUpdateBulkBtn()" style="width:16px;height:16px"></td>` : '<td></td>';
         const cellMap = {
-            date: `<td>${fmtDate(o.date)}</td>`,
-            orderNo: `<td style="font-weight:600">${o.orderNo}${isUrgent ? ' <span class="badge badge-danger" style="font-size:0.6rem"></span>' : ''}</td>`,
-            party: `<td>${escapeHtml(o.partyName)}</td>`,
-            delivery: `<td>${delDate}</td>`,
-            items: `<td>${o.items.length}</td>`,
-            total: `<td class="amount-green">${currency(o.total)}</td>`,
-            by: `<td style="font-size:0.82rem">${o.createdBy || '-'}</td>`,
-            status: `<td><span class="badge ${disp.class}" style="text-transform:capitalize">${disp.text}</span></td>`,
-            actions: `<td><div class="action-btns">
+            date: `<td style="min-width:90px">${fmtDate(o.date)}</td>`,
+            orderNo: `<td style="min-width:100px;font-weight:600">${o.orderNo}${isUrgent ? ' <span class="badge badge-danger" style="font-size:0.6rem"></span>' : ''}</td>`,
+            party: `<td style="min-width:150px">${escapeHtml(o.partyName)}</td>`,
+            delivery: `<td style="min-width:100px">${delDate}</td>`,
+            items: `<td style="min-width:50px;text-align:center">${o.items.length}</td>`,
+            total: `<td style="min-width:100px;text-align:right" class="amount-green">${currency(o.total)}</td>`,
+            by: `<td style="min-width:100px;font-size:0.82rem">${o.createdBy || '-'}</td>`,
+            status: `<td style="min-width:120px"><span class="badge ${disp.class}" style="text-transform:capitalize">${disp.text}</span></td>`,
+            actions: `<td style="min-width:140px"><div class="action-btns">
                 <button class="btn-icon" onclick="viewSalesOrder('${o.id}')" title="View"><span class="material-symbols-outlined" style="font-size:1.1rem">visibility</span></button>
                 <button class="btn-icon" onclick="duplicateSalesOrder('${o.id}')" title="Duplicate"><span class="material-symbols-outlined" style="font-size:1.1rem">content_copy</span></button>
                 ${o.status === 'pending' && isApprover ? `<button class="btn-icon" style="color:var(--success)" onclick="approveSalesOrder('${o.id}')" title="Approve"><span class="material-symbols-outlined" style="font-size:1.1rem">check_circle</span></button><button class="btn-icon" style="color:var(--danger)" onclick="rejectSalesOrder('${o.id}')" title="Reject"><span class="material-symbols-outlined" style="font-size:1.1rem">cancel</span></button>` : ''}
@@ -4751,11 +4764,7 @@ async function openSalesOrderModal() {
 
     _soItemDropdown = initSearchDropdown('f-so-item-input', buildItemSearchList(inv), function (item) {
         $('f-so-price').value = item.salePrice || '';
-        var uomSel = $('f-so-uom');
-        if (uomSel) {
-            uomSel.innerHTML = '<option value="' + item.unit + '">' + item.unit + '</option>';
-            if (item.secUom) uomSel.innerHTML += '<option value="' + item.secUom + '">' + item.secUom + '</option>';
-        }
+        populateUomSelect($('f-so-uom'), item);
     });
 }
 
@@ -4772,11 +4781,7 @@ function onSOSubcatFilterChange() {
     $('f-so-price').value = '';
     _soItemDropdown = initSearchDropdown('f-so-item-input', buildItemSearchList(inv), function (item) {
         $('f-so-price').value = item.salePrice || '';
-        var uomSel = $('f-so-uom');
-        if (uomSel) {
-            uomSel.innerHTML = '<option value="' + item.unit + '">' + item.unit + '</option>';
-            if (item.secUom) uomSel.innerHTML += '<option value="' + item.secUom + '">' + item.secUom + '</option>';
-        }
+        populateUomSelect($('f-so-uom'), item);
     });
 }
 var _soItemDropdown = null;
@@ -4802,11 +4807,7 @@ function onSOCatFilterChange() {
     $('f-so-price').value = '';
     _soItemDropdown = initSearchDropdown('f-so-item-input', buildItemSearchList(inv), function (item) {
         $('f-so-price').value = item.salePrice || '';
-        var uomSel = $('f-so-uom');
-        if (uomSel) {
-            uomSel.innerHTML = '<option value="' + item.unit + '">' + item.unit + '</option>';
-            if (item.secUom) uomSel.innerHTML += '<option value="' + item.secUom + '">' + item.secUom + '</option>';
-        }
+        populateUomSelect($('f-so-uom'), item);
     });
 }
 
@@ -4866,14 +4867,7 @@ function onSOItemChange() {
     if (!item) { $('f-so-price').value = ''; return; }
 
     $('f-so-price').value = item.salePrice || '';
-    // Populate UOM dropdown
-    const uomSel = $('f-so-uom');
-    if (uomSel) {
-        const priUnit = item.unit || 'Pcs';
-        const secUom = item.secUom || '';
-        uomSel.innerHTML = `<option value="${priUnit}">${priUnit}</option>`;
-        if (secUom) uomSel.innerHTML += `<option value="${secUom}">${secUom}</option>`;
-    }
+    populateUomSelect($('f-so-uom'), item);
 }
 function onSOUomChange() {
     const sel = $('f-so-item-input'); if (!sel || !sel.value) return;
@@ -5465,13 +5459,13 @@ async function renderPORows(orders) {
     const cols = ColumnManager.get('purchaseorders').filter(c => c.visible);
     return orders.slice().reverse().map(o => {
         const cellMap = {
-            date: `<td>${fmtDate(o.date)}</td>`,
-            poNo: `<td style="font-weight:600">${o.poNo}</td>`,
-            party: `<td>${escapeHtml(o.partyName)}</td>`,
-            items: `<td>${o.items.length}</td>`,
-            total: `<td class="amount-green">${currency(o.total)}</td>`,
-            status: `<td><span class="badge ${o.status === 'received' ? 'badge-success' : o.status === 'cancelled' ? 'badge-danger' : 'badge-warning'}">${o.status}</span></td>`,
-            actions: `<td><div class="action-btns">
+            date: `<td style="min-width:90px">${fmtDate(o.date)}</td>`,
+            poNo: `<td style="min-width:100px;font-weight:600">${o.poNo}</td>`,
+            party: `<td style="min-width:150px">${escapeHtml(o.partyName)}</td>`,
+            items: `<td style="min-width:50px;text-align:center">${o.items.length}</td>`,
+            total: `<td style="min-width:100px;text-align:right" class="amount-green">${currency(o.total)}</td>`,
+            status: `<td style="min-width:100px"><span class="badge ${o.status === 'received' ? 'badge-success' : o.status === 'cancelled' ? 'badge-danger' : 'badge-warning'}">${o.status}</span></td>`,
+            actions: `<td style="min-width:100px"><div class="action-btns">
                 <button class="btn-icon" onclick="viewPurchaseOrder('${o.id}')"></button>
                 ${o.status === 'pending' ? `<button class="btn-icon" style="color:var(--success)" onclick="receivePO('${o.id}')" title="Receive Goods"></button>` : ''}
                 ${o.status === 'pending' ? `<button class="btn-icon" onclick="deletePO('${o.id}')"></button>` : ''}
@@ -5530,14 +5524,14 @@ async function renderPurchaseInvoices() {
 function renderPInvRows(invs) {
     if (!invs.length) return '<tr><td colspan="8"><div class="empty-state"><p>No purchase invoices found</p></div></td></tr>';
     return invs.map(i => `<tr>
-        <td>${fmtDate(i.date)}</td>
-        <td style="font-weight:600">${i.invoiceNo}</td>
-        <td>${escapeHtml(i.partyName || '')}</td>
-        <td style="font-size:0.82rem;color:var(--text-muted)">${i.fromOrder || '-'}</td>
-        <td>${(i.items || []).length}</td>
-        <td class="amount-red" style="text-align:right">${currency(i.total)}</td>
-        <td><span class="badge ${i.status === 'cancelled' ? 'badge-danger' : 'badge-success'}">${i.status || 'active'}</span></td>
-        <td><div class="action-btns">
+        <td style="min-width:90px">${fmtDate(i.date)}</td>
+        <td style="min-width:100px;font-weight:600">${i.invoiceNo}</td>
+        <td style="min-width:150px">${escapeHtml(i.partyName || '')}</td>
+        <td style="min-width:100px;font-size:0.82rem;color:var(--text-muted)">${i.fromOrder || '-'}</td>
+        <td style="min-width:50px;text-align:center">${(i.items || []).length}</td>
+        <td style="min-width:100px;text-align:right" class="amount-red">${currency(i.total)}</td>
+        <td style="min-width:100px"><span class="badge ${i.status === 'cancelled' ? 'badge-danger' : 'badge-success'}">${i.status || 'active'}</span></td>
+        <td style="min-width:80px"><div class="action-btns">
             <button class="btn-icon" onclick="viewPurchaseInvoice('${i.id}')" title="View"><span class="material-symbols-outlined" style="font-size:1.1rem">visibility</span></button>
             ${i.status !== 'cancelled' && canEdit() ? `<button class="btn-icon" style="color:var(--danger)" onclick="cancelPurchaseInvoice('${i.id}')" title="Cancel"><span class="material-symbols-outlined" style="font-size:1.1rem">block</span></button>` : ''}
         </div></td>
@@ -5901,6 +5895,7 @@ async function renderInvoices() {
                     <button class="btn btn-outline" onclick="DB.exportToExcel('tbl-invoices', 'invoices')" style="border-color:#16a34a;color:#16a34a;padding:5px 10px"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button>
                     <button class="detailed-view-btn ${window._detailedInvoices ? 'active' : ''}" style="padding:5px 10px" onclick="toggleDetailedInvoices()"> Detailed View</button>
                     <button class="btn btn-outline" onclick="openColumnPersonalizer('invoices','renderInvoices')" style="border-color:var(--accent);color:var(--accent);padding:5px 10px"><span class="material-symbols-outlined" style="font-size:1.1rem">view_column</span> Columns</button>
+                    <button class="btn btn-outline" onclick="bulkPrintInvoices()" style="border-color:var(--warning);color:var(--warning);padding:5px 10px"><span class="material-symbols-outlined" style="font-size:1.1rem">print</span> Bulk Print</button>
                     <button class="btn btn-primary" onclick="openInvoiceModal('sale')" style="padding:5px 12px">+ Sale </button>
                     <button class="btn btn-primary" style="background:var(--info);padding:5px 12px" onclick="openInvoiceModal('purchase')">+ Purchase </button>
                 </div>
@@ -5908,7 +5903,7 @@ async function renderInvoices() {
         </div></div>
         <div class="card"><div class="card-body" style="padding:0">
             <div class="table-wrapper">
-                <table class="data-table" id="tbl-invoices"><thead><tr>${ColumnManager.get('invoices').filter(c => c.visible).map(c => `<th>${c.label}</th>`).join('')}</tr></thead>
+                <table class="data-table" id="tbl-invoices"><thead><tr><th style="width:32px"><input type="checkbox" id="inv-check-all" title="Select All" onchange="document.querySelectorAll('.inv-chk').forEach(c=>c.checked=this.checked)"></th>${ColumnManager.get('invoices').filter(c => c.visible).map(c => `<th>${c.label}</th>`).join('')}</tr></thead>
                 <tbody id="invoice-tbody">${renderInvoiceRows(visibleInvoices)}</tbody></table>
             </div>
         </div></div>`;
@@ -5944,24 +5939,26 @@ function renderInvoiceRows(invs) {
             detailedRow = `<tr class="detailed-info-row"><td colspan="${cols.length}" style="font-size:0.75rem;padding:4px 18px;color:var(--text-muted);background:#fafafa">${itemNames}</td></tr>`;
         }
         const cellMap = {
-            date: `<td>${fmtDate(i.date)}</td>`,
-            invoiceNo: `<td style="font-weight:600;text-decoration:${i.status === 'cancelled' ? 'line-through' : 'none'}">${i.invoiceNo}${i.vyaparInvoiceNo ? `<br><span style="font-size:0.7rem;font-weight:500;color:var(--primary)">V: ${escapeHtml(i.vyaparInvoiceNo)}</span>` : ''}${i.assignedTo ? `<br><span style="font-size:0.68rem;color:var(--info);font-weight:600"> ${escapeHtml(i.assignedTo)}${i.handoverDate ? '  ' + fmtDate(i.handoverDate) : ''}</span>` : ''}</td>`,
-            party: `<td>${escapeHtml(i.partyName)}</td>`,
-            type: `<td><span class="badge ${i.type === 'sale' ? 'badge-success' : 'badge-info'}">${i.type}</span></td>`,
-            status: `<td>${i.status === 'cancelled' ? '<span class="badge badge-danger">Cancelled</span>' : i.status === 'draft' ? '<span class="badge badge-warning">Draft</span>' : '<span class="badge badge-success">Posted</span>'}</td>`,
-            items: `<td>${(i.items || []).length}</td>`,
-            total: `<td class="${i.type === 'sale' ? 'amount-green' : 'amount-red'}">${currency(i.total)}</td>`,
-            actions: `<td><div class="action-btns">
+            date: `<td style="min-width:90px">${fmtDate(i.date)}</td>`,
+            invoiceNo: `<td style="min-width:140px;white-space:nowrap;font-weight:600;text-decoration:${i.status === 'cancelled' ? 'line-through' : 'none'}">${i.invoiceNo}${i.vyaparInvoiceNo ? `<br><span style="font-size:0.7rem;font-weight:500;color:var(--primary)">V: ${escapeHtml(i.vyaparInvoiceNo)}</span>` : ''}${i.assignedTo ? `<br><span style="font-size:0.68rem;color:var(--info);font-weight:600"> ${escapeHtml(i.assignedTo)}${i.handoverDate ? '  ' + fmtDate(i.handoverDate) : ''}</span>` : ''}</td>`,
+            party: `<td style="min-width:150px">${escapeHtml(i.partyName)}</td>`,
+            type: `<td style="min-width:80px"><span class="badge ${i.type === 'sale' ? 'badge-success' : 'badge-info'}">${i.type}</span></td>`,
+            status: `<td style="min-width:90px">${i.status === 'cancelled' ? '<span class="badge badge-danger">Cancelled</span>' : i.status === 'draft' ? '<span class="badge badge-warning">Draft</span>' : '<span class="badge badge-success">Posted</span>'}</td>`,
+            items: `<td style="min-width:50px;text-align:center">${(i.items || []).length}</td>`,
+            total: `<td style="min-width:100px;text-align:right" class="${i.type === 'sale' ? 'amount-green' : 'amount-red'}">${currency(i.total)}</td>`,
+            actions: `<td style="min-width:180px"><div class="action-btns">
                 <button class="btn-icon" onclick="viewInvoice('${i.id}')" title="View"><span class="material-symbols-outlined" style="font-size:1.1rem">visibility</span></button>
                 ${canEdit() && i.type === 'sale' && i.status !== 'cancelled' ? `<button class="btn-icon" style="color:var(--warning)" onclick="openEditInvoiceModal('${i.id}')" title="Edit Invoice"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button>` : ''}
                 ${canEdit() && i.type === 'sale' && i.status !== 'cancelled' ? `<button class="btn-icon" style="color:var(--info)" onclick="openAssignInvoiceModal('${i.id}')" title="Assign to Salesman"><span class="material-symbols-outlined" style="font-size:1.1rem">person_add</span></button>` : ''}
                 ${canPay && i.status !== 'cancelled' ? `<button class="btn-icon" style="color:var(--success)" onclick="openReceivePaymentForInvoice('${i.id}')" title="Record Payment"><span class="material-symbols-outlined" style="font-size:1.1rem">payments</span></button>` : ''}
                 <button class="btn-icon" style="font-size:1.1rem" onclick="viewInvoicePaymentHistory('${i.invoiceNo}')" title="Payment History">🧾</button>
+                <button class="btn-icon" style="font-size:1.1rem" onclick="printInvoice('${i.id}')" title="Print Invoice">🖨️</button>
+                <button class="btn-icon" style="font-size:1.1rem" onclick="shareInvoice('${i.id}')" title="Share Invoice">📤</button>
                 ${canEdit() && i.status !== 'cancelled' ? `<button class="btn-icon" style="color:var(--danger)" onclick="cancelInvoiceDirectly('${i.id}')" title="Cancel Invoice"><span class="material-symbols-outlined" style="font-size:1.1rem">block</span></button>` : ''}
                 ${canEdit() ? `<button class="btn-icon" onclick="deleteInvoice('${i.id}')" title="Delete" style="color:var(--danger)"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>` : ''}
             </div></td>`,
         };
-        return `<tr data-type="${i.type}">${cols.map(c => cellMap[c.key] || '').join('')}</tr>`;
+        return `<tr data-type="${i.type}"><td style="width:32px;text-align:center"><input type="checkbox" class="inv-chk" value="${i.id}"></td>${cols.map(c => cellMap[c.key] || '').join('')}</tr>`;
     }).join('');
 }
 async function filterInvTable2() {
@@ -6060,7 +6057,8 @@ async function openInvoiceModal(type = 'sale', preserveItems = false) {
 
     const vyaparNo = await buildVyaparInvoiceNo();
     openModal(type === 'sale' ? 'Create Sale Invoice' : 'Create Purchase / Stock In', `
-        <div class="form-row" style="grid-template-columns:1fr 1fr 1fr"><div class="form-group"><label>Invoice #</label><input id="f-inv-no" value="${invNo}"></div><div class="form-group"><label>Date</label><input type="date" id="f-inv-date" value="${today()}" onchange="updateInvDueDate()"></div><div class="form-group"><label>Due Date <span style="font-size:0.7rem;color:var(--text-muted)">auto</span></label><input type="date" id="f-inv-due-date" placeholder="Select party..."></div></div>
+        <div class="form-row" style="grid-template-columns:repeat(auto-fit, minmax(130px, 1fr))"><div class="form-group"><label>Invoice #</label><input id="f-inv-no" value="${invNo}"></div><div class="form-group"><label>Date</label><input type="date" id="f-inv-date" value="${today()}" onchange="updateInvDueDate()"></div><div class="form-group"><label>Due Date <span style="font-size:0.7rem;color:var(--text-muted)">auto</span></label><input type="date" id="f-inv-due-date" placeholder="Select party..."></div></div>
+        <div class="form-row" style="grid-template-columns:1fr 1fr"><div class="form-group"><label>🚚 Delivery Date</label><input type="date" id="f-inv-delivery-date" value=""></div><div class="form-group"><label>📦 Box / Crate No.</label><input type="text" id="f-inv-box-no" placeholder="e.g. B-001, C-05"></div></div>
         <input type="hidden" id="f-inv-from-order" value="">
         <input type="hidden" id="f-inv-type" value="${type}">
         ${type === 'sale' ? `
@@ -6146,7 +6144,11 @@ async function openInvoiceModal(type = 'sale', preserveItems = false) {
                 <button class="btn btn-outline btn-block" onclick="closeInvItemSubModal()" style="margin-top:10px">Done Adding</button>
             </div>
         </div>
-    `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveInvoice()"> Save & New</button><button class="btn btn-primary" onclick="saveInvoice()"> Save Invoice</button>`, true);
+    `, `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;width:100%">
+        <button class="btn btn-outline" onclick="closeModal()" title="Esc">Cancel</button>
+        <button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveInvoice()" title="Ctrl+Alt+S">Save &amp; New</button>
+        <button class="btn btn-primary" onclick="saveInvoice()" title="Ctrl+S">Save</button>
+    </div>`, true);
 
     // Init custom searchable dropdowns
     initSearchDropdown('f-inv-party', buildPartySearchList(filteredParties), function (party) {
@@ -6158,12 +6160,23 @@ async function openInvoiceModal(type = 'sale', preserveItems = false) {
     _invItemDropdown = initSearchDropdown('f-inv-item-input', buildItemSearchList(inv), function (item) {
         const type = $('f-inv-type') ? $('f-inv-type').value : 'sale';
         $('f-inv-price').value = type === 'sale' ? (item.salePrice || '') : (item.purchasePrice || '');
-        var uomSel = $('f-inv-uom');
-        if (uomSel) {
-            uomSel.innerHTML = '<option value="' + (item.unit || 'Pcs') + '">' + (item.unit || 'Pcs') + '</option>';
-            if (item.secUom) uomSel.innerHTML += '<option value="' + item.secUom + '">' + item.secUom + '</option>';
-        }
+        populateUomSelect($('f-inv-uom'), item);
     });
+
+    // Keyboard shortcuts (Vyapar-style)
+    if (window._invKbHandler) document.removeEventListener('keydown', window._invKbHandler);
+    window._invKbHandler = function (e) {
+        if (!$('f-inv-party')) { document.removeEventListener('keydown', window._invKbHandler); return; }
+        if ((e.target.tagName || '').toLowerCase() === 'textarea') return;
+        if (e.ctrlKey && e.altKey && (e.key === 's' || e.key === 'S')) {
+            e.preventDefault(); window._saveAndNew = true; saveInvoice();
+        } else if (e.ctrlKey && !e.altKey && (e.key === 's' || e.key === 'S')) {
+            e.preventDefault(); saveInvoice();
+        } else if (e.ctrlKey && (e.key === 'p' || e.key === 'P')) {
+            e.preventDefault(); window._printAndNew = true; saveInvoice();
+        }
+    };
+    document.addEventListener('keydown', window._invKbHandler);
 }
 
 async function loadAvailableAdvances(partyId) {
@@ -6270,11 +6283,7 @@ async function onInvSubcatFilterChange() {
     _invItemDropdown = initSearchDropdown('f-inv-item-input', buildItemSearchList(inv), function (item) {
         const type = $('f-inv-type') ? $('f-inv-type').value : 'sale';
         $('f-inv-price').value = type === 'sale' ? (item.salePrice || '') : (item.purchasePrice || '');
-        var uomSel = $('f-inv-uom');
-        if (uomSel) {
-            uomSel.innerHTML = '<option value="' + (item.unit || 'Pcs') + '">' + (item.unit || 'Pcs') + '</option>';
-            if (item.secUom) uomSel.innerHTML += '<option value="' + item.secUom + '">' + item.secUom + '</option>';
-        }
+        populateUomSelect($('f-inv-uom'), item);
     });
 }
 
@@ -6301,11 +6310,7 @@ async function onInvCatFilterChange() {
     _invItemDropdown = initSearchDropdown('f-inv-item-input', buildItemSearchList(inv), function (item) {
         const type = $('f-inv-type') ? $('f-inv-type').value : 'sale';
         $('f-inv-price').value = type === 'sale' ? (item.salePrice || '') : (item.purchasePrice || '');
-        var uomSel = $('f-inv-uom');
-        if (uomSel) {
-            uomSel.innerHTML = '<option value="' + (item.unit || 'Pcs') + '">' + (item.unit || 'Pcs') + '</option>';
-            if (item.secUom) uomSel.innerHTML += '<option value="' + item.secUom + '">' + item.secUom + '</option>';
-        }
+        populateUomSelect($('f-inv-uom'), item);
     });
 }
 
@@ -6407,7 +6412,8 @@ async function addInvoiceLine() {
         purchasePrice: +unitPurchasePrice.toFixed(2),
         discountAmt: 0, discountPct: 0,
         amount: lineAmount, unit, primaryQty, gstRate: itemGstRate,
-        baseAmount: lineBase, taxAmount: lineTax
+        baseAmount: lineBase, taxAmount: lineTax,
+        hsn: itemObj.hsn || '', mrp: itemObj.mrp || itemObj.salePrice || price
     });
 
     // Sync GST% field from item rates  if all items share one rate, show it; else leave as-is
@@ -6559,9 +6565,16 @@ function onInvDiscPctChange() {
     const sub = invoiceItems.reduce((s, li) => s + li.amount, 0);
     const pct = +($('f-inv-disc-pct').value || 0);
     const amtEl = $('f-inv-disc-amt');
+    let discAmt = 0;
     if (amtEl) {
         if (pct === 0) amtEl.value = '0';
-        else amtEl.value = (sub * pct / 100).toFixed(2);
+        else { discAmt = +(sub * pct / 100).toFixed(2); amtEl.value = discAmt; }
+    }
+    const invTypeEl = $('f-inv-type');
+    if (invTypeEl && invTypeEl.value === 'sale') {
+        const net = +(sub - discAmt).toFixed(2);
+        const roEl = $('f-inv-roundoff');
+        if (roEl) roEl.value = +(Math.round(net) - net).toFixed(2);
     }
     updateInvoiceTotal();
 }
@@ -6572,6 +6585,12 @@ function onInvDiscAmtChange() {
     if (pctEl) {
         if (sub > 0 && amt > 0) pctEl.value = ((amt / sub) * 100).toFixed(2);
         else pctEl.value = '0';
+    }
+    const invTypeEl = $('f-inv-type');
+    if (invTypeEl && invTypeEl.value === 'sale') {
+        const net = +(sub - amt).toFixed(2);
+        const roEl = $('f-inv-roundoff');
+        if (roEl) roEl.value = +(Math.round(net) - net).toFixed(2);
     }
     updateInvoiceTotal();
 }
@@ -6736,6 +6755,7 @@ async function saveInvoice(id) {
 
         const invData = {
             invoice_no: invNo, date: dateVal, due_date: $('f-inv-due-date')?.value || null,
+            delivery_date: $('f-inv-delivery-date')?.value || null, box_no: $('f-inv-box-no')?.value || null,
             type: invType, party_id: partyId, party_name: partyName,
             items: [...invoiceItems], // 🚀 FIX: Removed JSON.stringify so it saves as an array
             subtotal: sub, gst: gst,
@@ -6744,16 +6764,30 @@ async function saveInvoice(id) {
             vyapar_invoice_no: vyaparInvNo, from_order: fromOrderId ? (orders.find(o => o.id === fromOrderId)?.orderNo || '') : null
         };
 
-        ops.push(DB.rawInsert('invoices', invData));
         if (fromOrderId) ops.push(DB.rawUpdate('sales_orders', fromOrderId, { invoice_no: invNo }));
 
-        await Promise.all(ops);
+        const [savedInv] = await Promise.all([DB.rawInsert('invoices', invData), ...ops]);
+
+        const andNew = window._saveAndNew;
+        const andPrint = window._printAndNew;
+        window._saveAndNew = false;
+        window._printAndNew = false;
+
         await DB.refreshTables(['invoices', 'inventory', 'parties', 'sales_orders']);
         closeModal();
         fromOrderId ? await renderPacking() : await renderInvoices();
         showToast(`Invoice ${invNo} saved!`, 'success');
+
+        if (andPrint && savedInv && savedInv.id) {
+            await printInvoice(savedInv.id);
+            openInvoiceModal(invType);
+        } else if (andNew) {
+            openInvoiceModal(invType);
+        }
     } catch (err) {
         endSave();
+        window._saveAndNew = false;
+        window._printAndNew = false;
         alert('Error saving invoice: ' + err.message);
     }
 }
@@ -6857,7 +6891,7 @@ async function viewInvoice(id) {
             </div>`;
         })()}
         </div>
-        <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Close</button>${canEdit() && i.status !== 'cancelled' && i.type === 'sale' ? `<button class="btn btn-outline" onclick="openEditInvoiceModal('${i.id}')" style="color:var(--warning);border-color:var(--warning)"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">edit</span> Edit Items</button>` : ''}<button class="btn btn-primary" onclick="printInvoice()"> Print</button></div>`);
+        <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Close</button>${canEdit() && i.status !== 'cancelled' && i.type === 'sale' ? `<button class="btn btn-outline" onclick="openEditInvoiceModal('${i.id}')" style="color:var(--warning);border-color:var(--warning)"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">edit</span> Edit Items</button>` : ''}<button class="btn btn-outline" onclick="shareInvoice('${i.id}')">📤 Share</button><button class="btn btn-primary" onclick="printInvoice('${i.id}')">🖨️ Print</button></div>`);
 }
 
 async function openEditInvoiceModal(id) {
@@ -6903,7 +6937,11 @@ async function openEditInvoiceModal(id) {
                 <div id="inv-total-display" style="font-size:1.4rem;font-weight:700;color:var(--accent)">...</div>
             </div>
         </div>
-    `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="saveEditedInvoice('${id}')"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">save</span> Save Changes</button>`, true);
+    `, `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;width:100%">
+        <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+        <div style="visibility:hidden"></div>
+        <button class="btn btn-primary" onclick="saveEditedInvoice('${id}')"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">save</span> Save Changes</button>
+    </div>`, true);
 
     renderInvoiceLines();
     updateInvoiceTotal();
@@ -7224,6 +7262,145 @@ function numberToWords(num) {
     return res.trim() + ' Only';
 }
 
+function _buildInvoicePageHtml(inv, party, order, co, qrUrl, copyLabel) {
+    const items = typeof inv.items === 'string' ? JSON.parse(inv.items) : (inv.items || []);
+    const coStateCode = (co.gstin || '').substring(0, 2);
+    const paStateCode = (party.gstin || '').substring(0, 2);
+    const isSameState = coStateCode === paStateCode && coStateCode.length === 2;
+
+    // Tax: use per-item baseAmount if available, else back-calculate from total
+    const totalTaxable = items.reduce((s, it) => s + (it.baseAmount != null ? +it.baseAmount : 0), 0);
+    const totalTax = items.reduce((s, it) => s + (it.taxAmount != null ? +it.taxAmount : 0), 0);
+    const subTotal = inv.subtotal || items.reduce((s, it) => s + (it.amount || 0), 0);
+    const usedTaxable = totalTaxable > 0 ? totalTaxable : +(subTotal / 1.05).toFixed(2);
+    const usedTax = totalTax > 0 ? totalTax : +(subTotal - usedTaxable).toFixed(2);
+    const cgst = isSameState ? +(usedTax / 2).toFixed(2) : 0;
+    const sgst = isSameState ? +(usedTax / 2).toFixed(2) : 0;
+    const igst = !isSameState ? usedTax : 0;
+
+    const displayInvNo = inv.vyaparInvoiceNo || inv.invoiceNo;
+    const invDate = inv.date ? new Date(inv.date) : new Date();
+    const timeStr = inv.createdAt ? new Date(inv.createdAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }) : '';
+
+    return `
+<div class="page">
+  <div class="copy-label">${copyLabel}</div>
+  <div style="text-align:center;margin-bottom:4px"><strong style="font-size:1.1rem;letter-spacing:1px">Tax Invoice</strong></div>
+  <div class="inv-header">
+    <div class="inv-logo">
+      ${co.logo ? `<img src="${co.logo}" style="max-height:80px;max-width:150px;object-fit:contain">` : ''}
+    </div>
+    <div class="inv-co">
+      <div class="co-name">${escapeHtml(co.name || 'Company Name')}</div>
+      <div>${escapeHtml(co.address || '')}</div>
+      <div>Phone no.: ${escapeHtml(co.phone || '')}${co.email ? ` Email: ${escapeHtml(co.email)}` : ''}</div>
+      <div>GSTIN: ${escapeHtml(co.gstin || 'N/A')}, State: ${coStateCode}-${escapeHtml(co.state || '')}</div>
+    </div>
+  </div>
+
+  <div class="meta-grid">
+    <div class="meta-cell" style="border-right:1px solid #555">
+      <div class="meta-head">Bill To</div>
+      <div class="party-name">${escapeHtml(inv.partyName)}</div>
+      ${party.address ? `<div>${escapeHtml(party.address)}</div>` : ''}
+      ${party.city ? `<div>${escapeHtml(party.city)}</div>` : ''}
+      <div>Contact No. : ${escapeHtml(party.phone || '')}</div>
+    </div>
+    <div class="meta-cell" style="border-right:1px solid #555">
+      <div class="meta-head">Transportation Details</div>
+      <div class="meta-row"><span>Invoice Created By :</span><span style="font-weight:600">${escapeHtml(inv.createdBy||'-')}</span></div>
+      ${inv.deliveryDate ? `<div class="meta-row"><span>🚚 Delivery Date :</span><span style="font-weight:600">${fmtDate(inv.deliveryDate)}</span></div>` : '<div class="meta-row"><span>Delivery Date :</span><span>-</span></div>'}
+      ${inv.boxNo ? `<div class="meta-row"><span>📦 Box/Crate No. :</span><span style="font-weight:600">${escapeHtml(inv.boxNo)}</span></div>` : '<div class="meta-row"><span>Box/Crate No. :</span><span>-</span></div>'}
+      <div class="meta-row"><span>Delivered By :</span><span>_____________</span></div>
+    </div>
+    <div class="meta-cell">
+      <div class="meta-head" style="text-align:right">Invoice Details</div>
+      <div class="meta-row"><span>Invoice No. :</span><strong>${escapeHtml(displayInvNo)}</strong></div>
+      <div class="meta-row"><span>Date :</span><span>${fmtDate(inv.date)}</span></div>
+      ${timeStr ? `<div class="meta-row"><span>Time :</span><span>${timeStr}</span></div>` : ''}
+      ${inv.dueDate ? `<div class="meta-row"><span>Due Date :</span><span>${fmtDate(inv.dueDate)}</span></div>` : ''}
+      ${order.date ? `<div class="meta-row"><span>PO Date :</span><span>${fmtDate(order.date)}</span></div>` : ''}
+      ${inv.fromOrder ? `<div class="meta-row"><span>PO Number :</span><span>${escapeHtml(inv.fromOrder)}</span></div>` : ''}
+    </div>
+  </div>
+
+  <table class="items-tbl">
+    <thead>
+      <tr>
+        <th style="width:28px">#</th>
+        <th>Item Name</th>
+        <th style="width:60px">HSN/SAC</th>
+        <th class="tr" style="width:55px">MRP</th>
+        <th class="tr" style="width:40px">QTY</th>
+        <th style="width:45px">Unit</th>
+        <th class="tr" style="width:75px">Amount</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${items.map((it, idx) => `
+      <tr>
+        <td style="text-align:center">${idx + 1}</td>
+        <td style="font-weight:600">${escapeHtml(it.name)}</td>
+        <td style="font-size:8pt">${escapeHtml(it.hsn || '')}</td>
+        <td class="tr">&#8377; ${(+(it.mrp || it.price || 0)).toFixed(2)}</td>
+        <td class="tr">${it.qty}</td>
+        <td>${escapeHtml(it.unit || 'Pcs')}</td>
+        <td class="tr" style="font-weight:600">&#8377; ${(+(it.amount || 0)).toFixed(2)}</td>
+      </tr>`).join('')}
+    </tbody>
+    <tfoot>
+      <tr>
+        <td colspan="4" style="font-weight:700;border-top:1.5px solid #333">Total</td>
+        <td class="tr" style="font-weight:700;border-top:1.5px solid #333">${items.reduce((s,it)=>s+(+it.qty||0),0)}</td>
+        <td style="border-top:1.5px solid #333"></td>
+        <td class="tr" style="font-weight:800;border-top:1.5px solid #333">&#8377; ${(subTotal).toFixed(2)}</td>
+      </tr>
+    </tfoot>
+  </table>
+
+  <div class="bottom-grid">
+    <div class="tax-section">
+      <table class="tax-tbl">
+        <thead>
+          <tr><th>Tax type</th><th class="tr">Taxable amount</th><th class="tr">Rate</th><th class="tr">Tax amount</th></tr>
+        </thead>
+        <tbody>
+          ${isSameState ? `
+          <tr><td>SGST</td><td class="tr">&#8377; ${usedTaxable.toFixed(2)}</td><td class="tr">2.5%</td><td class="tr">&#8377; ${sgst.toFixed(2)}</td></tr>
+          <tr><td>CGST</td><td class="tr">&#8377; ${usedTaxable.toFixed(2)}</td><td class="tr">2.5%</td><td class="tr">&#8377; ${cgst.toFixed(2)}</td></tr>
+          ` : `
+          <tr><td>IGST</td><td class="tr">&#8377; ${usedTaxable.toFixed(2)}</td><td class="tr">5%</td><td class="tr">&#8377; ${igst.toFixed(2)}</td></tr>
+          `}
+        </tbody>
+      </table>
+      <div class="words-box">
+        <div class="section-label">Invoice Amount In Words</div>
+        <div style="text-transform:capitalize;font-size:0.82rem">${numberToWords(inv.total)}</div>
+      </div>
+      <div class="pay-box">
+        <div class="section-label">Payment mode</div>
+        <div style="text-align:center;font-size:0.88rem">${escapeHtml(inv.paymentMode || 'Cash')}</div>
+      </div>
+      <div class="bank-box">
+        <div class="section-label">Bank Details</div>
+        ${qrUrl ? `<div style="margin-top:4px"><img src="${qrUrl}" style="width:80px;height:80px"><br><span style="font-size:0.6rem;color:#555">UPI SCAN TO PAY</span></div>` : ''}
+      </div>
+    </div>
+    <div class="amt-section">
+      <div class="amt-row"><span>Sub Total</span><span>&#8377; ${subTotal.toFixed(2)}</span></div>
+      <div class="amt-row"><span>Round off</span><span>${(inv.roundOff||0) >= 0 ? '' : ''} &#8377; ${Math.abs(+(inv.roundOff||0)).toFixed(2)}${(inv.roundOff||0) < 0 ? ' (-)' : ''}</span></div>
+      <div class="amt-row grand"><span>Total</span><span>&#8377; ${(inv.total||0).toFixed(2)}</span></div>
+      <div class="amt-row" style="background:#fffbeb;color:#92400e"><span>Current Balance</span><span>&#8377; ${(party.balance||0).toFixed(2)}</span></div>
+      <div style="flex:1"></div>
+      <div style="text-align:right;padding:10px 8px;font-size:0.8rem">For : <strong>${escapeHtml(co.name||'')}</strong></div>
+      <div class="sign-area">
+        <div style="border-top:1px solid #333;padding-top:5px;text-align:center;font-weight:700;font-size:0.8rem">Authorized Signatory</div>
+      </div>
+    </div>
+  </div>
+</div>`;
+}
+
 async function printInvoice(id) {
     const [invoices, co, parties, orders] = await Promise.all([
         DB.getAll('invoices'),
@@ -7233,164 +7410,210 @@ async function printInvoice(id) {
     ]);
     const inv = invoices.find(x => x.id === id);
     if (!inv) return alert('Invoice not found');
-    const party = parties.find(p => p.id === inv.partyId) || {};
-    const order = orders.find(o => o.orderNo === inv.fromOrder) || {};
-
-    const items = typeof inv.items === 'string' ? JSON.parse(inv.items) : (inv.items || []);
-    const coStateCode = (co.gstin || '').substring(0, 2);
-    const paStateCode = (party.gstin || '').substring(0, 2);
-    const isSameState = coStateCode === paStateCode && coStateCode.length === 2;
-
-    const total = inv.total || 0;
-    const taxable = +(total / 1.05).toFixed(2);
-    const taxAmt = +(total - taxable).toFixed(2);
-    const cgst = isSameState ? +(taxAmt / 2).toFixed(2) : 0;
-    const sgst = isSameState ? +(taxAmt / 2).toFixed(2) : 0;
-    const igst = !isSameState ? taxAmt : 0;
 
     const upiLink = co.upi ? `upi://pay?pa=${co.upi}&pn=${encodeURIComponent(co.name)}&am=${inv.total}&cu=INR` : '';
     let qrUrl = '';
     if (upiLink && typeof QRCode !== 'undefined') {
         const div = document.createElement('div');
-        new QRCode(div, { text: upiLink, width: 100, height: 100, correctLevel: QRCode.CorrectLevel.M });
+        new QRCode(div, { text: upiLink, width: 80, height: 80, correctLevel: QRCode.CorrectLevel.M });
         const obj = div.querySelector('canvas') || div.querySelector('img');
         if (obj) qrUrl = obj.toDataURL ? obj.toDataURL() : obj.src;
     }
 
-    const printWindow = window.open('', '_blank', 'width=900,height=800');
-    const html = `<!DOCTYPE html><html><head><title>Invoice ${inv.invoiceNo}</title>
-<style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-    body { font-family: 'Inter', sans-serif; color: #1a1a1a; margin: 0; padding: 20px; font-size: 10pt; line-height: 1.3; background: #fff; }
-    .page { width: 210mm; min-height: 297mm; padding: 10mm; margin: 0 auto; background: white; box-sizing: border-box; position: relative; border: 1px solid #eee; }
-    .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #000; padding-bottom: 10px; margin-bottom: 15px; }
-    .co-info h1 { margin: 0; font-size: 1.5rem; color: #000; font-weight: 800; text-transform: uppercase; letter-spacing: -0.5px; }
-    .co-info p { margin: 1px 0; font-size: 0.8rem; color: #333; }
-    .invoice-title { text-align: center; font-size: 1.2rem; font-weight: 800; border: 1.5px solid #000; padding: 4px 20px; display: inline-block; margin-bottom: 15px; text-transform: uppercase; background: #f0f0f0; }
-    .grid-2 { display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 0; border: 1px solid #000; margin-bottom: 15px; }
-    .grid-cell { padding: 10px; border-right: 1px solid #000; }
-    .grid-cell:last-child { border-right: none; }
-    .label { font-size: 0.7rem; color: #555; font-weight: 600; text-transform: uppercase; margin-bottom: 2px; }
-    .value { font-weight: 700; font-size: 0.9rem; }
-    table { width: 100%; border-collapse: collapse; border: 1px solid #000; table-layout: fixed; }
-    th { background: #f0f0f0; color: #000; padding: 8px 5px; font-size: 0.75rem; text-transform: uppercase; text-align: left; border: 1px solid #000; }
-    td { padding: 8px 5px; border: 1px solid #000; font-size: 9pt; overflow: hidden; text-overflow: ellipsis; }
-    .text-right { text-align: right; }
-    .tot-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border: 1px solid #000; margin-top: -1px; }
-    .tax-box { border-right: 1px solid #000; padding: 10px; }
-    .tot-box { padding: 0; }
-    .tot-row { display: flex; justify-content: space-between; padding: 5px 10px; border-bottom: 0.5px solid #ccc; font-size: 0.85rem; }
-    .tot-row:last-child { border-bottom: none; }
-    .tot-row.grand { background: #f0f0f0; color: #000; font-weight: 800; font-size: 1.1rem; border-top: 1px solid #000; }
-    .footer { margin-top: 30px; display: flex; justify-content: space-between; align-items: flex-end; }
-    .sign-box { border-top: 1px solid #000; width: 220px; text-align: center; padding-top: 8px; font-weight: 700; font-size: 0.8rem; }
-    @media print {
-        body { padding: 0; }
-        .page { border: none; padding: 5mm; width: 100%; }
+    const party = parties.find(p => p.id === inv.partyId) || {};
+    const order = orders.find(o => o.orderNo === inv.fromOrder) || {};
+    const bodyHtml = _buildInvoicePageHtml(inv, party, order, co, qrUrl, 'ORIGINAL FOR RECIPIENT')
+        + '<div class="copy-divider">✂ - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -</div>'
+        + _buildInvoicePageHtml(inv, party, order, co, qrUrl, 'DUPLICATE FOR COLLECTION');
+
+    _openInvoicePrintWindow(bodyHtml, inv.vyaparInvoiceNo || inv.invoiceNo);
+}
+
+function _getInvoicePdfCss() {
+    return `* { box-sizing: border-box; }
+body { font-family: Arial, Helvetica, sans-serif; color: #1a1a1a; margin: 0; padding: 0; font-size: 8.5pt; line-height: 1.3; background: #fff; }
+.page { width: 148mm; padding: 5mm 7mm; background: #fff; position: relative; }
+.copy-label { position: absolute; top: 5mm; right: 7mm; font-size: 0.65rem; font-weight: 700; color: #555; }
+.inv-header { display: flex; gap: 10px; align-items: flex-start; border: 1px solid #444; border-bottom: none; padding: 8px 10px; }
+.inv-logo { min-width: 100px; }
+.inv-co { flex: 1; text-align: right; font-size: 0.78rem; }
+.co-name { font-size: 1rem; font-weight: 800; }
+.meta-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; border: 1px solid #444; margin-bottom: 0; }
+.meta-cell { padding: 6px 8px; font-size: 0.75rem; }
+.meta-head { font-weight: 800; background: #444; color: #fff; margin: -6px -8px 5px; padding: 3px 8px; font-size: 0.72rem; }
+.meta-row { display: flex; justify-content: space-between; gap: 4px; padding: 1px 0; }
+.party-name { font-weight: 800; font-size: 0.88rem; }
+.items-tbl { width: 100%; border-collapse: collapse; border: 1px solid #444; margin-top: 0; }
+.items-tbl th { background: #444; color: #fff; padding: 5px 4px; font-size: 0.7rem; text-align: left; border: 1px solid #555; }
+.items-tbl td { padding: 4px 4px; border: 1px solid #aaa; font-size: 8pt; }
+.items-tbl tfoot td { background: #f5f5f5; font-size: 8pt; }
+.tr { text-align: right; }
+.bottom-grid { display: grid; grid-template-columns: 55% 45%; border: 1px solid #444; border-top: none; }
+.tax-section { border-right: 1px solid #444; display: flex; flex-direction: column; }
+.tax-tbl { width: 100%; border-collapse: collapse; }
+.tax-tbl th { background: #444; color: #fff; padding: 4px 5px; font-size: 0.68rem; border: 1px solid #555; }
+.tax-tbl td { padding: 3px 5px; border: 1px solid #ccc; font-size: 8pt; }
+.words-box { border-top: 1px solid #aaa; padding: 5px 7px; }
+.pay-box { border-top: 1px solid #aaa; padding: 5px 7px; }
+.bank-box { border-top: 1px solid #aaa; padding: 5px 7px; flex: 1; }
+.section-label { font-weight: 800; font-size: 0.7rem; background: #444; color: #fff; margin: -5px -7px 4px; padding: 3px 7px; }
+.amt-section { display: flex; flex-direction: column; }
+.amt-row { display: flex; justify-content: space-between; padding: 4px 8px; border-bottom: 0.5px solid #ccc; font-size: 0.8rem; }
+.amt-row.grand { background: #444; color: #fff; font-weight: 800; font-size: 0.9rem; }
+.sign-area { padding: 6px 8px; text-align: right; }`;
+}
+
+async function _buildInvoicePdfBlob(inv, party, order, co, qrUrl) {
+    if (typeof html2pdf === 'undefined') throw new Error('PDF library not loaded');
+    const pageHtml = _buildInvoicePageHtml(inv, party, order, co, qrUrl, 'ORIGINAL FOR RECIPIENT');
+    const container = document.createElement('div');
+    container.style.cssText = 'width:148mm;position:absolute;left:-9999px;top:0;z-index:-1;background:#fff;';
+    container.innerHTML = `<style>${_getInvoicePdfCss()}</style>${pageHtml}`;
+    document.body.appendChild(container);
+    try {
+        const blob = await html2pdf().set({
+            margin: 0,
+            image: { type: 'jpeg', quality: 0.98 },
+            html2canvas: { scale: 2, useCORS: true, logging: false, backgroundColor: '#fff' },
+            jsPDF: { unit: 'mm', format: 'a5', orientation: 'portrait' }
+        }).from(container.querySelector('.page')).outputPdf('blob');
+        return blob;
+    } finally {
+        document.body.removeChild(container);
     }
+}
+
+async function shareInvoice(id) {
+    if (typeof html2pdf === 'undefined') { showToast('PDF library loading, please retry...', 'warning'); return; }
+    const [invs, parties, co, orders] = await Promise.all([
+        DB.getAll('invoices'), DB.getAll('parties'), DB.getObj('db_company'), DB.getAll('sales_orders')
+    ]);
+    const inv = invs.find(i => i.id === id);
+    if (!inv) return alert('Invoice not found');
+    const party = parties.find(p => p.id === inv.partyId) || {};
+    const order = orders.find(o => o.orderNo === inv.fromOrder) || {};
+    const invNo = inv.vyaparInvoiceNo || inv.invoiceNo;
+    const upiLink = co.upi ? `upi://pay?pa=${co.upi}&pn=${encodeURIComponent(co.name)}&am=${inv.total}&cu=INR` : '';
+    let qrUrl = '';
+    if (upiLink && typeof QRCode !== 'undefined') {
+        const div = document.createElement('div');
+        new QRCode(div, { text: upiLink, width: 80, height: 80, correctLevel: QRCode.CorrectLevel.M });
+        const obj = div.querySelector('canvas') || div.querySelector('img');
+        if (obj) qrUrl = obj.toDataURL ? obj.toDataURL() : obj.src;
+    }
+    showToast('Generating PDF...', 'info');
+    try {
+        const blob = await _buildInvoicePdfBlob(inv, party, order, co, qrUrl);
+        const fileName = `Invoice-${invNo}.pdf`;
+        const file = new File([blob], fileName, { type: 'application/pdf' });
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+            await navigator.share({ files: [file], title: `Invoice ${invNo}`, text: `${inv.partyName} — ₹${(inv.total || 0).toFixed(2)}` });
+        } else {
+            // Fallback: open PDF in new tab (user can share from there)
+            const url = URL.createObjectURL(blob);
+            window.open(url, '_blank');
+            setTimeout(() => URL.revokeObjectURL(url), 30000);
+            showToast('PDF opened — use browser share/download', 'info');
+        }
+    } catch (err) {
+        alert('PDF generation failed: ' + err.message);
+    }
+}
+async function printInvoiceByNo(invoiceNo) {
+    const invs = await DB.getAll('invoices');
+    const inv = invs.find(i => i.invoiceNo === invoiceNo);
+    if (inv) printInvoice(inv.id); else alert('Invoice not found: ' + invoiceNo);
+}
+async function shareInvoiceByNo(invoiceNo) {
+    const invs = await DB.getAll('invoices');
+    const inv = invs.find(i => i.invoiceNo === invoiceNo);
+    if (inv) shareInvoice(inv.id);
+}
+async function bulkPrintInvoices() {
+    const checked = [...document.querySelectorAll('.inv-chk:checked')].map(c => c.value);
+    if (!checked.length) return alert('Select at least one invoice to print.');
+
+    const [invoices, co, parties, orders] = await Promise.all([
+        DB.getAll('invoices'),
+        DB.getObj('db_company'),
+        DB.getAll('parties'),
+        DB.getAll('sales_orders')
+    ]);
+
+    const upiLink = co.upi ? `upi://pay?pa=${co.upi}&pn=${encodeURIComponent(co.name)}&cu=INR` : '';
+    let qrUrl = '';
+    if (upiLink && typeof QRCode !== 'undefined') {
+        const div = document.createElement('div');
+        new QRCode(div, { text: upiLink + '&am=0', width: 80, height: 80, correctLevel: QRCode.CorrectLevel.M });
+        const obj = div.querySelector('canvas') || div.querySelector('img');
+        if (obj) qrUrl = obj.toDataURL ? obj.toDataURL() : obj.src;
+    }
+
+    let bodyHtml = '';
+    checked.forEach((id, idx) => {
+        const inv = invoices.find(x => x.id === id);
+        if (!inv) return;
+        const party = parties.find(p => p.id === inv.partyId) || {};
+        const order = orders.find(o => o.orderNo === inv.fromOrder) || {};
+        if (idx > 0) bodyHtml += '<div class="page-break"></div>';
+        bodyHtml += _buildInvoicePageHtml(inv, party, order, co, qrUrl, 'ORIGINAL FOR RECIPIENT')
+            + '<div class="copy-divider">✂ - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -</div>'
+            + _buildInvoicePageHtml(inv, party, order, co, qrUrl, 'DUPLICATE FOR COLLECTION');
+    });
+
+    _openInvoicePrintWindow(bodyHtml, `Bulk (${checked.length} invoices)`);
+}
+
+function _openInvoicePrintWindow(bodyHtml, title) {
+    const printWindow = window.open('', '_blank', 'width=900,height=800');
+    const html = `<!DOCTYPE html><html><head><title>Invoice ${escapeHtml(title)}</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+  * { box-sizing: border-box; }
+  body { font-family: 'Inter', sans-serif; color: #1a1a1a; margin: 0; padding: 10px; font-size: 8.5pt; line-height: 1.3; background: #fff; }
+  .page { width: 148mm; padding: 5mm 7mm; margin: 0 auto 6px; background: #fff; border: 1px solid #ccc; position: relative; }
+  .page-break { page-break-after: always; break-after: page; height: 0; }
+  .copy-label { position: absolute; top: 8mm; right: 10mm; font-size: 0.68rem; font-weight: 700; color: #555; text-align: right; }
+  .inv-header { display: flex; gap: 10px; align-items: flex-start; border: 1px solid #444; border-bottom: none; padding: 8px 10px; }
+  .inv-logo { min-width: 100px; }
+  .inv-co { flex: 1; text-align: right; font-size: 0.8rem; }
+  .co-name { font-size: 1rem; font-weight: 800; }
+  .meta-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; border: 1px solid #444; margin-bottom: 0; }
+  .meta-cell { padding: 7px 9px; font-size: 0.78rem; }
+  .meta-head { font-weight: 800; background: #444; color: #fff; margin: -7px -9px 6px; padding: 4px 9px; font-size: 0.75rem; }
+  .meta-row { display: flex; justify-content: space-between; gap: 6px; padding: 1px 0; }
+  .party-name { font-weight: 800; font-size: 0.92rem; }
+  .items-tbl { width: 100%; border-collapse: collapse; border: 1px solid #444; margin-top: 0; }
+  .items-tbl th { background: #444; color: #fff; padding: 6px 5px; font-size: 0.72rem; text-align: left; border: 1px solid #555; }
+  .items-tbl td { padding: 5px 5px; border: 1px solid #aaa; font-size: 8.5pt; }
+  .items-tbl tfoot td { background: #f5f5f5; font-size: 8.5pt; }
+  .tr { text-align: right; }
+  .bottom-grid { display: grid; grid-template-columns: 55% 45%; border: 1px solid #444; border-top: none; }
+  .tax-section { border-right: 1px solid #444; display: flex; flex-direction: column; }
+  .tax-tbl { width: 100%; border-collapse: collapse; }
+  .tax-tbl th { background: #444; color: #fff; padding: 5px 6px; font-size: 0.7rem; border: 1px solid #555; }
+  .tax-tbl td { padding: 4px 6px; border: 1px solid #ccc; font-size: 8.5pt; }
+  .words-box { border-top: 1px solid #aaa; padding: 6px 8px; }
+  .pay-box { border-top: 1px solid #aaa; padding: 6px 8px; }
+  .bank-box { border-top: 1px solid #aaa; padding: 6px 8px; flex: 1; }
+  .section-label { font-weight: 800; font-size: 0.72rem; background: #444; color: #fff; margin: -6px -8px 5px; padding: 3px 8px; }
+  .amt-section { display: flex; flex-direction: column; }
+  .amt-row { display: flex; justify-content: space-between; padding: 5px 10px; border-bottom: 0.5px solid #ccc; font-size: 0.82rem; }
+  .amt-row.grand { background: #444; color: #fff; font-weight: 800; font-size: 0.95rem; }
+  .sign-area { padding: 6px 10px 8px; text-align: right; }
+  .copy-divider { text-align: center; font-size: 7.5pt; color: #bbb; letter-spacing: 1px; padding: 2px 0; margin: 0; line-height: 1; }
+  @media print {
+    @page { size: A5 portrait; margin: 0; }
+    body { padding: 0; margin: 0; }
+    .page { border: none; padding: 3mm 6mm; width: 100%; margin: 0; max-height: 100mm; overflow: hidden; }
+    .copy-divider { color: #999; page-break-after: avoid; break-after: avoid; }
+    .page-break { page-break-after: always; break-after: page; height: 0; }
+  }
 </style>
-</head><body>
-<div class="page">
-    <div style="text-align:right; font-size: 0.65rem; color: #666; font-weight: 600; margin-bottom: 5px;">TAX INVOICE - ORIGINAL FOR RECIPIENT</div>
-    <div class="header">
-        ${co.logo ? `<img src="${co.logo}" style="max-height:70px; max-width:200px; object-fit:contain">` : '<div></div>'}
-        <div class="co-info" style="text-align:right">
-            <h1>${escapeHtml(co.name || 'Company Name')}</h1>
-            <p>${escapeHtml(co.address || '')}</p>
-            <p>Phone: ${escapeHtml(co.phone || '')} | GSTIN: <strong>${escapeHtml(co.gstin || 'N/A')}</strong></p>
-            <p>State: ${escapeHtml(co.state || '')} (${coStateCode})</p>
-        </div>
-    </div>
-
-    <div style="text-align:center"><div class="invoice-title">Sales Invoice</div></div>
-
-    <div class="grid-2">
-        <div class="grid-cell">
-            <div class="label">Bill To</div>
-            <div class="value" style="font-size: 1rem; color: #000">${escapeHtml(inv.partyName)}</div>
-            <div style="font-size: 0.8rem; margin-top: 4px;">
-                ${party.address ? `<div>${escapeHtml(party.address)}</div>` : ''}
-                ${party.city ? `<div>${escapeHtml(party.city)}</div>` : ''}
-                <div style="margin-top: 4px;"><b>GSTIN:</b> ${escapeHtml(inv.gstin || party.gstin || 'URD')}</div>
-                <div style="margin-top: 8px; display: flex; gap: 15px;">
-                    <div><b style="color: #6366f1">Party Code:</b> ${escapeHtml(party.partyCode || 'N/A')}</div>
-                    <div><b>State:</b> ${paStateCode}</div>
-                </div>
-            </div>
-        </div>
-        <div class="grid-cell">
-            <div class="tot-row"><span class="label">Invoice No</span> <span class="value">${escapeHtml(inv.invoiceNo)}</span></div>
-            <div class="tot-row"><span class="label">Date</span> <span class="value">${fmtDate(inv.date)}</span></div>
-            ${inv.dueDate ? `<div class="tot-row"><span class="label">Due Date</span> <span class="value">${fmtDate(inv.dueDate)}</span></div>` : ''}
-            <div class="tot-row"><span class="label">Order Ref</span> <span class="value">${escapeHtml(inv.fromOrder || '-')}</span></div>
-            <div class="tot-row"><span class="label">Order Date</span> <span class="value">${order.date ? fmtDate(order.date) : '-'}</span></div>
-        </div>
-    </div>
-
-    <div class="table-wrapper">
-        <table>
-            <thead><tr><th width="30">S.N</th><th width="240">Description of Goods</th><th class="text-right" width="60">Qty</th><th width="60">Unit</th><th class="text-right" width="80">Rate</th><th class="text-right" width="100">Amount</th></tr></thead>
-            <tbody>
-                ${items.map((it, idx) => `
-                <tr>
-                    <td style="text-align:center">${idx + 1}</td>
-                    <td style="font-weight:600">${escapeHtml(it.name)}</td>
-                    <td class="text-right">${it.qty}</td>
-                    <td>${it.unit || 'PCS'}</td>
-                    <td class="text-right">${currency(it.price).replace('', '')}</td>
-                    <td class="text-right" style="font-weight:600">${currency(it.amount).replace('', '')}</td>
-                </tr>`).join('')}
-                ${Array.from({ length: Math.max(0, 10 - items.length) }).map(() => `<tr><td style="color:transparent">.</td><td></td><td></td><td></td><td></td><td></td></tr>`).join('')}
-            </tbody>
-        </table>
-    </div>
-
-    <div class="tot-grid">
-        <div class="tax-box">
-            <div class="label" style="margin-bottom:5px; border-bottom: 1px solid #777; display: inline-block">GST Analysis (Inclusive 5%)</div>
-            <table style="border:none; font-size: 0.8rem; width: 100%">
-                <tr style="background:none"><td style="padding:2px;border:none">Taxable Amount</td><td class="text-right" style="padding:2px;border:none">${currency(taxable)}</td></tr>
-                ${isSameState ? `
-                <tr style="background:none"><td style="padding:2px;border:none">CGST (2.5%)</td><td class="text-right" style="padding:2px;border:none">${currency(cgst)}</td></tr>
-                <tr style="background:none"><td style="padding:2px;border:none">SGST (2.5%)</td><td class="text-right" style="padding:2px;border:none">${currency(sgst)}</td></tr>
-                ` : `
-                <tr style="background:none"><td style="padding:2px;border:none">IGST (5.0%)</td><td class="text-right" style="padding:2px;border:none">${currency(igst)}</td></tr>
-                `}
-                <tr style="background:none; border-top: 1px solid #ccc"><td style="padding:2px;border:none"><b>Total Tax</b></td><td class="text-right" style="padding:2px;border:none"><b>${currency(taxAmt)}</b></td></tr>
-            </table>
-            <div style="margin-top:12px; padding-top:8px; border-top: 1px dashed #000">
-                <div class="label">Amount in Words</div>
-                <div class="value" style="font-size:0.8rem; text-transform: capitalize">${numberToWords(inv.total)}</div>
-            </div>
-        </div>
-        <div class="tot-box">
-            <div class="tot-row"><span class="label">Sub Total</span> <span class="value">${currency(inv.subtotal || inv.total)}</span></div>
-            <div class="tot-row"><span class="label">Discount</span> <span class="value">${currency(inv.discountAmt || 0)}</span></div>
-            <div class="tot-row"><span class="label">Round Off</span> <span class="value">${currency(inv.roundOff || 0)}</span></div>
-            <div class="tot-row grand"><span>Total Amount</span> <span>${currency(inv.total)}</span></div>
-            <div class="tot-row" style="background:#fefce8; padding: 8px 10px"><span class="label" style="color:#854d0e">Outstanding Balance</span> <span class="value" style="color:#854d0e">${currency(party.balance || 0)}</span></div>
-            <div style="padding: 10px; text-align: center">
-                ${qrUrl ? `<img src="${qrUrl}" style="margin-bottom:4px"><br><span style="font-size:0.6rem; color:#666">Pay via UPI</span>` : ''}
-            </div>
-        </div>
-    </div>
-
-    <div class="footer">
-        <div style="font-size: 0.75rem; color: #555">
-            <b>Terms & Conditions:</b><br>
-            1. Goods once sold will not be taken back.<br>
-            2. Subject to local jurisdiction.
-        </div>
-        <div style="text-align:right">
-            <div style="font-size:0.75rem; margin-bottom:35px">For <strong>${escapeHtml(co.name || 'Company Name')}</strong></div>
-            <div class="sign-box">Authorized Signatory</div>
-        </div>
-    </div>
-</div>
-</body></html>`;
+</head><body>${bodyHtml}</body></html>`;
     printWindow.document.write(html);
     printWindow.document.close();
-    setTimeout(() => { printWindow.print(); }, 800);
+    setTimeout(() => { printWindow.print(); }, 900);
 }
 
 
@@ -7398,6 +7621,8 @@ async function printInvoice(id) {
 //  PAYMENTS
 // =============================================
 async function renderPayments() {
+    // Restore bottom nav hidden by openPaymentModal
+    document.body.classList.remove('pay-form-open');
     const payments = await DB.getAll('payments');
     const isSalesman = currentUser.role === 'Salesman';
     // Salesman sees only their own payments
@@ -7475,7 +7700,7 @@ function renderPayRows(pays) {
             date: `<td>${fmtDate(p.date)}</td>`,
             receiptNo: `<td style="font-weight:600;color:var(--accent)">${p.payNo || (p.id ? p.id.substring(0, 8) : '-')}</td>`,
             party: `<td style="font-weight:600">${escapeHtml(p.partyName)}</td>`,
-            type: `<td><span class="badge ${p.type === 'in' ? 'badge-success' : 'badge-danger'}">${p.type === 'in' ? 'Payment In' : 'Payment Out'}</span></td>`,
+            type: `<td style="min-width:120px"><span class="badge ${p.type === 'in' ? 'badge-success' : 'badge-danger'}">${p.type === 'in' ? 'Payment In' : 'Payment Out'}</span></td>`,
             invoiceNo: `<td>${buildPayInvoiceCell(p)}</td>`,
             mode: `<td>${p.mode || 'Cash'}${p.mode === 'Cheque' && p.chequeNo ? `<br><span style="font-size:0.75rem;color:var(--text-muted)">#${p.chequeNo} | ${p.chequeBank || ''}</span><br><span class="badge ${p.chequeStatus === 'Cleared' ? 'badge-success' : p.chequeStatus === 'Deposited' ? 'badge-warning' : 'badge-danger'}" style="font-size:0.65rem">${p.chequeStatus || 'Pending'}</span>` : ''}</td>`,
             collectedBy: `<td style="font-size:0.82rem;color:var(--text-secondary)">${escapeHtml(p.collectedBy || p.createdBy || '-')}</td>`,
@@ -7586,9 +7811,11 @@ function printPaymentReceipt() {
 
 
 async function openPaymentModal(prefillPartyId) {
-    // Hide FAB  full-page form has its own footer buttons
+    // Hide FAB and bottom nav — full-page form has its own footer buttons
+    // Hiding the nav removes the gap between the sticky footer and the keyboard
     const fab = $('app-fab');
     if (fab) fab.classList.add('hidden');
+    document.body.classList.add('pay-form-open');
 
     // Render as full page (Vyapar-style) instead of a modal bottom sheet
     const [parties, users] = await Promise.all([DB.getAll('parties'), DB.getAll('users')]);
@@ -7758,6 +7985,31 @@ async function openPaymentModal(prefillPartyId) {
 
     updatePaymentQR();
     onPayModeChange();
+
+    // Enter on amount field → move focus to the relevant next section based on mode
+    const amtInput = $('f-pay-amount-0');
+    if (amtInput) {
+        amtInput.addEventListener('keydown', function (e) {
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+            const mode = document.querySelector('.f-pay-row-mode')?.value || 'Cash';
+            if (mode === 'UPI') {
+                const qrBox = $('pay-qr-box');
+                if (qrBox) qrBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            } else if (mode === 'Cheque') {
+                const chequeNo = $('f-pay-cheque-no');
+                if (chequeNo) { chequeNo.scrollIntoView({ behavior: 'smooth', block: 'center' }); chequeNo.focus(); }
+            } else {
+                // Cash / Bank Transfer → focus allocation section if visible, else note
+                const allocSection = $('pay-invoice-section');
+                const firstAlloc = allocSection && allocSection.style.display !== 'none'
+                    ? allocSection.querySelector('input')
+                    : null;
+                if (firstAlloc) { firstAlloc.scrollIntoView({ behavior: 'smooth', block: 'center' }); firstAlloc.focus(); }
+                else { const note = $('f-pay-note'); if (note) note.focus(); }
+            }
+        });
+    }
 }
 
 // Payment Mode Row Helpers
@@ -8513,12 +8765,14 @@ async function deletePayment(id) {
                 await DB.update('parties', party.id, { balance: newBal });
             }
 
-            // 2. Delete related party_ledger entries
+            // 2. Delete related party_ledger entries directly (bypass DB.delete's record-not-found guard)
             const payRefNo = pay.payNo || pay.id.substring(0, 8);
             const ledger = await DB.getAll('party_ledger');
             const ledgerEntries = ledger.filter(e => e.docNo === payRefNo && e.partyId === pay.partyId);
-            for (const entry of ledgerEntries) {
-                await DB.delete('party_ledger', entry.id);
+            if (ledgerEntries.length > 0) {
+                const ids = ledgerEntries.map(e => e.id);
+                await supabaseClient.from('party_ledger').delete().in('id', ids);
+                await DB.refreshTables(['party_ledger']);
             }
 
             // 3. Delete related expense entries (discount expenses)
@@ -8526,7 +8780,8 @@ async function deletePayment(id) {
                 const expenses = await DB.getAll('expenses');
                 const discExp = expenses.find(e => e.category === 'Payment Discount' && e.docNo === payRefNo);
                 if (discExp) {
-                    await DB.delete('expenses', discExp.id);
+                    await supabaseClient.from('expenses').delete().eq('id', discExp.id);
+                    await DB.refreshTables(['expenses']);
                 }
             }
         }
@@ -8940,11 +9195,16 @@ async function saveExpense(id) {
 }
 
 async function deleteExpense(id) {
-    if (!confirm('Delete?')) return;
+    if (!canEdit()) return alert('Access Denied: Only Admin or users with Edit permission can delete records.');
+    if (!confirm('Delete expense?')) return;
     try {
-        await DB.delete('expenses', id);
+        // Use direct Supabase delete to avoid the record-not-found guard in DB.delete
+        const { error } = await supabaseClient.from('expenses').delete().eq('id', id);
+        if (error) throw error;
+        await DB.refreshTables(['expenses']);
         await renderExpenses();
-    } catch (err) { alert('Error: ' + err.message); }
+        showToast('Expense deleted', 'warning');
+    } catch (err) { alert('Error deleting expense: ' + err.message); }
 }
 
 // =============================================
@@ -8990,8 +9250,23 @@ function renderPacking() {
             <div class="stat-card green"><div class="stat-icon"></div><div class="stat-value">${packedWithInvoice.length}</div><div class="stat-label">Packed History</div></div>
             <div class="stat-card red"><div class="stat-icon"></div><div class="stat-value">${cannotCompleteOrders.length}</div><div class="stat-label">Cannot Complete</div></div>
         </div>
-        <h3 style="margin-bottom:14px;font-size:1rem"> Orders Ready for Packing</h3>
-        <div class="section-toolbar" style="margin-bottom:8px"><div class="filter-group"><button class="btn btn-outline" onclick="openColumnPersonalizer('packing','renderPacking')" style="border-color:var(--accent);color:var(--accent)"> Columns</button></div></div>
+        <h3 style="margin-bottom:10px;font-size:1rem"> Orders Ready for Packing</h3>
+        <div class="section-toolbar" style="margin-bottom:8px"><div class="filter-group" style="flex-wrap:wrap;gap:6px">
+            <input type="date" id="pick-from" value="${window._pickListFrom||''}" onchange="window._pickListFrom=this.value" title="From Date" style="width:135px;padding:5px 8px;font-size:0.82rem">
+            <input type="date" id="pick-to" value="${window._pickListTo||today()}" onchange="window._pickListTo=this.value" title="To Date" style="width:135px;padding:5px 8px;font-size:0.82rem">
+            <select id="pick-warehouse" onchange="window._pickListWarehouse=this.value" style="padding:5px 8px;font-size:0.82rem">
+                <option value="" ${!window._pickListWarehouse?'selected':''}>All Warehouses</option>
+                <option value="Main Warehouse" ${window._pickListWarehouse==='Main Warehouse'?'selected':''}>Main Warehouse</option>
+                <option value="Store" ${window._pickListWarehouse==='Store'?'selected':''}>Store</option>
+                <option value="Van Stock" ${window._pickListWarehouse==='Van Stock'?'selected':''}>Van Stock</option>
+            </select>
+            <select id="pick-report-type" onchange="window._pickListReportType=this.value" style="padding:5px 8px;font-size:0.82rem">
+                <option value="item" ${window._pickListReportType!=='invoice'?'selected':''}>📦 Item-wise</option>
+                <option value="invoice" ${window._pickListReportType==='invoice'?'selected':''}>🧾 Invoice-wise</option>
+            </select>
+            <button class="btn btn-outline" onclick="printPickListPdf()" style="border-color:#1e293b;color:#1e293b;padding:5px 12px">📋 Pick List PDF</button>
+            <button class="btn btn-outline" onclick="openColumnPersonalizer('packing','renderPacking')" style="border-color:var(--accent);color:var(--accent);padding:5px 10px"> Columns</button>
+        </div></div>
         <div class="card" style="margin-bottom:24px"><div class="card-body">
             <div class="table-wrapper">
                 <table class="data-table"><thead><tr>${ColumnManager.get('packing').filter(c => c.visible).map(c => `<th>${c.label}</th>`).join('')}</tr></thead>
@@ -9075,6 +9350,221 @@ function renderPacking() {
                 </tr>`).join('') : '<tr><td colspan="7" class="empty-state"><p>No packed history for selected range</p></td></tr>'}</tbody></table>
             </div>
         </div></div>`;
+}
+
+async function printPickListPdf() {
+    const from = window._pickListFrom || '';
+    const to = window._pickListTo || today();
+    const warehouse = window._pickListWarehouse || '';
+    const reportType = window._pickListReportType || 'item';
+
+    const inventory = DB.cache['inventory'] || DB.get('db_inventory') || [];
+    const allInvoices = await DB.getAll('invoices');
+    const co = await DB.getObj('db_company');
+
+    let pickInvoices = allInvoices.filter(i => i.type === 'sale' && i.status !== 'cancelled');
+    if (from) pickInvoices = pickInvoices.filter(i => (i.date || '') >= from);
+    if (to)   pickInvoices = pickInvoices.filter(i => (i.date || '') <= to);
+    if (!pickInvoices.length) return alert('No sale invoices found for selected date range.');
+
+    const dateLabel = from ? `${fmtDate(from)} – ${fmtDate(to)}` : `Up to ${fmtDate(to)}`;
+    const sharedCss = `* { box-sizing: border-box; }
+    body { font-family: Arial, Helvetica, sans-serif; font-size: 9pt; color: #1a1a1a; margin: 0; padding: 8mm 10mm; }
+    .rpt-header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #1e293b; padding-bottom: 7px; margin-bottom: 8px; }
+    .rpt-title { font-size: 13pt; font-weight: 800; margin: 0 0 2px; }
+    .rpt-sub { font-size: 8pt; color: #475569; margin: 1px 0; }
+    .badge-stat { display: inline-block; background: #1e293b; color: #fff; border-radius: 4px; padding: 2px 7px; font-size: 8pt; font-weight: 700; margin-right: 6px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 4px; }
+    thead th { background: #1e293b; color: #fff; padding: 5px; font-size: 8.5pt; text-align: left; border: 1px solid #0f172a; }
+    tbody tr:nth-child(even) { background: #f1f5f9; }
+    td { padding: 4px 5px; border: 1px solid #cbd5e1; font-size: 8.5pt; vertical-align: middle; }
+    tfoot td { background: #334155; color: #fff; font-weight: 700; padding: 5px; }
+    .footer { margin-top: 10px; font-size: 8pt; color: #64748b; border-top: 1px dashed #cbd5e1; padding-top: 6px; display: flex; justify-content: space-between; }
+    .inv-block { margin-bottom: 12px; border: 1px solid #cbd5e1; border-radius: 4px; overflow: hidden; page-break-inside: avoid; }
+    .inv-block-header { background: #1e293b; color: #fff; padding: 5px 8px; font-size: 8.5pt; display: flex; justify-content: space-between; }
+    @media print { @page { size: A4 landscape; margin: 8mm; } body { padding: 0; } button { display: none; } }`;
+
+    let bodyHtml = '';
+
+    if (reportType === 'invoice') {
+        // ── INVOICE-WISE ──
+        let grandTotal = 0, grandQty = 0, grandAmt = 0;
+        const blocks = pickInvoices.sort((a, b) => (a.date || '').localeCompare(b.date || '')).map(inv => {
+            const invNo = inv.vyaparInvoiceNo || inv.invoiceNo;
+            const filteredItems = (inv.items || []).filter(li => {
+                if (!warehouse) return true;
+                const invItem = inventory.find(x => x.id === li.itemId);
+                return (invItem ? invItem.warehouse || 'Main Warehouse' : 'Main Warehouse') === warehouse;
+            });
+            if (!filteredItems.length) return '';
+            const invQty = filteredItems.reduce((s, li) => s + (li.packedQty !== undefined ? li.packedQty : (li.qty || 0)), 0);
+            const invAmt = filteredItems.reduce((s, li) => s + (+(li.amount || 0)), 0);
+            grandTotal += inv.total || 0;
+            grandQty += invQty;
+            grandAmt += invAmt;
+            const itemRows = filteredItems.map((li, idx) => {
+                const invItem = inventory.find(x => x.id === li.itemId);
+                const wh = invItem ? (invItem.warehouse || 'Main Warehouse') : 'Main Warehouse';
+                const qty = li.packedQty !== undefined ? li.packedQty : (li.qty || 0);
+                const rate = +(li.price || li.rate || 0);
+                const amt = +(li.amount || (qty * rate) || 0);
+                return `<tr>
+                    <td style="text-align:center">${idx + 1}</td>
+                    <td style="font-weight:600">${escapeHtml(li.name)}</td>
+                    <td style="font-size:7.5pt">${escapeHtml(invItem ? invItem.hsn || '-' : '-')}</td>
+                    <td>${escapeHtml(invItem ? invItem.category || '-' : '-')}</td>
+                    <td>${escapeHtml(wh)}</td>
+                    <td style="text-align:center;font-weight:700;color:#1e293b">${qty}</td>
+                    <td>${escapeHtml(li.unit || 'Pcs')}</td>
+                    <td style="text-align:right">₹${rate.toFixed(2)}</td>
+                    <td style="text-align:right;font-weight:600">₹${amt.toFixed(2)}</td>
+                    <td style="min-width:50px;border:1px solid #94a3b8;text-align:center"></td>
+                </tr>`;
+            }).join('');
+            const disc = inv.discountAmt || 0;
+            const gst = inv.gst ? (invAmt * inv.gst / 100) : 0;
+            return `<div class="inv-block">
+                <div class="inv-block-header">
+                    <span>🧾 <strong>${escapeHtml(invNo)}</strong> &nbsp;|&nbsp; ${escapeHtml(inv.partyName)}</span>
+                    <span>${fmtDate(inv.date)}${inv.deliveryDate ? ' &nbsp;🚚 ' + fmtDate(inv.deliveryDate) : ''}${inv.boxNo ? ' &nbsp;📦 ' + escapeHtml(inv.boxNo) : ''} &nbsp;|&nbsp; ${filteredItems.length} items &nbsp;|&nbsp; Qty: ${invQty}</span>
+                </div>
+                <table>
+                    <thead><tr>
+                        <th style="width:24px">#</th>
+                        <th>Item Name</th>
+                        <th style="width:48px">HSN</th>
+                        <th style="width:75px">Category</th>
+                        <th style="width:90px">Warehouse</th>
+                        <th style="width:50px;text-align:center">Qty</th>
+                        <th style="width:38px">Unit</th>
+                        <th style="width:65px;text-align:right">Rate</th>
+                        <th style="width:72px;text-align:right">Amount</th>
+                        <th style="width:55px;text-align:center">Picked ✓</th>
+                    </tr></thead>
+                    <tbody>${itemRows}</tbody>
+                    <tfoot>
+                        <tr>
+                            <td colspan="5" style="text-align:right;font-size:8pt">Sub Total</td>
+                            <td style="text-align:center">${invQty}</td>
+                            <td></td>
+                            <td></td>
+                            <td style="text-align:right">₹${invAmt.toFixed(2)}</td>
+                            <td></td>
+                        </tr>
+                        ${disc > 0 ? `<tr><td colspan="8" style="text-align:right;font-size:8pt;background:#fef9c3;color:#854d0e">Discount</td><td style="text-align:right;background:#fef9c3;color:#854d0e">-₹${disc.toFixed(2)}</td><td></td></tr>` : ''}
+                        ${gst > 0 ? `<tr><td colspan="8" style="text-align:right;font-size:8pt">GST (${inv.gst}%)</td><td style="text-align:right">₹${gst.toFixed(2)}</td><td></td></tr>` : ''}
+                        <tr style="background:#1e293b;color:#fff">
+                            <td colspan="8" style="text-align:right;font-weight:700">Invoice Total</td>
+                            <td style="text-align:right;font-weight:700">₹${(inv.total || 0).toFixed(2)}</td>
+                            <td></td>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>`;
+        }).join('');
+
+        bodyHtml = `
+        <div class="rpt-header">
+            <div>
+                <div class="rpt-title">🧾 Invoice-wise Pick List</div>
+                <div class="rpt-sub">${escapeHtml(co.name || '')} &nbsp;|&nbsp; Date: ${dateLabel} &nbsp;|&nbsp; Warehouse: ${warehouse || 'All'}</div>
+                <div style="margin-top:5px">
+                    <span class="badge-stat">${pickInvoices.length} Invoices</span>
+                    <span class="badge-stat">Total Qty: ${grandQty}</span>
+                    <span class="badge-stat">Grand Total: ₹${grandTotal.toFixed(2)}</span>
+                </div>
+            </div>
+            <div style="font-size:8pt;color:#64748b;text-align:right">Generated: ${new Date().toLocaleString('en-IN')}</div>
+        </div>
+        ${blocks || '<p style="color:#e11d48">No items match the selected warehouse filter.</p>'}
+        <div class="footer">
+            <span>Packed by: _________________________  Checked by: _________________________</span>
+            <span>Printed: ${new Date().toLocaleString('en-IN')}</span>
+        </div>`;
+
+    } else {
+        // ── ITEM-WISE ──
+        const itemMap = new Map();
+        pickInvoices.forEach(inv => {
+            (inv.items || []).forEach(li => {
+                const invItem = inventory.find(x => x.id === li.itemId);
+                const wh = invItem ? (invItem.warehouse || 'Main Warehouse') : 'Main Warehouse';
+                if (warehouse && wh !== warehouse) return;
+                const qty = li.packedQty !== undefined ? li.packedQty : (li.qty || 0);
+                const key = li.itemId || li.name;
+                if (itemMap.has(key)) {
+                    const e = itemMap.get(key);
+                    e.totalQty += qty;
+                    e.invoices.add(inv.vyaparInvoiceNo || inv.invoiceNo);
+                } else {
+                    itemMap.set(key, {
+                        name: li.name,
+                        category: invItem ? (invItem.category || '-') : '-',
+                        hsn: invItem ? (invItem.hsn || '-') : '-',
+                        unit: li.unit || (invItem ? invItem.unit : 'Pcs') || 'Pcs',
+                        warehouse: wh, totalQty: qty,
+                        invoices: new Set([inv.vyaparInvoiceNo || inv.invoiceNo])
+                    });
+                }
+            });
+        });
+        if (!itemMap.size) return alert('No items found for the selected warehouse filter.');
+        const rows = [...itemMap.values()].sort((a, b) => a.warehouse.localeCompare(b.warehouse) || a.name.localeCompare(b.name));
+        const totalQty = rows.reduce((s, r) => s + r.totalQty, 0);
+        const tableRows = rows.map((r, i) => `<tr>
+            <td style="text-align:center">${i + 1}</td>
+            <td style="font-weight:600">${escapeHtml(r.name)}</td>
+            <td>${escapeHtml(r.hsn)}</td>
+            <td>${escapeHtml(r.category)}</td>
+            <td>${escapeHtml(r.warehouse)}</td>
+            <td style="text-align:center;font-weight:700;font-size:1.05em">${r.totalQty}</td>
+            <td>${escapeHtml(r.unit)}</td>
+            <td style="font-size:0.78rem;color:#555">${[...r.invoices].join(', ')}</td>
+            <td style="min-width:60px;border:1px solid #94a3b8"></td>
+        </tr>`).join('');
+
+        bodyHtml = `
+        <div class="rpt-header">
+            <div>
+                <div class="rpt-title">📦 Item-wise Pick List</div>
+                <div class="rpt-sub">${escapeHtml(co.name || '')} &nbsp;|&nbsp; Date: ${dateLabel} &nbsp;|&nbsp; Warehouse: ${warehouse || 'All'}</div>
+                <div style="margin-top:5px">
+                    <span class="badge-stat">${pickInvoices.length} Invoices</span>
+                    <span class="badge-stat">${rows.length} Items</span>
+                    <span class="badge-stat">Total Qty: ${totalQty}</span>
+                </div>
+            </div>
+            <div style="font-size:8pt;color:#64748b;text-align:right">Generated: ${new Date().toLocaleString('en-IN')}</div>
+        </div>
+        <table>
+            <thead><tr>
+                <th style="width:26px">#</th><th>Item Name</th><th style="width:55px">HSN</th>
+                <th style="width:85px">Category</th><th style="width:100px">Warehouse</th>
+                <th style="width:60px;text-align:center">Total Qty</th><th style="width:42px">Unit</th>
+                <th>Invoices</th><th style="width:65px;text-align:center">Picked ✓</th>
+            </tr></thead>
+            <tbody>${tableRows}</tbody>
+            <tfoot><tr>
+                <td colspan="5" style="text-align:right">TOTAL</td>
+                <td style="text-align:center">${totalQty}</td>
+                <td colspan="3"></td>
+            </tr></tfoot>
+        </table>
+        <div class="footer">
+            <span>Packed by: _________________________  Checked by: _________________________</span>
+            <span>Printed: ${new Date().toLocaleString('en-IN')}</span>
+        </div>`;
+    }
+
+    const html = `<!DOCTYPE html><html><head><title>Pick List</title><style>${sharedCss}</style></head><body>
+    <div style="text-align:right;margin-bottom:6px"><button onclick="window.print()" style="background:#1e293b;color:#fff;border:none;border-radius:5px;padding:6px 18px;font-size:9pt;cursor:pointer">🖨️ Print</button></div>
+    ${bodyHtml}</body></html>`;
+
+    const win = window.open('', '_blank', 'width=1100,height=760');
+    if (!win) return alert('Please allow popups to print the Pick List.');
+    win.document.write(html);
+    win.document.close();
+    setTimeout(() => win.print(), 800);
 }
 
 async function clearCannotComplete(orderId) {
@@ -10879,6 +11369,7 @@ function renderReports() {
             <div class="report-card" onclick="showReport('party-soa')"><div class="report-icon-wrap" style="background:var(--bg-primary)"><div class="report-icon">📜</div></div><div class="report-text"><h4>Statement of Account</h4><p>Full party ledger with print</p></div></div>
             <div class="report-card" onclick="showReport('abc-analysis')"><div class="report-icon-wrap" style="background:var(--bg-primary)"><div class="report-icon">🔠</div></div><div class="report-text"><h4>ABC Analysis</h4><p>Revenue-based item classification</p></div></div>
             <div class="report-card" onclick="showReport('indent')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(249,115,22,0.12),rgba(234,88,12,0.08))"><div class="report-icon">📝</div></div><div class="report-text"><h4>Purchase Indent</h4><p>Suggested PO based on 30d sales</p></div></div>
+            <div class="report-card" onclick="showReport('zero-sales')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(239,68,68,0.12),rgba(220,38,38,0.08))"><div class="report-icon">🚨</div></div><div class="report-text"><h4>Zero Sales Customers</h4><p>Inactive customers — assign salesman for follow-up</p></div></div>
         </div>
 
         <div class="section-toolbar" style="margin-top:28px">
@@ -11534,9 +12025,242 @@ async function showReport(type) {
         renderPaymentRpt();
         return;
     }
+
+    if (type === 'zero-sales') {
+        const salesUsers = users.filter(u => ['Admin', 'Manager', 'Salesman'].includes(u.role));
+        pageContent.innerHTML = `
+        <div class="section-toolbar" style="flex-wrap:wrap;gap:8px;margin-bottom:16px">
+            <button class="btn btn-outline" onclick="renderReports()"> Back</button>
+            <h3 style="flex:1;min-width:200px">🚨 Zero Sales Customers</h3>
+            <button class="btn btn-outline" style="border-color:#16a34a;color:#16a34a" onclick="exportTableToExcel('tbl-zero-sales','ZeroSalesCustomers_${today()}')">
+                <span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export
+            </button>
+        </div>
+        <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
+            <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:12px;align-items:flex-end">
+                <div class="form-group">
+                    <label>No Sales in Last</label>
+                    <div style="display:flex;align-items:center;gap:6px">
+                        <input type="number" id="zs-days" value="7" min="1" max="365" style="width:80px" onchange="renderZeroSalesRpt()">
+                        <span style="font-size:0.9rem;font-weight:600;color:var(--text-muted)">days</span>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Customer Type</label>
+                    <select id="zs-type" onchange="renderZeroSalesRpt()">
+                        <option value="">All Customers</option>
+                        <option value="Customer">Customer</option>
+                        <option value="Supplier">Supplier</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Balance</label>
+                    <select id="zs-bal" onchange="renderZeroSalesRpt()">
+                        <option value="">All</option>
+                        <option value="due">Has Outstanding Balance</option>
+                        <option value="zero">Zero Balance</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Search Customer</label>
+                    <input id="zs-search" placeholder="Name or phone..." oninput="renderZeroSalesRpt()" style="width:180px">
+                </div>
+                <div class="form-group" style="align-self:flex-end">
+                    <button class="btn btn-primary btn-sm" onclick="renderZeroSalesRpt()">
+                        <span class="material-symbols-outlined" style="font-size:1.1rem">search</span> Run
+                    </button>
+                </div>
+            </div>
+        </div></div>
+        <div id="zs-summary" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px"></div>
+        <div id="zs-out"></div>`;
+
+        window._zsInvoices = invoices.filter(i => i.type === 'sale' && i.status !== 'cancelled');
+        window._zsParties = parties;
+        window._zsUsers = salesUsers;
+        renderZeroSalesRpt();
+        return;
+    }
 }
 
-//  REPORT RENDER HELPERS 
+function renderZeroSalesRpt() {
+    const days = parseInt(($('zs-days') || {}).value || '7', 10);
+    const typeFilter = ($('zs-type') || {}).value || '';
+    const balFilter = ($('zs-bal') || {}).value || '';
+    const search = (($('zs-search') || {}).value || '').toLowerCase().trim();
+    const out = $('zs-out'); if (!out) return;
+
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    const cutoffStr = cutoff.toISOString().split('T')[0];
+
+    const allInvoices = window._zsInvoices || [];
+    const allParties = window._zsParties || [];
+    const salesUsers = window._zsUsers || [];
+
+    // Parties that had at least one sale after cutoff
+    const activePartyIds = new Set(
+        allInvoices.filter(i => (i.date || '') >= cutoffStr).map(i => i.partyId)
+    );
+
+    // Get last sale date per party
+    const lastSaleMap = {};
+    allInvoices.forEach(i => {
+        if (!lastSaleMap[i.partyId] || i.date > lastSaleMap[i.partyId]) {
+            lastSaleMap[i.partyId] = i.date;
+        }
+    });
+
+    let dormant = allParties.filter(p => {
+        if (activePartyIds.has(p.id)) return false;
+        if (typeFilter && p.type !== typeFilter) return false;
+        if (balFilter === 'due' && !(p.balance > 0)) return false;
+        if (balFilter === 'zero' && (p.balance || 0) > 0) return false;
+        if (search && !(
+            (p.name || '').toLowerCase().includes(search) ||
+            (p.phone || '').toLowerCase().includes(search)
+        )) return false;
+        return true;
+    });
+
+    dormant.sort((a, b) => {
+        const la = lastSaleMap[a.id] || '';
+        const lb = lastSaleMap[b.id] || '';
+        return lb.localeCompare(la); // most recently active first
+    });
+
+    // Summary chips
+    const sumEl = $('zs-summary');
+    if (sumEl) {
+        const totalBal = dormant.reduce((s, p) => s + (p.balance || 0), 0);
+        const withBal = dormant.filter(p => (p.balance || 0) > 0).length;
+        const neverSold = dormant.filter(p => !lastSaleMap[p.id]).length;
+        sumEl.innerHTML = `
+            <div class="stat-chip red">${dormant.length} Inactive Customers</div>
+            <div class="stat-chip amber">${withBal} with Outstanding Balance</div>
+            <div class="stat-chip blue">${currency(totalBal)} Total Outstanding</div>
+            <div class="stat-chip grey">${neverSold} Never Ordered</div>`;
+    }
+
+    if (!dormant.length) {
+        out.innerHTML = `<div class="card"><div class="card-body" style="text-align:center;padding:40px;color:var(--text-muted)">
+            <div style="font-size:2.5rem;margin-bottom:10px">✅</div>
+            <strong>All customers have placed orders in the last ${days} days!</strong>
+        </div></div>`;
+        return;
+    }
+
+    out.innerHTML = `
+    <div class="card"><div class="card-body" style="padding:0">
+        <div class="table-wrapper">
+        <table class="data-table" id="tbl-zero-sales">
+            <thead><tr>
+                <th>#</th>
+                <th>Customer Name</th>
+                <th>Phone</th>
+                <th>Address</th>
+                <th style="text-align:right">Balance (₹)</th>
+                <th>Last Sale</th>
+                <th>Days Inactive</th>
+                <th>Assigned To</th>
+                <th>Action</th>
+            </tr></thead>
+            <tbody>
+            ${dormant.map((p, idx) => {
+                const lastDate = lastSaleMap[p.id];
+                const daysInactive = lastDate
+                    ? Math.floor((new Date() - new Date(lastDate)) / 86400000)
+                    : '—';
+                const urgency = typeof daysInactive === 'number'
+                    ? (daysInactive > 30 ? 'color:#dc2626;font-weight:700' : daysInactive > 14 ? 'color:#d97706;font-weight:600' : '')
+                    : 'color:#7c3aed;font-weight:700';
+                const assignedLabel = p.followupAssignedTo
+                    ? `<span class="badge badge-info" style="font-size:0.72rem">${escapeHtml(p.followupAssignedTo)}</span>`
+                    : '<span style="color:var(--text-muted);font-size:0.78rem">—</span>';
+                return `<tr>
+                    <td style="text-align:center;color:var(--text-muted)">${idx + 1}</td>
+                    <td style="font-weight:700">${escapeHtml(p.name)}</td>
+                    <td>${escapeHtml(p.phone || '—')}</td>
+                    <td style="font-size:0.8rem;color:var(--text-muted)">${escapeHtml((p.address || '') + (p.city ? ', ' + p.city : ''))}</td>
+                    <td style="text-align:right;font-weight:600;${(p.balance||0)>0?'color:#16a34a':''}">${currency(p.balance || 0)}</td>
+                    <td>${lastDate ? fmtDate(lastDate) : '<span style="color:#7c3aed;font-size:0.78rem">Never</span>'}</td>
+                    <td style="text-align:center;${urgency}">${typeof daysInactive === 'number' ? daysInactive + 'd' : daysInactive}</td>
+                    <td>${assignedLabel}</td>
+                    <td>
+                        <div class="action-btns">
+                            <button class="btn-icon" title="Assign Salesman for Follow-up" onclick="openZeroSalesAssign('${p.id}','${escapeHtml(p.name)}')" style="color:var(--primary)">
+                                <span class="material-symbols-outlined" style="font-size:1.1rem">person_add</span>
+                            </button>
+                            ${p.phone ? `<a class="btn-icon" href="tel:${escapeHtml(p.phone)}" title="Call Customer" style="color:var(--success)">
+                                <span class="material-symbols-outlined" style="font-size:1.1rem">call</span>
+                            </a>` : ''}
+                            ${p.phone ? `<a class="btn-icon" href="https://wa.me/91${escapeHtml(p.phone.replace(/\D/g,''))}" target="_blank" title="WhatsApp" style="color:#25D366">
+                                <span class="material-symbols-outlined" style="font-size:1.1rem">chat</span>
+                            </a>` : ''}
+                        </div>
+                    </td>
+                </tr>`;
+            }).join('')}
+            </tbody>
+        </table>
+        </div>
+    </div></div>`;
+}
+
+function openZeroSalesAssign(partyId, partyName) {
+    const salesUsers = window._zsUsers || [];
+    const party = (window._zsParties || []).find(p => p.id === partyId) || {};
+    openModal(`Assign Follow-up — ${partyName}`,
+    `<div style="margin-bottom:14px;padding:10px 14px;background:var(--bg-primary);border-radius:8px;border-left:3px solid var(--primary)">
+        <div style="font-size:0.78rem;color:var(--text-muted)">Customer</div>
+        <div style="font-weight:700;font-size:1rem">${escapeHtml(partyName)}</div>
+        ${party.phone ? `<div style="font-size:0.82rem;color:var(--text-muted);margin-top:2px">${escapeHtml(party.phone)}</div>` : ''}
+        ${party.address ? `<div style="font-size:0.82rem;color:var(--text-muted)">${escapeHtml(party.address)}${party.city ? ', ' + party.city : ''}</div>` : ''}
+        <div style="margin-top:6px;font-size:0.78rem;color:var(--warning)">⚠ No sales in the selected period — needs a follow-up visit.</div>
+    </div>
+    <div class="form-group">
+        <label>Assign To (Salesman / Manager)</label>
+        <select id="zs-assign-user" style="width:100%">
+            <option value="">-- Select --</option>
+            ${salesUsers.map(u => `<option value="${escapeHtml(u.name)}" ${party.followupAssignedTo === u.name ? 'selected' : ''}>${escapeHtml(u.name)} (${u.role})</option>`).join('')}
+        </select>
+    </div>
+    <div class="form-group">
+        <label>Visit / Follow-up Date</label>
+        <input type="date" id="zs-assign-date" value="${today()}">
+    </div>
+    <div class="form-group">
+        <label>Note (optional)</label>
+        <textarea id="zs-assign-note" rows="2" placeholder="e.g. Call to confirm order, push Maggi scheme..." style="width:100%;resize:vertical">${escapeHtml(party.followupNote || '')}</textarea>
+    </div>`,
+    `<button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-primary" onclick="saveZeroSalesAssign('${partyId}')">Assign</button>`
+    );
+}
+
+async function saveZeroSalesAssign(partyId) {
+    const assignedTo = ($('zs-assign-user') || {}).value || '';
+    if (!assignedTo) return alert('Please select a salesman.');
+    const visitDate = ($('zs-assign-date') || {}).value || today();
+    const note = ($('zs-assign-note') || {}).value || '';
+
+    try {
+        await DB.rawUpdate('parties', partyId, {
+            followup_assigned_to: assignedTo,
+            followup_date: visitDate,
+            followup_note: note
+        });
+        await DB.refreshTables(['parties']);
+        window._zsParties = await DB.getAll('parties');
+        closeModal();
+        renderZeroSalesRpt();
+        showToast(`Assigned to ${assignedTo}`, 'success');
+    } catch (e) {
+        alert('Error saving assignment: ' + e.message);
+    }
+}
+
+//  REPORT RENDER HELPERS
 function renderPaymentRpt() {
     const from = ($('r-pay-from') || {}).value || '';
     const to = ($('r-pay-to') || {}).value || '';
@@ -11836,9 +12560,9 @@ function renderInvPnlRpt() {
         </div>
         <div class="table-wrapper">
             <table class="data-table" id="tbl-invpnl">
-            <thead><tr><th>Date</th><th>Invoice</th><th>Party</th><th>Salesman</th><th style="text-align:right">Revenue</th><th style="text-align:right">Cost</th><th style="text-align:right">Profit</th><th style="text-align:right">Margin</th></tr></thead>
+            <thead><tr><th style="min-width:90px">Date</th><th style="min-width:120px">Invoice</th><th style="min-width:150px">Party</th><th style="min-width:120px">Salesman</th><th style="min-width:100px;text-align:right">Revenue</th><th style="min-width:100px;text-align:right">Cost</th><th style="min-width:100px;text-align:right">Profit</th><th style="min-width:80px;text-align:right">Margin</th></tr></thead>
             <tbody>${rows || '<tr><td colspan="8" class="empty-state"><p>No invoices found</p></td></tr>'}
-            <tr style="font-weight:700;background:rgba(0,212,170,0.1)"><td colspan="4" style="text-align:right">Total (${invoiceCount} invoices)</td><td class="amount-green" style="text-align:right">${currency(totalRev)}</td><td class="amount-red" style="text-align:right">${currency(totalCost)}</td><td style="text-align:right;color:${totalProfit >= 0 ? 'var(--success)' : 'var(--danger)'};font-weight:700">${currency(totalProfit)}</td><td style="text-align:right;font-weight:600"><span class="badge ${+totalMargin >= 12 ? 'badge-success' : +totalMargin >= 3 ? 'badge-warning' : 'badge-danger'}">${totalMargin}%</span></td></tr>
+            <tr style="font-weight:700;background:rgba(0,212,170,0.1)"><td colspan="4" style="text-align:right">Total (${invoiceCount} invoices)</td><td class="amount-green" style="min-width:100px;text-align:right">${currency(totalRev)}</td><td class="amount-red" style="min-width:100px;text-align:right">${currency(totalCost)}</td><td style="min-width:100px;text-align:right;color:${totalProfit >= 0 ? 'var(--success)' : 'var(--danger)'};font-weight:700">${currency(totalProfit)}</td><td style="min-width:80px;text-align:right;font-weight:600"><span class="badge ${+totalMargin >= 12 ? 'badge-success' : +totalMargin >= 3 ? 'badge-warning' : 'badge-danger'}">${totalMargin}%</span></td></tr>
             </tbody></table>
         </div>
     </div></div>`;
@@ -11862,6 +12586,163 @@ window.toggleAllInvPnlDetails = function () {
     document.querySelectorAll('.ipnl-arrow').forEach(a => a.style.transform = anyHidden ? 'rotate(90deg)' : '');
     if (btn) btn.textContent = anyHidden ? ' Collapse All' : ' Expand All';
 };
+
+function renderPurchaseIndentReport(el, inventory, invoices, categories) {
+    const catList = [...new Set(inventory.map(i => i.category).filter(Boolean))].sort();
+
+    // Pre-compute 30-day sales per item
+    // FIX: support both camelCase (itemId) and snake_case (item_id) — old invoices used snake_case
+    const thirtyDaysAgo = new Date(); thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const thirtyDaysStr = thirtyDaysAgo.toISOString().slice(0, 10);
+    const salesMap = {};   // itemId → total qty sold in last 30d
+    const salesCountMap = {}; // itemId → number of sale transactions
+    invoices
+        .filter(inv => inv.type === 'sale' && inv.status !== 'cancelled' && inv.date >= thirtyDaysStr)
+        .forEach(inv => (inv.items || []).forEach(li => {
+            const id = li.itemId || li.item_id;
+            if (!id) return;
+            const qty = li.packedQty !== undefined ? li.packedQty
+                      : li.packed_qty !== undefined ? li.packed_qty
+                      : (li.qty || 0);
+            salesMap[id] = (salesMap[id] || 0) + qty;
+            salesCountMap[id] = (salesCountMap[id] || 0) + 1;
+        }));
+
+    window._rIndentInv = inventory;
+    window._rIndentSales = salesMap;
+    window._rIndentSalesCount = salesCountMap;
+
+    el.innerHTML = `
+    <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
+        <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
+            <div class="form-group"><label>Category</label><select id="r-ind-cat" onchange="renderIndentRpt()"><option value="">All Categories</option>${catList.map(c => `<option>${escapeHtml(c)}</option>`).join('')}</select></div>
+            <div class="form-group"><label>Show</label><select id="r-ind-filter" onchange="renderIndentRpt()">
+                <option value="needed">Needs Reorder</option>
+                <option value="low">Low Stock Only</option>
+                <option value="all">All Items</option>
+            </select></div>
+            <div class="form-group"><label>Cover Days</label><input type="number" id="r-ind-days" value="30" min="1" max="365" style="width:80px" oninput="renderIndentRpt()"></div>
+            <div class="form-group"><label>Search</label><input id="r-ind-search" placeholder="Item name..." oninput="renderIndentRpt()" style="width:160px"></div>
+            <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-indent','PurchaseIndent_${today()}')"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button></div>
+        </div>
+    </div></div>
+    <div id="r-ind-out"></div>`;
+    renderIndentRpt();
+}
+
+function renderIndentRpt() {
+    const cat = ($('r-ind-cat') || {}).value || '';
+    const filter = ($('r-ind-filter') || {}).value || 'needed';
+    const coverDays = Math.max(1, +(($('r-ind-days') || {}).value) || 30);
+    const search = (($('r-ind-search') || {}).value || '').toLowerCase();
+    const out = $('r-ind-out'); if (!out) return;
+    const salesMap = window._rIndentSales || {};
+    const salesCountMap = window._rIndentSalesCount || {};
+
+    let items = (window._rIndentInv || []).slice();
+    if (cat) items = items.filter(i => i.category === cat);
+    if (search) items = items.filter(i => (i.name || '').toLowerCase().includes(search));
+
+    // Calculate velocity and suggested order qty
+    items = items.map(i => {
+        const sold30d = salesMap[i.id] || 0;
+        const txnCount = salesCountMap[i.id] || 0;
+        const dailyRate = sold30d / 30;
+        const stock = +(i.stock || 0);
+        const reorderLevel = +(i.lowStockAlert || 5);
+        const coverQty = +(dailyRate * coverDays).toFixed(2);
+
+        // Stock days remaining (how many days current stock lasts at current velocity)
+        const stockDays = dailyRate > 0 ? Math.floor(stock / dailyRate) : (stock > 0 ? 999 : 0);
+
+        // Suggest qty: fill up to coverDays of demand; minimum suggestion = reorderLevel if below it
+        let suggestQty = Math.max(0, +(coverQty - stock).toFixed(2));
+
+        // If no sales but stock is below reorder level → flag it
+        const isBelowReorder = stock <= reorderLevel;
+        if (suggestQty === 0 && isBelowReorder && stock >= 0) {
+            // Suggest enough to reach reorderLevel * 2 as safety buffer
+            suggestQty = +(reorderLevel * 2 - stock).toFixed(2);
+            if (suggestQty < 0) suggestQty = 0;
+        }
+
+        // Status
+        let status, statusColor;
+        if (stock <= 0) { status = 'Out of Stock'; statusColor = '#dc2626'; }
+        else if (stock <= reorderLevel) { status = 'Low Stock'; statusColor = '#f97316'; }
+        else if (dailyRate > 0 && stockDays < 7) { status = `${stockDays}d left`; statusColor = '#f97316'; }
+        else if (dailyRate > 0 && stockDays < coverDays) { status = `${stockDays}d left`; statusColor = '#ca8a04'; }
+        else { status = dailyRate > 0 ? `${stockDays > 999 ? '999+' : stockDays}d` : 'No Sales'; statusColor = '#16a34a'; }
+
+        return { ...i, sold30d, txnCount, dailyRate, coverQty, suggestQty, stockDays, isBelowReorder, status, statusColor };
+    });
+
+    // Apply filter
+    if (filter === 'needed') items = items.filter(i => i.suggestQty > 0);
+    else if (filter === 'low') items = items.filter(i => i.isBelowReorder || (i.stock || 0) <= 0);
+
+    // Sort: out-of-stock first, then by suggest qty descending
+    items.sort((a, b) => {
+        const aOut = (a.stock || 0) <= 0 ? 1 : 0;
+        const bOut = (b.stock || 0) <= 0 ? 1 : 0;
+        if (bOut !== aOut) return bOut - aOut;
+        return b.suggestQty - a.suggestQty;
+    });
+
+    const totalItems = items.length;
+    const totalCost = items.reduce((s, i) => s + i.suggestQty * (i.purchasePrice || 0), 0);
+    const outOfStockCount = items.filter(i => (i.stock || 0) <= 0).length;
+    const lowStockCount = items.filter(i => (i.stock || 0) > 0 && i.isBelowReorder).length;
+
+    const rows = items.map(i => {
+        const estCost = i.suggestQty * (i.purchasePrice || 0);
+        return `<tr>
+            <td style="font-weight:600">${escapeHtml(i.name || '')}</td>
+            <td style="font-size:0.82rem;color:var(--text-muted)">${escapeHtml(i.category || '-')}</td>
+            <td style="font-size:0.82rem">${escapeHtml(i.unit || 'Pcs')}</td>
+            <td style="text-align:right;font-weight:600;color:${(i.stock||0)<=0?'var(--danger)':(i.stock||0)<=(i.lowStockAlert||5)?'var(--warning)':'inherit'}">${(+i.stock||0).toFixed(2)}</td>
+            <td style="text-align:right;color:var(--text-muted);font-size:0.82rem">${+(i.lowStockAlert||5)}</td>
+            <td style="text-align:right">${i.sold30d > 0 ? i.sold30d.toFixed(2) : '<span style="color:var(--text-muted);font-size:0.8rem">—</span>'}</td>
+            <td style="text-align:right;font-size:0.82rem;color:var(--text-muted)">${i.dailyRate > 0 ? i.dailyRate.toFixed(2) : '—'}</td>
+            <td style="text-align:center"><span style="background:${i.statusColor};color:#fff;font-size:0.7rem;padding:2px 7px;border-radius:20px;white-space:nowrap;font-weight:600">${i.status}</span></td>
+            <td style="text-align:right;font-weight:700;color:${i.suggestQty>0?'var(--primary)':'var(--text-muted)'}">${i.suggestQty > 0 ? i.suggestQty.toFixed(2) : '—'}</td>
+            <td style="text-align:right;font-size:0.82rem">${currency(i.purchasePrice || 0)}</td>
+            <td style="text-align:right;font-weight:600">${estCost > 0 ? currency(estCost) : '—'}</td>
+        </tr>`;
+    }).join('');
+
+    out.innerHTML = `
+    <div class="stats-grid-sm" style="margin-bottom:14px">
+        <div class="stat-card amber"><div class="stat-icon">📝</div><div class="stat-value">${totalItems}</div><div class="stat-label">Items to Order</div></div>
+        <div class="stat-card red"><div class="stat-icon">🚫</div><div class="stat-value">${outOfStockCount}</div><div class="stat-label">Out of Stock</div></div>
+        <div class="stat-card orange" style="--sc-color:#f97316"><div class="stat-icon">⚠️</div><div class="stat-value">${lowStockCount}</div><div class="stat-label">Low Stock</div></div>
+        <div class="stat-card blue"><div class="stat-icon">💰</div><div class="stat-value">${currency(totalCost)}</div><div class="stat-label">Est. PO Value</div></div>
+    </div>
+    <div class="card"><div class="card-body">
+        <p style="font-size:0.78rem;color:var(--text-muted);margin-bottom:10px">
+            Suggested qty = ${coverDays}-day cover based on 30-day sales velocity. Items below reorder level are always included.
+        </p>
+        <div class="table-wrapper">
+            <table class="data-table" id="tbl-indent">
+            <thead><tr>
+                <th style="min-width:150px">Item</th>
+                <th>Category</th>
+                <th>Unit</th>
+                <th style="text-align:right">Stock</th>
+                <th style="text-align:right">Reorder Lvl</th>
+                <th style="text-align:right">Sold (30d)</th>
+                <th style="text-align:right">Daily Rate</th>
+                <th style="text-align:center">Stock Status</th>
+                <th style="text-align:right">Order Qty</th>
+                <th style="text-align:right">Pur. Price</th>
+                <th style="text-align:right">Est. Cost</th>
+            </tr></thead>
+            <tbody>${rows || '<tr><td colspan="11" class="empty-state"><p>No items need reordering</p></td></tr>'}
+            ${items.length ? `<tr style="font-weight:700;background:var(--bg-card)"><td colspan="10" style="text-align:right">Total Est. PO Cost</td><td style="text-align:right">${currency(totalCost)}</td></tr>` : ''}
+            </tbody></table>
+        </div>
+    </div></div>`;
+}
 
 function renderStockRpt() {
     const cat = ($('r-st-cat') || {}).value || '';
@@ -11887,9 +12768,9 @@ function renderStockRpt() {
     <div class="card"><div class="card-body">
         <div class="table-wrapper">
             <table class="data-table" id="tbl-stock">
-            <thead><tr><th>Item</th><th>Category</th><th>Unit</th><th style="text-align:right">Stock</th><th style="text-align:right">Purchase Price</th><th style="text-align:right">Stock Value</th></tr></thead>
-            <tbody>${items.map(i => { const low = i.stock <= (i.lowStockAlert || 5); return `<tr><td style="font-weight:600">${escapeHtml(i.name)}</td><td>${i.category || '-'}</td><td>${i.unit || 'Pcs'}</td><td style="text-align:right"><span class="badge ${i.stock <= 0 ? 'badge-danger' : low ? 'badge-warning' : 'badge-success'}">${i.stock}</span></td><td style="text-align:right">${currency(i.purchasePrice || 0)}</td><td style="text-align:right">${currency(i.stock * (i.purchasePrice || 0))}</td></tr>`; }).join('') || '<tr><td colspan="6" class="empty-state"><p>No items found</p></td></tr>'}
-            <tr style="font-weight:700"><td colspan="5" style="text-align:right">Total Value</td><td style="text-align:right">${currency(totalVal)}</td></tr>
+            <thead><tr><th style="min-width:150px">Item</th><th style="min-width:120px">Category</th><th style="min-width:80px">Unit</th><th style="min-width:80px;text-align:right">Stock</th><th style="min-width:100px;text-align:right">Purchase Price</th><th style="min-width:110px;text-align:right">Stock Value</th></tr></thead>
+            <tbody>${items.map(i => { const low = i.stock <= (i.lowStockAlert || 5); return `<tr><td style="min-width:150px;font-weight:600">${escapeHtml(i.name)}</td><td style="min-width:120px">${i.category || '-'}</td><td style="min-width:80px">${i.unit || 'Pcs'}</td><td style="min-width:80px;text-align:right"><span class="badge ${i.stock <= 0 ? 'badge-danger' : low ? 'badge-warning' : 'badge-success'}">${i.stock}</span></td><td style="min-width:100px;text-align:right">${currency(i.purchasePrice || 0)}</td><td style="min-width:110px;text-align:right">${currency(i.stock * (i.purchasePrice || 0))}</td></tr>`; }).join('') || '<tr><td colspan="6" class="empty-state"><p>No items found</p></td></tr>'}
+            <tr style="font-weight:700"><td colspan="5" style="text-align:right">Total Value</td><td style="min-width:110px;text-align:right">${currency(totalVal)}</td></tr>
             </tbody></table>
         </div>
     </div></div>`;
@@ -11982,7 +12863,7 @@ function renderOutstandingRpt() {
     <div class="card"><div class="card-body">
         <div class="table-wrapper">
             <table class="data-table" id="tbl-outstanding">
-            <thead><tr><th>Party</th><th>Type</th><th>Pending Inv.</th><th>Last Payment</th><th style="text-align:right">Oldest Age</th><th style="text-align:right">Balance</th><th>Status</th></tr></thead>
+            <thead><tr><th style="min-width:200px">Party</th><th style="min-width:100px">Type</th><th style="min-width:80px;text-align:center">Pending Inv.</th><th style="min-width:100px">Last Payment</th><th style="min-width:60px;text-align:right">Oldest Age</th><th style="min-width:120px;text-align:right">Balance</th><th style="min-width:100px">Status</th></tr></thead>
             <tbody>${rows.join('') || '<tr><td colspan="7" class="empty-state"><p>No outstanding balance found</p></td></tr>'}
             </tbody></table>
         </div>
@@ -12114,9 +12995,9 @@ function renderUserOutstandingRpt() {
         <div class="table-wrapper">
             <table class="data-table" id="tbl-user-outstanding">
                 <thead><tr>
-                    <th>Invoice #</th><th>Party</th><th style="text-align:center">Date</th>
-                    <th style="text-align:right">Age</th><th style="text-align:right">Paid</th>
-                    <th style="text-align:right">Due</th>
+                    <th style="min-width:120px">Invoice #</th><th style="min-width:150px">Party</th><th style="min-width:90px;text-align:center">Date</th>
+                    <th style="min-width:60px;text-align:right">Age</th><th style="min-width:100px;text-align:right">Paid</th>
+                    <th style="min-width:100px;text-align:right">Due</th>
                 </tr></thead>
                 <tbody>${rows.join('')}</tbody>
             </table>
@@ -12158,7 +13039,7 @@ function renderExpenseRpt() {
     <div class="card"><div class="card-header"><h4 style="font-size:0.9rem">Expense Details</h4></div><div class="card-body">
         <div class="table-wrapper">
             <table class="data-table">
-            <thead><tr><th>Date</th><th>Category</th><th>Note</th><th>Added By</th><th style="text-align:right">Amount</th></tr></thead>
+            <thead><tr><th style="min-width:90px">Date</th><th style="min-width:120px">Category</th><th style="min-width:200px">Note</th><th style="min-width:100px">Added By</th><th style="min-width:100px;text-align:right">Amount</th></tr></thead>
             <tbody>${detailRows || '<tr><td colspan="5" class="empty-state"><p>No expenses</p></td></tr>'}</tbody></table>
         </div>
     </div></div>`;
@@ -12197,7 +13078,7 @@ function renderChequeRpt() {
     <div class="card"><div class="card-body">
         <div class="table-wrapper">
             <table class="data-table" id="cheque-reg-table">
-            <thead><tr><th>Voucher #</th><th>Pay Date</th><th>Cheque #</th><th>Party</th><th>Bank</th><th>Deposit Date</th><th style="text-align:right">Amount</th><th>Status</th><th>Action</th></tr></thead>
+            <thead><tr><th style="min-width:100px">Voucher #</th><th style="min-width:90px">Pay Date</th><th style="min-width:100px">Cheque #</th><th style="min-width:150px">Party</th><th style="min-width:120px">Bank</th><th style="min-width:90px">Deposit Date</th><th style="min-width:100px;text-align:right">Amount</th><th style="min-width:100px">Status</th><th style="min-width:120px">Action</th></tr></thead>
             <tbody>${rows || '<tr><td colspan="9"><div class="empty-state"><p>No cheques found</p></div></td></tr>'}</tbody>
             </table>
         </div>
@@ -12253,9 +13134,9 @@ function renderSalesmanRpt() {
     <div class="card"><div class="card-body">
         <div class="table-wrapper">
             <table class="data-table" id="tbl-salesman">
-                <thead><tr><th>Salesman</th><th style="text-align:right">Invoices</th><th style="text-align:right">Sales </th><th style="text-align:right">Receipts</th><th style="text-align:right">Collections </th><th style="text-align:right">Collection %</th></tr></thead>
+                <thead><tr><th style="min-width:150px">Salesman</th><th style="min-width:80px;text-align:right">Invoices</th><th style="min-width:100px;text-align:right">Sales </th><th style="min-width:80px;text-align:right">Receipts</th><th style="min-width:110px;text-align:right">Collections </th><th style="min-width:100px;text-align:right">Collection %</th></tr></thead>
                 <tbody>${rows.join('') || '<tr><td colspan="6" class="empty-state"><p>No data found</p></td></tr>'}
-                <tr style="font-weight:700;background:rgba(0,212,170,0.1)"><td>Total</td><td></td><td class="amount-green" style="text-align:right">${currency(totSales)}</td><td></td><td class="amount-green" style="text-align:right">${currency(totColl)}</td><td></td></tr>
+                <tr style="font-weight:700;background:rgba(0,212,170,0.1)"><td>Total</td><td style="text-align:right"></td><td class="amount-green" style="min-width:100px;text-align:right">${currency(totSales)}</td><td style="text-align:right"></td><td class="amount-green" style="min-width:110px;text-align:right">${currency(totColl)}</td><td></td></tr>
                 </tbody>
             </table>
         </div>
@@ -12307,9 +13188,9 @@ function renderDayBook() {
     <div class="card"><div class="card-body">
         <div class="table-wrapper">
             <table class="data-table" id="tbl-daybook">
-                <thead><tr><th>Date</th><th>Type</th><th>Ref #</th><th>Party / Note</th><th style="text-align:right">Inflow </th><th style="text-align:right">Outflow </th><th>By</th></tr></thead>
+                <thead><tr><th style="min-width:90px">Date</th><th style="min-width:120px">Type</th><th style="min-width:120px">Ref #</th><th style="min-width:200px">Party / Note</th><th style="min-width:110px;text-align:right">Inflow </th><th style="min-width:110px;text-align:right">Outflow </th><th style="min-width:100px">By</th></tr></thead>
                 <tbody>${rows || '<tr><td colspan="7" class="empty-state"><p>No transactions found</p></td></tr>'}
-                <tr style="font-weight:700;background:rgba(0,212,170,0.08)"><td colspan="4" style="text-align:right">Totals</td><td class="amount-green" style="text-align:right">${currency(totalDr)}</td><td class="amount-red" style="text-align:right">${currency(totalCr)}</td><td></td></tr>
+                <tr style="font-weight:700;background:rgba(0,212,170,0.08)"><td colspan="4" style="text-align:right">Totals</td><td class="amount-green" style="min-width:110px;text-align:right">${currency(totalDr)}</td><td class="amount-red" style="min-width:110px;text-align:right">${currency(totalCr)}</td><td></td></tr>
                 </tbody>
             </table>
         </div>
@@ -12492,7 +13373,7 @@ async function generateUserPaymentReport() {
             <div class="card-body">
                 <table class="data-table" id="tbl-pay-report" style="font-size:0.85rem">
                     <thead>
-                        <tr><th>Date</th><th>Voucher No</th><th>Mode</th><th>Allocated Invoices</th><th>Party</th><th>Collected By</th><th style="text-align:right">Amt Received</th><th style="text-align:right">Discount</th><th style="text-align:right">Total Payment</th></tr>
+                        <tr><th style="min-width:90px">Date</th><th style="min-width:100px">Voucher No</th><th style="min-width:100px">Mode</th><th style="min-width:150px">Allocated Invoices</th><th style="min-width:150px">Party</th><th style="min-width:120px">Collected By</th><th style="min-width:110px;text-align:right">Amt Received</th><th style="min-width:100px;text-align:right">Discount</th><th style="min-width:120px;text-align:right">Total Payment</th></tr>
                     </thead>
                     <tbody>${payments.map(p => {
                         const allocKeys = p.allocations ? Object.keys(p.allocations) : [];
@@ -13628,7 +14509,7 @@ window.downloadFullDatabaseBackup = async function () {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `DistroManager_Cloud_Backup_${today()}.json`;
+        a.download = `Prakash Traders_Cloud_Backup_${today()}.json`;
         document.body.appendChild(a);
         a.click();
 
@@ -13771,7 +14652,7 @@ async function renderPartyLedgerLayout() {
                                 <td style="font-size:0.8rem">${e.createdBy || '-'}</td>
                                 <td>
                                     <div class="action-btns" style="flex-wrap:nowrap">
-                                        ${entryType.includes('Invoice') ? `<button class="btn-icon" onclick="showPaymentHistory('${partyId}', '${docNo}')" title="Payment History"><span class="material-symbols-outlined" style="font-size:1.1rem">history</span></button>` : ''}
+                                        ${entryType.includes('Invoice') ? `<button class="btn-icon" onclick="showPaymentHistory('${partyId}', '${docNo}')" title="Payment History"><span class="material-symbols-outlined" style="font-size:1.1rem">history</span></button><button class="btn-icon" style="font-size:1.1rem" onclick="printInvoiceByNo('${docNo}')" title="Print Invoice">🖨️</button><button class="btn-icon" style="font-size:1.1rem" onclick="shareInvoiceByNo('${docNo}')" title="Share Invoice">📤</button>` : ''}
                                         <div style="display:flex;gap:4px;justify-content:flex-end">
                                         ${canEdit() ? `<button class="btn-icon" onclick="editPartyLedgerEntry('${partyId}','${e.id}')" title="Edit Entry"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button><button class="btn-icon" onclick="deletePartyLedgerEntry('${partyId}','${e.id}')" title="Delete Entry" style="color:var(--danger)"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>` : ''}
                                     </div>
@@ -14678,11 +15559,7 @@ async function createOrderFromCatalog() {
     initSearchDropdown('f-so-party', buildPartySearchList(customers));
     _soItemDropdown = initSearchDropdown('f-so-item-input', buildItemSearchList(inv), function (item) {
         $('f-so-price').value = item.salePrice || '';
-        var uomSel = $('f-so-uom');
-        if (uomSel) {
-            uomSel.innerHTML = '<option value="' + item.unit + '">' + item.unit + '</option>';
-            if (item.secUom) uomSel.innerHTML += '<option value="' + item.secUom + '">' + item.secUom + '</option>';
-        }
+        populateUomSelect($('f-so-uom'), item);
     });
 
     // Render pre-filled lines from cart
@@ -14937,7 +15814,7 @@ function cpSaveSession() {
 
 function cpShell(content, showBack, backFn) {
     window._cpBackFn = backFn || null;
-    const company = DB.ls.getObj('db_company').name || 'DistroManager';
+    const company = DB.ls.getObj('db_company').name || 'Prakash Traders';
     const root = document.getElementById('cp-root');
     root.innerHTML = `
     <div class="cp-shell">

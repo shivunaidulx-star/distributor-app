@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport"
         content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>DistroManager — Distributor Business Management</title>
+    <title>Prakash Traders — Distributor Business Management</title>
     <meta name="description"
         content="A comprehensive distributor business management app for invoicing, inventory, payments, delivery, packing, and reports.">
     <link rel="icon" href="logo_prakash.png">
@@ -19,7 +19,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0" rel="stylesheet" />
-    <link rel="stylesheet" href="style.css?v=38">
+    <link rel="stylesheet" href="style.css?v=39">
     <style>
         .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
 
@@ -78,7 +78,7 @@
     <div id="app-loading">
         <div class="spinner"></div>
         <p style="font-family:'Inter',sans-serif;font-weight:600;color:var(--text-primary,#1e293b);margin:0">Loading
-            DistroManager...</p>
+            Prakash Traders...</p>
         <p style="font-family:'Inter',sans-serif;font-size:0.8rem;color:var(--text-muted,#64748b);margin-top:8px">
             Initializing database & workspace</p>
         <div id="boot-error-ui" class="hidden" style="margin-top:24px;text-align:center;padding:0 20px">
@@ -91,7 +91,7 @@
         <div class="login-card" style="max-width:480px">
             <div class="login-logo">
                 <div class="logo-icon"><img src="logo_prakash.png" alt="Logo"></div>
-                <h1>DistroManager Setup</h1>
+                <h1>Prakash Traders Setup</h1>
                 <p>Let's configure your business</p>
             </div>
             <div id="setup-step" class="login-form"></div>
@@ -103,7 +103,7 @@
         <div class="login-card">
             <div class="login-logo">
                 <div class="logo-icon"><img src="logo_prakash.png" alt="Logo"></div>
-                <h1 id="login-company-name">DistroManager</h1>
+                <h1 id="login-company-name">Prakash Traders</h1>
                 <p>Distributor Business Management</p>
                 <div style="font-size:0.72rem;color:var(--text-muted);margin-top:6px;font-weight:600">App Version: v103
                 </div>
@@ -146,7 +146,7 @@
         <aside id="sidebar" class="sidebar">
             <div class="sidebar-header">
                 <div class="logo-icon-sm"><img src="logo_prakash.png" alt="Logo"></div>
-                <span class="sidebar-brand" id="sidebar-brand">DistroManager</span>
+                <span class="sidebar-brand" id="sidebar-brand">Prakash Traders</span>
                 <button id="sidebar-close" class="sidebar-close">&times;</button>
             </div>
             <nav class="sidebar-nav">
@@ -303,11 +303,12 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" defer></script>
     <script src="qrcode.min.js"></script>
-    <script src="app.js?v=119"></script>
+    <script src="app.js?v=120"></script>
     <script>
-        const APP_VERSION = 'v102.6';
+        const APP_VERSION = 'v102.7';
 
         function showUpdateBanner() {
             const b = document.getElementById('update-banner');

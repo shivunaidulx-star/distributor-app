@@ -1,5 +1,5 @@
 /* ============================================
-   DistroManager — Design System & Styles
+   Prakash Traders — Design System & Styles
    ============================================ */
 
 /* --- Prevent browser swipe-back gesture (Chrome, Safari, Edge) --- */
@@ -828,6 +828,8 @@ table { border-collapse: collapse; width: 100%; }
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.3px;
+    white-space: nowrap;
+    transition: transform 0.15s ease;
 }
 
 .badge-success { background: var(--success-soft); color: var(--success); }
@@ -1144,7 +1146,7 @@ table { border-collapse: collapse; width: 100%; }
     border: 1px solid rgba(0, 0, 0, 0.07);
     border-radius: var(--radius);
     padding: 22px 22px 20px;
-    transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.22s ease, border-color 0.2s;
+    transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.25s ease, border-color 0.25s ease;
     cursor: pointer;
     display: flex;
     align-items: flex-start;
@@ -1152,7 +1154,7 @@ table { border-collapse: collapse; width: 100%; }
     position: relative;
     overflow: hidden;
     box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-    animation: slideInUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation: slideInUp 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 /* Stagger report cards */
@@ -1234,6 +1236,25 @@ table { border-collapse: collapse; width: 100%; }
     color: var(--text-muted);
     line-height: 1.4;
 }
+
+/* ============================================
+   STAT CHIPS (used in Zero Sales & other reports)
+   ============================================ */
+.stat-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 12px;
+    border-radius: 20px;
+    font-size: 0.8rem;
+    font-weight: 700;
+    border: 1.5px solid transparent;
+}
+.stat-chip.red   { background: rgba(239,68,68,0.1); color:#dc2626; border-color:rgba(239,68,68,0.25); }
+.stat-chip.amber { background: rgba(245,158,11,0.1); color:#b45309; border-color:rgba(245,158,11,0.25); }
+.stat-chip.blue  { background: rgba(59,130,246,0.1); color:#1d4ed8; border-color:rgba(59,130,246,0.25); }
+.stat-chip.grey  { background: rgba(100,116,139,0.1); color:#475569; border-color:rgba(100,116,139,0.2); }
+.stat-chip.green { background: rgba(22,163,74,0.1); color:#15803d; border-color:rgba(22,163,74,0.25); }
 
 /* ============================================
    PACKING / DELIVERY STATUS
@@ -1857,21 +1878,9 @@ body {
     box-shadow: 0 -8px 32px rgba(249,115,22,0.18);
 }
 
-/* --- Badge animations --- */
-.badge {
-    transition: transform 0.15s ease;
-}
 .badge:hover { transform: scale(1.08); }
 
 /* --- Report cards --- */
-.report-card {
-    animation: slideInUp 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
-    transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.25s ease, border-color 0.25s ease;
-}
-.report-card:nth-child(1) { animation-delay: 0.04s; }
-.report-card:nth-child(2) { animation-delay: 0.08s; }
-.report-card:nth-child(3) { animation-delay: 0.12s; }
-.report-card:nth-child(4) { animation-delay: 0.16s; }
 .report-card:hover {
     transform: translateY(-5px) scale(1.02);
     box-shadow: 0 12px 36px rgba(249,115,22,0.12);
@@ -2134,8 +2143,8 @@ body {
         min-height: 42px !important;
         font-size: 0.82rem !important;
     }
-    .modal-footer { flex-direction: column-reverse; gap: 8px; }
-    .modal-footer .btn:not(.btn-save-new) { width: 100%; min-height: 48px; }
+    .modal-footer { flex-direction: row; gap: 8px; flex-wrap: wrap; padding: 12px; }
+    .modal-footer .btn { flex: 1; min-width: 80px; min-height: 42px; font-size: 0.8rem !important; padding: 8px 4px !important; }
 
     /* All table columns visible, scroll horizontally */
     .data-table th, .data-table td { display: table-cell; }
@@ -2713,6 +2722,14 @@ body.modal-open .bottom-nav { display: none !important; }
         bottom: 62px;
         padding-bottom: env(safe-area-inset-bottom, 12px);
     }
+}
+/* Payment form hides the bottom nav to eliminate the gap between footer and keyboard */
+body.pay-form-open #bottom-nav {
+    display: none !important;
+}
+body.pay-form-open .pay-page-footer {
+    bottom: env(safe-area-inset-bottom, 0px);
+    padding-bottom: max(env(safe-area-inset-bottom, 0px), 8px);
 }
 
 /* ============ SMART RESET MODAL ============ */
