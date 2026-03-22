@@ -13538,13 +13538,34 @@ async function executeSmartReset() {
     if (btn) { btn.disabled = true; btn.textContent = ' Resetting...'; }
 
     try {
+        // Re-set session role so RLS policies allow delete
+        if (currentUser) {
+            await supabaseClient.rpc('set_session_role', {
+                user_role: currentUser.role,
+                user_id: (currentUser.userId || currentUser.id || '').toLowerCase()
+            });
+        }
         for (const t of entryTables) {
-            await supabaseClient.from(t).delete().not('id', 'is', null);
+            const { error } = await supabaseClient.from(t).delete().not('id', 'is', null);
+            if (error) console.warn(`Reset: failed to delete ${t}:`, error.message);
         }
         // Zero out all party balances so receivable/payable resets
         await supabaseClient.from('parties').update({ balance: 0 }).not('id', 'is', null);
         entryLsKeys.forEach(k => localStorage.removeItem(k));
         localStorage.removeItem('db_parties'); // force re-fetch so balance shows 0
+
+        // Clear IndexedDB cache so stale data is not restored on reload
+        const idbEntryKeys = ['db_sales_orders', 'db_invoices', 'db_payments', 'db_expenses',
+                              'db_stock_ledger', 'db_party_ledger', 'db_delivery'];
+        for (const k of idbEntryKeys) {
+            await DB.idb.set(k, []).catch(() => {});
+            // Also wipe the in-memory cache
+            const tableKey = k.replace(/^db_/, '');
+            if (DB.cache[tableKey]) DB.cache[tableKey] = [];
+        }
+        // Reset party balances in memory too
+        if (DB.cache['parties']) DB.cache['parties'].forEach(p => p.balance = 0);
+        await DB.idb.set('db_parties', DB.cache['parties'] || []).catch(() => {});
 
         if (window._resetOption === 'all') {
             for (const m of masterMap) {
