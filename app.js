@@ -7791,6 +7791,7 @@ async function onPayPartyChange() {
         invSec.innerHTML = `
             <div style="font-size:0.72rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px">INVOICES</div>
             <div style="font-size:0.85rem;color:var(--text-muted)">No pending invoices. Payment will be saved as Advance.</div>`;
+        setTimeout(() => { const a = document.getElementById('f-pay-amount-0'); if (a) { a.focus(); a.select(); } }, 100);
         return;
     }
 
@@ -7833,6 +7834,12 @@ async function onPayPartyChange() {
 
     // Auto-allocate based on current payment amount
     autoAllocPayment();
+
+    // Auto-focus amount field after party is selected
+    setTimeout(() => {
+        const amtField = document.getElementById('f-pay-amount-0');
+        if (amtField) { amtField.focus(); amtField.select(); }
+    }, 100);
 }
 
 // onPayAmountChange is defined above with multi-mode support
