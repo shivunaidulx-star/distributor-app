@@ -4681,8 +4681,8 @@ async function openSalesOrderModal() {
     const orderNo = await nextNumber('SO-');
 
     openModal('Create Sales Order', `
-        <div class="form-row" style="flex-wrap:nowrap"><div class="form-group"><label>Order #</label><input id="f-so-no" value="${orderNo}" readonly></div><div class="form-group"><label>Date</label><input type="date" id="f-so-date" value="${today()}"></div></div>
-        <div class="form-row" style="flex-wrap:nowrap"><div class="form-group"><label>Expected Delivery</label><input type="date" id="f-so-delivery" value=""></div><div class="form-group"><label>Priority</label><select id="f-so-priority"><option value="Normal">Normal</option><option value="Urgent"> Urgent</option></select></div></div>
+        <div class="form-row" style="grid-template-columns:1fr 1fr"><div class="form-group"><label>Order #</label><input id="f-so-no" value="${orderNo}" readonly></div><div class="form-group"><label>Date</label><input type="date" id="f-so-date" value="${today()}"></div></div>
+        <div class="form-row" style="grid-template-columns:1fr 1fr"><div class="form-group"><label>Expected Delivery</label><input type="date" id="f-so-delivery" value=""></div><div class="form-group"><label>Priority</label><select id="f-so-priority"><option value="Normal">Normal</option><option value="Urgent"> Urgent</option></select></div></div>
         <div class="form-group"><label>Customer * <small style="color:var(--text-muted)">(new name = auto-created)</small></label>
             <input id="f-so-party" placeholder="Type customer name or mobile...">
         </div>
@@ -5300,8 +5300,8 @@ async function editSalesOrder(id) {
 
     openModal(`Edit Order ${orig.orderNo}`, `
         <input type="hidden" id="f-so-edit-id" value="${orig.id}">
-        <div class="form-row" style="flex-wrap:nowrap"><div class="form-group"><label>Order #</label><input id="f-so-no" value="${orig.orderNo}" readonly style="opacity:0.6"></div><div class="form-group"><label>Date</label><input type="date" id="f-so-date" value="${orig.date}"></div></div>
-        <div class="form-row" style="flex-wrap:nowrap"><div class="form-group"><label>Expected Delivery</label><input type="date" id="f-so-delivery" value="${orig.expectedDeliveryDate || ''}"></div><div class="form-group"><label>Priority</label><select id="f-so-priority"><option value="Normal" ${(orig.priority || 'Normal') === 'Normal' ? 'selected' : ''}>Normal</option><option value="Urgent" ${orig.priority === 'Urgent' ? 'selected' : ''}> Urgent</option></select></div></div>
+        <div class="form-row" style="grid-template-columns:1fr 1fr"><div class="form-group"><label>Order #</label><input id="f-so-no" value="${orig.orderNo}" readonly style="opacity:0.6"></div><div class="form-group"><label>Date</label><input type="date" id="f-so-date" value="${orig.date}"></div></div>
+        <div class="form-row" style="grid-template-columns:1fr 1fr"><div class="form-group"><label>Expected Delivery</label><input type="date" id="f-so-delivery" value="${orig.expectedDeliveryDate || ''}"></div><div class="form-group"><label>Priority</label><select id="f-so-priority"><option value="Normal" ${(orig.priority || 'Normal') === 'Normal' ? 'selected' : ''}>Normal</option><option value="Urgent" ${orig.priority === 'Urgent' ? 'selected' : ''}> Urgent</option></select></div></div>
         <div class="form-group"><label>Customer *</label>
             <input id="f-so-party" value="${orig.partyName}" data-selected-id="${orig.partyId}" placeholder="Type customer name or mobile...">
         </div>
@@ -5385,8 +5385,8 @@ async function duplicateSalesOrder(id) {
     const orderNo = await nextNumber('SO-');
 
     openModal('Duplicate Sales Order', `
-        <div class="form-row" style="flex-wrap:nowrap"><div class="form-group"><label>Order #</label><input id="f-so-no" value="${orderNo}"></div><div class="form-group"><label>Date</label><input type="date" id="f-so-date" value="${today()}"></div></div>
-        <div class="form-row" style="flex-wrap:nowrap"><div class="form-group"><label>Expected Delivery</label><input type="date" id="f-so-delivery" value="${orig.expectedDeliveryDate || ''}"></div><div class="form-group"><label>Priority</label><select id="f-so-priority"><option value="Normal" ${(orig.priority || 'Normal') === 'Normal' ? 'selected' : ''}>Normal</option><option value="Urgent" ${orig.priority === 'Urgent' ? 'selected' : ''}> Urgent</option></select></div></div>
+        <div class="form-row" style="grid-template-columns:1fr 1fr"><div class="form-group"><label>Order #</label><input id="f-so-no" value="${orderNo}"></div><div class="form-group"><label>Date</label><input type="date" id="f-so-date" value="${today()}"></div></div>
+        <div class="form-row" style="grid-template-columns:1fr 1fr"><div class="form-group"><label>Expected Delivery</label><input type="date" id="f-so-delivery" value="${orig.expectedDeliveryDate || ''}"></div><div class="form-group"><label>Priority</label><select id="f-so-priority"><option value="Normal" ${(orig.priority || 'Normal') === 'Normal' ? 'selected' : ''}>Normal</option><option value="Urgent" ${orig.priority === 'Urgent' ? 'selected' : ''}> Urgent</option></select></div></div>
         <div class="form-group"><label>Customer *</label>
             <input id="f-so-party" value="${orig.partyName}" data-selected-id="${orig.partyId}" placeholder="Type customer name or mobile...">
         </div>
@@ -6060,7 +6060,7 @@ async function openInvoiceModal(type = 'sale', preserveItems = false) {
 
     const vyaparNo = await buildVyaparInvoiceNo();
     openModal(type === 'sale' ? 'Create Sale Invoice' : 'Create Purchase / Stock In', `
-        <div class="form-row" style="flex-wrap:nowrap"><div class="form-group"><label>Invoice #</label><input id="f-inv-no" value="${invNo}"></div><div class="form-group"><label>Date</label><input type="date" id="f-inv-date" value="${today()}" onchange="updateInvDueDate()"></div><div class="form-group"><label>Due Date <span style="font-size:0.7rem;color:var(--text-muted)">auto</span></label><input type="date" id="f-inv-due-date" placeholder="Select party..."></div></div>
+        <div class="form-row" style="grid-template-columns:1fr 1fr 1fr"><div class="form-group"><label>Invoice #</label><input id="f-inv-no" value="${invNo}"></div><div class="form-group"><label>Date</label><input type="date" id="f-inv-date" value="${today()}" onchange="updateInvDueDate()"></div><div class="form-group"><label>Due Date <span style="font-size:0.7rem;color:var(--text-muted)">auto</span></label><input type="date" id="f-inv-due-date" placeholder="Select party..."></div></div>
         <input type="hidden" id="f-inv-from-order" value="">
         <input type="hidden" id="f-inv-type" value="${type}">
         ${type === 'sale' ? `
@@ -14623,11 +14623,11 @@ async function createOrderFromCatalog() {
     pageContent.innerHTML = `
         <div class="card">
             <div class="card-body">
-                <div class="form-row" style="flex-wrap:nowrap">
+                <div class="form-row" style="grid-template-columns:1fr 1fr">
                     <div class="form-group"><label>Order #</label><input id="f-so-no" value="${orderNo}" readonly></div>
                     <div class="form-group"><label>Date</label><input type="date" id="f-so-date" value="${today()}"></div>
                 </div>
-                <div class="form-row" style="flex-wrap:nowrap">
+                <div class="form-row" style="grid-template-columns:1fr 1fr">
                     <div class="form-group"><label>Expected Delivery</label><input type="date" id="f-so-delivery" value=""></div>
                     <div class="form-group"><label>Priority</label><select id="f-so-priority"><option value="Normal">Normal</option><option value="Urgent"> Urgent</option></select></div>
                 </div>
