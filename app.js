@@ -2279,7 +2279,8 @@ async function renderDashboard() {
     </div></div>
     ${await renderCustReqWidget()}
     `;
-    // Chart rendering removed as it was undefined
+    // Render bar chart after DOM is ready
+    requestAnimationFrame(() => { renderDashChart(); });
     requestAnimationFrame(() => {
         document.querySelectorAll('.dash-count[data-val]').forEach(el => {
             const target = parseFloat(el.dataset.val) || 0;
@@ -2299,8 +2300,107 @@ async function renderDashboard() {
 }
 
 // =============================================
-//  PARTIES
+//  DASHBOARD CHART & PERIOD HELPERS
 // =============================================
+function toggleDashPeriodMenu() {
+    const menu = document.getElementById('dash-period-menu');
+    if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+    // Close on outside click
+    setTimeout(() => {
+        function outsideClose(e) {
+            const menu = document.getElementById('dash-period-menu');
+            if (menu && !menu.contains(e.target) && e.target.id !== 'dash-period-btn') {
+                menu.style.display = 'none';
+            }
+            document.removeEventListener('click', outsideClose);
+        }
+        document.addEventListener('click', outsideClose);
+    }, 10);
+}
+
+function selectDashPeriod(val, label) {
+    window._dashPeriod = val;
+    const menu = document.getElementById('dash-period-menu');
+    if (menu) menu.style.display = 'none';
+    const btn = document.getElementById('dash-period-label');
+    if (btn) btn.textContent = label;
+    renderDashChart();
+}
+
+function renderDashChart() {
+    const wrap = document.getElementById('dash-chart-wrap');
+    const totalEl = document.getElementById('dash-chart-total');
+    if (!wrap || !window._dashInvoicesAll) return;
+
+    const period = window._dashPeriod || 'month';
+    const now = new Date();
+    let buckets = []; // [{label, start, end}]
+
+    if (period === 'week') {
+        // Last 7 days, one bar per day
+        for (let i = 6; i >= 0; i--) {
+            const d = new Date(now); d.setDate(d.getDate() - i);
+            const ds = d.toISOString().split('T')[0];
+            buckets.push({ label: d.toLocaleDateString('en-IN', { weekday: 'short' }), start: ds, end: ds });
+        }
+    } else if (period === 'month') {
+        // This month - one bar per day
+        const yr = now.getFullYear(), mo = now.getMonth();
+        const days = new Date(yr, mo + 1, 0).getDate();
+        for (let d = 1; d <= days; d++) {
+            const ds = `${yr}-${String(mo + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+            buckets.push({ label: String(d), start: ds, end: ds });
+        }
+    } else if (period === 'lastmonth') {
+        const yr = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
+        const mo = now.getMonth() === 0 ? 12 : now.getMonth();
+        const days = new Date(yr, mo, 0).getDate();
+        for (let d = 1; d <= days; d++) {
+            const ds = `${yr}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+            buckets.push({ label: String(d), start: ds, end: ds });
+        }
+    } else if (period === 'quarter') {
+        // Last 12 weeks
+        for (let i = 11; i >= 0; i--) {
+            const wEnd = new Date(now); wEnd.setDate(wEnd.getDate() - i * 7);
+            const wStart = new Date(wEnd); wStart.setDate(wEnd.getDate() - 6);
+            buckets.push({ label: `W${12 - i}`, start: wStart.toISOString().split('T')[0], end: wEnd.toISOString().split('T')[0] });
+        }
+    } else if (period === 'halfyear' || period === 'year') {
+        // Monthly buckets
+        const months = period === 'halfyear' ? 6 : 12;
+        for (let i = months - 1; i >= 0; i--) {
+            const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+            const mStart = d.toISOString().split('T')[0];
+            const mEnd = new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().split('T')[0];
+            buckets.push({ label: d.toLocaleDateString('en-IN', { month: 'short' }), start: mStart, end: mEnd });
+        }
+    }
+
+    const data = buckets.map(b => ({
+        label: b.label,
+        val: window._dashInvoicesAll.filter(i => i.date >= b.start && i.date <= b.end).reduce((s, i) => s + i.total, 0)
+    }));
+
+    const total = data.reduce((s, d) => s + d.val, 0);
+    if (totalEl) totalEl.textContent = currency(total);
+
+    const max = Math.max(...data.map(d => d.val), 1);
+    const barW = Math.max(12, Math.min(32, Math.floor((wrap.offsetWidth || 320) / data.length) - 4));
+
+    wrap.innerHTML = `
+        <div style="display:flex;align-items:flex-end;gap:${barW > 20 ? 4 : 2}px;height:80px;overflow-x:auto;padding-bottom:18px;position:relative">
+            ${data.map(d => {
+                const h = Math.max(d.val > 0 ? 6 : 2, Math.round((d.val / max) * 68));
+                const isToday = d.label === String(now.getDate()) && (period === 'month' || period === 'lastmonth');
+                return `<div style="display:flex;flex-direction:column;align-items:center;flex-shrink:0;width:${barW}px" title="${d.label}: ${currency(d.val)}">
+                    <div style="width:${barW - 2}px;height:${h}px;background:${isToday ? 'var(--primary)' : d.val > 0 ? 'rgba(249,115,22,0.55)' : 'var(--border)'};border-radius:3px 3px 0 0;transition:height 0.3s"></div>
+                    <div style="font-size:${barW > 22 ? 9 : 7}px;color:var(--text-muted);margin-top:3px;white-space:nowrap;overflow:hidden;width:${barW}px;text-align:center">${d.label}</div>
+                </div>`;
+            }).join('')}
+        </div>`;
+}
+
 // =============================================
 //  PARTIES
 // =============================================
