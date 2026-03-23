@@ -8280,6 +8280,8 @@ async function viewPaymentDetails(id) {
         </div>
         <div class="modal-actions">
             <button class="btn btn-outline" onclick="closeModal()">Close</button>
+            ${canEdit() ? `<button class="btn btn-outline" style="color:var(--danger);border-color:var(--danger)" onclick="closeModal();deletePayment('${p.id}')"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-2px">delete</span> Delete</button>` : ''}
+            ${canEdit() ? `<button class="btn btn-outline" onclick="closeModal();openEditPaymentModal('${p.id}')"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-2px">edit</span> Edit</button>` : ''}
             <button class="btn btn-primary" onclick="printPaymentReceipt()"> Print Receipt</button>
         </div>
     `);
@@ -9257,6 +9259,9 @@ async function deletePayment(id) {
             for (const entry of ledgerEntries) {
                 await DB.adminDelete('party_ledger', entry.id);
             }
+            if (typeof recalculatePartyLedger === 'function') {
+                await recalculatePartyLedger(party.id);
+            }
 
             // 3. Delete related expense entries (discount expenses)
             if (pay.discount > 0 && pay.type === 'in') {
@@ -9423,7 +9428,21 @@ window.saveEditedPayment = async function (id) {
             const finalBal = tempBal + newBalChange;
 
             await DB.update('parties', party.id, { balance: finalBal });
-            await addPartyLedgerEntry(party.id, party.name, oldPay.type === 'in' ? 'Payment Edited' : 'Payment Out Edited', newBalChange, id, `Mode: ${$('f-pay-mode').value}`);
+            
+            // Find the original ledger entry and update it
+            const payRefNo = oldPay.payNo || oldPay.id.substring(0, 8);
+            const ledger = await DB.getAll('party_ledger');
+            const ledgerEntry = ledger.find(e => e.docNo === payRefNo && e.partyId === party.id);
+            if (ledgerEntry) {
+                await DB.adminUpdate('party_ledger', ledgerEntry.id, {
+                    amount: newBalChange,
+                    notes: `Mode: ${$('f-pay-mode').value} (Edited)`
+                });
+            }
+            
+            if (typeof recalculatePartyLedger === 'function') {
+                await recalculatePartyLedger(party.id);
+            }
         }
 
         // Manage Expense Entry for Discount (use adminUpdate/adminDelete for RLS bypass)
