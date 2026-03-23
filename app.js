@@ -3966,31 +3966,26 @@ async function openBulkEditModal() {
             <td><input type="number" class="be-mrp" value="${i.mrp || 0}" min="0" step="0.01" style="width:90px;padding:4px 6px;border:1px solid var(--border);border-radius:6px;text-align:right;font-size:0.9rem"></td>
             <td><input type="number" class="be-lowstock" value="${i.lowStockAlert || 5}" min="0" step="1" style="width:70px;padding:4px 6px;border:1px solid var(--border);border-radius:6px;text-align:right;font-size:0.9rem"></td>
         </tr>`).join('');
-    openModal(`
-        <div class="modal-header"><h3 style="margin:0;font-size:1.1rem">Bulk Edit Items (${selected.length})</h3></div>
-        <div class="modal-body" style="padding:0">
-            <div style="overflow-x:auto;max-height:60vh;overflow-y:auto">
-                <table style="width:100%;border-collapse:collapse;font-size:0.88rem">
-                    <thead style="position:sticky;top:0;background:var(--surface);z-index:1">
-                        <tr style="border-bottom:2px solid var(--border)">
-                            <th style="padding:8px 12px;text-align:left;color:var(--text-muted);font-weight:600">Item</th>
-                            <th style="padding:8px 12px;text-align:center;color:var(--text-muted);font-weight:600">Unit</th>
-                            <th style="padding:8px 12px;text-align:right;color:var(--text-muted);font-weight:600">Purchase ₹</th>
-                            <th style="padding:8px 12px;text-align:right;color:var(--text-muted);font-weight:600">Sale ₹</th>
-                            <th style="padding:8px 12px;text-align:right;color:var(--text-muted);font-weight:600">MRP ₹</th>
-                            <th style="padding:8px 12px;text-align:right;color:var(--text-muted);font-weight:600">Low Stock</th>
-                        </tr>
-                    </thead>
-                    <tbody id="bulk-edit-tbody" style="border-bottom:1px solid var(--border)">
-                        ${rows}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-        <div class="modal-actions">
-            <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-            <button class="btn btn-primary" onclick="saveBulkEdit()"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-2px">save</span> Save All</button>
-        </div>`);
+    openModal(
+        `Bulk Edit Items (${selected.length})`,
+        `<div style="overflow-x:auto;max-height:55vh;overflow-y:auto">
+            <table style="width:100%;border-collapse:collapse;font-size:0.88rem">
+                <thead style="position:sticky;top:0;background:var(--surface);z-index:1">
+                    <tr style="border-bottom:2px solid var(--border)">
+                        <th style="padding:8px 12px;text-align:left;color:var(--text-muted);font-weight:600">Item</th>
+                        <th style="padding:8px 12px;text-align:center;color:var(--text-muted);font-weight:600">Unit</th>
+                        <th style="padding:8px 12px;text-align:right;color:var(--text-muted);font-weight:600">Purchase ₹</th>
+                        <th style="padding:8px 12px;text-align:right;color:var(--text-muted);font-weight:600">Sale ₹</th>
+                        <th style="padding:8px 12px;text-align:right;color:var(--text-muted);font-weight:600">MRP ₹</th>
+                        <th style="padding:8px 12px;text-align:right;color:var(--text-muted);font-weight:600">Low Stock</th>
+                    </tr>
+                </thead>
+                <tbody id="bulk-edit-tbody">${rows}</tbody>
+            </table>
+        </div>`,
+        `<button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+         <button class="btn btn-primary" onclick="saveBulkEdit()"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-2px">save</span> Save All</button>`
+    );
 }
 async function saveBulkEdit() {
     const tbody = document.getElementById('bulk-edit-tbody');
@@ -4476,17 +4471,18 @@ function processItemImport(event) {
     const file = event.target.files[0];
     if (!file) return;
 
-    function parseText(text) {
+    async function parseText(text) {
         const lines = text.split(/\r?\n/).filter(l => l.trim());
         if (lines.length < 2) return alert('File is empty or has no data rows');
         const errors = [];
         pendingItemImports = [];
-        const items = DB.get('db_inventory');
-        const categories = DB.get('db_categories');
+        const items = await DB.getAll('inventory');
+        const categories = await DB.getAll('categories');
         for (let i = 1; i < lines.length; i++) {
             const cols = parseCSVLine(lines[i]);
             if (cols.length < 3) { errors.push(`Row ${i + 1}: Not enough columns`); continue; }
             const [code, name, cat, subcat, hsn, gstRateStr, priUnit, secUOM, convStr, ppStr, spStr, mrpStr, stockStr, lowStr, warehouse, t1qty, t1price, t2qty, t2price] = cols.map(c => (c || '').trim());
+            if (!name) continue;
             const existingItem = items.find(it => it.name.toLowerCase() === name.toLowerCase());
             if (pendingItemImports.some(it => it.name.toLowerCase() === name.toLowerCase())) { errors.push(`Row ${i + 1}: Duplicate item "${name}" in file.`); continue; }
             if (!cat) { errors.push(`Row ${i + 1}: Category required for "${name}"`); continue; }
@@ -15083,7 +15079,11 @@ async function renderCompanySetup() {
             <div class="form-row"><div class="form-group"><label>Phone</label><input id="f-co-phone" value="${co.phone || ''}"></div>
             <div class="form-group"><label>GSTIN</label><input id="f-co-gstin" value="${co.gstin || ''}"></div></div>
             <div class="form-group"><label>Address</label><input id="f-co-address" value="${co.address || ''}"></div>
-            <div class="form-row"><div class="form-group"><label>City</label><input id="f-co-city" value="${co.city || ''}"></div>
+            <div class="form-row">
+                <div class="form-group"><label>City</label><input id="f-co-city" value="${co.city || ''}"></div>
+                <div class="form-group"><label>Post Code / PIN</label><input id="f-co-pincode" value="${co.pincode || ''}" placeholder="e.g. 500001"></div>
+            </div>
+            <div class="form-row"><div class="form-group"><label>State</label><input id="f-co-state" value="${co.state || ''}" placeholder="e.g. Telangana"></div>
             <div class="form-group"><label>UPI ID (Optional)</label><input id="f-co-upi" value="${co.upi || ''}" placeholder="e.g. 9876543210@upi"></div></div>
             <div class="form-group">
                 <label> Warehouse / Office GPS <small style="color:var(--text-muted)">(used for route sheet distance sorting)</small></label>
@@ -15169,7 +15169,7 @@ async function saveCompanySetup() {
     const co = DB.getObj('db_company');
     const wlat = $('f-co-wlat') ? $('f-co-wlat').value.trim() : '';
     const wlng = $('f-co-wlng') ? $('f-co-wlng').value.trim() : '';
-    const newCo = { ...co, name, phone: $('f-co-phone').value.trim(), gstin: $('f-co-gstin').value.trim(), address: $('f-co-address').value.trim(), city: $('f-co-city').value.trim(), upi: $('f-co-upi').value.trim(), warehouseLat: wlat ? parseFloat(wlat) : null, warehouseLng: wlng ? parseFloat(wlng) : null };
+    const newCo = { ...co, name, phone: $('f-co-phone').value.trim(), gstin: $('f-co-gstin').value.trim(), address: $('f-co-address').value.trim(), city: $('f-co-city').value.trim(), pincode: $('f-co-pincode') ? $('f-co-pincode').value.trim() : (co.pincode || ''), state: $('f-co-state') ? $('f-co-state').value.trim() : (co.state || ''), upi: $('f-co-upi').value.trim(), warehouseLat: wlat ? parseFloat(wlat) : null, warehouseLng: wlng ? parseFloat(wlng) : null };
     await DB.saveSettings('db_company', newCo);
     $('sidebar-brand').textContent = name;
     showToast('Company info saved!', 'success');
