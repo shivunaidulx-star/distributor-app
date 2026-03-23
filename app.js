@@ -4458,10 +4458,10 @@ function parseCSVLine(line) {
 
 // --- Excel Item Master Import ---
 function downloadItemTemplate() {
-    let csv = 'Item Code,Item Name *,Category *,Sub-Category,HSN,Primary Unit *,Secondary UOM,Conversion Ratio,Purchase Price *,Sale Price *,MRP,Opening Stock,Low Stock Alert,Warehouse,Price Tier 1 Qty,Price Tier 1 Price,Price Tier 2 Qty,Price Tier 2 Price\n';
-    csv += 'SKU-001,Premium Soap,FMCG,Personal Care,3401,Pcs,Box,12,25.00,35.00,40.00,100,20,Main Warehouse,50,33.00,100,30.00\n';
-    csv += 'SKU-002,Rice 5Kg,Grocery,Staples,1006,Bag,,,160.00,200.00,220.00,50,10,Main Warehouse,,,\n';
-    csv += 'SKU-003,Parle-G Biscuit,Biscuits,Glucose,,Pcs,Box,24,5.00,6.00,7.00,200,50,Main Warehouse,100,5.50,,\n';
+    let csv = 'Item Code,Item Name *,Category *,Sub-Category,HSN,GST Rate %,Primary Unit *,Secondary UOM,Conversion Ratio,Purchase Price *,Sale Price *,MRP,Opening Stock,Low Stock Alert,Warehouse,Price Tier 1 Qty,Price Tier 1 Price,Price Tier 2 Qty,Price Tier 2 Price\n';
+    csv += 'SKU-001,Premium Soap,FMCG,Personal Care,3401,12,Pcs,Box,12,25.00,35.00,40.00,100,20,Main Warehouse,50,33.00,100,30.00\n';
+    csv += 'SKU-002,Rice 5Kg,Grocery,Staples,1006,5,Bag,,,160.00,200.00,220.00,50,10,Main Warehouse,,,\n';
+    csv += 'SKU-003,Parle-G Biscuit,Biscuits,Glucose,,5,Pcs,Box,24,5.00,6.00,7.00,200,50,Main Warehouse,100,5.50,,\n';
     downloadCSV(csv, 'item_master_template.csv');
     showToast('Item template downloaded!', 'success');
 }
@@ -4486,7 +4486,7 @@ function processItemImport(event) {
         for (let i = 1; i < lines.length; i++) {
             const cols = parseCSVLine(lines[i]);
             if (cols.length < 3) { errors.push(`Row ${i + 1}: Not enough columns`); continue; }
-            const [code, name, cat, subcat, hsn, priUnit, secUOM, convStr, ppStr, spStr, mrpStr, stockStr, lowStr, warehouse, t1qty, t1price, t2qty, t2price] = cols.map(c => (c || '').trim());
+            const [code, name, cat, subcat, hsn, gstRateStr, priUnit, secUOM, convStr, ppStr, spStr, mrpStr, stockStr, lowStr, warehouse, t1qty, t1price, t2qty, t2price] = cols.map(c => (c || '').trim());
             const existingItem = items.find(it => it.name.toLowerCase() === name.toLowerCase());
             if (pendingItemImports.some(it => it.name.toLowerCase() === name.toLowerCase())) { errors.push(`Row ${i + 1}: Duplicate item "${name}" in file.`); continue; }
             if (!cat) { errors.push(`Row ${i + 1}: Category required for "${name}"`); continue; }
@@ -4504,6 +4504,7 @@ function processItemImport(event) {
                 itemCode: code || (existingItem ? existingItem.itemCode : ''),
                 name, category: cat, subCategory: subcat || '',
                 hsn: hsn || (existingItem ? existingItem.hsn : ''),
+                gstRate: gstRateStr !== '' ? parseFloat(gstRateStr) : (existingItem ? (existingItem.gstRate || 0) : 0),
                 unit: priUnit || (existingItem ? existingItem.unit : 'Pcs'),
                 secUom: secUOM || (existingItem ? existingItem.secUom : ''),
                 secUomRatio: ratio > 0 ? ratio : (existingItem ? existingItem.secUomRatio : 0),
