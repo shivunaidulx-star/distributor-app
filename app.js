@@ -8428,29 +8428,28 @@ async function openPaymentModal(prefillPartyId) {
             const ptType = $('f-pay-party-type')?.value || 'Customer';
             const customers = parties.filter(p => p.type === ptType);
 
-            // Get fresh GPS and build the sorted list
-            const sortedParties = await getFreshLocationAndSort(customers, 'party');
-
-            initSearchDropdown('f-pay-party', sortedParties, (party) => {
+            // Show dropdown IMMEDIATELY using cached coords (no GPS wait)
+            const sortedParties = buildPartySearchList(customers);
+            const onPartySelect = (party) => {
                 if ($('f-pay-party-id')) $('f-pay-party-id').value = party.id || '';
                 onPayPartyChange();
-            });
-
+            };
+            initSearchDropdown('f-pay-party', sortedParties, onPartySelect);
             partyInput.dataset.initDone = "true";
 
-            // Re-open the dropdown if focus was lost during the async GPS fetch
-            if (document.activeElement === partyInput) {
-                const dd = document.getElementById('f-pay-party-dropdown');
-                if (dd) dd.classList.add('open');
-            }
+            // Silently refresh GPS in background — re-sort once fresh coords arrive
+            ensureGeolocation(60000).then(coords => {
+                if (coords && !partyInput.dataset.selectedId) {
+                    initSearchDropdown('f-pay-party', buildPartySearchList(customers), onPartySelect);
+                }
+            });
         }
     };
 
     // Add the focus listener for manual clicks
     partyInput.addEventListener('focus', initPartySearch, { once: true });
 
-    // AUTO-CLICK Logic: Automatically focus and trigger search
-    // AUTO-CLICK Logic: Fetch GPS first, THEN focus
+    // Show dropdown immediately — no GPS wait on auto-open
     initPartySearch().then(() => {
         if (!prefillPartyId && partyInput && document.activeElement !== partyInput) {
             partyInput.focus();
@@ -8566,7 +8565,7 @@ async function onPayPartyTypeChange() {
     if ($('f-pay-party-id')) $('f-pay-party-id').value = '';
 
     const customers = parties.filter(p => p.type === ptype);
-    const sortedParties = await getFreshLocationAndSort(customers, 'party');
+    const sortedParties = buildPartySearchList(customers);
 
     initSearchDropdown('f-pay-party', sortedParties, async (party) => {
         if ($('f-pay-party-id')) $('f-pay-party-id').value = party.id || '';
@@ -9566,6 +9565,35 @@ async function viewExpenseDoc(docNo, type) {
     }
 }
 
+function viewExpenseDetails(id) {
+    const expenses = DB.get('db_expenses') || [];
+    const e = expenses.find(x => x.id === id);
+    if (!e) return;
+    openModal('Expense Details', `
+        <div style="background:var(--bg-card);padding:20px;border-radius:var(--radius-md);border:1px solid var(--border)">
+            <div style="display:flex;justify-content:space-between;margin-bottom:15px;border-bottom:1px dashed var(--border);padding-bottom:10px">
+                <div>
+                    <h3 style="margin:0;font-size:1.1rem">${escapeHtml(e.partyName || 'General Expense')}</h3>
+                    <div style="font-size:0.85rem;color:var(--text-muted)">Date: ${fmtDate(e.date)}</div>
+                </div>
+                <div style="text-align:right">
+                    <span class="badge ${e.category === 'Sales Discount' ? 'badge-warning' : e.category === 'Payment Discount' ? 'badge-info' : 'badge-success'}">${escapeHtml(e.category || 'Manual')}</span>
+                </div>
+            </div>
+            <table style="width:100%;font-size:0.9rem;border-collapse:collapse;margin-bottom:15px">
+                <tr style="border-bottom:1px dashed var(--border)"><td style="padding:8px 0;color:var(--text-secondary)">Amount</td><td style="padding:8px 0;text-align:right;font-weight:700;font-size:1.1rem;color:var(--danger)">${currency(e.amount)}</td></tr>
+                ${e.docNo ? `<tr style="border-bottom:1px dashed var(--border)"><td style="padding:8px 0;color:var(--text-secondary)">Linked Doc</td><td style="padding:8px 0;text-align:right;font-weight:600;color:var(--accent)"><a href="#" onclick="viewExpenseDoc('${escapeHtml(e.docNo)}','${e.docNo.startsWith('PAY-') ? 'payment' : 'invoice'}');return false">${escapeHtml(e.docNo)}</a></td></tr>` : ''}
+                <tr><td style="padding:8px 0;color:var(--text-secondary);vertical-align:top">Description</td><td style="padding:8px 0;text-align:right">${escapeHtml(e.description || e.note || '-')}</td></tr>
+            </table>
+        </div>
+        <div class="modal-actions">
+            <button class="btn btn-outline" onclick="closeModal()">Close</button>
+            ${canEdit() ? `<button class="btn btn-outline" style="color:var(--danger);border-color:var(--danger)" onclick="closeModal();deleteExpense('${e.id}')"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-2px">delete</span> Delete</button>` : ''}
+            ${canEdit() ? `<button class="btn btn-outline" onclick="closeModal();openEditExpenseModal('${e.id}')"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-2px">edit</span> Edit</button>` : ''}
+        </div>
+    `);
+}
+
 function openEditExpenseModal(id) {
     const expenses = DB.get('db_expenses') || [];
     const e = expenses.find(x => x.id === id);
@@ -9577,7 +9605,11 @@ function openEditExpenseModal(id) {
         </div>
         <div class="form-group"><label>Amount *</label><input type="number" id="f-exp-amt" min="0" step="0.01" value="${e.amount || 0}"></div>
         <div class="form-group"><label>Description</label><input id="f-exp-desc" value="${escapeHtml(e.description || e.note || '')}" placeholder="Details..."></div>
-    `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="saveEditedExpense('${id}')"> Save</button>`);
+    `, `
+        <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+        ${canEdit() ? `<button class="btn btn-icon" style="color:var(--danger)" title="Delete" onclick="closeModal(); deleteExpense('${id}')"><span class="material-symbols-outlined">delete</span></button>` : ''}
+        <button class="btn btn-primary" onclick="saveEditedExpense('${id}')"> Save</button>
+    `);
 }
 
 async function saveEditedExpense(id) {
@@ -9595,6 +9627,46 @@ async function saveEditedExpense(id) {
     } catch (err) { alert('Error: ' + err.message); }
 }
 
+function toggleExpFilters() {
+    const extra = $('exp-extra-filters');
+    const btn = $('exp-filter-toggle');
+    if (!extra) return;
+    const open = extra.style.display !== 'none';
+    extra.style.display = open ? 'none' : 'block';
+    if (btn) btn.style.background = open ? 'var(--bg-input)' : 'var(--primary)';
+    if (btn) btn.style.color = open ? '' : '#fff';
+}
+
+function renderExpCards(expenses) {
+    if (!expenses.length) return `<div style="text-align:center;padding:40px 20px;color:var(--text-muted)"><div style="font-size:2rem;margin-bottom:8px">💸</div><div>No expenses found</div></div>`;
+    const parties = DB.get('db_parties') || [];
+    return expenses.map(e => {
+        const party = e.partyId ? parties.find(p => p.id === e.partyId) : null;
+        const partyDisplay = e.partyName || (party ? party.name : 'General Expense');
+        
+        let docBtn = '';
+        if (e.docNo) {
+            const isPayment = e.docNo.startsWith('PAY-');
+            docBtn = `<button class="btn-icon" style="padding:4px" onclick="event.stopPropagation(); viewExpenseDoc('${escapeHtml(e.docNo)}','${isPayment ? 'payment' : 'invoice'}')"><span class="material-symbols-outlined" style="font-size:1.2rem;color:var(--accent)">visibility</span></button>`;
+        }
+        
+        return `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:8px;display:flex;align-items:center;gap:12px" onclick="viewExpenseDetails('${e.id}')">
+            <div style="flex:1;min-width:0">
+                <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
+                    <span style="font-size:0.68rem;font-weight:700;background:var(--bg-secondary);color:var(--text-muted);padding:2px 7px;border-radius:20px;white-space:nowrap">${escapeHtml(e.category || 'Manual')}</span>
+                    ${e.docNo ? `<span style="font-weight:700;font-size:0.8rem;color:var(--accent)">${escapeHtml(e.docNo)}</span>` : ''}
+                </div>
+                <div style="font-weight:600;font-size:0.88rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(partyDisplay)}</div>
+                <div style="font-size:0.75rem;color:var(--text-muted);margin-top:2px">${fmtDate(e.date)} ${e.description ? '· ' + escapeHtml(e.description) : ''}</div>
+            </div>
+            <div style="text-align:right;flex-shrink:0;display:flex;flex-direction:column;align-items:flex-end">
+                <div style="font-size:1.1rem;font-weight:800;color:var(--danger)">${currency(e.amount)}</div>
+                ${docBtn ? `<div style="margin-top:6px">${docBtn}</div>` : ''}
+            </div>
+        </div>`;
+    }).join('');
+}
+
 async function renderExpenses() {
     const expenses = await DB.getAll('expenses');
     window._allExpenses = expenses;
@@ -9603,7 +9675,45 @@ async function renderExpenses() {
     const total = expenses.reduce((s, e) => s + (e.amount || 0), 0);
     // Build category options
     const cats = [...new Set(expenses.map(e => e.category).filter(Boolean))].sort();
-    pageContent.innerHTML = `
+    
+    const isMobile = window.innerWidth < 768;
+
+    if (isMobile) {
+        pageContent.innerHTML = `
+        <!-- Mobile: compact stat tiles -->
+        <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:10px 12px;margin-bottom:10px;text-align:center">
+            <div style="display:flex;gap:5px;justify-content:space-around">
+                <div><div style="font-size:0.65rem;color:var(--text-muted);font-weight:700">SALES DISC</div><div style="font-size:1.1rem;font-weight:800;color:#f59e0b">${currency(salDisc)}</div></div>
+                <div><div style="font-size:0.65rem;color:var(--text-muted);font-weight:700">PAY DISC</div><div style="font-size:1.1rem;font-weight:800;color:#3b82f6">${currency(payDisc)}</div></div>
+                <div><div style="font-size:0.65rem;color:var(--text-muted);font-weight:700">TOTAL EXP</div><div style="font-size:1.1rem;font-weight:800;color:#ef4444">${currency(total)}</div></div>
+            </div>
+        </div>
+        
+        <!-- Mobile: compact filter strip -->
+        <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:10px">
+            <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+                <input type="date" id="exp-f-from" value="${today()}" onchange="filterExpTable()" style="flex:1;font-size:0.78rem;padding:7px 8px;border:1px solid var(--border);border-radius:7px;background:var(--bg-input)">
+                <span style="color:var(--text-muted);font-size:0.8rem">–</span>
+                <input type="date" id="exp-f-to" value="${today()}" onchange="filterExpTable()" style="flex:1;font-size:0.78rem;padding:7px 8px;border:1px solid var(--border);border-radius:7px;background:var(--bg-input)">
+                <button onclick="toggleExpFilters()" id="exp-filter-toggle" style="border:1px solid var(--border);background:var(--bg-input);border-radius:7px;padding:7px 10px;font-size:0.85rem;cursor:pointer;flex-shrink:0">⚙️</button>
+                <button class="btn btn-primary btn-sm" onclick="openExpenseModal()" style="white-space:nowrap;padding:7px 14px;flex-shrink:0">+ New</button>
+            </div>
+            <div id="exp-extra-filters" style="display:none">
+                <input id="exp-f-party" placeholder="Party name..." oninput="filterExpTable()" style="width:100%;margin-bottom:6px;padding:7px 10px;border:1px solid var(--border);border-radius:7px;font-size:0.82rem;background:var(--bg-input);box-sizing:border-box">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+                    <select id="exp-f-cat" onchange="filterExpTable()" style="padding:7px;border:1px solid var(--border);border-radius:7px;font-size:0.78rem;background:var(--bg-input)"><option value="">All Categories</option>${cats.map(c => `<option>${escapeHtml(c)}</option>`).join('')}</select>
+                    <input id="exp-f-doc" placeholder="DOC-NO..." oninput="filterExpTable()" style="padding:7px 10px;border:1px solid var(--border);border-radius:7px;font-size:0.82rem;background:var(--bg-input);box-sizing:border-box">
+                </div>
+            </div>
+        </div>
+        
+        <!-- Mobile: expense entry cards -->
+        <div id="exp-list">${renderExpCards(expenses)}</div>
+        <div id="exp-tbody" style="display:none"></div>
+        <table id="exp-table" style="display:none"><tbody></tbody></table>
+        `;
+    } else {
+        pageContent.innerHTML = `
         <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
             <div class="stat-card amber" style="flex:1;min-width:140px;padding:12px 16px"><div style="font-size:0.72rem;font-weight:700;text-transform:uppercase;color:var(--text-muted);margin-bottom:4px">Sales Discount</div><div style="font-size:1.3rem;font-weight:800;color:#f59e0b">${currency(salDisc)}</div></div>
             <div class="stat-card blue" style="flex:1;min-width:140px;padding:12px 16px"><div style="font-size:0.72rem;font-weight:700;text-transform:uppercase;color:var(--text-muted);margin-bottom:4px">Payment Discount</div><div style="font-size:1.3rem;font-weight:800;color:#3b82f6">${currency(payDisc)}</div></div>
@@ -9625,11 +9735,13 @@ async function renderExpenses() {
             </div>
         </div></div>
         <div class="card"><div class="card-body" style="padding:0">
-            <div class="table-wrapper"><table class="data-table">
+            <div class="table-wrapper"><table class="data-table" id="exp-table">
                 <thead><tr>${ColumnManager.get('expenses').filter(c => c.visible).map(c => `<th>${c.label}</th>`).join('')}</tr></thead>
                 <tbody id="exp-tbody">${renderExpRows(expenses)}</tbody>
             </table></div>
-        </div></div>`;
+        </div></div>
+        <div id="exp-list" style="display:none"></div>`;
+    }
 }
 
 function clearExpFilters() {
@@ -9651,7 +9763,9 @@ async function filterExpTable() {
     if (party) exps = exps.filter(e => (e.partyName || '').toLowerCase().includes(party));
     if (doc) exps = exps.filter(e => (e.docNo || '').toLowerCase().includes(doc));
     const tbody = $('exp-tbody');
+    const list = $('exp-list');
     if (tbody) tbody.innerHTML = renderExpRows(exps);
+    if (list) list.innerHTML = renderExpCards(exps);
 }
 
 function openExpenseModal() {
