@@ -3904,7 +3904,7 @@ function updateBulkItemBar() {
 }
 // Strip fields that are not in the Supabase inventory schema
 function _cleanInvItem(item) {
-    const { conversionFactor, conversion_factor, ...rest } = item;
+    const { conversionFactor, conversion_factor, minStock, min_stock, ...rest } = item;
     return rest;
 }
 function clearBulkItems() {
