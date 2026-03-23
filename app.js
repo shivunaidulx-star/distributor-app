@@ -253,7 +253,7 @@ const DB = {
             let val = obj[key];
 
             // 🚀 FIX: Global safety net to catch and parse corrupted JSON strings from the DB
-            if (typeof val === 'string' && ['items', 'packed_items', 'allocations', 'price_tiers', 'batches', 'package_numbers', 'cannot_complete_lines'].includes(key)) {
+            if (typeof val === 'string' && ['items', 'packed_items', 'allocations', 'price_tiers', 'batches', 'package_numbers', 'cannot_complete_lines', 'sub_categories'].includes(key)) {
                 try {
                     const parsed = JSON.parse(val);
                     if (typeof parsed === 'object' && parsed !== null) val = parsed;
@@ -3150,6 +3150,9 @@ function showPartyImportPreview(errors) {
 
 
 async function commitPartyImport() {
+    const btn = document.querySelector('#modal-body .btn-primary');
+    if (btn) { btn.disabled = true; btn.innerText = ' Importing...'; }
+
     let added = 0, updated = 0;
 
     try {
@@ -3165,11 +3168,12 @@ async function commitPartyImport() {
         }
 
         pendingPartyImports = [];
-        closeModal();
         await renderParties();
         showToast(`Import complete! ${added} added, ${updated} updated.`, 'success');
     } catch (err) {
         alert('Error during party import: ' + err.message);
+    } finally {
+        closeModal();
     }
 }
 
@@ -4523,7 +4527,8 @@ function processItemImport(event) {
             if (pendingItemImports.some(it => it.name.toLowerCase() === name.toLowerCase())) { errors.push(`Row ${i + 1}: Duplicate item "${name}" in file.`); continue; }
             if (!cat) { errors.push(`Row ${i + 1}: Category required for "${name}"`); continue; }
             let catObj = categories.find(c => c.name.toLowerCase() === cat.toLowerCase());
-            let createdCat = !catObj || (subcat && !catObj.subCategories.find(s => s.toLowerCase() === subcat.toLowerCase()));
+            const catSubs = Array.isArray(catObj && catObj.subCategories) ? catObj.subCategories : [];
+            let createdCat = !catObj || (subcat && !catSubs.find(s => s.toLowerCase() === subcat.toLowerCase()));
             const purchasePrice = parseFloat(ppStr) || 0;
             const salePrice = parseFloat(spStr) || 0;
             const stock = parseInt(stockStr, 10) || 0;
@@ -4577,6 +4582,9 @@ function processItemImport(event) {
 }
 
 async function commitItemImport() {
+    const btn = document.querySelector('#modal-body .btn-primary');
+    if (btn) { btn.disabled = true; btn.innerText = ' Importing...'; }
+
     let added = 0, updated = 0;
 
     try {
@@ -4585,15 +4593,20 @@ async function commitItemImport() {
             DB.getAll('inventory')
         ]);
 
+        const importErrors = [];
         for (const p of pendingItemImports) {
+          try {
             // Ensure category and subcategory exist
             let catObj = categories.find(c => c.name.toLowerCase() === p.category.toLowerCase());
             if (!catObj) {
-                catObj = await DB.insert('categories', { name: p.category, subCategories: [p.subCategory] });
+                catObj = await DB.insert('categories', { name: p.category, subCategories: p.subCategory ? [p.subCategory] : [] });
                 categories.push(catObj);
-            } else if (!catObj.subCategories.find(s => s.toLowerCase() === p.subCategory.toLowerCase())) {
-                catObj.subCategories.push(p.subCategory);
-                await DB.update('categories', catObj.id, { subCategories: catObj.subCategories });
+            } else {
+                const subs = Array.isArray(catObj.subCategories) ? catObj.subCategories : [];
+                if (p.subCategory && !subs.find(s => s.toLowerCase() === p.subCategory.toLowerCase())) {
+                    catObj.subCategories = [...subs, p.subCategory];
+                    await DB.update('categories', catObj.id, { subCategories: catObj.subCategories });
+                }
             }
 
             const isUpdate = p.isUpdate;
@@ -4604,10 +4617,9 @@ async function commitItemImport() {
 
             if (isUpdate) {
                 const existing = inventory.find(it => it.id === itemId);
-                const dataToUpdate = { ...p };
+                const dataToUpdate = _cleanInvItem({ ...p });
                 if (existing) {
                     dataToUpdate.stock = existing.stock;
-                    // Keep existing price tiers only if import didn't provide new ones
                     if (!dataToUpdate.priceTiers || !dataToUpdate.priceTiers.length) {
                         dataToUpdate.priceTiers = existing.priceTiers || [];
                     }
@@ -4618,18 +4630,26 @@ async function commitItemImport() {
                 const inserted = await DB.insert('inventory', { ...p });
                 added++;
                 if (p.stock > 0) {
-                    // Update the inserted object's stock state for the ledger entry
                     inserted.stock = p.stock;
                     await addLedgerEntry(inserted.id, p.name, 'Opening', p.stock, 'OPEN-IMP', 'Bulk Excel Import');
                 }
             }
+          } catch (rowErr) {
+            importErrors.push(`"${p.name}": ${rowErr.message}`);
+          }
         }
 
         pendingItemImports = [];
         closeModal();
         await renderInventory();
-        showToast(`Import complete! ${added} added, ${updated} updated.`, 'success');
+        if (importErrors.length) {
+            showToast(`Import done: ${added} added, ${updated} updated. ${importErrors.length} failed.`, 'warning');
+            console.warn('Import row errors:', importErrors);
+        } else {
+            showToast(`Import complete! ${added} added, ${updated} updated.`, 'success');
+        }
     } catch (err) {
+        closeModal();
         alert('Error during item import: ' + err.message);
     }
 }
