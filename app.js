@@ -283,7 +283,7 @@ const DB = {
         const res = {};
         for (const key in obj) {
             const v = obj[key];
-            res[key] = (v === '' && (key.includes('date') || key.includes('at') || key.includes('_at'))) ? null : v;
+            res[key] = (v === '' && (key.includes('date') || key.includes('at') || key.includes('_at') || key === 'item_code')) ? null : v;
         }
         return res;
     },
@@ -4538,7 +4538,7 @@ function processItemImport(event) {
             if (t1qty && t1price) priceTiers.push({ minQty: +t1qty, price: +t1price });
             if (t2qty && t2price) priceTiers.push({ minQty: +t2qty, price: +t2price });
             const entry = {
-                itemCode: code || (existingItem ? existingItem.itemCode : ''),
+                itemCode: code || (existingItem ? existingItem.itemCode : null) || null,
                 name, category: cat, subCategory: subcat || '',
                 hsn: hsn || (existingItem ? existingItem.hsn : ''),
                 gstRate: gstRateStr !== '' ? parseFloat(gstRateStr) : (existingItem ? (existingItem.gstRate || 0) : 0),
