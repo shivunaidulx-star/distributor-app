@@ -4804,16 +4804,16 @@ async function openSalesOrderModal() {
             <button class="btn-icon" onclick="closeSoItemSubModal()"></button>
         </div>
         <div class="sub-modal-body">
-            <div class="form-row" style="margin-bottom:8px; grid-template-columns: 1fr 1fr">
-                <div class="form-group">
-                    <label>Category Filter</label>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+                <div class="form-group" style="margin-bottom:0">
+                    <label>Category</label>
                     <select id="f-so-cat-filter" onchange="onSOCatFilterChange()">
                         <option value="">All Categories</option>
                         ${categories.map(c => `<option value="${c.name}">${c.name}</option>`).join('')}
                     </select>
                 </div>
-                <div class="form-group">
-                    <label>Sub-Category Filter</label>
+                <div class="form-group" style="margin-bottom:0">
+                    <label>Sub-Category</label>
                     <select id="f-so-subcat-filter" onchange="onSOSubcatFilterChange()">
                         <option value="">All Sub-Categories</option>
                     </select>
@@ -4830,7 +4830,7 @@ async function openSalesOrderModal() {
                         <input type="number" id="f-so-qty" value="1" min="1" style="background:#fff">
                     </div>
                 </div>
-                <div style="display:grid;grid-template-columns:1fr 1.5fr auto;gap:10px;align-items:end">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end;margin-bottom:10px">
                     <div class="form-group" style="margin-bottom:0">
                         <label style="font-size:0.75rem">UOM</label>
                         <select id="f-so-uom" onchange="onSOUomChange()" style="background:#fff"><option value="">--</option></select>
@@ -4839,16 +4839,18 @@ async function openSalesOrderModal() {
                         <label style="font-size:0.75rem">Price ₹</label>
                         <input type="number" id="f-so-price" value="" min="0" step="0.01" placeholder="Listed" style="background:#fff">
                     </div>
-                    <button class="btn btn-primary" onclick="addSOLine()" style="height:38px;padding:0 16px">Add</button>
                 </div>
+                <button class="btn btn-primary btn-block" onclick="addSOLine()" style="height:44px;font-size:1rem">+ Add</button>
             </div>
             <button class="btn btn-outline btn-block" onclick="closeSoItemSubModal()" style="margin-top:10px">Done Adding</button>
         </div>
     </div>`;
 
-    // Fetch fresh GPS and then init the search dropdown
-    const sortedParties = await getFreshLocationAndSort(customers, 'party');
-    initSearchDropdown('f-so-party', sortedParties);
+    // Show party dropdown immediately with cached GPS; silently re-sort in background
+    initSearchDropdown('f-so-party', buildPartySearchList(customers));
+    ensureGeolocation(30000).then(() => {
+        initSearchDropdown('f-so-party', buildPartySearchList(customers));
+    });
 
     _soItemDropdown = initSearchDropdown('f-so-item-input', buildItemSearchList(inv), function (item) {
         $('f-so-price').value = item.salePrice || '';
@@ -5495,8 +5497,10 @@ async function editSalesOrder(id) {
         </div>
     </div>`;
 
-    const sortedParties = await getFreshLocationAndSort(customers, 'party');
-    initSearchDropdown('f-so-party', sortedParties);
+    initSearchDropdown('f-so-party', buildPartySearchList(customers));
+    ensureGeolocation(30000).then(() => {
+        initSearchDropdown('f-so-party', buildPartySearchList(customers));
+    });
 
     _soItemDropdown = initSearchDropdown('f-so-item-input', buildItemSearchList(inv), function (item) {
         $('f-so-price').value = item.salePrice || '';
