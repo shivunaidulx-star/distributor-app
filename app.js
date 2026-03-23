@@ -3954,38 +3954,65 @@ async function bulkDeleteItems() {
 
 async function openBulkEditModal() {
     if (!window._bulkItems || !window._bulkItems.size) return;
-    const allItems = await DB.getAll('inventory');
+    const [allItems, cats] = await Promise.all([DB.getAll('inventory'), DB.getAll('categories')]);
     const selected = allItems.filter(i => window._bulkItems.has(i.id));
     if (!selected.length) return;
-    const rows = selected.map(i => `
-        <tr data-id="${i.id}">
-            <td style="min-width:180px;font-weight:600;color:var(--text-primary)">${i.name}${i.itemCode ? `<br><span style="font-size:0.72rem;color:var(--text-muted)">${i.itemCode}</span>` : ''}</td>
-            <td style="min-width:60px;text-align:center;color:var(--text-muted)">${i.unit || 'Pcs'}</td>
-            <td><input type="number" class="be-purchase" value="${i.purchasePrice || 0}" min="0" step="0.01" style="width:90px;padding:4px 6px;border:1px solid var(--border);border-radius:6px;text-align:right;font-size:0.9rem"></td>
-            <td><input type="number" class="be-sale" value="${i.salePrice || 0}" min="0" step="0.01" style="width:90px;padding:4px 6px;border:1px solid var(--border);border-radius:6px;text-align:right;font-size:0.9rem"></td>
-            <td><input type="number" class="be-mrp" value="${i.mrp || 0}" min="0" step="0.01" style="width:90px;padding:4px 6px;border:1px solid var(--border);border-radius:6px;text-align:right;font-size:0.9rem"></td>
-            <td><input type="number" class="be-lowstock" value="${i.lowStockAlert || 5}" min="0" step="1" style="width:70px;padding:4px 6px;border:1px solid var(--border);border-radius:6px;text-align:right;font-size:0.9rem"></td>
-        </tr>`).join('');
-    openModal(
-        `Bulk Edit Items (${selected.length})`,
-        `<div style="overflow-x:auto;max-height:55vh;overflow-y:auto">
-            <table style="width:100%;border-collapse:collapse;font-size:0.88rem">
-                <thead style="position:sticky;top:0;background:var(--surface);z-index:1">
-                    <tr style="border-bottom:2px solid var(--border)">
-                        <th style="padding:8px 12px;text-align:left;color:var(--text-muted);font-weight:600">Item</th>
-                        <th style="padding:8px 12px;text-align:center;color:var(--text-muted);font-weight:600">Unit</th>
-                        <th style="padding:8px 12px;text-align:right;color:var(--text-muted);font-weight:600">Purchase ₹</th>
-                        <th style="padding:8px 12px;text-align:right;color:var(--text-muted);font-weight:600">Sale ₹</th>
-                        <th style="padding:8px 12px;text-align:right;color:var(--text-muted);font-weight:600">MRP ₹</th>
-                        <th style="padding:8px 12px;text-align:right;color:var(--text-muted);font-weight:600">Low Stock</th>
-                    </tr>
-                </thead>
-                <tbody id="bulk-edit-tbody">${rows}</tbody>
-            </table>
-        </div>`,
-        `<button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-         <button class="btn btn-primary" onclick="saveBulkEdit()"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-2px">save</span> Save All</button>`
-    );
+    window._beCategories = cats;
+    const inStyle = 'padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:0.88rem;background:var(--bg-input);color:var(--text-primary);width:100%';
+    const rows = selected.map((item, idx) => {
+        const catOpts = `<option value="">--</option>` + cats.map(c => `<option value="${c.name}" ${c.name === item.category ? 'selected' : ''}>${c.name}</option>`).join('');
+        const itemCat = cats.find(c => c.name === item.category);
+        const subOpts = `<option value="">--</option>` + (itemCat ? itemCat.subCategories || [] : []).map(s => `<option value="${s}" ${s === item.subCategory ? 'selected' : ''}>${s}</option>`).join('');
+        return `<tr data-id="${item.id}">
+            <td style="min-width:170px"><div style="font-weight:600;font-size:0.88rem;color:var(--text-primary)">${item.name}</div>${item.itemCode ? `<div style="font-size:0.72rem;color:var(--text-muted)">${item.itemCode}</div>` : ''}</td>
+            <td style="min-width:60px;text-align:center;font-size:0.82rem;color:var(--text-muted)">${item.unit || 'Pcs'}</td>
+            <td style="min-width:140px"><select class="be-cat" data-row="${idx}" onchange="_beOnCatChange(${idx})" style="${inStyle}">${catOpts}</select></td>
+            <td style="min-width:130px"><select class="be-subcat" id="be-subcat-${idx}" style="${inStyle}">${subOpts}</select></td>
+            <td style="min-width:75px"><input type="number" class="be-gst" value="${item.gstRate || 0}" min="0" step="0.01" style="${inStyle};text-align:right"></td>
+            <td style="min-width:95px"><input type="number" class="be-purchase" value="${item.purchasePrice || 0}" min="0" step="0.01" style="${inStyle};text-align:right"></td>
+            <td style="min-width:95px"><input type="number" class="be-sale" value="${item.salePrice || 0}" min="0" step="0.01" style="${inStyle};text-align:right"></td>
+            <td style="min-width:95px"><input type="number" class="be-mrp" value="${item.mrp || 0}" min="0" step="0.01" style="${inStyle};text-align:right"></td>
+            <td style="min-width:75px"><input type="number" class="be-lowstock" value="${item.lowStockAlert || 5}" min="0" step="1" style="${inStyle};text-align:right"></td>
+        </tr>`;
+    }).join('');
+    pageContent.innerHTML = `
+        <div class="section-toolbar" style="margin-bottom:16px">
+            <div style="display:flex;align-items:center;gap:10px">
+                <button class="btn btn-outline" onclick="renderInventory()"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-2px">arrow_back</span> Back</button>
+                <h3 style="margin:0;font-size:1rem;font-weight:700">Bulk Edit — ${selected.length} Items</h3>
+            </div>
+            <button class="btn btn-primary" onclick="saveBulkEdit()"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-2px">save</span> Save All</button>
+        </div>
+        <div class="card"><div class="card-body" style="padding:0">
+            <div style="overflow-x:auto">
+                <table class="data-table" id="bulk-edit-table" style="min-width:900px">
+                    <thead><tr>
+                        <th style="min-width:170px">Item</th>
+                        <th style="min-width:60px;text-align:center">Unit</th>
+                        <th style="min-width:140px">Category</th>
+                        <th style="min-width:130px">Sub-Category</th>
+                        <th style="min-width:75px;text-align:right">GST %</th>
+                        <th style="min-width:95px;text-align:right">Purchase ₹</th>
+                        <th style="min-width:95px;text-align:right">Sale ₹</th>
+                        <th style="min-width:95px;text-align:right">MRP ₹</th>
+                        <th style="min-width:75px;text-align:right">Low Stock</th>
+                    </tr></thead>
+                    <tbody id="bulk-edit-tbody">${rows}</tbody>
+                </table>
+            </div>
+        </div></div>
+        <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:16px">
+            <button class="btn btn-outline" onclick="renderInventory()">Cancel</button>
+            <button class="btn btn-primary" onclick="saveBulkEdit()"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-2px">save</span> Save All (${selected.length} items)</button>
+        </div>`;
+}
+function _beOnCatChange(idx) {
+    const catSel = document.querySelector(`.be-cat[data-row="${idx}"]`);
+    const subcatSel = document.getElementById(`be-subcat-${idx}`);
+    if (!catSel || !subcatSel || !window._beCategories) return;
+    const catObj = window._beCategories.find(c => c.name === catSel.value);
+    const subs = catObj ? (catObj.subCategories || []) : [];
+    subcatSel.innerHTML = `<option value="">--</option>` + subs.map(s => `<option value="${s}">${s}</option>`).join('');
 }
 async function saveBulkEdit() {
     const tbody = document.getElementById('bulk-edit-tbody');
@@ -3996,14 +4023,18 @@ async function saveBulkEdit() {
         const id = row.dataset.id;
         const item = allItems.find(x => x.id === id);
         if (!item) continue;
-        const purchasePrice = parseFloat(row.querySelector('.be-purchase').value) || 0;
-        const salePrice = parseFloat(row.querySelector('.be-sale').value) || 0;
-        const mrp = parseFloat(row.querySelector('.be-mrp').value) || 0;
-        const lowStockAlert = parseInt(row.querySelector('.be-lowstock').value) || 5;
-        await DB.update('inventory', id, { ...item, purchasePrice, salePrice, mrp, lowStockAlert });
+        await DB.update('inventory', id, {
+            ...item,
+            category: row.querySelector('.be-cat').value || item.category,
+            subCategory: row.querySelector('.be-subcat').value || item.subCategory,
+            gstRate: parseFloat(row.querySelector('.be-gst').value) || 0,
+            purchasePrice: parseFloat(row.querySelector('.be-purchase').value) || 0,
+            salePrice: parseFloat(row.querySelector('.be-sale').value) || 0,
+            mrp: parseFloat(row.querySelector('.be-mrp').value) || 0,
+            lowStockAlert: parseInt(row.querySelector('.be-lowstock').value) || 5,
+        });
         count++;
     }
-    closeModal();
     showToast(count + ' items updated', 'success');
     window._bulkItems.clear();
     renderInventory();
