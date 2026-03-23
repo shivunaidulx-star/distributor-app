@@ -1507,7 +1507,8 @@ function buildItemSearchList(inventoryItems) {
 
 // Helper to ensure we have user coordinates for proximity sorting
 async function ensureGeolocation(maximumAge = 300000) {
-    if (window._userCoords) return window._userCoords;
+    // If cached coords exist and maximumAge allows it, return immediately
+    if (window._userCoords && maximumAge > 0) return window._userCoords;
     if (!navigator.geolocation) return null;
     return new Promise((resolve) => {
         navigator.geolocation.getCurrentPosition(
@@ -1515,8 +1516,8 @@ async function ensureGeolocation(maximumAge = 300000) {
                 window._userCoords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
                 resolve(window._userCoords);
             },
-            () => resolve(null),
-            { timeout: 6000, maximumAge, enableHighAccuracy: false }
+            () => resolve(window._userCoords || null), // on error/timeout, return cached if available
+            { timeout: 45000, maximumAge, enableHighAccuracy: false }
         );
     });
 }
@@ -4964,8 +4965,12 @@ async function openSalesOrderModal() {
 
     // Show party dropdown immediately with cached GPS; silently re-sort in background
     initSearchDropdown('f-so-party', buildPartySearchList(customers));
-    ensureGeolocation(30000).then(() => {
-        initSearchDropdown('f-so-party', buildPartySearchList(customers));
+    // Use maximumAge:0 for truly fresh location; only re-sort if user isn't actively on the field
+    ensureGeolocation(0).then(() => {
+        const inp = $('f-so-party');
+        if (inp && !inp.value && !inp.dataset.selectedId && document.activeElement !== inp) {
+            initSearchDropdown('f-so-party', buildPartySearchList(customers));
+        }
     });
 
     _soItemDropdown = initSearchDropdown('f-so-item-input', buildItemSearchList(inv), function (item) {
@@ -5614,8 +5619,11 @@ async function editSalesOrder(id) {
     </div>`;
 
     initSearchDropdown('f-so-party', buildPartySearchList(customers));
-    ensureGeolocation(30000).then(() => {
-        initSearchDropdown('f-so-party', buildPartySearchList(customers));
+    ensureGeolocation(0).then(() => {
+        const inp = $('f-so-party');
+        if (inp && !inp.value && !inp.dataset.selectedId && document.activeElement !== inp) {
+            initSearchDropdown('f-so-party', buildPartySearchList(customers));
+        }
     });
 
     _soItemDropdown = initSearchDropdown('f-so-item-input', buildItemSearchList(inv), function (item) {
@@ -6511,7 +6519,7 @@ function onInvDateChange() {
 }
 async function openInvoiceModal(type = 'sale', preserveItems = false) {
     if (!preserveItems) invoiceItems = [];
-    await ensureGeolocation();
+    ensureGeolocation(0); // fire-and-forget — don't block modal on GPS
     const ptype = type === 'sale' ? 'Customer' : 'Supplier';
     const [parties, inv, categories] = await Promise.all([
         DB.getAll('parties'),
@@ -6626,10 +6634,18 @@ async function openInvoiceModal(type = 'sale', preserveItems = false) {
     </div>`, true);
 
     // Init custom searchable dropdowns
-    initSearchDropdown('f-inv-party', buildPartySearchList(filteredParties), function (party) {
+    const onInvPartySelect = function (party) {
         const t = $('f-inv-type') ? $('f-inv-type').value : 'sale';
         if (t === 'sale') loadAvailableAdvances(party.id);
         updateInvDueDate(party);
+    };
+    initSearchDropdown('f-inv-party', buildPartySearchList(filteredParties), onInvPartySelect);
+    // Silently refresh GPS sort in background — only re-sort if user isn't actively on the field
+    ensureGeolocation(0).then(() => {
+        const inp = $('f-inv-party');
+        if (inp && !inp.value && !inp.dataset.selectedId && document.activeElement !== inp) {
+            initSearchDropdown('f-inv-party', buildPartySearchList(filteredParties), onInvPartySelect);
+        }
     });
 
     _invItemDropdown = initSearchDropdown('f-inv-item-input', buildItemSearchList(inv), function (item) {
@@ -8602,9 +8618,10 @@ async function openPaymentModal(prefillPartyId) {
             initSearchDropdown('f-pay-party', sortedParties, onPartySelect);
             partyInput.dataset.initDone = "true";
 
-            // Silently refresh GPS in background — re-sort once fresh coords arrive
-            ensureGeolocation(30000).then(coords => {
-                if (coords && !partyInput.dataset.selectedId) {
+            // Silently refresh GPS in background — only re-sort if user isn't actively on the field
+            ensureGeolocation(0).then(coords => {
+                if (coords && !partyInput.dataset.selectedId && !partyInput.value
+                        && document.activeElement !== partyInput) {
                     initSearchDropdown('f-pay-party', buildPartySearchList(customers), onPartySelect);
                 }
             });
@@ -16061,8 +16078,8 @@ let catalogCart = [];
 let _catalogAutoSyncInterval = null;
 
 async function renderCatalog() {
-    // Ping GPS immediately when opening catalog
-    await getFreshLocationAndSort([], 'none');
+    // Ping GPS in background — don't block page render
+    getFreshLocationAndSort([], 'none').catch(() => {});
     // Setup background interval if not already running
     if (!_catalogAutoSyncInterval) {
         _catalogAutoSyncInterval = setInterval(() => {
