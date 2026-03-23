@@ -340,6 +340,35 @@ const DB = {
         await this.refreshTables([actualTable]);
     },
 
+    // 🔑 Admin Delete — uses SECURITY DEFINER RPC to bypass RLS in a single transaction
+    async adminDelete(table, id) {
+        const actualTable = this.mapTable(table);
+        const role = (currentUser && currentUser.role) || 'Unknown';
+        const { error } = await supabaseClient.rpc('admin_delete_record', {
+            p_table: actualTable,
+            p_id: id,
+            p_user_role: role
+        });
+        if (error) throw error;
+        await this.refreshTables([actualTable]);
+    },
+
+    // 🔑 Admin Update — uses SECURITY DEFINER RPC to bypass RLS in a single transaction
+    async adminUpdate(table, id, row) {
+        const actualTable = this.mapTable(table);
+        const role = (currentUser && currentUser.role) || 'Unknown';
+        const snakeRow = this._clean(this._toSnake(row));
+        const { error } = await supabaseClient.rpc('admin_update_record', {
+            p_table: actualTable,
+            p_id: id,
+            p_data: snakeRow,
+            p_user_role: role
+        });
+        if (error) throw error;
+        await this.refreshTables([actualTable]);
+        return { id };
+    },
+
     //  Raw operations  NO auto-refresh (batch multiple then call DB.refresh() once) 
     async rawUpdate(table, id, row) {
         const actualTable = this.mapTable(table);
@@ -484,6 +513,7 @@ const ColumnManager = {
             { key: 'status', label: 'Status', visible: true },
             { key: 'items', label: 'Items', visible: false },
             { key: 'total', label: 'Total', visible: true },
+            { key: 'outstanding', label: 'Outstanding', visible: true },
             { key: 'actions', label: 'Actions', required: true },
         ],
         payments: [
@@ -1069,20 +1099,6 @@ async function doLoginSuccess(user, isRestore = false) {
     $('current-date').textContent = new Date().toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' });
     buildSidebar();
     showBottomNav();
-
-    // --- AUTOMATED BACKUP CHECK ---
-    if (user.role === 'Admin') {
-        const lastBackup = DB.ls.get('last_backup_date');
-        if (lastBackup !== today()) {
-            setTimeout(() => {
-                // Mark today immediately so the reminder doesn't repeat on every app open
-                DB.ls.set('last_backup_date', today());
-                if (confirm(" Daily Backup Reminder\n\nYou haven't downloaded a database backup today. Would you like to download one now to keep your data safe?")) {
-                    downloadFullDatabaseBackup();
-                }
-            }, 2000); // Prompts 2 seconds after dashboard loads
-        }
-    }
 
     await navigateTo('dashboard');
 }
@@ -1891,6 +1907,11 @@ function canEdit() {
     const r = (currentUser?.role || '').toLowerCase();
     return r === 'admin' || r === 'administrator' || r === 'manager';
 }
+function canViewLedger() {
+    const r = (currentUser?.role || '').toLowerCase();
+    if (r === 'admin' || r === 'administrator' || r === 'manager') return true;
+    return Array.isArray(currentUser?.extra_perms) && currentUser.extra_perms.includes('partyledger');
+}
 
 // =============================================
 //  DASHBOARD
@@ -2486,7 +2507,7 @@ function renderPartyRows(parties) {
             gstin: `<td style="min-width:130px;font-size:0.82rem">${p.gstin || '-'}</td>`,
             balance: `<td style="min-width:120px;text-align:right" class="${(p.balance || 0) < 0 ? 'amount-green' : 'amount-red'}">${currency(Math.abs(p.balance || 0))} ${(p.balance || 0) < 0 ? '(Cr)' : '(Dr)'}</td>`,
             actions: `<td style="min-width:150px"><div class="action-btns">
-                <button class="btn-icon" onclick="openDedicatedPartyLedger('${p.id}')" title="View Ledger"><span class="material-symbols-outlined" style="font-size:1.1rem">account_balance_wallet</span></button>
+                ${canViewLedger() ? `<button class="btn-icon" onclick="openDedicatedPartyLedger('${p.id}')" title="View Ledger"><span class="material-symbols-outlined" style="font-size:1.1rem">account_balance_wallet</span></button>` : ''}
                 ${p.phone ? `<a href="tel:${p.phone}" class="btn-icon" title="Call party" style="text-decoration:none"><span class="material-symbols-outlined" style="font-size:1.1rem">call</span></a>` : ''}
                 ${p.lat && p.lng ? `<button class="btn-icon" onclick="openPartyMap('${p.lat}','${p.lng}','${escapeHtml(p.name)}')" title="Navigate to party"><span class="material-symbols-outlined" style="font-size:1.1rem">near_me</span></button>` : ''}
                 ${!isPacker() && !(p.lat && p.lng) ? `<button class="btn-icon" onclick="updatePartyLocation('${p.id}')" title="Update Location" style="color:#3b82f6"><span class="material-symbols-outlined" style="font-size:1.1rem">location_on</span></button>` : ''}
@@ -2537,6 +2558,8 @@ async function openPartyModal(id) {
         </div>
         <div class="form-row"><div class="form-group"><label>Type</label><select id="f-party-type" data-is-new="${!p}" onchange="onPartyTypeChange(this)"><option ${p && p.type === 'Customer' ? 'selected' : ''}>Customer</option><option ${p && p.type === 'Supplier' ? 'selected' : ''}>Supplier</option></select></div>
         <div class="form-group"><label>Phone</label><input id="f-party-phone" value="${p ? p.phone || '' : ''}"></div></div>
+        <div class="form-row"><div class="form-group"><label>Party Group / Category</label><input id="f-party-group" value="${p ? p.group || '' : ''}" placeholder="e.g. Retailer, Wholesaler, Chain..."></div>
+        <div class="form-group"><label>Area / Route</label><input id="f-party-area" value="${p ? p.area || '' : ''}" placeholder="e.g. North Zone, Route-1"></div></div>
         <div class="form-row"><div class="form-group"><label>City</label><input id="f-party-city" value="${p ? p.city || '' : ''}"></div>
         <div class="form-group"><label>Post Code</label><input id="f-party-postcode" value="${p ? p.postCode || '' : ''}" placeholder="PIN / ZIP"></div></div>
         <div class="form-row"><div class="form-group"><label>GSTIN</label><input id="f-party-gstin" value="${p ? p.gstin || '' : ''}"></div>
@@ -2590,6 +2613,8 @@ async function saveParty(id) {
         gstin: $('f-party-gstin') ? $('f-party-gstin').value.trim() : '',
         address: $('f-party-addr') ? $('f-party-addr').value.trim() : '',
         postCode: $('f-party-postcode') ? $('f-party-postcode').value.trim() : '',
+        group: $('f-party-group') ? $('f-party-group').value.trim() : '',
+        area: $('f-party-area') ? $('f-party-area').value.trim() : '',
         paymentTerms: $('f-party-terms') ? $('f-party-terms').value : '',
         lat: latVal ? parseFloat(latVal) : null,
         lng: lngVal ? parseFloat(lngVal) : null,
@@ -3159,7 +3184,8 @@ async function renderCategories() {
         <div class="section-toolbar">
             <h3 style="font-size:1rem"> Categories</h3>
             <div class="filter-group">
-                <button class="btn btn-outline" onclick="triggerCategorizeExcelImport()"><span class="material-symbols-outlined" style="font-size:1.1rem">upload</span> Import</button>
+                <button class="btn btn-outline" onclick="downloadCategoryTemplate()">📥 Template</button>
+                <button class="btn btn-outline" onclick="triggerCategorizeExcelImport()">📤 Import</button>
                 <input type="file" id="f-cat-import" accept=".xlsx, .xls" style="display:none" onchange="importCategoriesExcel(event)">
                 <button class="btn btn-primary" onclick="openCategoryModal()">+ Add Category</button>
             </div>
@@ -3170,7 +3196,7 @@ async function renderCategories() {
                 <tbody>${cats.length ? cats.map(c => `<tr>
                     <td style="font-weight:600">${c.name}</td>
                     <td>${(c.subCategories || []).join(', ') || '-'}</td>
-                    <td><div class="action-btns"><button class="btn-icon" onclick="openCategoryModal('${c.id}')" title="Edit"></button><button class="btn-icon" onclick="deleteCategory('${c.id}')" title="Delete"></button></div></td>
+                    <td><div class="action-btns"><button class="btn-icon" onclick="openCategoryModal('${c.id}')" title="Edit">✏️</button><button class="btn-icon" onclick="deleteCategory('${c.id}')" title="Delete">🗑️</button></div></td>
                 </tr>`).join('') : '<tr><td colspan="3"><div class="empty-state"><span class="empty-icon"></span><p>No categories defined</p><p class="empty-subtitle">Add your first category above</p></div></td></tr>'}</tbody></table>
             </div>
         </div></div>`;
@@ -3223,6 +3249,19 @@ async function deleteCategory(id) {
 
 function triggerCategorizeExcelImport() {
     $('f-cat-import').click();
+}
+function downloadCategoryTemplate() {
+    const headers = ['Category Name', 'Sub-Categories'];
+    const rows = [
+        ['NESTLE', 'MUNCH, KITKAT, SUNRISE'],
+        ['CAVIN', 'CHICK, MEERA'],
+        ['Max', 'MILK SHAKE, BARS, WAFER']
+    ];
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+    ws['!cols'] = [{ wch: 25 }, { wch: 40 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Categories');
+    XLSX.writeFile(wb, 'Category_Import_Template.xlsx');
 }
 
 async function importCategoriesExcel(e) {
@@ -3553,9 +3592,9 @@ function openItemModal(id) {
             <div class="form-group"><label>Conversion Ratio</label><input type="number" id="f-item-secratio" value="${i ? i.secUomRatio || '' : ''}" placeholder="1 Pri = ? Sec"></div>
         </div>
         <div class="form-row">
-            <div class="form-group"><label>Purchase Price</label><input type="number" id="f-item-pp" value="${i ? i.purchasePrice : 0}"></div>
-            <div class="form-group"><label>Standard Sale Price</label><input type="number" id="f-item-sp" value="${i ? i.salePrice : 0}"></div>
-            <div class="form-group"><label>MRP</label><input type="number" id="f-item-mrp" value="${i ? i.mrp || '' : ''}" placeholder="Max Retail Price"></div>
+            <div class="form-group"><label>Purchase Price</label><input type="number" id="f-item-pp" value="${i ? Math.round(i.purchasePrice) : 0}" step="1" min="0"></div>
+            <div class="form-group"><label>Standard Sale Price</label><input type="number" id="f-item-sp" value="${i ? Math.round(i.salePrice) : 0}" step="1" min="0"></div>
+            <div class="form-group"><label>MRP</label><input type="number" id="f-item-mrp" value="${i && i.mrp ? Math.round(i.mrp) : ''}" step="1" min="0" placeholder="Max Retail Price"></div>
         </div>
         
         <div style="background:var(--bg-body);padding:10px;border-radius:6px;border:1px solid var(--border);margin-bottom:12px;">
@@ -3717,8 +3756,8 @@ function openAddBatchForm() {
             <div class="form-group"><label>Date Received</label><input type="date" id="f-batch-date" value="${today}"></div>
         </div>
         <div class="form-row">
-            <div class="form-group"><label>Purchase Price  *</label><input type="number" id="f-batch-pp" placeholder="Your cost price" step="0.01"></div>
-            <div class="form-group"><label>Sale Price  *</label><input type="number" id="f-batch-sp" placeholder="Price to customer" step="0.01"></div>
+            <div class="form-group"><label>Purchase Price  *</label><input type="number" id="f-batch-pp" placeholder="Your cost price" step="1" min="0"></div>
+            <div class="form-group"><label>Sale Price  *</label><input type="number" id="f-batch-sp" placeholder="Price to customer" step="1" min="0"></div>
         </div>
         <div class="form-group"><label>Opening Qty (this batch)</label><input type="number" id="f-batch-qty" value="0" min="0"></div>
         <div class="modal-actions">
@@ -3740,7 +3779,7 @@ function saveItemBatch() {
     if (!mrp) return alert('MRP is required');
     if (!pp) return alert('Purchase Price is mandatory for a new MRP batch');
     if (!sp) return alert('Sale Price is mandatory for a new MRP batch');
-    currentItemBatches.push({ id: 'b_' + Date.now().toString(36), mrp, purchasePrice: pp, salePrice: sp, qty, receivedDate: date, isActive: true });
+    currentItemBatches.push({ id: 'b_' + Date.now().toString(36), mrp: Math.round(mrp), purchasePrice: Math.round(pp), salePrice: Math.round(sp), qty, receivedDate: date, isActive: true });
     // Sync main form fields to new batch
     if ($('f-item-mrp')) $('f-item-mrp').value = mrp;
     if ($('f-item-pp')) $('f-item-pp').value = pp;
@@ -4620,6 +4659,7 @@ function renderSORows(orders, isApprover) {
                 <button class="btn-icon" onclick="viewSalesOrder('${o.id}')" title="View"><span class="material-symbols-outlined" style="font-size:1.1rem">visibility</span></button>
                 <button class="btn-icon" onclick="duplicateSalesOrder('${o.id}')" title="Duplicate"><span class="material-symbols-outlined" style="font-size:1.1rem">content_copy</span></button>
                 ${o.status === 'pending' && isApprover ? `<button class="btn-icon" style="color:var(--success)" onclick="approveSalesOrder('${o.id}')" title="Approve"><span class="material-symbols-outlined" style="font-size:1.1rem">check_circle</span></button><button class="btn-icon" style="color:var(--danger)" onclick="rejectSalesOrder('${o.id}')" title="Reject"><span class="material-symbols-outlined" style="font-size:1.1rem">cancel</span></button>` : ''}
+                ${(o.status === 'pending' || (o.status === 'approved' && !o.packed && !o.invoiceNo)) && isApprover ? `<button class="btn-icon" style="color:var(--warning)" onclick="editSalesOrder('${o.id}')" title="Edit"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button>` : ''}
                 ${o.status === 'pending' && canEdit() ? `<button class="btn-icon" onclick="deleteSalesOrder('${o.id}')" title="Delete" style="color:var(--danger)"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>` : ''}
             </div></td>`,
         };
@@ -4683,7 +4723,8 @@ async function filterSOTable() {
 }
 async function openSalesOrderModal() {
     soItems = [];
-
+    currentPage = 'salesorders';
+    pageTitle.textContent = 'New Sales Order';
 
     const [parties, inv, categories] = await Promise.all([
         DB.getAll('parties'),
@@ -4693,70 +4734,108 @@ async function openSalesOrderModal() {
     const customers = parties.filter(p => p.type === 'Customer');
     const orderNo = await nextNumber('SO-');
 
-    openModal('Create Sales Order', `
-        <div class="form-row" style="grid-template-columns:1fr 1fr"><div class="form-group"><label>Order #</label><input id="f-so-no" value="${orderNo}" readonly></div><div class="form-group"><label>Date</label><input type="date" id="f-so-date" value="${today()}"></div></div>
-        <div class="form-row" style="grid-template-columns:1fr 1fr"><div class="form-group"><label>Expected Delivery</label><input type="date" id="f-so-delivery" value=""></div><div class="form-group"><label>Priority</label><select id="f-so-priority"><option value="Normal">Normal</option><option value="Urgent"> Urgent</option></select></div></div>
-        <div class="form-group"><label>Customer * <small style="color:var(--text-muted)">(new name = auto-created)</small></label>
-            <input id="f-so-party" placeholder="Type customer name or mobile...">
+    pageContent.innerHTML = `
+    <div style="max-width:680px;margin:0 auto;padding-bottom:100px">
+        <!-- Header -->
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;padding-top:4px">
+            <button class="btn-icon" onclick="navigateTo('salesorders')" style="font-size:1.1rem;padding:4px 10px">← Back</button>
+            <h2 style="font-size:1.1rem;font-weight:700;margin:0">New Sales Order</h2>
         </div>
-        
-        <hr style="border-color:var(--border);margin:16px 0"><h4 style="margin-bottom:10px;font-size:0.9rem">Items</h4>
-        
-        <button class="btn btn-outline btn-block" onclick="openSoItemSubModal()" style="margin-bottom:16px;border-style:dashed;color:var(--primary);border-color:var(--primary);height:44px;font-weight:600"> Add Item(s)</button>
-        
-        <div class="table-wrapper"><div id="so-lines-list"></div></div>
-        
-        <div style="display:flex; justify-content:flex-end; gap:15px; align-items:flex-end; margin-top:10px; flex-wrap:wrap">
-            <div class="form-group" style="width:100px; margin-bottom:0">
-                <label style="font-size:0.7rem">Discount %</label>
-                <input type="number" id="f-so-disc-pct" value="0" min="0" max="100" step="0.01" oninput="onSoDiscPctChange()">
-            </div>
-            <div class="form-group" style="width:100px; margin-bottom:0">
-                <label style="font-size:0.7rem">Discount </label>
-                <input type="number" id="f-so-disc-amt" value="0" min="0" step="0.01" oninput="onSoDiscAmtChange()">
-            </div>
-            <div style="text-align:right; font-size:1.15rem; font-weight:800; color:var(--accent)" id="so-total-display">Total: 0.00</div>
-        </div>
-        
-        <div id="so-item-sub-modal" class="sub-modal">
-            <div class="sub-modal-header">
-                <h3>Add Item to Order</h3>
-                <button class="btn-icon" onclick="closeSoItemSubModal()"></button>
-            </div>
-            <div class="sub-modal-body">
-                <div class="form-row" style="margin-bottom:8px">
-                    <div class="form-group">
-                        <label>Category Filter</label>
-                        <select id="f-so-cat-filter" onchange="onSOCatFilterChange()">
-                            <option value="">All Categories</option>
-                            ${categories.map(c => `<option value="${c.name}">${c.name}</option>`).join('')}
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label>Sub-Category Filter</label>
-                        <select id="f-so-subcat-filter" onchange="onSOSubcatFilterChange()">
-                            <option value="">All Sub-Categories</option>
-                        </select>
-                    </div>
+
+        <!-- Order Details Section -->
+        <div class="card" style="margin-bottom:14px">
+            <div class="card-body">
+                <div style="font-size:0.75rem;font-weight:700;text-transform:uppercase;color:var(--text-muted);margin-bottom:12px;letter-spacing:0.05em">Order Details</div>
+                <div class="form-row" style="grid-template-columns:1fr 1fr">
+                    <div class="form-group"><label>Order #</label><input id="f-so-no" value="${orderNo}" readonly></div>
+                    <div class="form-group"><label>Date</label><input type="date" id="f-so-date" value="${today()}"></div>
                 </div>
-                <div class="inv-item-entry" style="background:var(--bg-input);padding:10px;border-radius:8px;margin-bottom:12px;border:1px solid var(--border)">
-                    <div class="form-group" style="margin-bottom:10px">
-                        <label style="font-size:0.8rem">Search & Select Item</label>
-                        <input id="f-so-item-input" placeholder="Type item name or code..." style="background:#fff">
-                    </div>
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
-                        <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">Qty</label><input type="number" id="f-so-qty" value="1" min="1" style="background:#fff"></div>
-                        <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">UOM</label><select id="f-so-uom" onchange="onSOUomChange()" style="background:#fff"><option value="">--</option></select></div>
-                    </div>
-                    <div style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end">
-                        <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">Price </label><input type="number" id="f-so-price" value="" min="0" step="0.01" placeholder="Listed" style="background:#fff"></div>
-                        <button class="btn btn-primary" onclick="addSOLine()" style="height:38px;padding:0 20px">Add</button>
-                    </div>
+                <div class="form-row" style="grid-template-columns:1fr 1fr">
+                    <div class="form-group"><label>Expected Delivery</label><input type="date" id="f-so-delivery" value=""></div>
+                    <div class="form-group"><label>Priority</label><select id="f-so-priority"><option value="Normal">Normal</option><option value="Urgent"> Urgent</option></select></div>
                 </div>
-                <button class="btn btn-outline btn-block" onclick="closeSoItemSubModal()" style="margin-top:10px">Done Adding</button>
             </div>
         </div>
-    `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveSalesOrder()"> Save & New</button><button class="btn btn-primary" onclick="saveSalesOrder()"> Submit Order</button>`, true);
+
+        <!-- Customer Section -->
+        <div class="card" style="margin-bottom:14px">
+            <div class="card-body">
+                <div style="font-size:0.75rem;font-weight:700;text-transform:uppercase;color:var(--text-muted);margin-bottom:12px;letter-spacing:0.05em">Customer</div>
+                <div class="form-group" style="margin-bottom:0">
+                    <label>Customer * <small style="color:var(--text-muted)">(new name = auto-created)</small></label>
+                    <input id="f-so-party" placeholder="Type customer name or mobile...">
+                </div>
+            </div>
+        </div>
+
+        <!-- Items Section -->
+        <div class="card" style="margin-bottom:14px">
+            <div class="card-body">
+                <div style="font-size:0.75rem;font-weight:700;text-transform:uppercase;color:var(--text-muted);margin-bottom:12px;letter-spacing:0.05em"> Items</div>
+                <button class="btn btn-outline btn-block" onclick="openSoItemSubModal()" style="margin-bottom:14px;border-style:dashed;color:var(--primary);border-color:var(--primary);height:48px;font-weight:600;font-size:1rem"> Add Item(s)</button>
+                <div id="so-lines-list"></div>
+
+                <div style="display:flex;justify-content:flex-end;gap:14px;align-items:flex-end;margin-top:14px;flex-wrap:wrap;padding-top:12px;border-top:1px solid var(--border)">
+                    <div class="form-group" style="width:110px;margin-bottom:0">
+                        <label style="font-size:0.72rem">Discount %</label>
+                        <input type="number" id="f-so-disc-pct" value="0" min="0" max="100" step="0.01" oninput="onSoDiscPctChange()">
+                    </div>
+                    <div class="form-group" style="width:110px;margin-bottom:0">
+                        <label style="font-size:0.72rem">Discount ₹</label>
+                        <input type="number" id="f-so-disc-amt" value="0" min="0" step="0.01" oninput="onSoDiscAmtChange()">
+                    </div>
+                    <div style="text-align:right;font-size:1.2rem;font-weight:800;color:var(--accent)" id="so-total-display">Total: ₹0.00</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Action Buttons -->
+        <div style="display:flex;gap:10px;justify-content:flex-end">
+            <button class="btn btn-outline" onclick="navigateTo('salesorders')">Cancel</button>
+            <button class="btn btn-outline" onclick="window._saveAndNew=true;saveSalesOrder()"> Save & New</button>
+            <button class="btn btn-primary" onclick="saveSalesOrder()"> Submit Order</button>
+        </div>
+    </div>
+
+    <!-- Add Item Panel (slide-in overlay) -->
+    <div id="so-item-sub-modal" class="sub-modal">
+        <div class="sub-modal-header">
+            <h3>Add Item to Order</h3>
+            <button class="btn-icon" onclick="closeSoItemSubModal()"></button>
+        </div>
+        <div class="sub-modal-body">
+            <div class="form-row" style="margin-bottom:8px">
+                <div class="form-group">
+                    <label>Category Filter</label>
+                    <select id="f-so-cat-filter" onchange="onSOCatFilterChange()">
+                        <option value="">All Categories</option>
+                        ${categories.map(c => `<option value="${c.name}">${c.name}</option>`).join('')}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Sub-Category Filter</label>
+                    <select id="f-so-subcat-filter" onchange="onSOSubcatFilterChange()">
+                        <option value="">All Sub-Categories</option>
+                    </select>
+                </div>
+            </div>
+            <div class="inv-item-entry" style="background:var(--bg-input);padding:10px;border-radius:8px;margin-bottom:12px;border:1px solid var(--border)">
+                <div class="form-group" style="margin-bottom:10px">
+                    <label style="font-size:0.8rem">Search & Select Item</label>
+                    <input id="f-so-item-input" placeholder="Type item name or code..." style="background:#fff">
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+                    <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">Qty</label><input type="number" id="f-so-qty" value="1" min="1" style="background:#fff"></div>
+                    <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">UOM</label><select id="f-so-uom" onchange="onSOUomChange()" style="background:#fff"><option value="">--</option></select></div>
+                </div>
+                <div style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end">
+                    <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">Price ₹</label><input type="number" id="f-so-price" value="" min="0" step="0.01" placeholder="Listed" style="background:#fff"></div>
+                    <button class="btn btn-primary" onclick="addSOLine()" style="height:38px;padding:0 20px">Add</button>
+                </div>
+            </div>
+            <button class="btn btn-outline btn-block" onclick="closeSoItemSubModal()" style="margin-top:10px">Done Adding</button>
+        </div>
+    </div>`;
 
     // Fetch fresh GPS and then init the search dropdown
     const sortedParties = await getFreshLocationAndSort(customers, 'party');
@@ -5263,15 +5342,20 @@ async function viewSalesOrder(id) {
         ${o.status === 'pending' && isA ? `<div class="modal-actions">
             <button class="btn btn-danger" onclick="rejectSalesOrder('${o.id}')"> Reject</button>
             <button class="btn btn-outline" onclick="editSalesOrder('${o.id}')"> Edit</button>
-            <button class="btn btn-primary" onclick="approveSalesOrder('${o.id}')"> Approve</button></div>` : ''}`);
+            <button class="btn btn-primary" onclick="approveSalesOrder('${o.id}')"> Approve</button></div>` : ''}
+        ${o.status === 'approved' && isA && !o.packed && !o.invoiceNo ? `<div class="modal-actions">
+            <button class="btn btn-outline" onclick="editSalesOrder('${o.id}')">✏️ Edit Order</button></div>` : ''}`);
 }
 async function editSalesOrder(id) {
-    const orders = await DB.getAll('salesorders');
+    closeModal(); // close view modal if open before switching to full-page edit
+    const [orders, inv, categories, parties] = await Promise.all([
+        DB.getAll('salesorders'), DB.getAll('inventory'), DB.getAll('categories'), DB.getAll('parties')
+    ]);
     const orig = orders.find(o => o.id === id); if (!orig) return;
-    const inventory = await DB.getAll('inventory');
+    const customers = parties.filter(p => p.type === 'Customer');
 
     soItems = orig.items.map(li => {
-        const item = inventory.find(x => x.id === li.itemId);
+        const item = inv.find(x => x.id === li.itemId);
         const latestListed = item ? item.salePrice : li.listedPrice || li.price;
         const discountAmt = li.discountAmt || 0;
         const discountPct = li.discountPct || 0;
@@ -5289,29 +5373,127 @@ async function editSalesOrder(id) {
         };
     });
 
-    const parties = await DB.getAll('parties');
-    const customers = parties.filter(p => p.type === 'Customer');
+    currentPage = 'salesorders';
+    pageTitle.textContent = 'Edit Sales Order';
 
-    openModal(`Edit Order ${orig.orderNo}`, `
+    pageContent.innerHTML = `
+    <div style="max-width:680px;margin:0 auto;padding-bottom:100px">
         <input type="hidden" id="f-so-edit-id" value="${orig.id}">
-        <div class="form-row" style="grid-template-columns:1fr 1fr"><div class="form-group"><label>Order #</label><input id="f-so-no" value="${orig.orderNo}" readonly style="opacity:0.6"></div><div class="form-group"><label>Date</label><input type="date" id="f-so-date" value="${orig.date}"></div></div>
-        <div class="form-row" style="grid-template-columns:1fr 1fr"><div class="form-group"><label>Expected Delivery</label><input type="date" id="f-so-delivery" value="${orig.expectedDeliveryDate || ''}"></div><div class="form-group"><label>Priority</label><select id="f-so-priority"><option value="Normal" ${(orig.priority || 'Normal') === 'Normal' ? 'selected' : ''}>Normal</option><option value="Urgent" ${orig.priority === 'Urgent' ? 'selected' : ''}> Urgent</option></select></div></div>
-        <div class="form-group"><label>Customer *</label>
-            <input id="f-so-party" value="${orig.partyName}" data-selected-id="${orig.partyId}" placeholder="Type customer name or mobile...">
+
+        <!-- Header -->
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;padding-top:4px">
+            <button class="btn-icon" onclick="navigateTo('salesorders')" style="font-size:1.1rem;padding:4px 10px">← Back</button>
+            <h2 style="font-size:1.1rem;font-weight:700;margin:0">Edit Order ${escapeHtml(orig.orderNo)}</h2>
         </div>
-        <hr style="border-color:var(--border);margin:16px 0"><h4 style="margin-bottom:10px;font-size:0.9rem">Items</h4>
-        <div class="form-row-3" style="margin-bottom:8px"><div class="form-group"><label>Item</label>
-            <input id="f-so-item-input" placeholder="Type item name or code...">
+
+        <!-- Order Details Section -->
+        <div class="card" style="margin-bottom:14px">
+            <div class="card-body">
+                <div style="font-size:0.75rem;font-weight:700;text-transform:uppercase;color:var(--text-muted);margin-bottom:12px;letter-spacing:0.05em">Order Details</div>
+                <div class="form-row" style="grid-template-columns:1fr 1fr">
+                    <div class="form-group"><label>Order #</label><input id="f-so-no" value="${escapeHtml(orig.orderNo)}" readonly style="opacity:0.6"></div>
+                    <div class="form-group"><label>Date</label><input type="date" id="f-so-date" value="${orig.date || ''}"></div>
+                </div>
+                <div class="form-row" style="grid-template-columns:1fr 1fr">
+                    <div class="form-group"><label>Expected Delivery</label><input type="date" id="f-so-delivery" value="${orig.expectedDeliveryDate || ''}"></div>
+                    <div class="form-group"><label>Priority</label><select id="f-so-priority"><option value="Normal" ${(orig.priority || 'Normal') === 'Normal' ? 'selected' : ''}>Normal</option><option value="Urgent" ${orig.priority === 'Urgent' ? 'selected' : ''}> Urgent</option></select></div>
+                </div>
+            </div>
         </div>
-        <div class="form-group"><label>Qty</label><input type="number" id="f-so-qty" value="1" min="1"></div>
-        <div class="form-group"><label>UOM</label><select id="f-so-uom" onchange="onSOUomChange()"><option value="">--</option></select></div>
-        <div class="form-group"><label>Price </label><input type="number" id="f-so-price" value="" min="0" step="0.01" placeholder="Listed"></div>
-        <div class="form-group"><label>&nbsp;</label><button class="btn btn-primary btn-block" onclick="addSOLine()">Add</button></div></div>
-        <div id="so-lines-list"></div>
-        <div style="text-align:right;font-size:1.1rem;font-weight:700;color:var(--accent)" id="so-total-display">Total: 0.00</div>
-        <div class="form-group" style="margin-top:12px"><label>Notes</label><input id="f-so-notes" value="${orig.notes ? escapeHtml(orig.notes) : ''}"></div>
-        <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="saveSalesOrder()">Save Changes</button></div>`);
-    initSearchDropdown('f-so-party', buildPartySearchList(customers));
+
+        <!-- Customer Section -->
+        <div class="card" style="margin-bottom:14px">
+            <div class="card-body">
+                <div style="font-size:0.75rem;font-weight:700;text-transform:uppercase;color:var(--text-muted);margin-bottom:12px;letter-spacing:0.05em">Customer</div>
+                <div class="form-group" style="margin-bottom:0">
+                    <label>Customer *</label>
+                    <input id="f-so-party" value="${escapeHtml(orig.partyName || '')}" data-selected-id="${orig.partyId || ''}" placeholder="Type customer name or mobile...">
+                </div>
+            </div>
+        </div>
+
+        <!-- Items Section -->
+        <div class="card" style="margin-bottom:14px">
+            <div class="card-body">
+                <div style="font-size:0.75rem;font-weight:700;text-transform:uppercase;color:var(--text-muted);margin-bottom:12px;letter-spacing:0.05em"> Items</div>
+                <button class="btn btn-outline btn-block" onclick="openSoItemSubModal()" style="margin-bottom:14px;border-style:dashed;color:var(--primary);border-color:var(--primary);height:48px;font-weight:600;font-size:1rem"> Add Item(s)</button>
+                <div id="so-lines-list"></div>
+                <div style="display:flex;justify-content:flex-end;gap:14px;align-items:flex-end;margin-top:14px;flex-wrap:wrap;padding-top:12px;border-top:1px solid var(--border)">
+                    <div class="form-group" style="width:110px;margin-bottom:0">
+                        <label style="font-size:0.72rem">Discount %</label>
+                        <input type="number" id="f-so-disc-pct" value="${orig.discountPct || 0}" min="0" max="100" step="0.01" oninput="onSoDiscPctChange()">
+                    </div>
+                    <div class="form-group" style="width:110px;margin-bottom:0">
+                        <label style="font-size:0.72rem">Discount ₹</label>
+                        <input type="number" id="f-so-disc-amt" value="${orig.discountAmt || 0}" min="0" step="0.01" oninput="onSoDiscAmtChange()">
+                    </div>
+                    <div style="text-align:right;font-size:1.2rem;font-weight:800;color:var(--accent)" id="so-total-display">Total: ₹0.00</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Notes -->
+        <div class="card" style="margin-bottom:14px">
+            <div class="card-body">
+                <div class="form-group" style="margin-bottom:0"><label>Notes</label><input id="f-so-notes" value="${orig.notes ? escapeHtml(orig.notes) : ''}" placeholder="Optional notes..."></div>
+            </div>
+        </div>
+
+        <!-- Action Buttons -->
+        <div style="display:flex;gap:10px;justify-content:flex-end">
+            <button class="btn btn-outline" onclick="navigateTo('salesorders')">Cancel</button>
+            <button class="btn btn-primary" onclick="saveSalesOrder()"> Save Changes</button>
+        </div>
+    </div>
+
+    <!-- Add Item Panel (slide-in overlay) -->
+    <div id="so-item-sub-modal" class="sub-modal">
+        <div class="sub-modal-header">
+            <h3>Add Item to Order</h3>
+            <button class="btn-icon" onclick="closeSoItemSubModal()"></button>
+        </div>
+        <div class="sub-modal-body">
+            <div class="form-row" style="margin-bottom:8px">
+                <div class="form-group">
+                    <label>Category Filter</label>
+                    <select id="f-so-cat-filter" onchange="onSOCatFilterChange()">
+                        <option value="">All Categories</option>
+                        ${categories.map(c => `<option value="${c.name}">${c.name}</option>`).join('')}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Sub-Category Filter</label>
+                    <select id="f-so-subcat-filter" onchange="onSOSubcatFilterChange()">
+                        <option value="">All Sub-Categories</option>
+                    </select>
+                </div>
+            </div>
+            <div class="inv-item-entry" style="background:var(--bg-input);padding:10px;border-radius:8px;margin-bottom:12px;border:1px solid var(--border)">
+                <div class="form-group" style="margin-bottom:10px">
+                    <label style="font-size:0.8rem">Search & Select Item</label>
+                    <input id="f-so-item-input" placeholder="Type item name or code..." style="background:#fff">
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+                    <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">Qty</label><input type="number" id="f-so-qty" value="1" min="1" style="background:#fff"></div>
+                    <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">UOM</label><select id="f-so-uom" onchange="onSOUomChange()" style="background:#fff"><option value="">--</option></select></div>
+                </div>
+                <div style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end">
+                    <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">Price ₹</label><input type="number" id="f-so-price" value="" min="0" step="0.01" placeholder="Listed" style="background:#fff"></div>
+                    <button class="btn btn-primary" onclick="addSOLine()" style="height:38px;padding:0 20px">Add</button>
+                </div>
+            </div>
+            <button class="btn btn-outline btn-block" onclick="closeSoItemSubModal()" style="margin-top:10px">Done Adding</button>
+        </div>
+    </div>`;
+
+    const sortedParties = await getFreshLocationAndSort(customers, 'party');
+    initSearchDropdown('f-so-party', sortedParties);
+
+    _soItemDropdown = initSearchDropdown('f-so-item-input', buildItemSearchList(inv), function (item) {
+        $('f-so-price').value = item.salePrice || '';
+        populateUomSelect($('f-so-uom'), item);
+    });
+
     renderSOLines();
 }
 async function approveSalesOrder(id) {
@@ -5873,42 +6055,78 @@ async function deletePO(id) {
 // =============================================
 let invoiceItems = [];
 async function renderInvoices() {
-    const invoices = await DB.getAll('invoices');
-    // Salesman only sees invoices assigned to them
+    const [invoices, payments] = await Promise.all([DB.getAll('invoices'), DB.getAll('payments')]);
+
+    // Build payments map: invoiceNo → paid amount
+    const pm = {};
+    payments.forEach(p => {
+        if (p.allocations) {
+            Object.entries(p.allocations).forEach(([invNo, amt]) => { pm[invNo] = (pm[invNo] || 0) + Number(amt); });
+        } else if (p.invoiceNo) {
+            pm[p.invoiceNo] = (pm[p.invoiceNo] || 0) + (p.amount || 0) + (p.discount || 0);
+        }
+    });
+    window._invPaymentsMap = pm;
+
     const visibleInvoices = currentUser.role === 'Salesman'
         ? invoices.filter(i => i.assignedTo === currentUser.name)
         : invoices;
     const validInvoices = visibleInvoices.filter(i => i.status !== 'cancelled');
-    const sales = validInvoices.filter(i => i.type === 'sale'), purchases = validInvoices.filter(i => i.type === 'purchase');
+    const sales = validInvoices.filter(i => i.type === 'sale');
+    const totalSale = sales.reduce((s, i) => s + i.total, 0);
+    const balanceDue = sales.reduce((s, i) => s + Math.max(0, i.total - (pm[i.invoiceNo] || 0)), 0);
+
     pageContent.innerHTML = `
-        <div class="stats-grid" style="margin-bottom:18px">
-            <div class="stat-card green"><div class="stat-icon"></div><div class="stat-value">${currency(sales.reduce((s, i) => s + i.total, 0))}</div><div class="stat-label">Total Sales</div></div>
-            <div class="stat-card blue"><div class="stat-icon"></div><div class="stat-value">${currency(purchases.reduce((s, i) => s + i.total, 0))}</div><div class="stat-label">Total Purchases</div></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
+            <div style="background:#fff;border-radius:12px;padding:14px 16px;box-shadow:0 1px 6px rgba(0,0,0,0.08)">
+                <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:4px">Total Sale</div>
+                <div style="font-size:1.15rem;font-weight:800;color:var(--text-primary)">${currency(totalSale)}</div>
+            </div>
+            <div style="background:#fff;border-radius:12px;padding:14px 16px;box-shadow:0 1px 6px rgba(0,0,0,0.08)">
+                <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:4px">Balance Due</div>
+                <div style="font-size:1.15rem;font-weight:800;color:#e53e3e">${currency(balanceDue)}</div>
+            </div>
         </div>
-        <div class="card" style="margin-bottom:12px"><div class="card-body" style="padding:10px 14px">
+
+        <div style="background:#fff;border-radius:12px;padding:10px 12px;margin-bottom:12px;box-shadow:0 1px 4px rgba(0,0,0,0.06)">
             <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end">
-                <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:0.72rem;font-weight:600;color:var(--text-muted)">FROM</label><input type="date" id="inv-f-from" class="form-control" style="width:130px;padding:5px 8px;font-size:0.82rem" value="${today()}" onchange="filterInvTable2()"></div>
-                <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:0.72rem;font-weight:600;color:var(--text-muted)">TO</label><input type="date" id="inv-f-to" class="form-control" style="width:130px;padding:5px 8px;font-size:0.82rem" value="${today()}" onchange="filterInvTable2()"></div>
-                <div style="display:flex;flex-direction:column;gap:3px"><label style="font-size:0.72rem;font-weight:600;color:var(--text-muted)">TYPE</label><select id="inv-type-filter" class="form-control" style="width:120px;padding:5px 8px;font-size:0.82rem" onchange="filterInvTable2()"><option value="">All</option><option value="sale">Sale</option><option value="purchase">Purchase</option></select></div>
-                <div style="display:flex;flex-direction:column;gap:3px;flex:1"><label style="font-size:0.72rem;font-weight:600;color:var(--text-muted)">SEARCH</label><input type="text" id="inv-search2" class="form-control" placeholder="Search invoices..." style="padding:5px 8px;font-size:0.82rem" oninput="filterInvTable2()"></div>
-                <div style="display:flex;gap:8px;align-items:flex-end">
-                    <button class="btn btn-outline" onclick="DB.exportToExcel('tbl-invoices', 'invoices')" style="border-color:#16a34a;color:#16a34a;padding:5px 10px"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button>
-                    <button class="detailed-view-btn ${window._detailedInvoices ? 'active' : ''}" style="padding:5px 10px" onclick="toggleDetailedInvoices()"> Detailed View</button>
-                    <button class="btn btn-outline" onclick="openColumnPersonalizer('invoices','renderInvoices')" style="border-color:var(--accent);color:var(--accent);padding:5px 10px"><span class="material-symbols-outlined" style="font-size:1.1rem">view_column</span> Columns</button>
-                    <button class="btn btn-outline" onclick="bulkPrintInvoices()" style="border-color:var(--warning);color:var(--warning);padding:5px 10px"><span class="material-symbols-outlined" style="font-size:1.1rem">print</span> Bulk Print</button>
-                    <button class="btn btn-primary" onclick="openInvoiceModal('sale')" style="padding:5px 12px">+ Sale </button>
-                    <button class="btn btn-primary" style="background:var(--info);padding:5px 12px" onclick="openInvoiceModal('purchase')">+ Purchase </button>
+                <div style="display:flex;flex-direction:column;gap:2px"><label style="font-size:0.7rem;font-weight:600;color:var(--text-muted)">FROM</label><input type="date" id="inv-f-from" class="form-control" style="width:130px;padding:5px 8px;font-size:0.82rem" value="${today()}" onchange="filterInvTable2()"></div>
+                <div style="display:flex;flex-direction:column;gap:2px"><label style="font-size:0.7rem;font-weight:600;color:var(--text-muted)">TO</label><input type="date" id="inv-f-to" class="form-control" style="width:130px;padding:5px 8px;font-size:0.82rem" value="${today()}" onchange="filterInvTable2()"></div>
+                <div style="display:flex;flex-direction:column;gap:2px"><label style="font-size:0.7rem;font-weight:600;color:var(--text-muted)">TYPE</label><select id="inv-type-filter" class="form-control" style="width:110px;padding:5px 8px;font-size:0.82rem" onchange="filterInvTable2()"><option value="">All</option><option value="sale">Sale</option><option value="purchase">Purchase</option></select></div>
+                <div style="display:flex;flex-direction:column;gap:2px;flex:1;min-width:160px"><label style="font-size:0.7rem;font-weight:600;color:var(--text-muted)">SEARCH</label><input type="text" id="inv-search2" class="form-control" placeholder="Party / Invoice #..." style="padding:5px 8px;font-size:0.82rem" oninput="filterInvTable2()"></div>
+                <div style="display:flex;gap:6px;align-items:flex-end;flex-wrap:wrap">
+                    <button class="btn btn-outline" onclick="bulkPrintInvoices()" style="padding:5px 10px;font-size:0.8rem">🖨️ Bulk Print</button>
+                    <button class="btn btn-outline" onclick="exportInvoiceList()" style="padding:5px 10px;font-size:0.8rem">📊 Export</button>
+                    <button class="btn btn-primary" onclick="openInvoiceModal('sale')" style="padding:5px 12px;font-size:0.85rem">+ Sale</button>
+                    <button class="btn btn-primary" style="background:var(--info);padding:5px 12px;font-size:0.85rem" onclick="openInvoiceModal('purchase')">+ Purchase</button>
                 </div>
             </div>
-        </div></div>
-        <div class="card"><div class="card-body" style="padding:0">
-            <div class="table-wrapper">
-                <table class="data-table" id="tbl-invoices"><thead><tr><th style="width:32px"><input type="checkbox" id="inv-check-all" title="Select All" onchange="document.querySelectorAll('.inv-chk').forEach(c=>c.checked=this.checked)"></th>${ColumnManager.get('invoices').filter(c => c.visible).map(c => `<th>${c.label}</th>`).join('')}</tr></thead>
+        </div>
+
+        ${window.innerWidth < 768
+            ? `<div id="invoice-list">${renderInvoiceCards(visibleInvoices)}</div>`
+            : `<div class="card"><div class="card-body" style="padding:0"><div class="table-wrapper">
+                <table class="data-table" id="tbl-invoices"><thead><tr>
+                    <th style="width:32px"><input type="checkbox" id="inv-check-all" title="Select All" onchange="document.querySelectorAll('.inv-chk').forEach(c=>c.checked=this.checked)"></th>
+                    ${ColumnManager.get('invoices').filter(c => c.visible).map(c => `<th>${c.label}</th>`).join('')}
+                </tr></thead>
                 <tbody id="invoice-tbody">${renderInvoiceRows(visibleInvoices)}</tbody></table>
-            </div>
-        </div></div>`;
+            </div></div></div>`
+        }`;
 
     initSwipeActions();
+}
+
+function exportInvoiceList() {
+    const invs = Array.from(document.querySelectorAll('[data-inv-id]')).map(el => el.dataset.invId);
+    // Fall back to full export
+    const allInvs = DB.cache['invoices'] || [];
+    const rows = [['Invoice No','Date','Party','Type','Total','Status']];
+    allInvs.forEach(i => rows.push([i.invoiceNo, i.date, i.partyName, i.type, i.total, i.status]));
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Invoices');
+    XLSX.writeFile(wb, 'Invoices_Export.xlsx');
 }
 async function getInvoicePaidAmount(invNo) {
     const payments = await DB.getAll('payments');
@@ -5933,11 +6151,6 @@ function renderInvoiceRows(invs) {
     const canPay = canEdit() || currentUser.role === 'Salesman';
     const cols = ColumnManager.get('invoices').filter(c => c.visible);
     return invs.map(i => {
-        let detailedRow = '';
-        if (window._detailedInvoices && i.items && i.items.length) {
-            const itemNames = i.items.map(li => ` ${li.name}`).join(' ');
-            detailedRow = `<tr class="detailed-info-row"><td colspan="${cols.length}" style="font-size:0.75rem;padding:4px 18px;color:var(--text-muted);background:#fafafa">${itemNames}</td></tr>`;
-        }
         const cellMap = {
             date: `<td style="min-width:90px">${fmtDate(i.date)}</td>`,
             invoiceNo: `<td style="min-width:140px;white-space:nowrap;font-weight:600;text-decoration:${i.status === 'cancelled' ? 'line-through' : 'none'}">${i.invoiceNo}${i.vyaparInvoiceNo ? `<br><span style="font-size:0.7rem;font-weight:500;color:var(--primary)">V: ${escapeHtml(i.vyaparInvoiceNo)}</span>` : ''}${i.assignedTo ? `<br><span style="font-size:0.68rem;color:var(--info);font-weight:600"> ${escapeHtml(i.assignedTo)}${i.handoverDate ? '  ' + fmtDate(i.handoverDate) : ''}</span>` : ''}</td>`,
@@ -5946,38 +6159,142 @@ function renderInvoiceRows(invs) {
             status: `<td style="min-width:90px">${i.status === 'cancelled' ? '<span class="badge badge-danger">Cancelled</span>' : i.status === 'draft' ? '<span class="badge badge-warning">Draft</span>' : '<span class="badge badge-success">Posted</span>'}</td>`,
             items: `<td style="min-width:50px;text-align:center">${(i.items || []).length}</td>`,
             total: `<td style="min-width:100px;text-align:right" class="${i.type === 'sale' ? 'amount-green' : 'amount-red'}">${currency(i.total)}</td>`,
+            outstanding: (() => {
+                const pm = window._invPaymentsMap || {};
+                const paid = pm[i.invoiceNo] || 0;
+                const bal = i.status === 'cancelled' ? 0 : Math.max(0, +(i.total - paid).toFixed(2));
+                const color = bal > 0 ? 'var(--danger)' : 'var(--success)';
+                return `<td style="min-width:100px;text-align:right;font-weight:600;color:${color}">${bal > 0 ? currency(bal) : 'PAID'}</td>`;
+            })(),
             actions: `<td style="min-width:180px"><div class="action-btns">
                 <button class="btn-icon" onclick="viewInvoice('${i.id}')" title="View"><span class="material-symbols-outlined" style="font-size:1.1rem">visibility</span></button>
-                ${canEdit() && i.type === 'sale' && i.status !== 'cancelled' ? `<button class="btn-icon" style="color:var(--warning)" onclick="openEditInvoiceModal('${i.id}')" title="Edit Invoice"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button>` : ''}
-                ${canEdit() && i.type === 'sale' && i.status !== 'cancelled' ? `<button class="btn-icon" style="color:var(--info)" onclick="openAssignInvoiceModal('${i.id}')" title="Assign to Salesman"><span class="material-symbols-outlined" style="font-size:1.1rem">person_add</span></button>` : ''}
-                ${canPay && i.status !== 'cancelled' ? `<button class="btn-icon" style="color:var(--success)" onclick="openReceivePaymentForInvoice('${i.id}')" title="Record Payment"><span class="material-symbols-outlined" style="font-size:1.1rem">payments</span></button>` : ''}
-                <button class="btn-icon" style="font-size:1.1rem" onclick="viewInvoicePaymentHistory('${i.invoiceNo}')" title="Payment History">🧾</button>
-                <button class="btn-icon" style="font-size:1.1rem" onclick="printInvoice('${i.id}')" title="Print Invoice">🖨️</button>
-                <button class="btn-icon" style="font-size:1.1rem" onclick="shareInvoice('${i.id}')" title="Share Invoice">📤</button>
-                ${canEdit() && i.status !== 'cancelled' ? `<button class="btn-icon" style="color:var(--danger)" onclick="cancelInvoiceDirectly('${i.id}')" title="Cancel Invoice"><span class="material-symbols-outlined" style="font-size:1.1rem">block</span></button>` : ''}
+                ${canEdit() && i.type === 'sale' && i.status !== 'cancelled' ? `<button class="btn-icon" style="color:var(--warning)" onclick="openEditInvoiceModal('${i.id}')" title="Edit"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button>` : ''}
+                ${canEdit() && i.type === 'sale' && i.status !== 'cancelled' ? `<button class="btn-icon" style="color:var(--info)" onclick="openAssignInvoiceModal('${i.id}')" title="Assign"><span class="material-symbols-outlined" style="font-size:1.1rem">person_add</span></button>` : ''}
+                ${canPay && i.status !== 'cancelled' ? `<button class="btn-icon" style="color:var(--success)" onclick="openReceivePaymentForInvoice('${i.id}')" title="Payment"><span class="material-symbols-outlined" style="font-size:1.1rem">payments</span></button>` : ''}
+                <button class="btn-icon" style="font-size:1.1rem" onclick="viewInvoicePaymentHistory('${i.invoiceNo}')" title="History">🧾</button>
+                <button class="btn-icon" style="font-size:1.1rem" onclick="printInvoice('${i.id}')" title="Print">🖨️</button>
+                <button class="btn-icon" style="font-size:1.1rem" onclick="shareInvoice('${i.id}')" title="Share">📤</button>
+                ${canEdit() && i.status !== 'cancelled' ? `<button class="btn-icon" style="color:var(--danger)" onclick="cancelInvoiceDirectly('${i.id}')" title="Cancel"><span class="material-symbols-outlined" style="font-size:1.1rem">block</span></button>` : ''}
                 ${canEdit() ? `<button class="btn-icon" onclick="deleteInvoice('${i.id}')" title="Delete" style="color:var(--danger)"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>` : ''}
             </div></td>`,
         };
         return `<tr data-type="${i.type}"><td style="width:32px;text-align:center"><input type="checkbox" class="inv-chk" value="${i.id}"></td>${cols.map(c => cellMap[c.key] || '').join('')}</tr>`;
     }).join('');
 }
+
+function renderInvoiceCards(invs) {
+    if (!invs.length) return '<div style="text-align:center;padding:40px;color:var(--text-muted)">No invoices found</div>';
+    const pm = window._invPaymentsMap || {};
+    const canPay = canEdit() || currentUser.role === 'Salesman';
+    return invs.map(i => {
+        const paid = pm[i.invoiceNo] || 0;
+        const balance = Math.max(0, i.total - paid);
+        const isPaid = balance <= 0 || i.status === 'cancelled';
+        const isCancelled = i.status === 'cancelled';
+        const badgeStyle = isCancelled
+            ? 'background:#fee2e2;color:#dc2626;'
+            : isPaid
+                ? 'background:#dcfce7;color:#16a34a;'
+                : i.type === 'purchase' ? 'background:#dbeafe;color:#1d4ed8;' : 'background:#fef9c3;color:#b45309;';
+        const badgeLabel = isCancelled ? 'CANCELLED' : isPaid ? 'PAID' : 'UNPAID';
+        const invDate = i.date ? new Date(i.date) : null;
+        const dateStr = invDate ? invDate.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' }) : '-';
+        const dueStr = i.dueDate ? new Date(i.dueDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' }) : (i.due_date ? new Date(i.due_date).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: '2-digit' }) : '-');
+        return `<div data-inv-id="${i.id}" style="background:#fff;border-radius:12px;padding:14px 16px;margin-bottom:10px;box-shadow:0 1px 6px rgba(0,0,0,0.07);cursor:pointer;${isCancelled ? 'opacity:0.65;' : ''}" onclick="viewInvoice('${i.id}')">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
+                <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0">
+                    <span style="font-weight:700;font-size:0.95rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(i.partyName)}</span>
+                    <span style="font-size:0.68rem;font-weight:700;padding:2px 7px;border-radius:20px;white-space:nowrap;${badgeStyle}">${badgeLabel}</span>
+                </div>
+                <span style="font-size:0.75rem;color:var(--text-muted);white-space:nowrap;margin-left:8px">${i.type === 'sale' ? 'Sale' : 'Purchase'} #${escapeHtml(i.invoiceNo)}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                <span style="font-size:1.2rem;font-weight:800;color:${i.type === 'sale' ? 'var(--text-primary)' : '#1d4ed8'}">${currency(i.total)}</span>
+                <span style="font-size:0.78rem;color:var(--text-muted)">${dateStr}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;padding-top:8px;border-top:1px solid var(--border)">
+                <div style="font-size:0.78rem;color:var(--text-muted);display:flex;flex-direction:column;gap:2px">
+                    <span>Balance: <strong style="color:${balance > 0 ? '#e53e3e' : 'var(--text-primary)'}">${currency(balance)}</strong></span>
+                    <span>Due Date: ${dueStr}</span>
+                </div>
+                <div style="display:flex;gap:2px;align-items:center" onclick="event.stopPropagation()">
+                    <button class="btn-icon" style="font-size:1.2rem;width:36px;height:36px" onclick="printInvoice('${i.id}')" title="Print">🖨️</button>
+                    <button class="btn-icon" style="font-size:1.2rem;width:36px;height:36px" onclick="shareInvoice('${i.id}')" title="Share">📤</button>
+                    <button class="btn-icon" style="font-size:1.3rem;width:36px;height:36px;font-weight:700;color:var(--text-muted)" onclick="openInvoiceActionsMenu('${i.id}',event)" title="More actions">⋮</button>
+                </div>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function openInvoiceActionsMenu(id, evt) {
+    evt.stopPropagation();
+    closeInvoiceActionsMenu();
+    const invs = DB.cache['invoices'] || [];
+    const i = invs.find(x => x.id === id);
+    if (!i) return;
+    const canPay = canEdit() || currentUser.role === 'Salesman';
+
+    const actions = [
+        { icon: '👁️', label: 'View Invoice', fn: `viewInvoice('${id}')` },
+        canEdit() && i.type === 'sale' && i.status !== 'cancelled' ? { icon: '✏️', label: 'Edit Invoice', fn: `openEditInvoiceModal('${id}')` } : null,
+        { icon: '📋', label: 'Duplicate', fn: `duplicateInvoice('${id}')` },
+        canPay && i.status !== 'cancelled' ? { icon: '💰', label: 'Receive Payment', fn: `openReceivePaymentForInvoice('${id}')` } : null,
+        { icon: '🧾', label: 'Payment History', fn: `viewInvoicePaymentHistory('${i.invoiceNo}')` },
+        canEdit() && i.type === 'sale' && i.status !== 'cancelled' ? { icon: '👤', label: 'Assign to Salesman', fn: `openAssignInvoiceModal('${id}')` } : null,
+        canEdit() && i.status !== 'cancelled' ? { icon: '🚫', label: 'Cancel Invoice', fn: `cancelInvoiceDirectly('${id}')`, danger: true } : null,
+        canEdit() ? { icon: '🗑️', label: 'Delete Invoice', fn: `deleteInvoice('${id}')`, danger: true } : null,
+    ].filter(Boolean);
+
+    const sheet = document.createElement('div');
+    sheet.id = 'inv-action-sheet';
+    sheet.innerHTML = `
+        <div onclick="closeInvoiceActionsMenu()" style="position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:9998"></div>
+        <div style="position:fixed;bottom:0;left:0;right:0;background:#fff;border-radius:18px 18px 0 0;z-index:9999;padding:0 0 env(safe-area-inset-bottom,12px)">
+            <div style="width:40px;height:4px;background:#ddd;border-radius:4px;margin:10px auto 4px"></div>
+            <div style="padding:8px 16px 6px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+                <div style="font-size:0.85rem;font-weight:700;color:var(--text-muted)">${escapeHtml(i.invoiceNo)} · ${escapeHtml(i.partyName)}</div>
+                <button class="btn-icon" onclick="closeInvoiceActionsMenu()" style="font-size:1.2rem">✕</button>
+            </div>
+            ${actions.map(a => `<div onclick="closeInvoiceActionsMenu();${a.fn}" style="display:flex;align-items:center;gap:14px;padding:14px 20px;cursor:pointer;font-size:0.95rem;${a.danger ? 'color:#dc2626' : ''}" onmousedown="this.style.background='var(--bg-secondary)'" onmouseup="this.style.background=''">
+                <span style="font-size:1.2rem;width:24px">${a.icon}</span>
+                <span>${a.label}</span>
+            </div>`).join('')}
+        </div>`;
+    document.body.appendChild(sheet);
+}
+
+function closeInvoiceActionsMenu() {
+    const el = document.getElementById('inv-action-sheet');
+    if (el) el.remove();
+}
+
+async function duplicateInvoice(id) {
+    const invs = await DB.getAll('invoices');
+    const orig = invs.find(i => i.id === id);
+    if (!orig) return;
+    // Pre-populate items then open modal with preserveItems=true
+    invoiceItems = (orig.items || []).map(li => ({ ...li }));
+    await openInvoiceModal(orig.type, true);
+    // Pre-fill party name after modal opens
+    const partyEl = $('f-inv-party');
+    if (partyEl) { partyEl.value = orig.partyName; partyEl.dataset.selectedId = orig.partyId || ''; }
+}
 async function filterInvTable2() {
     const s = ($('inv-search2') || {}).value?.toLowerCase() || '';
     const t = ($('inv-type-filter') || {}).value || '';
     const from = ($('inv-f-from') || {}).value || '';
     const to = ($('inv-f-to') || {}).value || '';
-    
+
     let invs = await DB.getAll('invoices');
     if (from) invs = invs.filter(i => (i.date || '') >= from);
     if (to) invs = invs.filter(i => (i.date || '') <= to);
-    if (s) invs = invs.filter(i => i.invoiceNo.toLowerCase().includes(s) || i.partyName.toLowerCase().includes(s));
+    if (s) invs = invs.filter(i => (i.invoiceNo || '').toLowerCase().includes(s) || (i.partyName || '').toLowerCase().includes(s));
     if (t) invs = invs.filter(i => i.type === t);
-    
-    // Only run the visible filter based on role AFTER data fetch
-    if (currentUser.role === 'Salesman') {
-        invs = invs.filter(i => i.assignedTo === currentUser.name);
-    }
-    
+    if (currentUser.role === 'Salesman') invs = invs.filter(i => i.assignedTo === currentUser.name);
+
+    const list = $('invoice-list');
+    if (list) { list.innerHTML = renderInvoiceCards(invs); return; }
     const tbody = $('invoice-tbody');
     if (tbody) tbody.innerHTML = renderInvoiceRows(invs);
 }
@@ -6030,6 +6347,14 @@ async function buildVyaparInvoiceNo() {
 function updateInvDueDate(party) {
     const dueDateEl = $('f-inv-due-date');
     if (!dueDateEl) return;
+    // If party not passed, look up selected party from the dropdown
+    if (!party) {
+        const partyEl = $('f-inv-party');
+        if (partyEl && partyEl.dataset.selectedId) {
+            const cached = DB.cache['parties'] || [];
+            party = cached.find(p => String(p.id) === String(partyEl.dataset.selectedId));
+        }
+    }
     const termName = party ? (party.paymentTerms || '') : '';
     if (!termName) { dueDateEl.value = ''; dueDateEl.placeholder = 'No terms set'; return; }
     const terms = getPaymentTermsList();
@@ -6042,6 +6367,18 @@ function updateInvDueDate(party) {
     dueDateEl.value = d.toISOString().split('T')[0];
     dueDateEl.style.color = 'var(--accent)';
     dueDateEl.title = `${termName}  ${term.days} days from invoice date`;
+    // Also sync delivery date to invoice date if it hasn't been manually set
+    const delEl = $('f-inv-delivery-date');
+    if (delEl && !delEl.dataset.manuallySet) delEl.value = base;
+}
+function onInvDateChange() {
+    const invDateEl = $('f-inv-date');
+    const newDate = invDateEl ? invDateEl.value : today();
+    // Sync delivery date if user hasn't manually set it
+    const delEl = $('f-inv-delivery-date');
+    if (delEl && !delEl.dataset.manuallySet) delEl.value = newDate;
+    // Recalculate due date
+    updateInvDueDate();
 }
 async function openInvoiceModal(type = 'sale', preserveItems = false) {
     if (!preserveItems) invoiceItems = [];
@@ -6057,8 +6394,8 @@ async function openInvoiceModal(type = 'sale', preserveItems = false) {
 
     const vyaparNo = await buildVyaparInvoiceNo();
     openModal(type === 'sale' ? 'Create Sale Invoice' : 'Create Purchase / Stock In', `
-        <div class="form-row" style="grid-template-columns:repeat(auto-fit, minmax(130px, 1fr))"><div class="form-group"><label>Invoice #</label><input id="f-inv-no" value="${invNo}"></div><div class="form-group"><label>Date</label><input type="date" id="f-inv-date" value="${today()}" onchange="updateInvDueDate()"></div><div class="form-group"><label>Due Date <span style="font-size:0.7rem;color:var(--text-muted)">auto</span></label><input type="date" id="f-inv-due-date" placeholder="Select party..."></div></div>
-        <div class="form-row" style="grid-template-columns:1fr 1fr"><div class="form-group"><label>🚚 Delivery Date</label><input type="date" id="f-inv-delivery-date" value=""></div><div class="form-group"><label>📦 Box / Crate No.</label><input type="text" id="f-inv-box-no" placeholder="e.g. B-001, C-05"></div></div>
+        <div class="form-row" style="grid-template-columns:repeat(auto-fit, minmax(130px, 1fr))"><div class="form-group"><label>Invoice #</label><input id="f-inv-no" value="${invNo}"></div><div class="form-group"><label>Date</label><input type="date" id="f-inv-date" value="${today()}" onchange="onInvDateChange()"></div><div class="form-group"><label>Due Date <span style="font-size:0.7rem;color:var(--text-muted)">auto</span></label><input type="date" id="f-inv-due-date" placeholder="Select party..."></div></div>
+        <div class="form-row" style="grid-template-columns:1fr 1fr"><div class="form-group"><label>🚚 Delivery Date</label><input type="date" id="f-inv-delivery-date" value="${today()}" onchange="this.dataset.manuallySet='1'"></div><div class="form-group"><label>📦 Box / Crate No.</label><input type="text" id="f-inv-box-no" placeholder="e.g. B-001, C-05"></div></div>
         <input type="hidden" id="f-inv-from-order" value="">
         <input type="hidden" id="f-inv-type" value="${type}">
         ${type === 'sale' ? `
@@ -7096,10 +7433,9 @@ async function executeAssignCollector(invId) {
 const _cancellingInvoices = new Set();
 
 function cancelInvoiceDirectly(id) {
-    // Check live cache first
     const invoices = DB.cache['invoices'] || DB.get('db_invoices') || [];
     const inv = invoices.find(i => i.id === id);
-    if (!inv || inv.status === 'cancelled') return;
+    if (!inv || inv.status === 'cancelled') return alert('This invoice is already cancelled.');
     if (_cancellingInvoices.has(id)) return; // already in progress
     openModal('Cancel Invoice', `
         <div style="margin-bottom:14px;padding:12px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:8px;font-size:0.9rem">
@@ -7110,8 +7446,12 @@ function cancelInvoiceDirectly(id) {
         <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Keep Invoice</button>
         <button id="btn-confirm-cancel" class="btn btn-danger" onclick="executeCancelInvoice('${id}')"> Cancel Invoice</button></div>`);
 }
-async function executeCancelInvoice(id) {
+async function executeCancelInvoice(id, { skipNav = false } = {}) {
     if (_cancellingInvoices.has(id)) return;
+    // Check cache first for fast early exit before any await
+    const cachedInvs = DB.cache['invoices'] || [];
+    const cachedInv = cachedInvs.find(x => x.id === id);
+    if (cachedInv && cachedInv.status === 'cancelled') { closeModal(); return; }
     _cancellingInvoices.add(id);
     // Disable the button immediately to prevent double-click
     const btn = document.getElementById('btn-confirm-cancel');
@@ -7120,9 +7460,40 @@ async function executeCancelInvoice(id) {
     const invoices = await DB.getAll('invoices');
     const inv = invoices.find(i => i.id === id);
     if (!inv) { _cancellingInvoices.delete(id); closeModal(); return; }
-    if (inv.status === 'cancelled') { _cancellingInvoices.delete(id); closeModal(); alert('Invoice is already cancelled.'); return; }
+    if (inv.status === 'cancelled') { _cancellingInvoices.delete(id); closeModal(); showToast('Invoice already cancelled.', 'warning'); return; }
 
     try {
+        // ✅ MARK AS CANCELLED FIRST — prevents double-cancel if anything below fails
+        await DB.update('invoices', id, { status: 'cancelled' });
+
+        // ✅ HARD VERIFY directly from Supabase — don't rely on cache (cache patches can mask failures)
+        const { data: verifyData } = await supabaseClient.from('invoices').select('id, status').eq('id', id);
+        const verifyRow = verifyData && verifyData[0];
+        if (!verifyRow || verifyRow.status !== 'cancelled') {
+            throw new Error('Invoice status did not update in database. Check RLS permissions and try again.');
+        }
+        // Sync cache to confirmed DB state
+        if (Array.isArray(DB.cache['invoices'])) {
+            const ci = DB.cache['invoices'].find(x => x.id === id);
+            if (ci) ci.status = 'cancelled';
+        }
+
+        // ✅ LEDGER DEDUPLICATION GUARD — reliable across page refreshes & retries
+        // If Sale Return entries already exist for this invoice, stock was already restored
+        const existingLedger = await DB.getAll('stock_ledger');
+        const alreadyRestored = existingLedger.some(e =>
+            e.documentNo === inv.invoiceNo &&
+            (e.entryType === 'Sale Return' || e.entryType === 'Purchase Return') &&
+            e.reason === 'Invoice Cancelled'
+        );
+        if (alreadyRestored) {
+            _cancellingInvoices.delete(id);
+            closeModal();
+            await renderInvoices();
+            showToast('Invoice ' + inv.invoiceNo + ' was already cancelled.', 'warning');
+            return;
+        }
+
         // Restore stock
         const inventory = await DB.getAll('inventory');
         for (const li of (inv.items || [])) {
@@ -7165,12 +7536,17 @@ async function executeCancelInvoice(id) {
             if (exp) await DB.delete('expenses', exp.id);
         }
 
-        // Reset associated sales order — only mark invoiceCancelled, do NOT change order status
+        // Reset associated sales order — mark cancelled so it won't reappear in packing module
         if (inv.fromOrder) {
             const orders = await DB.getAll('salesorders');
             const order = orders.find(o => o.orderNo === inv.fromOrder);
-            if (order) {
-                await DB.update('salesorders', order.id, { invoiceCancelled: true, invoiceNo: null });
+            if (order && order.status !== 'cancelled') {
+                await DB.update('salesorders', order.id, { invoiceCancelled: true, invoiceNo: null, status: 'cancelled' });
+                // Patch cache immediately
+                if (Array.isArray(DB.cache['salesorders'])) {
+                    const co = DB.cache['salesorders'].find(x => x.id === order.id);
+                    if (co) { co.invoiceCancelled = true; co.invoiceNo = null; co.status = 'cancelled'; }
+                }
             }
         }
 
@@ -7193,24 +7569,28 @@ async function executeCancelInvoice(id) {
             }
         }
 
-        // Cancel delivery records
+        // Cancel delivery records and patch cache immediately
         const dels = await DB.getAll('delivery');
         for (const d of dels) {
             if (d.invoiceNo === inv.invoiceNo && d.status !== 'Delivered' && d.status !== 'Cancelled') {
                 await DB.update('delivery', d.id, { status: 'Cancelled', cancelReason: 'Invoice cancelled' });
+                if (Array.isArray(DB.cache['delivery'])) {
+                    const cd = DB.cache['delivery'].find(x => x.id === d.id);
+                    if (cd) cd.status = 'Cancelled';
+                }
             }
         }
 
-        // Mark invoice as cancelled
-        await DB.update('invoices', id, { status: 'cancelled' });
-
         _cancellingInvoices.delete(id);
-        closeModal();
-        await renderInvoices();
+        if (!skipNav) {
+            closeModal();
+            await renderInvoices();
+        }
         showToast('Invoice ' + inv.invoiceNo + ' cancelled!', 'warning');
     } catch (err) {
         _cancellingInvoices.delete(id);
-        alert('Error cancelling invoice: ' + err.message);
+        if (!skipNav) alert('Error cancelling invoice: ' + err.message);
+        throw err; // re-throw so callers (e.g. executeCancelDeliveryInvoice) can handle
     }
 }
 async function deleteInvoice(id) {
@@ -7464,19 +7844,23 @@ body { font-family: Arial, Helvetica, sans-serif; color: #1a1a1a; margin: 0; pad
 }
 
 async function _buildInvoicePdfBlob(inv, party, order, co, qrUrl) {
-    if (typeof html2pdf === 'undefined') throw new Error('PDF library not loaded');
+    if (typeof html2pdf === 'undefined') throw new Error('PDF library not loaded — refresh and retry');
     const pageHtml = _buildInvoicePageHtml(inv, party, order, co, qrUrl, 'ORIGINAL FOR RECIPIENT');
+    // Use fixed+opacity:0 so html2canvas can measure/render the element properly
     const container = document.createElement('div');
-    container.style.cssText = 'width:148mm;position:absolute;left:-9999px;top:0;z-index:-1;background:#fff;';
+    container.style.cssText = 'position:fixed;top:0;left:0;width:148mm;opacity:0;pointer-events:none;z-index:-9999;background:#fff;overflow:hidden;';
     container.innerHTML = `<style>${_getInvoicePdfCss()}</style>${pageHtml}`;
     document.body.appendChild(container);
+    // Allow browser to render layout before capturing
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
     try {
         const blob = await html2pdf().set({
             margin: 0,
             image: { type: 'jpeg', quality: 0.98 },
-            html2canvas: { scale: 2, useCORS: true, logging: false, backgroundColor: '#fff' },
+            html2canvas: { scale: 2, useCORS: true, allowTaint: true, logging: false, backgroundColor: '#ffffff' },
             jsPDF: { unit: 'mm', format: 'a5', orientation: 'portrait' }
         }).from(container.querySelector('.page')).outputPdf('blob');
+        if (!blob || blob.size < 500) throw new Error('PDF output is empty — html2canvas may have failed');
         return blob;
     } finally {
         document.body.removeChild(container);
@@ -7484,7 +7868,10 @@ async function _buildInvoicePdfBlob(inv, party, order, co, qrUrl) {
 }
 
 async function shareInvoice(id) {
-    if (typeof html2pdf === 'undefined') { showToast('PDF library loading, please retry...', 'warning'); return; }
+    if (typeof html2pdf === 'undefined') {
+        showToast('PDF library not loaded — refresh the page and retry', 'warning');
+        return;
+    }
     const [invs, parties, co, orders] = await Promise.all([
         DB.getAll('invoices'), DB.getAll('parties'), DB.getObj('db_company'), DB.getAll('sales_orders')
     ]);
@@ -7506,17 +7893,20 @@ async function shareInvoice(id) {
         const blob = await _buildInvoicePdfBlob(inv, party, order, co, qrUrl);
         const fileName = `Invoice-${invNo}.pdf`;
         const file = new File([blob], fileName, { type: 'application/pdf' });
+        // Share PDF file — no text field so only the PDF is sent (prevents text-only fallback)
         if (navigator.canShare && navigator.canShare({ files: [file] })) {
-            await navigator.share({ files: [file], title: `Invoice ${invNo}`, text: `${inv.partyName} — ₹${(inv.total || 0).toFixed(2)}` });
+            await navigator.share({ files: [file], title: fileName });
         } else {
-            // Fallback: open PDF in new tab (user can share from there)
+            // Fallback: download the PDF directly
             const url = URL.createObjectURL(blob);
-            window.open(url, '_blank');
-            setTimeout(() => URL.revokeObjectURL(url), 30000);
-            showToast('PDF opened — use browser share/download', 'info');
+            const a = document.createElement('a');
+            a.href = url; a.download = fileName; a.click();
+            setTimeout(() => URL.revokeObjectURL(url), 5000);
+            showToast('PDF downloaded — share from your files app', 'info');
         }
     } catch (err) {
-        alert('PDF generation failed: ' + err.message);
+        console.error('shareInvoice error:', err);
+        alert('Could not generate PDF: ' + err.message);
     }
 }
 async function printInvoiceByNo(invoiceNo) {
@@ -7644,12 +8034,58 @@ async function renderPayments() {
     const today1 = today();
     const monthStart = today1; // User requested today as default
 
-    pageContent.innerHTML = `
+    const isMobile = window.innerWidth < 768;
+    const collectorOptions = !isSalesman ? `<option value="">All</option>${[...new Set(visiblePayments.map(p => p.collectedBy || p.createdBy).filter(Boolean))].map(n => `<option>${escapeHtml(n)}</option>`).join('')}` : '';
+
+    if (isMobile) {
+        pageContent.innerHTML = `
+        <!-- Mobile: compact stat + mode strip -->
+        <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:10px 12px;margin-bottom:10px">
+            <div style="display:flex;gap:0;margin-bottom:${modeChips ? '8px' : '0'}">
+                <div style="flex:1;text-align:center;border-right:1px solid var(--border);padding-right:8px">
+                    <div style="font-size:0.65rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">↗ Pay In</div>
+                    <div id="pay-stat-in" style="font-size:1.2rem;font-weight:800;color:var(--success)">${currency(totalIn)}</div>
+                </div>
+                ${!isSalesman ? `<div style="flex:1;text-align:center;padding-left:8px">
+                    <div style="font-size:0.65rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">↙ Pay Out</div>
+                    <div id="pay-stat-out" style="font-size:1.2rem;font-weight:800;color:var(--danger)">${currency(totalOut)}</div>
+                </div>` : `<div id="pay-stat-out" style="display:none"></div>`}
+            </div>
+            ${modeChips ? `<div id="pay-mode-bar-wrap" style="display:flex;gap:6px;overflow-x:auto;padding:4px 0;scrollbar-width:none">
+                <span style="font-size:0.65rem;font-weight:700;color:var(--text-muted);white-space:nowrap;align-self:center">MODE:</span>
+                <div id="pay-mode-chips" style="display:flex;gap:6px;overflow-x:auto;scrollbar-width:none">${modeChips}</div>
+            </div>` : `<div id="pay-mode-bar-wrap" style="display:none"><div id="pay-mode-chips"></div></div>`}
+        </div>
+
+        <!-- Mobile: compact filter strip -->
+        <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:10px">
+            <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+                <input type="date" id="pay-f-from" value="${monthStart}" onchange="filterPayTable()" style="flex:1;font-size:0.78rem;padding:7px 8px;border:1px solid var(--border);border-radius:7px;background:var(--bg-input)">
+                <span style="color:var(--text-muted);font-size:0.8rem">–</span>
+                <input type="date" id="pay-f-to" value="${today1}" onchange="filterPayTable()" style="flex:1;font-size:0.78rem;padding:7px 8px;border:1px solid var(--border);border-radius:7px;background:var(--bg-input)">
+                <button onclick="togglePayFilters()" id="pay-filter-toggle" style="border:1px solid var(--border);background:var(--bg-input);border-radius:7px;padding:7px 10px;font-size:0.85rem;cursor:pointer;flex-shrink:0">⚙️</button>
+                <button class="btn btn-primary btn-sm" onclick="openPaymentModal()" style="white-space:nowrap;padding:7px 14px;flex-shrink:0">+ Record</button>
+            </div>
+            <div id="pay-extra-filters" style="display:none">
+                <input id="pay-search" placeholder="Search parties/receipts..." oninput="filterPayTable()" style="width:100%;margin-bottom:6px;padding:7px 10px;border:1px solid var(--border);border-radius:7px;font-size:0.82rem;background:var(--bg-input);box-sizing:border-box">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+                    <select id="pay-type-filter" onchange="filterPayTable()" style="padding:7px;border:1px solid var(--border);border-radius:7px;font-size:0.78rem;background:var(--bg-input)"><option value="">All Types</option><option value="in">Payment In</option><option value="out">Payment Out</option></select>
+                    <select id="pay-mode-filter" onchange="filterPayTable()" style="padding:7px;border:1px solid var(--border);border-radius:7px;font-size:0.78rem;background:var(--bg-input)"><option value="">All Modes</option><option>Cash</option><option>UPI</option><option>Cheque</option><option>Bank Transfer</option></select>
+                    ${!isSalesman ? `<select id="pay-collector-filter" onchange="filterPayTable()" style="padding:7px;border:1px solid var(--border);border-radius:7px;font-size:0.78rem;background:var(--bg-input);grid-column:span 2">${collectorOptions}</select>` : ''}
+                </div>
+            </div>
+        </div>
+
+        <!-- Mobile: payment entry cards -->
+        <div id="pay-list">${renderPayCards(visiblePayments)}</div>
+        <div id="pay-tbody" style="display:none"></div>
+        <table id="tbl-payments" style="display:none"><tbody></tbody></table>`;
+    } else {
+        pageContent.innerHTML = `
         <div class="stats-grid" style="margin-bottom:14px" id="pay-stat-tiles">
             <div class="stat-card green"><div class="stat-icon"></div><div class="stat-value" id="pay-stat-in">${currency(totalIn)}</div><div class="stat-label">Payment In</div></div>
             ${!isSalesman ? `<div class="stat-card red"><div class="stat-icon"></div><div class="stat-value" id="pay-stat-out">${currency(totalOut)}</div><div class="stat-label">Payment Out</div></div>` : ''}
         </div>
-        
         <div id="pay-mode-bar-wrap">
             <div class="pay-summary-bar">
                 <div class="pay-summary-total">
@@ -7659,7 +8095,6 @@ async function renderPayments() {
                 <div class="pay-summary-modes" id="pay-mode-chips">${modeChips}</div>
             </div>
         </div>
-
         <div class="pay-toolbar-compact">
             <div class="pay-filters-section">
                 <div class="pay-filter-group"><label>From</label><input type="date" id="pay-f-from" value="${monthStart}" onchange="filterPayTable()"></div>
@@ -7667,7 +8102,7 @@ async function renderPayments() {
                 <div class="pay-filter-group" style="flex:1.5;min-width:180px"><label>Search</label><input id="pay-search" placeholder="Search parties/receipts..." oninput="filterPayTable()" class="search-box" style="margin:0"></div>
                 <div class="pay-filter-group"><label>Type</label><select id="pay-type-filter" onchange="filterPayTable()"><option value="">All Types</option><option value="in">Payment In</option><option value="out">Payment Out</option></select></div>
                 <div class="pay-filter-group"><label>Mode</label><select id="pay-mode-filter" onchange="filterPayTable()"><option value="">All Modes</option><option>Cash</option><option>UPI</option><option>Cheque</option><option>Bank Transfer</option></select></div>
-                ${!isSalesman ? `<div class="pay-filter-group"><label>Collector</label><select id="pay-collector-filter" onchange="filterPayTable()"><option value="">All</option>${[...new Set(visiblePayments.map(p => p.collectedBy || p.createdBy).filter(Boolean))].map(n => `<option>${n}</option>`).join('')}</select></div>` : ''}
+                ${!isSalesman ? `<div class="pay-filter-group"><label>Collector</label><select id="pay-collector-filter" onchange="filterPayTable()">${collectorOptions}</select></div>` : ''}
                 <div style="display:flex;gap:6px;align-items:center;padding-top:14px">
                     <button class="btn btn-outline btn-sm" onclick="DB.exportToExcel('tbl-payments', 'payments')" title="Export Excel" style="border-color:#16a34a;color:#16a34a"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span></button>
                     <button class="btn btn-outline btn-sm" onclick="openColumnPersonalizer('payments','renderPayments')" title="Column Config" style="border-color:var(--accent);color:var(--accent)"><span class="material-symbols-outlined" style="font-size:1.1rem">view_column</span></button>
@@ -7680,9 +8115,51 @@ async function renderPayments() {
                 <table class="data-table" id="tbl-payments"><thead><tr>${ColumnManager.get('payments').filter(c => c.visible).map(c => `<th>${c.label}</th>`).join('')}</tr></thead>
                 <tbody id="pay-tbody">${renderPayRows(visiblePayments)}</tbody></table>
             </div>
-        </div></div>`;
+        </div></div>
+        <div id="pay-list" style="display:none"></div>`;
+    }
     filterPayTable();
 }
+function togglePayFilters() {
+    const extra = $('pay-extra-filters');
+    const btn = $('pay-filter-toggle');
+    if (!extra) return;
+    const open = extra.style.display !== 'none';
+    extra.style.display = open ? 'none' : 'block';
+    if (btn) btn.style.background = open ? 'var(--bg-input)' : 'var(--primary)';
+    if (btn) btn.style.color = open ? '' : '#fff';
+}
+
+function renderPayCards(pays) {
+    if (!pays.length) return `<div style="text-align:center;padding:40px 20px;color:var(--text-muted)"><div style="font-size:2rem;margin-bottom:8px">💸</div><div>No payments found</div></div>`;
+    return pays.map(p => {
+        const isIn = p.type === 'in';
+        const amtColor = isIn ? 'var(--success)' : 'var(--danger)';
+        const amtSign = isIn ? '+' : '−';
+        const typeLabel = isIn ? 'IN' : 'OUT';
+        const typeBg = isIn ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)';
+        const typeColor = isIn ? 'var(--success)' : 'var(--danger)';
+        const invCell = p.allocations && Object.keys(p.allocations).length > 0
+            ? Object.keys(p.allocations).join(', ')
+            : (p.invoiceNo || '');
+        return `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:8px;display:flex;align-items:center;gap:12px" onclick="viewPaymentDetails('${p.id}')">
+            <div style="flex:1;min-width:0">
+                <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
+                    <span style="font-weight:700;font-size:0.9rem;color:var(--accent)">${escapeHtml(p.payNo || '')}</span>
+                    <span style="font-size:0.68rem;font-weight:700;background:${typeBg};color:${typeColor};padding:2px 7px;border-radius:20px">${typeLabel}</span>
+                    ${p.mode && p.mode !== 'Cash' ? `<span style="font-size:0.68rem;color:var(--text-muted);background:var(--bg-secondary);padding:2px 6px;border-radius:10px">${escapeHtml(p.mode)}</span>` : ''}
+                </div>
+                <div style="font-weight:600;font-size:0.88rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(p.partyName || '')}</div>
+                <div style="font-size:0.75rem;color:var(--text-muted);margin-top:2px">${fmtDate(p.date)}${invCell ? ' · ' + escapeHtml(invCell) : ''}${p.collectedBy ? ' · ' + escapeHtml(p.collectedBy) : ''}</div>
+            </div>
+            <div style="text-align:right;flex-shrink:0">
+                <div style="font-size:1.1rem;font-weight:800;color:${amtColor}">${amtSign}${currency(p.amount)}</div>
+                ${p.mode === 'Cash' ? `<div style="font-size:0.65rem;color:var(--text-muted)">CASH</div>` : ''}
+            </div>
+        </div>`;
+    }).join('');
+}
+
 function buildPayInvoiceCell(p) {
     if (p.allocations && Object.keys(p.allocations).length > 0) {
         return Object.entries(p.allocations).map(([inv, amt]) => `${inv} - ${AMT(amt)}`).join(', ');
@@ -7728,7 +8205,14 @@ async function filterPayTable() {
     if (t) pays = pays.filter(p => p.type === t);
     if (modeF) pays = pays.filter(p => (p.mode || 'Cash') === modeF);
     if (collF) pays = pays.filter(p => (p.collectedBy || p.createdBy) === collF);
-    $('pay-tbody').innerHTML = renderPayRows(pays);
+    // Update table or cards depending on view
+    const listEl = $('pay-list');
+    const tbodyEl = $('pay-tbody');
+    if (listEl && listEl.style.display !== 'none') {
+        listEl.innerHTML = renderPayCards(pays);
+    } else if (tbodyEl) {
+        tbodyEl.innerHTML = renderPayRows(pays);
+    }
 
     // Update stat tiles
     const filtIn = pays.filter(p => p.type === 'in').reduce((s, p) => s + p.amount, 0);
@@ -7736,20 +8220,21 @@ async function filterPayTable() {
     if ($('pay-stat-in')) $('pay-stat-in').textContent = currency(filtIn);
     if ($('pay-stat-out')) $('pay-stat-out').textContent = currency(filtOut);
 
-    // Update mode breakup bar
+    // Update mode breakup (desktop bar or mobile chips)
     const mb = {};
     pays.filter(p => p.type === 'in').forEach(p => { const m = p.mode || 'Cash'; mb[m] = (mb[m] || 0) + p.amount; });
     const chips = Object.entries(mb).map(([m, a]) => `<div class="pay-mode-chip"><span>${m}</span><strong>${currency(a)}</strong></div>`).join('');
+    const modeChipsEl = $('pay-mode-chips');
+    if (modeChipsEl) modeChipsEl.innerHTML = chips;
     const wrap = $('pay-mode-bar-wrap');
-    if (wrap) {
-        wrap.innerHTML = Object.keys(mb).length > 0 ? `
-        <div class="pay-summary-bar">
-            <div class="pay-summary-total">
-                <span class="pay-sum-label">Mode Breakup (In)</span>
-                <span class="pay-sum-value" id="pay-mode-total">${currency(filtIn)}</span>
-            </div>
-            <div class="pay-summary-modes" id="pay-mode-chips">${chips}</div>
-        </div>` : '';
+    if (wrap && wrap.querySelector('.pay-summary-bar')) {
+        // Desktop: update total value
+        const totalEl = wrap.querySelector('#pay-mode-total') || wrap.querySelector('.pay-sum-value');
+        if (totalEl) totalEl.textContent = currency(filtIn);
+        if (!chips) wrap.style.display = 'none'; else wrap.style.display = '';
+    } else if (wrap) {
+        // Mobile: show/hide the mode strip
+        if (!chips) wrap.style.display = 'none'; else { wrap.style.display = 'flex'; }
     }
 }
 
@@ -8765,14 +9250,12 @@ async function deletePayment(id) {
                 await DB.update('parties', party.id, { balance: newBal });
             }
 
-            // 2. Delete related party_ledger entries directly (bypass DB.delete's record-not-found guard)
+            // 2. Delete related party_ledger entries via admin RPC (bypasses RLS)
             const payRefNo = pay.payNo || pay.id.substring(0, 8);
             const ledger = await DB.getAll('party_ledger');
             const ledgerEntries = ledger.filter(e => e.docNo === payRefNo && e.partyId === pay.partyId);
-            if (ledgerEntries.length > 0) {
-                const ids = ledgerEntries.map(e => e.id);
-                await supabaseClient.from('party_ledger').delete().in('id', ids);
-                await DB.refreshTables(['party_ledger']);
+            for (const entry of ledgerEntries) {
+                await DB.adminDelete('party_ledger', entry.id);
             }
 
             // 3. Delete related expense entries (discount expenses)
@@ -8780,12 +9263,12 @@ async function deletePayment(id) {
                 const expenses = await DB.getAll('expenses');
                 const discExp = expenses.find(e => e.category === 'Payment Discount' && e.docNo === payRefNo);
                 if (discExp) {
-                    await supabaseClient.from('expenses').delete().eq('id', discExp.id);
-                    await DB.refreshTables(['expenses']);
+                    await DB.adminDelete('expenses', discExp.id);
                 }
             }
         }
-        await DB.delete('payments', id);
+        // Delete the payment record itself via admin RPC
+        await DB.adminDelete('payments', id);
         await renderPayments();
         showToast('Payment deleted and all related entries reversed!', 'warning');
     } catch (err) {
@@ -8943,11 +9426,10 @@ window.saveEditedPayment = async function (id) {
             await addPartyLedgerEntry(party.id, party.name, oldPay.type === 'in' ? 'Payment Edited' : 'Payment Out Edited', newBalChange, id, `Mode: ${$('f-pay-mode').value}`);
         }
 
-        // Manage Expense Entry for Discount
+        // Manage Expense Entry for Discount (use adminUpdate/adminDelete for RLS bypass)
         if (oldPay.type === 'in') {
             const expenses = await DB.getAll('expenses');
             const payRefNo = oldPay.payNo || oldPay.id.substring(0, 8);
-            // Find by doc_no, which is much safer than matching a generated description string
             const discExp = expenses.find(e => e.category === 'Payment Discount' && e.docNo === payRefNo);
 
             if (disc > 0) {
@@ -8961,17 +9443,17 @@ window.saveEditedPayment = async function (id) {
                     description: `Payment Discount for ${oldPay.partyName} (${payRefNo})`
                 };
                 if (discExp) {
-                    await DB.update('expenses', discExp.id, expData);
+                    await DB.adminUpdate('expenses', discExp.id, expData);
                 } else {
                     await DB.insert('expenses', expData);
                 }
             } else if (discExp) {
                 // Discount removed
-                await DB.delete('expenses', discExp.id);
+                await DB.adminDelete('expenses', discExp.id);
             }
         }
 
-        // Update payment record
+        // Update payment record via admin RPC (bypasses RLS)
         const modeVal = $('f-pay-mode').value;
         const updateData = {
             date: $('f-pay-date').value,
@@ -8990,13 +9472,12 @@ window.saveEditedPayment = async function (id) {
             updateData.cheque_deposit_date = $('f-pay-cheque-date')?.value || null;
             updateData.cheque_status = $('f-pay-cheque-status')?.value || 'Pending';
         } else {
-            // Clear cheque fields when switching away from Cheque mode
             updateData.cheque_no = null;
             updateData.cheque_bank = null;
             updateData.cheque_deposit_date = null;
             updateData.cheque_status = null;
         }
-        await DB.update('payments', id, updateData);
+        await DB.adminUpdate('payments', id, updateData);
 
         closeModal();
         await renderPayments();
@@ -9035,8 +9516,8 @@ function renderExpRows(expenses) {
             status: `<td><span class="badge ${e.status === 'posted' ? 'badge-success' : e.status === 'cancelled' ? 'badge-danger' : 'badge-warning'}" style="font-size:0.72rem">${e.status || 'manual'}</span></td>`,
             addedBy: `<td style="font-size:0.82rem;color:var(--text-muted)">${escapeHtml(e.createdBy || '-')}</td>`,
             actions: `<td><div class="action-btns">
-                ${isAdm && e.docNo ? `<button class="btn-icon" title="View Document" onclick="viewExpenseDoc('${escapeHtml(e.docNo)}','${e.docNo.startsWith('PAY-') ? 'payment' : 'invoice'}')"><span class="material-symbols-outlined" style="font-size:1.1rem">visibility</span></button>` : ''}
-                ${!e.docNo && canEdit() ? `<button class="btn-icon" onclick="openEditExpenseModal('${e.id}')" title="Edit Expense"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button>` : ''}
+                ${e.docNo ? `<button class="btn-icon" title="View Document" onclick="viewExpenseDoc('${escapeHtml(e.docNo)}','${e.docNo.startsWith('PAY-') ? 'payment' : 'invoice'}')"><span class="material-symbols-outlined" style="font-size:1.1rem">visibility</span></button>` : ''}
+                ${canEdit() ? `<button class="btn-icon" onclick="openEditExpenseModal('${e.id}')" title="Edit Expense"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button>` : ''}
                 ${canEdit() ? `<button class="btn-icon" onclick="deleteExpense('${e.id}')" title="Delete Expense" style="color:var(--danger)"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>` : ''}
             </div></td>`,
         };
@@ -9083,7 +9564,7 @@ function openEditExpenseModal(id) {
 async function saveEditedExpense(id) {
     const amt = +$('f-exp-amt').value; if (!amt) return alert('Enter amount');
     try {
-        await DB.update('expenses', id, {
+        await DB.adminUpdate('expenses', id, {
             date: $('f-exp-date').value,
             category: $('f-exp-cat').value,
             amount: amt,
@@ -9198,10 +9679,8 @@ async function deleteExpense(id) {
     if (!canEdit()) return alert('Access Denied: Only Admin or users with Edit permission can delete records.');
     if (!confirm('Delete expense?')) return;
     try {
-        // Use direct Supabase delete to avoid the record-not-found guard in DB.delete
-        const { error } = await supabaseClient.from('expenses').delete().eq('id', id);
-        if (error) throw error;
-        await DB.refreshTables(['expenses']);
+        // Use admin RPC to bypass RLS in a single transaction
+        await DB.adminDelete('expenses', id);
         await renderExpenses();
         showToast('Expense deleted', 'warning');
     } catch (err) { alert('Error deleting expense: ' + err.message); }
@@ -9228,7 +9707,7 @@ function renderPacking() {
         readyToPackRows = readyToPackRows.filter(o => !o.assignedPacker || o.assignedPacker === currentUser.name);
     }
 
-    const allPackedNoInvoice = orders.filter(o => o.packed && !o.invoiceNo);
+    const allPackedNoInvoice = orders.filter(o => o.packed && !o.invoiceNo && !o.invoiceCancelled);
     // Non-admin sees only their own packed orders awaiting invoice
     const packedNoInvoice = isAdmin ? allPackedNoInvoice : allPackedNoInvoice.filter(o => o.packedBy === currentUser.name);
     const packedWithInvoice = orders.filter(o => o.packed && o.invoiceNo);
@@ -9341,13 +9820,22 @@ function renderPacking() {
         </div>
         <div class="card"><div class="card-body">
             <div class="table-wrapper">
-                <table class="data-table"><thead><tr><th>Order #</th><th>Party</th><th>Packer</th><th>Time</th><th>Packages</th><th>Invoice</th><th>Total</th></tr></thead>
-                <tbody>${filteredHistory.length ? filteredHistory.map(o => `<tr>
+                <table class="data-table"><thead><tr><th>Order #</th><th>Party</th><th>Packer</th><th>Time</th><th>📦 Boxes</th><th>📋 Crates</th><th>Invoice</th><th>Total</th></tr></thead>
+                <tbody>${filteredHistory.length ? filteredHistory.map(o => {
+                    const pkgs = o.packageNumbers || [];
+                    const bc = o.boxCount || 0;
+                    const cc = o.crateCount || 0;
+                    const boxes = o.boxNumbers || (bc > 0 ? pkgs.slice(0, bc) : []);
+                    const crates = o.crateNumbers || (cc > 0 ? pkgs.slice(bc, bc + cc) : []);
+                    const boxDisplay = boxes.length ? boxes.map(n => `<span class="badge badge-outline" style="font-size:0.72rem;margin:1px">${escapeHtml(n)}</span>`).join(' ') : '-';
+                    const crateDisplay = crates.length ? crates.map(n => `<span class="badge badge-outline" style="font-size:0.72rem;margin:1px;border-color:var(--warning);color:var(--warning)">${escapeHtml(n)}</span>`).join(' ') : '-';
+                    return `<tr>
                     <td style="font-weight:600">${o.orderNo}</td><td>${o.partyName}</td><td>${o.packedBy || '-'}</td>
                     <td style="font-size:0.8rem">${o.packingDurationMins !== undefined ? o.packingDurationMins + ' min' : '-'}</td>
-                    <td style="font-size:0.8rem">${(o.packageNumbers || []).length ? (o.packageNumbers || []).length + ' pkg<br><span style="color:var(--text-muted);font-size:0.75rem">' + (o.packageNumbers || []).join(', ') + '</span>' : '-'}</td>
+                    <td style="font-size:0.8rem">${boxDisplay}</td>
+                    <td style="font-size:0.8rem">${crateDisplay}</td>
                     <td><span class="badge badge-success">${o.invoiceNo || '-'}</span></td><td class="amount-green">${currency(o.total)}</td>
-                </tr>`).join('') : '<tr><td colspan="7" class="empty-state"><p>No packed history for selected range</p></td></tr>'}</tbody></table>
+                </tr>`; }).join('') : '<tr><td colspan="8" class="empty-state"><p>No packed history for selected range</p></td></tr>'}</tbody></table>
             </div>
         </div></div>`;
 }
@@ -10216,6 +10704,8 @@ async function finalizePacking() {
             packedItems,
             packedTotal,
             packageNumbers: allPkgNumbers,
+            boxNumbers: boxNumbers,
+            crateNumbers: crateNumbers,
             boxCount: totalBoxes,
             crateCount: totalCrates
         });
@@ -10261,11 +10751,22 @@ async function generateInvoiceFromPacked(orderId) {
             inp.value = party.name;
             inp.dataset.selectedId = party.id;
             loadAvailableAdvances(party.id);
+            updateInvDueDate(party);
         }
 
         // Link the Order ID
         const refEl = $('f-inv-from-order');
         if (refEl) refEl.value = orderId;
+
+        // Pre-fill box/crate numbers from packing
+        const boxNoEl = $('f-inv-box-no');
+        if (boxNoEl && o.packageNumbers && o.packageNumbers.length) {
+            boxNoEl.value = o.packageNumbers.join(', ');
+        }
+
+        // Pre-fill delivery date with invoice date (if not already set)
+        const delDateEl = $('f-inv-delivery-date');
+        if (delDateEl && !delDateEl.dataset.manuallySet) delDateEl.value = today();
 
         renderInvoiceLines();
     } catch (err) {
@@ -10455,7 +10956,18 @@ async function confirmBulkInvoices() {
 // =============================================
 //  DELIVERY (with undelivered returns, re-dispatch, cancel)
 // =============================================
-const UNDELIVERED_REASONS = ['Customer Not Available', 'Wrong Address', 'Customer Refused', 'Damaged Goods', 'Payment Issue', 'Area Not Accessible', 'Other'];
+const UNDELIVERED_REASONS = [
+    'Customer Not Available',
+    'Wrong Address / Unable to Locate',
+    'Customer Refused Delivery',
+    'Damaged Goods / Quality Issue',
+    'Payment Not Ready (COD)',
+    'Shop Closed',
+    'Area Not Accessible',
+    'Partial Delivery – Balance Pending',
+    'Time Slot Issue',
+    'Other'
+];
 
 async function renderDelivery() {
     let [dels, allOrders, allInvoices, allParties] = await Promise.all([
@@ -10533,14 +11045,37 @@ function renderDelRows(dels, parties) {
     const cols = ColumnManager.get('delivery').filter(c => c.visible);
     return dels.map(d => {
         const party = (parties || []).find(p => String(p.id) === String(d.partyId));
-        const statusBadge = d.status === 'Delivered' ? 'badge-success' : d.status === 'Returned' ? 'badge-danger' : 'badge-warning';
+        const statusBadge = d.status === 'Delivered' ? 'badge-success' : d.status === 'Returned' ? 'badge-danger' : d.status === 'Cancelled' ? 'badge-danger' : 'badge-warning';
         const pkgNums = d.packageNumbers || [];
-        const pkgDisplay = pkgNums.slice(0, 3).map(n => `<span class="badge badge-outline" style="font-size:0.68rem">${n}</span>`).join(' ') + (pkgNums.length > 3 ? ` +${pkgNums.length - 3}` : '');
+        let bc = d.boxCount || 0;
+        let cc = d.crateCount || 0;
+        let boxes = d.boxNumbers || [];
+        let crates = d.crateNumbers || [];
+        // Fallback: look up from linked sales order if delivery has no package data
+        if (!pkgNums.length && !boxes.length && !crates.length && d.orderId) {
+            const so = (DB.cache['salesorders'] || DB.cache['db_salesorders'] || []).find(o => o.id === d.orderId);
+            if (so) { bc = so.boxCount || 0; cc = so.crateCount || 0; boxes = so.boxNumbers || []; crates = so.crateNumbers || []; }
+        }
+        if (!boxes.length && bc > 0) boxes = pkgNums.slice(0, bc);
+        if (!crates.length && cc > 0) crates = pkgNums.slice(bc, bc + cc);
+        const boxDisp = boxes.length ? boxes.map(n => `<span class="badge badge-outline" style="font-size:0.68rem">${n}</span>`).join(' ') : '-';
+        const crateDisp = crates.length ? crates.map(n => `<span class="badge badge-outline" style="font-size:0.68rem;border-color:var(--warning);color:var(--warning)">${n}</span>`).join(' ') : '-';
+        const pkgDisplay = `<div>📦 ${boxDisp}</div><div style="margin-top:2px">📋 ${crateDisp}</div>`;
         const gpsBtn = party && party.lat && party.lng ? `<button class="btn-icon" onclick="openPartyMap('${party.lat}','${party.lng}','${escapeHtml(d.partyName)}')" title="Navigate" style="font-size:0.8rem"><span class="material-symbols-outlined" style="font-size:1.1rem">map</span></button>` : '';
         const actions = `<div class="action-btns">
             <button class="btn-icon" onclick="viewDeliveryDetail('${d.id}')" title="View Detail"><span class="material-symbols-outlined" style="font-size:1.1rem">visibility</span></button>
-            ${d.status !== 'Delivered' ? `<button class="btn btn-primary btn-sm" onclick="markDelivered('${d.id}')"> Delivered</button>` : ''}
-            ${d.status !== 'Returned' && d.status !== 'Delivered' ? `<button class="btn btn-outline btn-sm" onclick="openUndeliveredModal('${d.id}')"> Return</button>` : ''}
+            ${d.status === 'Dispatched' ? `
+                <button class="btn btn-primary btn-sm" onclick="markDelivered('${d.id}')"> Delivered</button>
+                <button class="btn btn-outline btn-sm" onclick="openUndeliveredModal('${d.id}')"> Undelivered</button>
+            ` : ''}
+            ${d.status === 'Undelivered' ? `
+                <button class="btn btn-primary btn-sm" onclick="reDispatchOrder('${d.id}')">🔄 Re-Dispatch</button>
+                <button class="btn btn-outline btn-sm" onclick="confirmReturn('${d.id}')">📦 Return</button>
+                ${d.invoiceNo && currentUser ? `<button class="btn btn-outline btn-sm" style="border-color:var(--danger);color:var(--danger)" onclick="cancelDeliveryInvoice('${d.id}')">✕ Cancel Inv.</button>` : ''}
+            ` : ''}
+            ${d.status === 'Returned' ? `
+                <button class="btn btn-outline btn-sm" onclick="reDispatchOrder('${d.id}')">🔄 Re-Dispatch</button>
+            ` : ''}
         </div>`;
         const partyPhone = party ? (party.phone || '') : '';
         // Location cell: show address/city from party, with delivery confirmation note if delivered
@@ -10575,7 +11110,7 @@ function renderDelRows(dels, parties) {
                    </a>`
                 : '<span style="color:var(--text-muted);font-size:0.82rem">-</span>'}</td>`,
             person: personCell,
-            packages: `<td style="max-width:180px">${pkgDisplay}<div style="font-size:0.7rem;color:var(--text-muted);margin-top:2px">${pkgNums.length} pkg(s)</div></td>`,
+            packages: `<td style="max-width:180px">${pkgDisplay}</td>`,
             status: `<td><span class="badge ${statusBadge}">${d.status}</span></td>`,
             reason: `<td style="font-size:0.82rem;color:var(--text-muted)">${escapeHtml(d.undeliveredReason || '-')}</td>`,
             actions: `<td>${actions}</td>`,
@@ -10632,7 +11167,8 @@ async function viewDeliveryDetail(id) {
     const [dels, allParties, inventory] = await Promise.all([
         DB.getAll('delivery'),
         DB.getAll('parties'),
-        DB.getAll('inventory')
+        DB.getAll('inventory'),
+        DB.getAll('salesorders')  // ensure cache is populated for package fallback
     ]);
     const d = dels.find(x => x.id === id);
     if (!d) return alert('Delivery record not found.');
@@ -10708,17 +11244,39 @@ async function viewDeliveryDetail(id) {
                 </div>` : ''}
         </div>`;
 
-    const pkgs = d.packageNumbers || [];
-    const pkgHtml = pkgs.length ? `<div style="margin-bottom:12px">
-        <span style="font-size:0.78rem;color:var(--text-muted)">Packages: </span>
-        ${pkgs.map(n => `<span class="badge badge-outline" style="font-size:0.7rem">${n}</span>`).join(' ')}
+    // Package data: try delivery record first, then fallback to sales order
+    let pkgs = d.packageNumbers || [];
+    let dbc = d.boxCount || 0;
+    let dcc = d.crateCount || 0;
+    let dBoxes = d.boxNumbers || [];
+    let dCrates = d.crateNumbers || [];
+    if (!pkgs.length && !dBoxes.length && !dCrates.length && d.orderId) {
+        const orders = DB.cache['salesorders'] || DB.cache['db_salesorders'] || [];
+        const linkedOrder = orders.find(o => o.id === d.orderId);
+        if (linkedOrder) {
+            pkgs = linkedOrder.packageNumbers || [];
+            dbc = linkedOrder.boxCount || 0;
+            dcc = linkedOrder.crateCount || 0;
+            dBoxes = linkedOrder.boxNumbers || [];
+            dCrates = linkedOrder.crateNumbers || [];
+        }
+    }
+    if (!dBoxes.length && dbc > 0) dBoxes = pkgs.slice(0, dbc);
+    if (!dCrates.length && dcc > 0) dCrates = pkgs.slice(dbc, dbc + dcc);
+    const pkgHtml = (dBoxes.length || dCrates.length) ? `<div style="margin-bottom:12px;display:flex;gap:16px;flex-wrap:wrap">
+        ${dBoxes.length ? `<div><span style="font-size:0.78rem;color:var(--text-muted)">📦 Boxes: </span>${dBoxes.map(n => `<span class="badge badge-outline" style="font-size:0.7rem">${escapeHtml(n)}</span>`).join(' ')}</div>` : ''}
+        ${dCrates.length ? `<div><span style="font-size:0.78rem;color:var(--text-muted)">📋 Crates: </span>${dCrates.map(n => `<span class="badge badge-outline" style="font-size:0.7rem;border-color:var(--warning);color:var(--warning)">${escapeHtml(n)}</span>`).join(' ')}</div>` : ''}
     </div>` : '';
 
     const actionHtml = d.status === 'Dispatched'
         ? `<button class="btn btn-primary" onclick="markDelivered('${d.id}')"> Mark Delivered</button>
            <button class="btn btn-outline" onclick="openUndeliveredModal('${d.id}')"> Undelivered</button>`
         : d.status === 'Undelivered'
-            ? `<button class="btn btn-primary btn-sm" onclick="closeModal();reDispatchOrder('${d.id}')"> Re-Dispatch</button>`
+            ? `<button class="btn btn-primary btn-sm" onclick="closeModal();reDispatchOrder('${d.id}')"> Re-Dispatch</button>
+               ${d.invoiceNo ? `<button class="btn btn-outline btn-sm" style="border-color:var(--danger);color:var(--danger)" onclick="closeModal();cancelDeliveryInvoice('${d.id}')">✕ Cancel Inv.</button>` : ''}`
+        : d.status === 'Returned'
+            ? `<button class="btn btn-primary btn-sm" onclick="closeModal();reDispatchOrder('${d.id}')"> Re-Dispatch</button>
+               ${d.invoiceNo ? `<button class="btn btn-outline btn-sm" style="border-color:var(--danger);color:var(--danger)" onclick="closeModal();cancelDeliveryInvoice('${d.id}')">✕ Cancel Inv.</button>` : ''}`
             : '';
 
     openModal(`Delivery  ${d.orderNo}`, `
@@ -10740,15 +11298,75 @@ async function viewDeliveryDetail(id) {
         </div>`);
 }
 
-function markDelivered(id) {
+async function markDelivered(id) {
     const dels = DB.cache['delivery'] || [];
     const d = dels.find(x => x.id === id);
-    const summaryHtml = d ? `<div style="margin-bottom:14px;padding:12px;background:var(--bg-secondary);border-radius:8px;font-size:0.85rem">
+    if (!d) return;
+
+    // Check COD — party paymentTerms === 'COD'  OR  invoice dueDate ≤ today (due at/before delivery)
+    const [parties, invoices, payments] = await Promise.all([
+        DB.cache['parties'] ? Promise.resolve(DB.cache['parties']) : DB.getAll('parties'),
+        DB.cache['invoices'] ? Promise.resolve(DB.cache['invoices']) : DB.getAll('invoices'),
+        DB.cache['payments'] ? Promise.resolve(DB.cache['payments']) : DB.getAll('payments')
+    ]);
+    const party = parties.find(p => String(p.id) === String(d.partyId));
+    const inv = d.invoiceNo ? invoices.find(i => i.invoiceNo === d.invoiceNo) : null;
+
+    const isPartyTermsCOD = party && (party.paymentTerms || '').toUpperCase() === 'COD';
+    const isDueTodayOrOverdue = inv && inv.dueDate && inv.dueDate <= today();
+    const isCOD = isPartyTermsCOD || isDueTodayOrOverdue;
+
+    // Calculate balance due (total minus already-paid)
+    let balanceDue = d.total || 0;
+    if (inv) {
+        const paid = payments
+            .filter(p => p.invoiceNo === inv.invoiceNo || (p.allocations && p.allocations[inv.invoiceNo]))
+            .reduce((s, p) => s + (p.invoiceNo === inv.invoiceNo ? p.amount : +(p.allocations[inv.invoiceNo] || 0)), 0);
+        balanceDue = Math.max(0, (inv.total || d.total || 0) - paid);
+    }
+
+    const co = DB.ls.getObj('db_company') || {};
+    const amt = balanceDue;
+
+    // COD reason label
+    const codReason = isPartyTermsCOD ? 'COD Party' : `Due ${fmtDate(inv.dueDate)}`;
+
+    // Build COD section with cash collect + QR option
+    let codHtml = '';
+    if (isCOD && amt > 0) {
+        let qrImgHtml = '';
+        if (co.upi && typeof QRCode !== 'undefined' && amt > 0) {
+            const upiStr = `upi://pay?pa=${co.upi}&pn=${encodeURIComponent(co.name || '')}&am=${amt.toFixed(2)}&cu=INR&tn=${encodeURIComponent((d.invoiceNo || d.orderNo || '') + ' - ' + (d.partyName || ''))}`;
+            const div = document.createElement('div');
+            new QRCode(div, { text: upiStr, width: 180, height: 180, correctLevel: QRCode.CorrectLevel.M });
+            const obj = div.querySelector('canvas') || div.querySelector('img');
+            if (obj) qrImgHtml = `<img src="${obj.toDataURL ? obj.toDataURL() : obj.src}" alt="UPI QR" style="display:block;margin:8px auto;border:1px solid var(--border);border-radius:8px;padding:8px;background:#fff;width:180px">
+                <div style="font-size:0.78rem;color:var(--text-muted);text-align:center;margin-top:2px">Scan with any UPI App</div>`;
+        } else if (!co.upi) {
+            qrImgHtml = `<div style="font-size:0.82rem;color:var(--warning);background:rgba(245,158,11,0.1);padding:8px;border-radius:6px;margin-top:8px">Set UPI ID in Company Setup to show QR code</div>`;
+        }
+        codHtml = `
+        <div style="background:#fff7ed;border:2px solid #f97316;border-radius:10px;padding:14px;margin-bottom:16px">
+            <div style="font-size:1rem;font-weight:700;color:#ea580c;margin-bottom:4px">⚠️ Collect Payment Before Delivering</div>
+            <div style="font-size:0.75rem;color:#ea580c;margin-bottom:10px;font-weight:600">${codReason}</div>
+            <div style="font-size:0.9rem;margin-bottom:12px">Balance Due: <strong style="font-size:1.15rem;color:var(--danger)">${currency(amt)}</strong> from <strong>${escapeHtml(d.partyName)}</strong></div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:4px">
+                <button class="btn btn-outline btn-sm" onclick="toggleDelQr()" id="del-qr-btn" style="border-color:#f97316;color:#ea580c">📱 Show UPI QR</button>
+                <button class="btn btn-sm" onclick="toggleDelCashCollected()" id="del-cash-btn" style="background:#fff;border:1.5px solid var(--border);color:var(--text-primary)">📋 Mark Cash Collected</button>
+            </div>
+            <div id="del-qr-box" style="display:none;text-align:center;margin-top:8px">${qrImgHtml}</div>
+        </div>
+        <input type="hidden" id="f-del-cod-collected" value="0">`;
+    }
+
+    const summaryHtml = `<div style="margin-bottom:14px;padding:12px;background:var(--bg-secondary);border-radius:8px;font-size:0.85rem">
         <strong>${d.orderNo}</strong>  ${escapeHtml(d.partyName)}<br>
-        <span style="color:var(--text-muted)">Invoice: ${d.invoiceNo || '-'} | ${currency(d.total || 0)}</span>
-    </div>` : '';
+        <span style="color:var(--text-muted)">Invoice: ${d.invoiceNo || '-'} | ${currency(amt)}</span>
+    </div>`;
+
     openModal(' Confirm Delivery', `
         ${summaryHtml}
+        ${codHtml}
         <div style="font-weight:600;font-size:0.82rem;color:var(--text-muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.04em"> Delivery Location <span style="font-weight:400;text-transform:none">(Optional)</span></div>
         <div class="form-group">
             <label>Location / Handover Notes</label>
@@ -10789,17 +11407,38 @@ function captureDeliveryGps() {
     );
 }
 
+function toggleDelQr() {
+    const box = $('del-qr-box');
+    const btn = $('del-qr-btn');
+    if (!box) return;
+    const showing = box.style.display !== 'none';
+    box.style.display = showing ? 'none' : 'block';
+    if (btn) btn.textContent = showing ? ' Show UPI QR' : ' Hide QR';
+}
+function toggleDelCashCollected() {
+    const inp = $('f-del-cod-collected');
+    const btn = $('del-cash-btn');
+    if (!inp || !btn) return;
+    const collected = inp.value === '1';
+    inp.value = collected ? '0' : '1';
+    btn.style.background = collected ? '#fff' : 'var(--success)';
+    btn.style.color = collected ? 'var(--text-primary)' : '#fff';
+    btn.style.borderColor = collected ? 'var(--border)' : 'var(--success)';
+    btn.textContent = collected ? ' Mark Cash Collected' : '✓ Cash Collected';
+}
 async function confirmMarkDelivered(id) {
     const location = ($('f-del-location') || {}).value.trim();
     const lat = parseFloat(($('f-del-lat') || {}).value || '');
     const lng = parseFloat(($('f-del-lng') || {}).value || '');
+    const codCollected = ($('f-del-cod-collected') || {}).value === '1';
     const update = { status: 'Delivered', deliveredAt: today() };
     if (location) update.deliveryLocation = location;
     if (!isNaN(lat) && !isNaN(lng)) { update.deliveryLat = lat; update.deliveryLng = lng; }
+    if (codCollected) update.codCollected = true;
     await DB.update('delivery', id, update);
     closeModal();
     await renderDelivery();
-    showToast('Delivery confirmed!', 'success');
+    showToast(codCollected ? 'Delivery confirmed! Cash collected.' : 'Delivery confirmed!', 'success');
 }
 async function openQuickGpsUpdate(partyId, returnId, returnSource) {
     if (!partyId) return alert('No party linked to this record.');
@@ -10896,7 +11535,7 @@ function calcDistanceKm(lat1, lng1, lat2, lng2) {
 }
 
 async function printDeliveryRouteSheet() {
-    const [dels, allParties] = await Promise.all([DB.getAll('delivery'), DB.getAll('parties')]);
+    const [dels, allParties] = await Promise.all([DB.getAll('delivery'), DB.getAll('parties'), DB.getAll('salesorders')]);
     const dispatched = dels.filter(d => d.status === 'Dispatched');
     const co = DB.getObj('db_company') || {};
     const warehouseLat = parseFloat(co.warehouseLat || 0);
@@ -10971,9 +11610,26 @@ async function printDeliveryRouteSheet() {
                 <td><strong>${d.orderNo || d.invoiceNo || '-'}</strong><br><span style="font-size:0.75rem;color:#666">${d.invoiceNo || ''}</span></td>
                 <td><strong>${d.partyName}</strong><br>${gpsInfo}</td>
                 <td>${phone !== '-' ? `<a href="tel:${phone}" style="color:#1a73e8">${phone}</a>` : '-'}</td>
-                <td>${(d.packageNumbers || []).join(', ') || '-'}</td>
+                <td>${(() => {
+                    let rpkgs = d.packageNumbers || [];
+                    let rbc = d.boxCount || 0;
+                    let rcc = d.crateCount || 0;
+                    let rBoxes = d.boxNumbers || [];
+                    let rCrates = d.crateNumbers || [];
+                    // Fallback: look up from linked sales order
+                    if (!rpkgs.length && !rBoxes.length && !rCrates.length && d.orderId) {
+                        const so = (DB.cache['salesorders'] || DB.cache['db_salesorders'] || []).find(o => o.id === d.orderId);
+                        if (so) { rbc = so.boxCount || 0; rcc = so.crateCount || 0; rBoxes = so.boxNumbers || []; rCrates = so.crateNumbers || []; rpkgs = so.packageNumbers || []; }
+                    }
+                    if (!rBoxes.length && rbc > 0) rBoxes = rpkgs.slice(0, rbc);
+                    if (!rCrates.length && rcc > 0) rCrates = rpkgs.slice(rbc, rbc + rcc);
+                    const parts = [];
+                    if (rBoxes.length) parts.push('📦 ' + rBoxes.join(', '));
+                    if (rCrates.length) parts.push('📋 ' + rCrates.join(', '));
+                    return parts.join('<br>') || rpkgs.join(', ') || '-';
+                })()}</td>
                 <td style="text-align:right">${(d.total || 0).toFixed(2)}</td>
-                <td style="width:90px"></td>
+                <td style="width:90px" class="no-print"><button onclick="moveRow(this,-1)" style="cursor:pointer;border:none;background:none;font-size:1rem" title="Move up">⬆️</button><button onclick="moveRow(this,1)" style="cursor:pointer;border:none;background:none;font-size:1rem" title="Move down">⬇️</button></td>
             </tr>`;
         }).join('');
 
@@ -10995,7 +11651,7 @@ async function printDeliveryRouteSheet() {
             <th style="border:1px solid #ddd;padding:6px">Order</th>
             <th style="border:1px solid #ddd;padding:6px">Party &amp; Location</th>
             <th style="border:1px solid #ddd;padding:6px">Phone</th>
-            <th style="border:1px solid #ddd;padding:6px">Packages</th>
+            <th style="border:1px solid #ddd;padding:6px">📦 Boxes / 📋 Crates</th>
             <th style="border:1px solid #ddd;padding:6px;text-align:right">Amount</th>
             <th style="border:1px solid #ddd;padding:6px">Signature</th>
         </tr></thead>
@@ -11018,6 +11674,16 @@ async function printDeliveryRouteSheet() {
     <style>body{font-family:sans-serif;padding:20px;max-width:960px;margin:0 auto}@media print{button{display:none}.no-print{display:none}}</style>
     </head><body>${header}${sections || '<p>No dispatched deliveries</p>'}
     <button onclick="window.print()" style="margin-top:16px;padding:8px 20px;background:#f97316;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:1rem"> Print Route Sheet</button>
+    <script>
+    function moveRow(btn, dir) {
+        const row = btn.closest('tr');
+        const tbody = row.parentNode;
+        if (dir === -1 && row.previousElementSibling) tbody.insertBefore(row, row.previousElementSibling);
+        if (dir === 1 && row.nextElementSibling) tbody.insertBefore(row.nextElementSibling, row);
+        // Re-number
+        Array.from(tbody.querySelectorAll('.seq-num')).forEach((el, i) => el.textContent = i + 1);
+    }
+    </script>
     </body></html>`);
     w.document.close();
 }
@@ -11103,7 +11769,9 @@ async function dispatchOrder(orderId) {
         orderId: o.id, orderNo: o.orderNo, partyName: o.partyName,
         partyId: o.partyId, invoiceNo: o.invoiceNo || '',
         deliveryPerson: person, status: 'Dispatched',
-        dispatchedAt: today(), total: o.total, items: o.items
+        dispatchedAt: today(), total: o.total, items: o.items,
+        packageNumbers: o.packageNumbers || [], boxNumbers: o.boxNumbers || [],
+        crateNumbers: o.crateNumbers || [], boxCount: o.boxCount || 0, crateCount: o.crateCount || 0
     };
 
     await DB.insert('delivery', delData);
@@ -11121,23 +11789,57 @@ async function updateDeliveryStatus(id, status) {
 
 function openUndeliveredModal(id) {
     openModal('Mark as Undelivered', `
-        <div class="form-group"><label>Reason *</label>
-            <select id="f-undel-reason">${UNDELIVERED_REASONS.map(r => `<option>${r}</option>`).join('')}</select>
+        <div class="form-group">
+            <label>Reason * <span style="color:var(--danger)">Required</span></label>
+            <select id="f-undel-reason" style="border-color:var(--danger)">
+                <option value="">-- Select Reason --</option>
+                ${UNDELIVERED_REASONS.map(r => `<option value="${r}">${r}</option>`).join('')}
+            </select>
         </div>
-        <div class="form-group"><label>Additional Notes</label><input id="f-undel-notes" placeholder="Optional details..."></div>
-        <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-        <button class="btn btn-danger" onclick="markUndelivered('${id}')"> Mark Undelivered</button></div>`);
+        <div class="form-group"><label>Additional Notes</label>
+            <input id="f-undel-notes" placeholder="Optional — extra details...">
+        </div>
+        <div class="form-group">
+            <label>Update Status To *</label>
+            <select id="f-undel-status">
+                <option value="Undelivered">🔄 Undelivered — Re-dispatch later</option>
+                <option value="Returned">📦 Returned to Warehouse</option>
+            </select>
+        </div>
+        <div style="background:rgba(249,115,22,0.08);border:1px solid rgba(249,115,22,0.25);border-radius:8px;padding:10px;font-size:0.82rem;margin-bottom:4px">
+            <strong>After saving:</strong> Admin can Re-dispatch to a new delivery person, or Cancel the Invoice to fully reverse stock &amp; ledger.
+        </div>
+        <div class="modal-actions">
+            <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+            <button class="btn btn-danger" onclick="markUndelivered('${id}')">✓ Confirm</button>
+        </div>`);
 }
 
 async function markUndelivered(id) {
-    const reason = $('f-undel-reason').value + ($('f-undel-notes').value.trim() ? '  ' + $('f-undel-notes').value.trim() : '');
-    await DB.update('delivery', id, {
-        status: 'Undelivered',
-        undeliveredReason: reason,
+    const reason = ($('f-undel-reason') || {}).value || '';
+    if (!reason) {
+        const el = $('f-undel-reason');
+        if (el) { el.style.borderColor = 'var(--danger)'; el.focus(); }
+        alert('Please select a reason. Reason is mandatory.');
+        return;
+    }
+    const notes = ($('f-undel-notes') || {}).value?.trim() || '';
+    const fullReason = reason + (notes ? ' — ' + notes : '');
+    const newStatus = ($('f-undel-status') || {}).value || 'Undelivered';
+    const updateData = {
+        status: newStatus,
+        undeliveredReason: fullReason,
         undeliveredAt: today()
-    });
-    closeModal();
-    await renderDelivery();
+    };
+    if (newStatus === 'Returned') updateData.returnedAt = today();
+    try {
+        await DB.update('delivery', id, updateData);
+        closeModal();
+        await renderDelivery();
+        showToast(`Marked as ${newStatus}`, 'warning');
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
 }
 function confirmReturn(id) {
     const dels = DB.cache['delivery'] || [];
@@ -11211,7 +11913,7 @@ async function confirmBulkDispatch() {
             if (r.source === 'order') {
                 const o = orders.find(x => x.id === r.id);
                 if (!o) return null;
-                delData = { orderId: o.id, orderNo: o.orderNo, partyName: o.partyName, partyId: o.partyId, invoiceNo: o.invoiceNo || '', deliveryPerson: person, status: 'Dispatched', dispatchedAt: today(), total: o.total, items: o.items };
+                delData = { orderId: o.id, orderNo: o.orderNo, partyName: o.partyName, partyId: o.partyId, invoiceNo: o.invoiceNo || '', deliveryPerson: person, status: 'Dispatched', dispatchedAt: today(), total: o.total, items: o.items, packageNumbers: o.packageNumbers || [], boxNumbers: o.boxNumbers || [], crateNumbers: o.crateNumbers || [], boxCount: o.boxCount || 0, crateCount: o.crateCount || 0 };
             } else {
                 const inv = invoices.find(x => x.id === r.id);
                 if (!inv) return null;
@@ -11233,8 +11935,12 @@ async function reDispatchOrder(id) {
     const d = dels.find(x => x.id === id);
     if (!d) { alert('Delivery record not found'); return; }
     const dp = await DB.getAll('delivery_persons');
-    openModal('Re-Dispatch ' + d.orderNo, `
-        <div style="margin-bottom:14px;padding:10px;background:rgba(255,193,7,0.1);border:1px solid rgba(255,193,7,0.3);border-radius:8px;font-size:0.85rem"><strong>Return Reason:</strong> ${d.undeliveredReason || 'N/A'}</div>
+    openModal('Re-Dispatch — ' + d.orderNo, `
+        <div style="margin-bottom:14px;padding:10px;background:rgba(255,193,7,0.1);border:1px solid rgba(255,193,7,0.3);border-radius:8px;font-size:0.85rem">
+            <div><strong>Party:</strong> ${escapeHtml(d.partyName)}</div>
+            <div><strong>Previous Status:</strong> ${d.status}</div>
+            <div><strong>Reason:</strong> ${escapeHtml(d.undeliveredReason || 'N/A')}</div>
+        </div>
         <div class="form-group"><label>Delivery Person *</label>
             <select id="f-redel-person"><option value="">Select</option>${dp.map(p => `<option value="${p.name}">${p.name} (${p.phone || ''})</option>`).join('')}</select>
         </div>
@@ -11262,7 +11968,9 @@ async function executeReDispatch(id) {
             orderId: d.orderId, orderNo: d.orderNo, partyName: d.partyName,
             partyId: d.partyId, invoiceNo: d.invoiceNo, deliveryPerson: person,
             status: 'Dispatched', dispatchedAt: today(), total: d.total,
-            items: d.items, reDispatchOf: d.id
+            items: d.items, reDispatchOf: d.id,
+            packageNumbers: d.packageNumbers || [], boxNumbers: d.boxNumbers || [],
+            crateNumbers: d.crateNumbers || [], boxCount: d.boxCount || 0, crateCount: d.crateCount || 0
         };
         await DB.insert('delivery', newDel);
 
@@ -11278,14 +11986,29 @@ async function cancelDeliveryInvoice(id) {
     const dels = await DB.getAll('delivery');
     const d = dels.find(x => x.id === id);
     if (!d) return;
-    openModal('Cancel Invoice', `
-        <div style="margin-bottom:14px;padding:12px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:8px;font-size:0.9rem">
-            <strong>Order:</strong> ${d.orderNo} | <strong>Invoice:</strong> ${d.invoiceNo || 'N/A'}<br>
-            <strong>Party:</strong> ${d.partyName}
+    openModal('⚠️ Cancel Invoice', `
+        <div style="background:rgba(239,68,68,0.12);border:2px solid rgba(239,68,68,0.5);border-radius:10px;padding:14px;margin-bottom:14px">
+            <div style="font-size:1rem;font-weight:800;color:var(--danger);margin-bottom:10px">⚠️ WARNING — This cannot be undone!</div>
+            <div style="font-size:0.88rem;margin-bottom:10px">
+                <strong>Invoice:</strong> ${escapeHtml(d.invoiceNo || 'N/A')} &nbsp;|&nbsp;
+                <strong>Party:</strong> ${escapeHtml(d.partyName)} &nbsp;|&nbsp;
+                <strong>Order:</strong> ${escapeHtml(d.orderNo)}
+            </div>
+            <div style="font-size:0.85rem;font-weight:600;margin-bottom:6px;color:var(--danger)">Canceling this delivery will also:</div>
+            <ul style="font-size:0.83rem;margin:0;padding-left:18px;line-height:2;color:var(--text-primary)">
+                <li>Mark Invoice <strong>${escapeHtml(d.invoiceNo || '')}</strong> as <strong style="color:var(--danger)">CANCELLED</strong></li>
+                <li><strong>Restore stock</strong> for all items in this invoice</li>
+                <li><strong>Reverse party balance</strong> (₹${(d.total||0).toLocaleString('en-IN')} will be deducted from ${escapeHtml(d.partyName)}'s ledger)</li>
+                <li>Reverse all <strong>party ledger entries</strong> for this invoice</li>
+                <li>Release any <strong>allocated payments</strong> tied to this invoice</li>
+                <li>Mark this delivery record as <strong>Cancelled</strong></li>
+            </ul>
         </div>
-        <p style="margin-bottom:16px;font-size:0.9rem">Cancel this invoice? Stock will be restored and party balance adjusted.</p>
-        <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Keep Invoice</button>
-        <button class="btn btn-danger" onclick="executeCancelDeliveryInvoice('${id}')"> Cancel Invoice</button></div>`);
+        <p style="font-size:0.92rem;font-weight:700;text-align:center;margin-bottom:4px">Are you absolutely sure?</p>
+        <div class="modal-actions">
+            <button class="btn btn-outline" style="flex:1" onclick="closeModal()">No, Keep Invoice</button>
+            <button class="btn btn-danger" style="flex:1" onclick="executeCancelDeliveryInvoice('${id}')">✓ Yes, Cancel Invoice &amp; Reverse All</button>
+        </div>`);
 }
 async function executeCancelDeliveryInvoice(id) {
     const dels = await DB.getAll('delivery');
@@ -11304,18 +12027,19 @@ async function executeCancelDeliveryInvoice(id) {
             const invoices = await DB.getAll('invoices');
             const inv = invoices.find(i => i.invoiceNo === d.invoiceNo);
             if (inv) {
-                await executeCancelInvoice(inv.id);
+                await executeCancelInvoice(inv.id, { skipNav: true });
             } else {
-                alert('Invoice ' + d.invoiceNo + ' not found.');
+                alert('Invoice ' + d.invoiceNo + ' not found — delivery marked cancelled only.');
             }
         }
 
         closeModal();
         await renderDelivery();
-        showToast('Invoice and delivery cancelled.', 'warning');
+        showToast('Invoice ' + (d.invoiceNo || '') + ' cancelled & all reversals done.', 'warning');
     } catch (err) {
-        alert('Error: ' + err.message);
+        alert('Error cancelling invoice: ' + err.message);
         closeModal();
+        await renderDelivery();
     }
 }
 
@@ -11792,6 +12516,8 @@ async function showReport(type) {
         renderStockRpt();
     }
     if (type === 'outstanding') {
+        const outGroups = [...new Set(parties.map(p => p.group).filter(Boolean))].sort();
+        const outAreas = [...new Set(parties.map(p => p.area).filter(Boolean))].sort();
         window._rOutAll = parties;
         window._rOutInv = invoices.filter(i => i.status !== 'cancelled');
         window._rOutPay = payments;
@@ -11799,7 +12525,9 @@ async function showReport(type) {
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
             <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
                 <div class="form-group"><label>Party Type</label><select id="r-out-type" onchange="renderOutstandingRpt()"><option value="">All</option><option>Customer</option><option>Supplier</option></select></div>
-                <div class="form-group"><label>Search</label><input id="r-out-search" placeholder="Party name..." oninput="renderOutstandingRpt()" style="width:180px"></div>
+                <div class="form-group"><label>Group / Category</label><select id="r-out-group" onchange="renderOutstandingRpt()"><option value="">All Groups</option>${outGroups.map(g => `<option>${escapeHtml(g)}</option>`).join('')}</select></div>
+                <div class="form-group"><label>Area / Route</label><select id="r-out-area" onchange="renderOutstandingRpt()"><option value="">All Areas</option>${outAreas.map(a => `<option>${escapeHtml(a)}</option>`).join('')}</select></div>
+                <div class="form-group"><label>Search</label><input id="r-out-search" placeholder="Party name..." oninput="renderOutstandingRpt()" style="width:160px"></div>
                 <div class="form-group"><label>Balance</label><select id="r-out-bal" onchange="renderOutstandingRpt()"><option value="">All</option><option value="dr">Receivable (Customer owes us)</option><option value="cr">Payable (We owe them)</option></select></div>
                 <div class="form-group"><label>Age</label><select id="r-out-age" onchange="renderOutstandingRpt()"><option value="">All</option><option value="0-30">030 days</option><option value="31-60">3160 days</option><option value="61-90">6190 days</option><option value="90+">90+ days</option></select></div>
                 <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-outstanding','Outstanding_${today()}')"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button></div>
@@ -12778,6 +13506,8 @@ function renderStockRpt() {
 
 function renderOutstandingRpt() {
     const ptype = ($('r-out-type') || {}).value || '';
+    const grp = ($('r-out-group') || {}).value || '';
+    const routeArea = ($('r-out-area') || {}).value || '';
     const search = (($('r-out-search') || {}).value || '').toLowerCase();
     const bal = ($('r-out-bal') || {}).value || '';
     const age = ($('r-out-age') || {}).value || '';
@@ -12795,6 +13525,8 @@ function renderOutstandingRpt() {
 
     let pts = (window._rOutAll || []).filter(p => p.balance);
     if (ptype) pts = pts.filter(p => p.type === ptype);
+    if (grp) pts = pts.filter(p => (p.group || '') === grp);
+    if (routeArea) pts = pts.filter(p => (p.area || '') === routeArea);
     if (search) pts = pts.filter(p => (p.name || '').toLowerCase().includes(search));
     if (bal === 'dr') pts = pts.filter(p => p.balance < 0);
     if (bal === 'cr') pts = pts.filter(p => p.balance > 0);
@@ -12814,8 +13546,8 @@ function renderOutstandingRpt() {
         if (age && ageBucket !== age) return;
         const ageColor = daysDue === null ? 'var(--text-muted)' : daysDue <= 30 ? '#22c55e' : daysDue <= 60 ? '#f59e0b' : '#ef4444';
         const dirColor = p.balance < 0 ? 'var(--success)' : 'var(--danger)';
-        rows.push(`<tr style="cursor:pointer;font-weight:500" onclick="currentLedgerPartyId='${p.id}';navigateTo('partyledger')">
-            <td><span style="font-weight:700">${escapeHtml(p.name)}</span><br><span style="font-size:0.75rem;color:var(--text-muted)">${p.phone || ''}</span></td>
+        rows.push(`<tr style="cursor:pointer;font-weight:500" onclick="openDedicatedPartyLedger('${p.id}')">
+            <td><span style="font-weight:700">${escapeHtml(p.name)}</span><br><span style="font-size:0.75rem;color:var(--text-muted)">${p.phone || ''}${p.group ? ' · '+escapeHtml(p.group) : ''}${p.area ? ' · '+escapeHtml(p.area) : ''}</span></td>
             <td><span class="badge ${p.type === 'Customer' ? 'badge-success' : 'badge-info'}">${p.type}</span></td>
             <td style="font-size:0.82rem">${pending.length}</td>
             <td style="font-size:0.82rem;color:var(--text-muted)">${lastPay ? fmtDate(lastPay.date) : '<span style="color:var(--danger)">Never</span>'}</td>
@@ -14526,6 +15258,7 @@ window.downloadFullDatabaseBackup = async function () {
 };
 
 function openDedicatedPartyLedger(partyId) {
+    if (!canViewLedger()) return alert('Access Denied: You do not have permission to view the Party Ledger.');
     currentLedgerPartyId = partyId;
     navigateTo('partyledger');
 }
@@ -14553,7 +15286,7 @@ async function renderPartyLedgerLayout() {
     pageContent.innerHTML = `
         <div class="section-toolbar">
             <h3 style="font-size:1rem;display:flex;align-items:center;gap:10px">
-                <button class="btn-icon" onclick="navigateTo('parties')" title="Back to Parties"><span class="material-symbols-outlined">arrow_back</span></button>
+                <button class="btn-icon" onclick="navigateTo('parties')" title="Back to Parties" style="font-size:1.2rem;padding:4px 8px">← Back</button>
                  Ledger: ${party.name} <span class="badge ${party.type === 'Customer' ? 'badge-success' : 'badge-info'}" style="font-size:0.7rem">${party.type}</span>
             </h3>
             <div class="filter-group">

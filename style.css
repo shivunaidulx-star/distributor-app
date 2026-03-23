@@ -1632,6 +1632,18 @@ table { border-collapse: collapse; width: 100%; }
     .catalog-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
 }
 
+/* ---- Mobile Payment Page ---- */
+@media (max-width: 767px) {
+    /* compact mode chips inside mobile pay header */
+    #pay-mode-chips .pay-mode-chip {
+        min-width: 70px;
+        padding: 5px 10px;
+        border-radius: 8px;
+    }
+    #pay-mode-chips .pay-mode-chip span { font-size: 0.58rem; }
+    #pay-mode-chips .pay-mode-chip strong { font-size: 0.85rem; }
+}
+
 /* ============================================
    ENHANCED ANIMATIONS & VISUAL UPGRADES
    ============================================ */
