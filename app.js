@@ -4804,7 +4804,7 @@ async function openSalesOrderModal() {
             <button class="btn-icon" onclick="closeSoItemSubModal()"></button>
         </div>
         <div class="sub-modal-body">
-            <div class="form-row" style="margin-bottom:8px">
+            <div class="form-row" style="margin-bottom:8px; grid-template-columns: 1fr 1fr">
                 <div class="form-group">
                     <label>Category Filter</label>
                     <select id="f-so-cat-filter" onchange="onSOCatFilterChange()">
@@ -4820,17 +4820,26 @@ async function openSalesOrderModal() {
                 </div>
             </div>
             <div class="inv-item-entry" style="background:var(--bg-input);padding:10px;border-radius:8px;margin-bottom:12px;border:1px solid var(--border)">
-                <div class="form-group" style="margin-bottom:10px">
-                    <label style="font-size:0.8rem">Search & Select Item</label>
-                    <input id="f-so-item-input" placeholder="Type item name or code..." style="background:#fff">
+                <div style="display:grid;grid-template-columns:2fr 1fr;gap:10px;margin-bottom:10px">
+                    <div class="form-group" style="margin-bottom:0">
+                        <label style="font-size:0.75rem">Item</label>
+                        <input id="f-so-item-input" placeholder="Search..." style="background:#fff">
+                    </div>
+                    <div class="form-group" style="margin-bottom:0">
+                        <label style="font-size:0.75rem">Qty</label>
+                        <input type="number" id="f-so-qty" value="1" min="1" style="background:#fff">
+                    </div>
                 </div>
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
-                    <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">Qty</label><input type="number" id="f-so-qty" value="1" min="1" style="background:#fff"></div>
-                    <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">UOM</label><select id="f-so-uom" onchange="onSOUomChange()" style="background:#fff"><option value="">--</option></select></div>
-                </div>
-                <div style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end">
-                    <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">Price ₹</label><input type="number" id="f-so-price" value="" min="0" step="0.01" placeholder="Listed" style="background:#fff"></div>
-                    <button class="btn btn-primary" onclick="addSOLine()" style="height:38px;padding:0 20px">Add</button>
+                <div style="display:grid;grid-template-columns:1fr 1.5fr auto;gap:10px;align-items:end">
+                    <div class="form-group" style="margin-bottom:0">
+                        <label style="font-size:0.75rem">UOM</label>
+                        <select id="f-so-uom" onchange="onSOUomChange()" style="background:#fff"><option value="">--</option></select>
+                    </div>
+                    <div class="form-group" style="margin-bottom:0">
+                        <label style="font-size:0.75rem">Price ₹</label>
+                        <input type="number" id="f-so-price" value="" min="0" step="0.01" placeholder="Listed" style="background:#fff">
+                    </div>
+                    <button class="btn btn-primary" onclick="addSOLine()" style="height:38px;padding:0 16px">Add</button>
                 </div>
             </div>
             <button class="btn btn-outline btn-block" onclick="closeSoItemSubModal()" style="margin-top:10px">Done Adding</button>
@@ -6449,7 +6458,7 @@ async function openInvoiceModal(type = 'sale', preserveItems = false) {
                 <button class="btn-icon" onclick="closeInvItemSubModal()"></button>
             </div>
             <div class="sub-modal-body">
-                <div class="form-row" style="margin-bottom:8px">
+                <div class="form-row" style="margin-bottom:8px; grid-template-columns: 1fr 1fr">
                     <div class="form-group">
                         <label>Category Filter</label>
                         <select id="f-inv-cat-filter" onchange="onInvCatFilterChange()">
@@ -6465,17 +6474,26 @@ async function openInvoiceModal(type = 'sale', preserveItems = false) {
                     </div>
                 </div>
                 <div class="inv-item-entry" style="background:var(--bg-input);padding:10px;border-radius:8px;margin-bottom:12px;border:1px solid var(--border)">
-                    <div class="form-group" style="margin-bottom:10px">
-                        <label style="font-size:0.8rem">Search & Select Item</label>
-                        <input id="f-inv-item-input" placeholder="Type item name or code..." style="background:#fff">
+                    <div style="display:grid;grid-template-columns:2fr 1fr;gap:10px;margin-bottom:10px">
+                        <div class="form-group" style="margin-bottom:0">
+                            <label style="font-size:0.75rem">Item</label>
+                            <input id="f-inv-item-input" placeholder="Search..." style="background:#fff">
+                        </div>
+                        <div class="form-group" style="margin-bottom:0">
+                            <label style="font-size:0.75rem">Qty</label>
+                            <input type="number" id="f-inv-qty" value="1" min="1" style="background:#fff">
+                        </div>
                     </div>
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
-                        <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">Qty</label><input type="number" id="f-inv-qty" value="1" min="1" style="background:#fff"></div>
-                        <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">UOM</label><select id="f-inv-uom" onchange="onInvUomChange()" style="background:#fff"><option value="">--</option></select></div>
-                    </div>
-                    <div style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end">
-                        <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">Price </label><input type="number" id="f-inv-price" value="" min="0" step="0.01" placeholder="Listed" style="background:#fff"></div>
-                        <button class="btn btn-primary" onclick="addInvoiceLine()" style="height:38px;padding:0 20px">Add</button>
+                    <div style="display:grid;grid-template-columns:1fr 1.5fr auto;gap:10px;align-items:end">
+                        <div class="form-group" style="margin-bottom:0">
+                            <label style="font-size:0.75rem">UOM</label>
+                            <select id="f-inv-uom" onchange="onInvUomChange()" style="background:#fff"><option value="">--</option></select>
+                        </div>
+                        <div class="form-group" style="margin-bottom:0">
+                            <label style="font-size:0.75rem">Price</label>
+                            <input type="number" id="f-inv-price" value="" min="0" step="0.01" placeholder="Listed" style="background:#fff">
+                        </div>
+                        <button class="btn btn-primary" onclick="addInvoiceLine()" style="height:38px;padding:0 16px">Add</button>
                     </div>
                 </div>
                 <button class="btn btn-outline btn-block" onclick="closeInvItemSubModal()" style="margin-top:10px">Done Adding</button>
@@ -7954,10 +7972,8 @@ async function bulkPrintInvoices() {
     _openInvoicePrintWindow(bodyHtml, `Bulk (${checked.length} invoices)`);
 }
 
-function _openInvoicePrintWindow(bodyHtml, title) {
-    const printWindow = window.open('', '_blank', 'width=900,height=800');
-    const html = `<!DOCTYPE html><html><head><title>Invoice ${escapeHtml(title)}</title>
-<style>
+function _getInvoicePrintCss() {
+    return `
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
   * { box-sizing: border-box; }
   body { font-family: 'Inter', sans-serif; color: #1a1a1a; margin: 0; padding: 10px; font-size: 8.5pt; line-height: 1.3; background: #fff; }
@@ -7998,12 +8014,41 @@ function _openInvoicePrintWindow(bodyHtml, title) {
     .page { border: none; padding: 3mm 6mm; width: 100%; margin: 0; max-height: 100mm; overflow: hidden; }
     .copy-divider { color: #999; page-break-after: avoid; break-after: avoid; }
     .page-break { page-break-after: always; break-after: page; height: 0; }
-  }
-</style>
-</head><body>${bodyHtml}</body></html>`;
-    printWindow.document.write(html);
-    printWindow.document.close();
-    setTimeout(() => { printWindow.print(); }, 900);
+    #inv-print-close-btn { display: none !important; }
+  }`;
+}
+
+function _openInvoicePrintWindow(bodyHtml, title) {
+    const isMobile = window.innerWidth < 768;
+    if (isMobile) {
+        // Mobile: inject into current page to avoid popup blocker
+        let overlay = document.getElementById('inv-print-overlay');
+        if (!overlay) {
+            overlay = document.createElement('div');
+            overlay.id = 'inv-print-overlay';
+            document.body.appendChild(overlay);
+        }
+        overlay.innerHTML = `
+            <style id="inv-print-style">${_getInvoicePrintCss()}
+              #inv-print-overlay { position:fixed;inset:0;z-index:99999;background:#fff;overflow-y:auto;padding:10px; }
+              #inv-print-close-btn { position:fixed;top:10px;right:10px;z-index:100000;background:#f97316;color:#fff;border:none;border-radius:50%;width:40px;height:40px;font-size:1.2rem;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,0.3); }
+            </style>
+            <button id="inv-print-close-btn" onclick="document.getElementById('inv-print-overlay').remove()" title="Close">✕</button>
+            ${bodyHtml}`;
+        setTimeout(() => window.print(), 600);
+        window.addEventListener('afterprint', () => {
+            const el = document.getElementById('inv-print-overlay');
+            if (el) el.remove();
+        }, { once: true });
+    } else {
+        // Desktop: open a new window as before
+        const printWindow = window.open('', '_blank', 'width=900,height=800');
+        if (!printWindow) { alert('Popup blocked — please allow popups for this site and try again.'); return; }
+        const html = `<!DOCTYPE html><html><head><title>Invoice ${escapeHtml(title)}</title><style>${_getInvoicePrintCss()}</style></head><body>${bodyHtml}</body></html>`;
+        printWindow.document.write(html);
+        printWindow.document.close();
+        setTimeout(() => { printWindow.print(); }, 900);
+    }
 }
 
 
@@ -8438,7 +8483,7 @@ async function openPaymentModal(prefillPartyId) {
             partyInput.dataset.initDone = "true";
 
             // Silently refresh GPS in background — re-sort once fresh coords arrive
-            ensureGeolocation(60000).then(coords => {
+            ensureGeolocation(30000).then(coords => {
                 if (coords && !partyInput.dataset.selectedId) {
                     initSearchDropdown('f-pay-party', buildPartySearchList(customers), onPartySelect);
                 }
