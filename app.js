@@ -3902,6 +3902,11 @@ function updateBulkItemBar() {
     bar.style.display = n > 0 ? 'flex' : 'none';
     if (cnt) cnt.textContent = n + ' selected';
 }
+// Strip fields that are not in the Supabase inventory schema
+function _cleanInvItem(item) {
+    const { conversion_factor, ...rest } = item;
+    return rest;
+}
 function clearBulkItems() {
     window._bulkItems.clear();
     document.querySelectorAll('.bulk-chk-item').forEach(el => el.checked = false);
@@ -3913,7 +3918,7 @@ async function bulkActivateItems() {
     const inv = await DB.getAll('inventory');
     for (const id of window._bulkItems) {
         const item = inv.find(x => x.id === id);
-        if (item) await DB.update('inventory', id, { ...item, active: true });
+        if (item) await DB.update('inventory', id, { ..._cleanInvItem(item), active: true });
     }
     showToast(window._bulkItems.size + ' items activated', 'success');
     window._bulkItems.clear();
@@ -3924,7 +3929,7 @@ async function bulkDeactivateItems() {
     const inv = await DB.getAll('inventory');
     for (const id of window._bulkItems) {
         const item = inv.find(x => x.id === id);
-        if (item) await DB.update('inventory', id, { ...item, active: false });
+        if (item) await DB.update('inventory', id, { ..._cleanInvItem(item), active: false });
     }
     showToast(window._bulkItems.size + ' items deactivated', 'success');
     window._bulkItems.clear();
@@ -4024,7 +4029,7 @@ async function saveBulkEdit() {
         const item = allItems.find(x => x.id === id);
         if (!item) continue;
         await DB.update('inventory', id, {
-            ...item,
+            ..._cleanInvItem(item),
             category: row.querySelector('.be-cat').value || item.category,
             subCategory: row.querySelector('.be-subcat').value || item.subCategory,
             gstRate: parseFloat(row.querySelector('.be-gst').value) || 0,
