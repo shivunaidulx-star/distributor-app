@@ -3428,6 +3428,7 @@ async function renderInventory() {
             <span id="bulk-cnt-inv" style="font-weight:700;flex:1">0 selected</span>
             <button class="btn" onclick="bulkActivateItems()" style="background:#fff;color:#10b981;padding:4px 10px;font-size:0.82rem;font-weight:600"> Activate</button>
             <button class="btn" onclick="bulkDeactivateItems()" style="background:#fff;color:#f59e0b;padding:4px 10px;font-size:0.82rem;font-weight:600"> Deactivate</button>
+            <button class="btn" onclick="openBulkEditModal()" style="background:#fff;color:#6366f1;padding:4px 10px;font-size:0.82rem;font-weight:600"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-2px">edit_note</span> Bulk Edit</button>
             <button class="btn" onclick="bulkDeleteItems()" style="background:#ef4444;color:#fff;padding:4px 10px;font-size:0.82rem;font-weight:600"> Delete</button>
             <button class="btn" onclick="clearBulkItems()" style="background:rgba(255,255,255,0.2);color:#fff;padding:4px 10px;font-size:0.82rem"> Clear</button>
         </div>
@@ -3947,6 +3948,68 @@ async function bulkDeleteItems() {
     if (!confirm('Delete ' + toDelete.length + ' item(s)? Cannot be undone.')) return;
     for (const id of toDelete) await DB.delete('inventory', id);
     showToast(toDelete.length + ' items deleted', 'success');
+    window._bulkItems.clear();
+    renderInventory();
+}
+
+async function openBulkEditModal() {
+    if (!window._bulkItems || !window._bulkItems.size) return;
+    const allItems = await DB.getAll('inventory');
+    const selected = allItems.filter(i => window._bulkItems.has(i.id));
+    if (!selected.length) return;
+    const rows = selected.map(i => `
+        <tr data-id="${i.id}">
+            <td style="min-width:180px;font-weight:600;color:var(--text-primary)">${i.name}${i.itemCode ? `<br><span style="font-size:0.72rem;color:var(--text-muted)">${i.itemCode}</span>` : ''}</td>
+            <td style="min-width:60px;text-align:center;color:var(--text-muted)">${i.unit || 'Pcs'}</td>
+            <td><input type="number" class="be-purchase" value="${i.purchasePrice || 0}" min="0" step="0.01" style="width:90px;padding:4px 6px;border:1px solid var(--border);border-radius:6px;text-align:right;font-size:0.9rem"></td>
+            <td><input type="number" class="be-sale" value="${i.salePrice || 0}" min="0" step="0.01" style="width:90px;padding:4px 6px;border:1px solid var(--border);border-radius:6px;text-align:right;font-size:0.9rem"></td>
+            <td><input type="number" class="be-mrp" value="${i.mrp || 0}" min="0" step="0.01" style="width:90px;padding:4px 6px;border:1px solid var(--border);border-radius:6px;text-align:right;font-size:0.9rem"></td>
+            <td><input type="number" class="be-lowstock" value="${i.lowStockAlert || 5}" min="0" step="1" style="width:70px;padding:4px 6px;border:1px solid var(--border);border-radius:6px;text-align:right;font-size:0.9rem"></td>
+        </tr>`).join('');
+    openModal(`
+        <div class="modal-header"><h3 style="margin:0;font-size:1.1rem">Bulk Edit Items (${selected.length})</h3></div>
+        <div class="modal-body" style="padding:0">
+            <div style="overflow-x:auto;max-height:60vh;overflow-y:auto">
+                <table style="width:100%;border-collapse:collapse;font-size:0.88rem">
+                    <thead style="position:sticky;top:0;background:var(--surface);z-index:1">
+                        <tr style="border-bottom:2px solid var(--border)">
+                            <th style="padding:8px 12px;text-align:left;color:var(--text-muted);font-weight:600">Item</th>
+                            <th style="padding:8px 12px;text-align:center;color:var(--text-muted);font-weight:600">Unit</th>
+                            <th style="padding:8px 12px;text-align:right;color:var(--text-muted);font-weight:600">Purchase ₹</th>
+                            <th style="padding:8px 12px;text-align:right;color:var(--text-muted);font-weight:600">Sale ₹</th>
+                            <th style="padding:8px 12px;text-align:right;color:var(--text-muted);font-weight:600">MRP ₹</th>
+                            <th style="padding:8px 12px;text-align:right;color:var(--text-muted);font-weight:600">Low Stock</th>
+                        </tr>
+                    </thead>
+                    <tbody id="bulk-edit-tbody" style="border-bottom:1px solid var(--border)">
+                        ${rows}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="modal-actions">
+            <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="saveBulkEdit()"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-2px">save</span> Save All</button>
+        </div>`);
+}
+async function saveBulkEdit() {
+    const tbody = document.getElementById('bulk-edit-tbody');
+    if (!tbody) return;
+    const allItems = await DB.getAll('inventory');
+    let count = 0;
+    for (const row of tbody.querySelectorAll('tr[data-id]')) {
+        const id = row.dataset.id;
+        const item = allItems.find(x => x.id === id);
+        if (!item) continue;
+        const purchasePrice = parseFloat(row.querySelector('.be-purchase').value) || 0;
+        const salePrice = parseFloat(row.querySelector('.be-sale').value) || 0;
+        const mrp = parseFloat(row.querySelector('.be-mrp').value) || 0;
+        const lowStockAlert = parseInt(row.querySelector('.be-lowstock').value) || 5;
+        await DB.update('inventory', id, { ...item, purchasePrice, salePrice, mrp, lowStockAlert });
+        count++;
+    }
+    closeModal();
+    showToast(count + ' items updated', 'success');
     window._bulkItems.clear();
     renderInventory();
 }
