@@ -68,7 +68,7 @@ const DB = {
     async loadCacheFromIDB() {
         try {
             await this.idb.init();
-            const keys = ['db_users', 'db_categories', 'db_uom', 'db_company', 'db_tax_settings', 'db_parties', 'db_inventory', 'db_sales_orders', 'db_invoices', 'db_payments', 'db_expenses', 'db_party_ledger', 'db_stock_ledger', 'db_packers', 'db_delivery_persons', 'db_delivery', 'db_gps_logs'];
+            const keys = ['db_users', 'db_categories', 'db_uom', 'db_company', 'db_tax_settings', 'db_parties', 'db_inventory', 'db_sales_orders', 'db_invoices', 'db_payments', 'db_expenses', 'db_party_ledger', 'db_stock_ledger', 'db_packers', 'db_delivery_persons', 'db_delivery'];
             await Promise.all(keys.map(async k => {
                 const val = await this.idb.get(k);
                 if (val) {
@@ -108,7 +108,13 @@ const DB = {
     async refresh() {
         // Core tables needed for Login & Dashboard basic structure
         const coreTables = ['users', 'categories', 'uom'];
-        const tables = ['parties', 'inventory', 'sales_orders', 'invoices', 'payments', 'expenses', 'party_ledger', 'stock_ledger', 'packers', 'delivery_persons', 'delivery', 'gps_logs'];
+        // Batch 1: high-priority tables needed for first page render
+        const batch1 = ['parties', 'inventory', 'sales_orders', 'invoices', 'payments'];
+        // Batch 2: lower-priority tables loaded after a short delay
+        const batch2 = ['expenses', 'packers', 'delivery_persons', 'delivery'];
+        // Ledger tables: load with date filter (last 6 months) to avoid huge payloads
+        const ledgerCutoff = new Date(); ledgerCutoff.setMonth(ledgerCutoff.getMonth() - 6);
+        const ledgerDateFrom = ledgerCutoff.toISOString().split('T')[0];
 
         // Mark last refresh time
         this.cache._lastRefresh = Date.now();
@@ -132,32 +138,39 @@ const DB = {
             });
         } catch (e) { console.error('Core Refresh Error:', e); }
 
-        // 2. Start loading secondary tables in the background
-        tables.forEach(t => {
-            const actualTable = this.mapTable(t);
-            supabaseClient.from(actualTable).select('*').then(res => {
-                if (res.error) console.error(`Bg Refresh Error ${actualTable}:`, res.error);
-                else {
-                    const camel = this._toCamel(res.data || []);
-                    this.cache[actualTable] = camel;
-                    this.idb.set('db_' + actualTable, camel).catch(console.error);
-
-                    // Trigger a UI refresh if we are on a page that needs this data
-                    const isCatalog = currentPage === 'catalog';
-                    if (currentPage === actualTable || (actualTable === 'sales_orders' && currentPage === 'salesorders') || (isCatalog && (actualTable === 'sales_orders' || actualTable === 'inventory' || actualTable === 'parties'))) {
-                        console.log(`Bg loaded ${actualTable}, silent UI refresh...`);
-                        clearTimeout(this._bgNavTimer);
-                        this._bgNavTimer = setTimeout(() => navigateTo(currentPage, { silent: true }), 300);
-                    }
-                    // Run data repair only after both invoices and sales_orders are cached
-                    if (actualTable === 'invoices' || actualTable === 'sales_orders') {
-                        if (this.cache['invoices'] && this.cache['sales_orders']) {
-                            repairCancelledInvoiceOrders();
-                        }
-                    }
+        const _bgLoad = (actualTable, query) => {
+            query.then(res => {
+                if (res.error) { console.error(`Bg Refresh Error ${actualTable}:`, res.error); return; }
+                const camel = this._toCamel(res.data || []);
+                this.cache[actualTable] = camel;
+                this.idb.set('db_' + actualTable, camel).catch(console.error);
+                // Trigger a UI refresh if we are on a page that needs this data
+                const isCatalog = currentPage === 'catalog';
+                if (currentPage === actualTable || (actualTable === 'sales_orders' && currentPage === 'salesorders') || (isCatalog && (actualTable === 'sales_orders' || actualTable === 'inventory' || actualTable === 'parties'))) {
+                    clearTimeout(this._bgNavTimer);
+                    this._bgNavTimer = setTimeout(() => navigateTo(currentPage, { silent: true }), 300);
+                }
+                if (actualTable === 'invoices' || actualTable === 'sales_orders') {
+                    if (this.cache['invoices'] && this.cache['sales_orders']) repairCancelledInvoiceOrders();
                 }
             });
-        });
+        };
+
+        // 3. Batch 1: fire immediately (most-needed tables)
+        batch1.forEach(t => _bgLoad(this.mapTable(t), supabaseClient.from(this.mapTable(t)).select('*')));
+
+        // 4. Batch 2: fire after 2s delay so batch1 gets bandwidth priority
+        setTimeout(() => {
+            batch2.forEach(t => _bgLoad(this.mapTable(t), supabaseClient.from(this.mapTable(t)).select('*')));
+        }, 2000);
+
+        // 5. Ledger tables: load last 6 months only (unbounded = very slow on large data)
+        setTimeout(() => {
+            _bgLoad('party_ledger', supabaseClient.from('party_ledger').select('*').gte('date', ledgerDateFrom).order('date', { ascending: false }));
+            _bgLoad('stock_ledger', supabaseClient.from('stock_ledger').select('*').gte('date', ledgerDateFrom).order('date', { ascending: false }));
+        }, 4000);
+
+        // gps_logs: NOT auto-loaded — fetch on demand in GPS admin view only
 
         // Legacy map for what we have so far
         this.cache['db_users'] = this.cache['users'] || [];
@@ -290,7 +303,18 @@ const DB = {
 
     async getAll(table) {
         const actualTable = this.mapTable(table);
-        const { data, error } = await supabaseClient.from(actualTable).select('*');
+        // Return from cache if available (populated by background refresh)
+        if (this.cache[actualTable] && this.cache[actualTable].length > 0) return this.cache[actualTable];
+        // For large ledger/log tables use date filter to avoid fetching all-time data
+        let query = supabaseClient.from(actualTable).select('*');
+        if (actualTable === 'party_ledger' || actualTable === 'stock_ledger') {
+            const cutoff = new Date(); cutoff.setMonth(cutoff.getMonth() - 6);
+            query = query.gte('date', cutoff.toISOString().split('T')[0]).order('date', { ascending: false });
+        } else if (actualTable === 'gps_logs') {
+            const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 7);
+            query = query.gte('timestamp', cutoff.toISOString()).order('timestamp', { ascending: false }).limit(500);
+        }
+        const { data, error } = await query;
         if (error) {
             console.warn(`Offline or Error fetching ${actualTable}. Falling back to IDB Cache.`);
             return this.get(actualTable) || [];
