@@ -5690,17 +5690,25 @@ async function viewSalesOrder(id) {
             <strong>Linked Invoice:</strong> ${o.invoiceNo} ${o.packedBy ? `| <strong>Packed By:</strong> ${o.packedBy}` : ''}
         </div>` : ''}
 
-        <table class="data-table"><thead><tr><th>SL</th><th>Item</th><th>Qty</th><th>Listed</th><th>Rate</th><th>Dis%</th><th>Dis</th><th>Amount</th></tr></thead>
-        <tbody>${o.items.map((l, idx) => {
-        const edited = l.listedPrice !== undefined && l.price !== l.listedPrice;
-        return `<tr${edited ? ' style="background:rgba(245,158,11,0.06)"' : ''}><td>${idx + 1}</td><td>${l.name}</td><td>${l.qty} <span style="font-size:0.75rem;color:var(--text-muted)">${l.unit || 'Pcs'}</span>${l.packedQty !== undefined && l.packedQty !== l.qty ? ` <span style="color:var(--danger);font-size:0.8rem">(Packed: ${l.packedQty})</span>` : ''}</td>
-            <td style="font-size:0.82rem;color:var(--text-muted)">${l.listedPrice !== undefined ? currency(l.listedPrice) : '-'}</td>
-            <td>${edited ? `<span style="color:var(--warning);font-weight:600">${currency(l.price)}</span>` : currency(l.price)}</td>
-            <td style="font-size:0.8rem">${l.discountPct || 0}%</td>
-            <td style="font-size:0.8rem">${currency(l.discountAmt || 0)}</td>
-            <td>${currency(l.amount)}</td></tr>`;
-    }).join('')}
-        <tr style="font-weight:700"><td colspan="7" style="text-align:right;color:var(--accent)">Total</td><td style="color:var(--accent)">${currency(o.total)}</td></tr></tbody></table>
+        <div style="margin-bottom:8px">
+        ${o.items.map((l, idx) => {
+            const edited = l.listedPrice !== undefined && l.price !== l.listedPrice;
+            const borderColor = edited ? 'var(--warning)' : 'var(--border)';
+            return `<div style="border:1px solid ${borderColor};border-radius:8px;padding:8px 10px;margin-bottom:6px;background:var(--surface)">
+                <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:6px;margin-bottom:5px">
+                    <span style="font-size:0.72rem;color:var(--text-muted);min-width:16px">${idx + 1}.</span>
+                    <div style="flex:1;font-size:0.85rem;font-weight:600;line-height:1.3;word-break:break-word">${escapeHtml(l.name)}</div>
+                    <div style="font-size:0.9rem;font-weight:800;color:var(--accent);white-space:nowrap">${currency(l.amount)}</div>
+                </div>
+                <div style="display:flex;gap:12px;font-size:0.78rem;color:var(--text-muted);flex-wrap:wrap">
+                    <span><strong style="color:var(--text-primary)">${l.qty}</strong> ${l.unit || 'Pcs'}${l.packedQty !== undefined && l.packedQty !== l.qty ? ` <span style="color:var(--danger)">(Packed: ${l.packedQty})</span>` : ''}</span>
+                    <span>@ ${edited ? `<span style="color:var(--warning);font-weight:600">${currency(l.price)}</span>` : `<strong>${currency(l.price)}</strong>`}${l.listedPrice !== undefined && edited ? ` <span style="text-decoration:line-through">${currency(l.listedPrice)}</span>` : ''}</span>
+                    ${l.discountPct ? `<span>Dis: ${l.discountPct}%</span>` : ''}
+                </div>
+            </div>`;
+        }).join('')}
+        <div style="text-align:right;font-size:1rem;font-weight:800;color:var(--accent);padding-top:6px;border-top:2px solid var(--border)">Total: ${currency(o.total)}</div>
+        </div>
         ${o.notes ? `<div style="margin-top:12px;padding:10px;background:var(--bg-input);border-radius:var(--radius-sm);font-size:0.85rem"><strong>Notes:</strong> ${o.notes}</div>` : ''}
         ${o.status === 'pending' && isA ? `<div class="modal-actions">
             <button class="btn btn-danger" onclick="rejectSalesOrder('${o.id}')"> Reject</button>
@@ -11595,8 +11603,6 @@ async function finalizePacking() {
             packedItems,
             packedTotal,
             packageNumbers: allPkgNumbers,
-            boxNumbers: boxNumbers,
-            crateNumbers: crateNumbers,
             boxCount: totalBoxes,
             crateCount: totalCrates
         });
