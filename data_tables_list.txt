@@ -1,0 +1,495 @@
+﻿
+app.js:1912:        <div c
+lass="table-wrapper"><tabl
+e class="data-table">
+app.js:2061:              
+          <table 
+class="data-table">
+app.js:2099:              
+      <table class="data-t
+able"><thead><tr><th>Order
+ #</th><th>Party</th><th>I
+nvoice</th><th>Status</th>
+</tr></thead>
+app.js:2125:              
+      <table class="data-t
+able"><thead><tr><th>Order
+ #</th><th>Party</th><th>I
+tems</th><th>Total</th></t
+r></thead>
+app.js:2131:              
+      <table class="data-t
+able"><thead><tr><th>Order
+ #</th><th>Party</th><th>I
+tems</th><th>Total</th></t
+r></thead>
+app.js:2272:        
+<table class="data-table">
+<thead><tr><th>Item</th><t
+h>Stock</th><th>Last Sold<
+/th></tr></thead><tbody>${
+nonMovingItems.slice(0, 
+8).map(i => `<tr><td style
+="font-weight:600">${i.nam
+e}</td><td><span 
+class="badge badge-danger"
+>${i.stock}</span></td><td
+ style="color:var(--text-m
+uted);font-size:0.82rem">$
+{itemLastSoldMap[i.id] ? f
+mtDate(itemLastSoldMap[i.i
+d]) : 'Never'}</td></tr>`)
+.join('')}</tbody></table>
+</div>` : ''}
+app.js:2274:        
+<table class="data-table">
+<thead><tr><th>Item</th><t
+h>Stock</th><th>Sold (90d)
+</th></tr></thead><tbody>$
+{slowMovingItems.slice(0, 
+8).map(i => `<tr><td style
+="font-weight:600">${i.nam
+e}</td><td><span 
+class="badge badge-info">$
+{i.stock}</span></td><td s
+tyle="font-weight:600;colo
+r:var(--warning)">${itemSa
+lesMap[i.id] || 0}</td></t
+r>`).join('')}</tbody></ta
+ble></div>` : ''}
+app.js:2279:            
+<table class="data-table">
+<thead><tr><th>Date</th><t
+h>Invoice #</th><th>Party<
+/th><th>Type</th><th>Amoun
+t</th></tr></thead>
+app.js:2460:              
+  <table 
+class="data-table" style="
+min-width:920px;width:100%
+"><thead><tr><th style="wi
+dth:36px;text-align:center
+"><input type="checkbox" 
+id="bulk-all-par" onchange
+="toggleSelectAllParties(t
+his)" style="width:16px;he
+ight:16px;cursor:pointer">
+</th>${ColumnManager.get('
+parties').filter(c => 
+c.visible).map(c => `<th>$
+{c.label}</th>`).join('')}
+</tr></thead>
+app.js:2905:        
+<table class="data-table" 
+style="font-size:0.8rem">
+app.js:3090:            
+<table class="data-table" 
+style="font-size:0.85rem">
+<thead><tr><th>Code</th><t
+h>Name</th><th>Type</th><t
+h>Phone</th><th>City</th><
+th>GSTIN</th><th>Address</
+th><th>Status</th><th></th
+></tr></thead>
+app.js:3159:              
+  <table class="data-table
+"><thead><tr><th>Category 
+Name</th><th>Sub-Categorie
+s</th><th>Actions</th></tr
+></thead>
+app.js:3387:              
+  <table 
+class="data-table" 
+id="inv-table" style="min-
+width:900px"><thead><tr><t
+h style="width:36px;text-a
+lign:center"><input 
+type="checkbox" 
+id="bulk-all-inv" onchange
+="toggleSelectAllItems(thi
+s)" style="width:16px;heig
+ht:16px;cursor:pointer"></
+th>${ColumnManager.get('in
+ventory').filter(c => 
+c.visible).map(c => `<th>$
+{c.label}</th>`).join('')}
+</tr></thead>
+app.js:4165:        
+<table class="data-table" 
+style="min-width:680px"><t
+head><tr>
+app.js:4285:        if (pe
+ndingStockImports.length) 
+html += `<div style="max-h
+eight:300px;overflow-y:aut
+o;border:1px solid var(--b
+order);border-radius:var(-
+-radius-sm)"><table class=
+"data-table"><thead><tr><t
+h>Date</th><th>Item</th><t
+h>Type</th><th>Qty</th><th
+>New Stock</th></tr></thea
+d><tbody>${pendingStockImp
+orts.map(p => `<tr><td>${f
+mtDate(p.adjDate)}</td><td
+>${p.item.name}</td><td><s
+pan class="badge 
+${p.actualQty > 0 ? 
+'badge-success' : 'badge-d
+anger'}">${p.entryType}</s
+pan></td><td style="font-w
+eight:700;color:${p.actual
+Qty > 0 ? 
+'var(--success)' : 'var(--
+danger)'}">${p.actualQty 
+> 0 ? '+' : ''}${p.actualQ
+ty}</td><td>${p.item.stock
+ + p.actualQty}</td></tr>`
+).join('')}</tbody></table
+></div>`;
+app.js:4417:        if (pe
+ndingItemImports.length) 
+html += `<div style="max-h
+eight:300px;overflow-y:aut
+o;border:1px solid var(--b
+order);border-radius:var(-
+-radius-sm)"><table class=
+"data-table"><thead><tr><t
+h>Name</th><th>Cat / 
+Sub</th><th>Sale </th><th>
+Action</th></tr></thead><t
+body>${pendingItemImports.
+map(p => `<tr><td>${p.name
+}</td><td>${p.category} > 
+${p.subCategory}</td><td>$
+{currency(p.salePrice)}</t
+d><td><span class="badge 
+${p.isUpdate ? 
+'badge-warning' : 'badge-s
+uccess'}">${p.isUpdate ? 
+'Update' : 'New'}</span></
+td></tr>`).join('')}</tbod
+y></table></div>`;
+app.js:4530:              
+  <table class="data-table
+"><thead><tr>${isApprover 
+? `<th 
+style="width:36px"><input 
+type="checkbox" 
+id="so-select-all" 
+title="Select all 
+pending" onchange="soToggl
+eAll(this.checked)"></th>`
+ : '<th style="width:36px"
+></th>'}${ColumnManager.ge
+t('salesorders').filter(c 
+=> c.visible).map(c => `<t
+h>${c.label}</th>`).join('
+')}</tr></thead>
+app.js:5260:        
+<table class="data-table">
+<thead><tr><th>SL</th><th>
+Item</th><th>Qty</th><th>L
+isted</th><th>Rate</th><th
+>Dis%</th><th>Dis</th><th>
+Amount</th></tr></thead>
+app.js:5461:            
+<table class="data-table" 
+style="min-width:700px"><t
+head><tr>${ColumnManager.g
+et('purchaseorders').filte
+r(c => c.visible).map(c 
+=> `<th>${c.label}</th>`).
+join('')}</tr></thead>
+app.js:5524:            
+<table class="data-table" 
+id="pinv-table" 
+style="min-width:700px">
+app.js:5574:        
+<table class="data-table" 
+style="min-width:500px">
+app.js:5810:        
+<table class="data-table">
+<thead><tr><th>Item</th><t
+h>Qty</th><th>Rate</th><th
+>Amount</th></tr></thead>
+app.js:5915:              
+  <table 
+class="data-table" id="tbl
+-invoices"><thead><tr><th 
+style="width:32px"><input 
+type="checkbox" 
+id="inv-check-all" 
+title="Select All" onchang
+e="document.querySelectorA
+ll('.inv-chk').forEach(c=>
+c.checked=this.checked)"><
+/th>${ColumnManager.get('i
+nvoices').filter(c => 
+c.visible).map(c => `<th>$
+{c.label}</th>`).join('')}
+</tr></thead>
+app.js:6014:            
+<table class="data-table">
+app.js:6200:        
+<table class="data-table" 
+style="font-size:0.85rem;m
+argin:0">
+app.js:6816:        
+<table class="data-table">
+<thead><tr><th>SL</th><th>
+Item</th><th>Qty</th><th>R
+ate</th><th>Amount</th></t
+r></thead>
+app.js:6823:              
+  <table 
+class="data-table" 
+style="font-size:0.85rem">
+app.js:7543:              
+  <table 
+class="data-table" id="tbl
+-payments"><thead><tr>${Co
+lumnManager.get('payments'
+).filter(c => 
+c.visible).map(c => `<th>$
+{c.label}</th>`).join('')}
+</tr></thead>
+app.js:8688:              
+  <table 
+class="data-table" style="
+margin:0;font-size:0.85rem
+">
+app.js:8991:            
+<div class="table-wrapper"
+><table 
+class="data-table">
+app.js:9120:              
+  <table class="data-table
+"><thead><tr>${ColumnManag
+er.get('packing').filter(c
+ => c.visible).map(c => `<
+th>${c.label}</th>`).join(
+'')}</tr></thead>
+app.js:9143:              
+  <table class="data-table
+"><thead><tr><th>Order #</
+th><th>Party</th><th>Flagg
+ed By</th><th>Reason</th><
+th>Notes</th><th>Line 
+Status</th>${isAdmin ? 
+'<th>Actions</th>' : 
+''}</tr></thead>
+app.js:9169:              
+  <table class="data-table
+"><thead><tr>
+app.js:9192:              
+  <table class="data-table
+"><thead><tr><th>Order #</
+th><th>Party</th><th>Packe
+r</th><th>Time</th><th>Pac
+kages</th><th>Invoice</th>
+<th>Total</th></tr></thead
+>
+app.js:9605:            
+<table class="data-table" 
+style="margin:0">
+app.js:9958:        
+<table class="data-table" 
+style="font-size:0.82rem;m
+in-width:480px">
+app.js:10136:             
+   <table class="data-tabl
+e"><thead><tr>
+app.js:10159:             
+   <table class="data-tabl
+e"><thead><tr>${ColumnMana
+ger.get('delivery').filter
+(c => c.visible).map(c => 
+`<th>${c.label}</th>`).joi
+n('')}</tr></thead>
+app.js:11084:            
+let html = '<div class="ta
+ble-wrapper"><table 
+class="data-table" id="tbl
+-allocations"><thead><tr><
+th>Collector</th><th>Invoi
+ce No</th><th>Date</th><th
+>Customer</th><th>Total Am
+t</th><th>Paid</th><th>Bal
+ance</th><th>Assigned On</
+th><th>Action</th></tr></t
+head><tbody>';
+app.js:11155:            
+let html = '<div class="ta
+ble-wrapper"><table 
+class="data-table" id="tbl
+-aging"><thead><tr><th>Ite
+m Name</th><th>Code</th><t
+h>Current 
+Stock</th><th>0-30 
+Days</th><th>31-60 
+Days</th><th>61-90 
+Days</th><th>>90 Days</th>
+<th>Expiry</th></tr></thea
+d><tbody>';
+app.js:11238:            
+let html = '<div class="ta
+ble-wrapper"><table 
+class="data-table" id="tbl
+-salesman-ach"><thead><tr>
+<th>Salesman</th><th>Targe
+t</th><th>Achievement</th>
+<th>Achievement %</th><th>
+Collections</th></tr></the
+ad><tbody>';
+app.js:11305:             
+       <div class="table-w
+rapper"><table 
+class="data-table" id="tbl
+-soa"><thead><tr><th>Date<
+/th><th>Type</th><th>Ref N
+o</th><th>Description</th>
+<th>Debit 
+(Out)</th><th>Credit (In)<
+/th><th>Balance</th></tr><
+/thead><tbody>`;
+app.js:11350:            
+let html = '<div class="ta
+ble-wrapper"><table 
+class="data-table" id="tbl
+-abc"><thead><tr><th>Rank<
+/th><th>Item 
+Name</th><th>Revenue 
+()</th><th>% 
+Share</th><th>Cumul %</th>
+<th>Class</th></tr></thead
+><tbody>';
+app.js:11502:            
+<table class="data-table" 
+id="tbl-vy-sales" 
+style="font-size:0.82rem">
+app.js:11527:            
+<table class="data-table" 
+id="tbl-vy-pay" 
+style="font-size:0.82rem">
+app.js:11789:        
+<table class="data-table" 
+id="tbl-zero-sales">
+app.js:11941:        
+<table class="data-table" 
+id="tbl-pay-rpt" 
+style="min-width:900px">
+app.js:12004:    <div 
+class="card"><div 
+class="card-body"><table 
+class="data-table" 
+id="tbl-sales">
+app.js:12030:            
+<table class="data-table" 
+id="tbl-purchases">
+app.js:12195:            
+<table class="data-table" 
+id="tbl-invpnl">
+app.js:12246:            
+<table class="data-table" 
+id="tbl-stock">
+app.js:12341:            
+<table class="data-table" 
+id="tbl-outstanding">
+app.js:12472:            
+<table class="data-table" 
+id="tbl-user-outstanding">
+app.js:12508:            
+<table class="data-table" 
+id="tbl-expenses">
+app.js:12517:            
+<table class="data-table">
+app.js:12556:            
+<table class="data-table" 
+id="cheque-reg-table">
+app.js:12612:            
+<table class="data-table" 
+id="tbl-salesman">
+app.js:12666:            
+<table class="data-table" 
+id="tbl-daybook">
+app.js:12765:             
+       <table 
+class="data-table" 
+style="font-size:0.85rem">
+app.js:12850:             
+   <table 
+class="data-table" 
+id="tbl-pay-report" 
+style="font-size:0.85rem">
+app.js:12903:             
+   <table class="data-tabl
+e"><thead><tr><th>Name</th
+><th>Phone</th><th>Actions
+</th></tr></thead>
+app.js:12947:             
+   <table class="data-tabl
+e"><thead><tr><th>Name</th
+><th>Phone</th><th>Vehicle
+</th><th>Actions</th></tr>
+</thead>
+app.js:12994:             
+   <table 
+class="data-table">
+app.js:13014:        
+<table class="data-table" 
+style="font-size:0.82rem">
+app.js:13240:             
+   <table 
+class="data-table" 
+id="tbl-pay-trend" style="
+min-width:${Math.max(600, 
+180 + dates.length * 
+100)}px">
+app.js:13407:             
+   <table 
+class="data-table">
+app.js:13602:             
+   <table 
+class="data-table" style="
+margin-bottom:12px">
+app.js:14071:             
+       <table 
+class="data-table">
+app.js:14208:            
+<table class="data-table">
+app.js:14392:             
+   <table class="data-tabl
+e"><thead><tr><th>Unit 
+Name</th><th>Short Code</t
+h><th>Description</th><th>
+Actions</th></tr></thead>
+app.js:14835:            
+<table class="data-table" 
+style="min-width:500px">
+app.js:14877:             
+   <table class="data-tabl
+e"><thead><tr><th>Item</th
+><th>Qty</th><th>Unit</th>
+<th>Price</th><th>Amount</
+th><th></th></tr></thead>
+app.js:15086:             
+   <table class="data-tabl
+e"><thead><tr><th>Brand Na
+me</th><th>Description</th
+><th>Actions</th></tr></th
+ead>
+app.js:15954:    <div clas
+s="table-wrapper"><table 
+class="data-table">
+app.js:16096:    <div clas
+s="table-wrapper"><table 
+class="data-table">
+app.js:16374:    <div clas
+s="table-wrapper"><table 
+class="data-table">
+app.js:16409:    <div clas
+s="table-wrapper"><table 
+class="data-table">
+
+

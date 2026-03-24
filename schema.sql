@@ -32,7 +32,9 @@ CREATE TABLE IF NOT EXISTS parties (
     balance NUMERIC DEFAULT 0,
     credit_limit NUMERIC DEFAULT 0,
     blocked BOOLEAN DEFAULT false,
-    party_code TEXT
+    party_code TEXT,
+    "group" TEXT,
+    area TEXT
 );
 ALTER TABLE parties ADD COLUMN IF NOT EXISTS gstin TEXT;
 ALTER TABLE parties ADD COLUMN IF NOT EXISTS address TEXT;
@@ -45,6 +47,8 @@ ALTER TABLE parties ADD COLUMN IF NOT EXISTS blocked BOOLEAN DEFAULT false;
 ALTER TABLE parties ADD COLUMN IF NOT EXISTS post_code TEXT;
 ALTER TABLE parties ADD COLUMN IF NOT EXISTS payment_terms TEXT;
 ALTER TABLE parties ADD COLUMN IF NOT EXISTS party_code TEXT;
+ALTER TABLE parties ADD COLUMN IF NOT EXISTS "group" TEXT;
+ALTER TABLE parties ADD COLUMN IF NOT EXISTS area TEXT;
 
 -- ─────────────────────────────────────────────
 -- 3. INVENTORY
@@ -331,8 +335,10 @@ CREATE TABLE IF NOT EXISTS delivery (
     status TEXT DEFAULT 'Dispatched',
     dispatched_at DATE,
     delivered_at DATE,
+    returned_at DATE,
     reason TEXT,
     cancel_reason TEXT,
+    re_dispatch_of TEXT,
     notes TEXT,
     created_by TEXT
 );
@@ -348,6 +354,8 @@ ALTER TABLE delivery ADD COLUMN IF NOT EXISTS notes TEXT;
 ALTER TABLE delivery ADD COLUMN IF NOT EXISTS delivery_location TEXT;
 ALTER TABLE delivery ADD COLUMN IF NOT EXISTS delivery_lat NUMERIC;
 ALTER TABLE delivery ADD COLUMN IF NOT EXISTS delivery_lng NUMERIC;
+ALTER TABLE delivery ADD COLUMN IF NOT EXISTS re_dispatch_of TEXT;
+ALTER TABLE delivery ADD COLUMN IF NOT EXISTS returned_at DATE;
 
 -- ─────────────────────────────────────────────
 -- 16. SETTINGS (company config, app preferences)
@@ -373,3 +381,19 @@ CREATE INDEX IF NOT EXISTS idx_delivery_status ON delivery(status);
 -- =========================================================
 -- DONE — All 15 tables ready, safe to re-run anytime
 -- =========================================================
+
+-- ─────────────────────────────────────────────
+-- 17. GPS LOGS
+-- ─────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS gps_logs (
+    id TEXT PRIMARY KEY,
+    user_id TEXT,
+    user_name TEXT,
+    action TEXT,
+    reference_id TEXT,
+    lat NUMERIC,
+    lng NUMERIC,
+    timestamp TIMESTAMPTZ DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_gps_logs_time ON gps_logs(timestamp);

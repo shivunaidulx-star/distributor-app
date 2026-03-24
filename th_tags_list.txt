@@ -1,0 +1,692 @@
+﻿
+app.js:1913:            <t
+head><tr><th>Business</th>
+<th>Phone</th><th>City</th
+><th>Date</th><th>Status</
+th><th></th></tr></thead>
+app.js:2062:              
+              <thead><tr><
+th>Date</th><th>Order #</t
+h><th>Party</th><th>Status
+</th><th>Total</th></tr></
+thead>
+app.js:2099:              
+      <table class="data-t
+able"><thead><tr><th>Order
+ #</th><th>Party</th><th>I
+nvoice</th><th>Status</th>
+</tr></thead>
+app.js:2125:              
+      <table class="data-t
+able"><thead><tr><th>Order
+ #</th><th>Party</th><th>I
+tems</th><th>Total</th></t
+r></thead>
+app.js:2131:              
+      <table class="data-t
+able"><thead><tr><th>Order
+ #</th><th>Party</th><th>I
+tems</th><th>Total</th></t
+r></thead>
+app.js:2272:        
+<table class="data-table">
+<thead><tr><th>Item</th><t
+h>Stock</th><th>Last Sold<
+/th></tr></thead><tbody>${
+nonMovingItems.slice(0, 
+8).map(i => `<tr><td style
+="font-weight:600">${i.nam
+e}</td><td><span 
+class="badge badge-danger"
+>${i.stock}</span></td><td
+ style="color:var(--text-m
+uted);font-size:0.82rem">$
+{itemLastSoldMap[i.id] ? f
+mtDate(itemLastSoldMap[i.i
+d]) : 'Never'}</td></tr>`)
+.join('')}</tbody></table>
+</div>` : ''}
+app.js:2274:        
+<table class="data-table">
+<thead><tr><th>Item</th><t
+h>Stock</th><th>Sold (90d)
+</th></tr></thead><tbody>$
+{slowMovingItems.slice(0, 
+8).map(i => `<tr><td style
+="font-weight:600">${i.nam
+e}</td><td><span 
+class="badge badge-info">$
+{i.stock}</span></td><td s
+tyle="font-weight:600;colo
+r:var(--warning)">${itemSa
+lesMap[i.id] || 0}</td></t
+r>`).join('')}</tbody></ta
+ble></div>` : ''}
+app.js:2279:            
+<table class="data-table">
+<thead><tr><th>Date</th><t
+h>Invoice #</th><th>Party<
+/th><th>Type</th><th>Amoun
+t</th></tr></thead>
+app.js:2460:              
+  <table 
+class="data-table" style="
+min-width:920px;width:100%
+"><thead><tr><th style="wi
+dth:36px;text-align:center
+"><input type="checkbox" 
+id="bulk-all-par" onchange
+="toggleSelectAllParties(t
+his)" style="width:16px;he
+ight:16px;cursor:pointer">
+</th>${ColumnManager.get('
+parties').filter(c => 
+c.visible).map(c => `<th>$
+{c.label}</th>`).join('')}
+</tr></thead>
+app.js:2906:            
+<thead><tr><th>Party 
+Code</th><th>Party 
+Name</th><th>Invoice No</t
+h><th>Date</th><th>Amount<
+/th><th>Action</th></tr></
+thead>
+app.js:3090:            
+<table class="data-table" 
+style="font-size:0.85rem">
+<thead><tr><th>Code</th><t
+h>Name</th><th>Type</th><t
+h>Phone</th><th>City</th><
+th>GSTIN</th><th>Address</
+th><th>Status</th><th></th
+></tr></thead>
+app.js:3159:              
+  <table class="data-table
+"><thead><tr><th>Category 
+Name</th><th>Sub-Categorie
+s</th><th>Actions</th></tr
+></thead>
+app.js:3387:              
+  <table 
+class="data-table" 
+id="inv-table" style="min-
+width:900px"><thead><tr><t
+h style="width:36px;text-a
+lign:center"><input 
+type="checkbox" 
+id="bulk-all-inv" onchange
+="toggleSelectAllItems(thi
+s)" style="width:16px;heig
+ht:16px;cursor:pointer"></
+th>${ColumnManager.get('in
+ventory').filter(c => 
+c.visible).map(c => `<th>$
+{c.label}</th>`).join('')}
+</tr></thead>
+app.js:4166:            <t
+h>Date</th><th>Type</th><t
+h>Doc #</th><th>MRP</th><t
+h>Qty</th><th>Balance</th>
+<th>Reason</th><th>By</th>
+app.js:4285:        if (pe
+ndingStockImports.length) 
+html += `<div style="max-h
+eight:300px;overflow-y:aut
+o;border:1px solid var(--b
+order);border-radius:var(-
+-radius-sm)"><table class=
+"data-table"><thead><tr><t
+h>Date</th><th>Item</th><t
+h>Type</th><th>Qty</th><th
+>New Stock</th></tr></thea
+d><tbody>${pendingStockImp
+orts.map(p => `<tr><td>${f
+mtDate(p.adjDate)}</td><td
+>${p.item.name}</td><td><s
+pan class="badge 
+${p.actualQty > 0 ? 
+'badge-success' : 'badge-d
+anger'}">${p.entryType}</s
+pan></td><td style="font-w
+eight:700;color:${p.actual
+Qty > 0 ? 
+'var(--success)' : 'var(--
+danger)'}">${p.actualQty 
+> 0 ? '+' : ''}${p.actualQ
+ty}</td><td>${p.item.stock
+ + p.actualQty}</td></tr>`
+).join('')}</tbody></table
+></div>`;
+app.js:4417:        if (pe
+ndingItemImports.length) 
+html += `<div style="max-h
+eight:300px;overflow-y:aut
+o;border:1px solid var(--b
+order);border-radius:var(-
+-radius-sm)"><table class=
+"data-table"><thead><tr><t
+h>Name</th><th>Cat / 
+Sub</th><th>Sale </th><th>
+Action</th></tr></thead><t
+body>${pendingItemImports.
+map(p => `<tr><td>${p.name
+}</td><td>${p.category} > 
+${p.subCategory}</td><td>$
+{currency(p.salePrice)}</t
+d><td><span class="badge 
+${p.isUpdate ? 
+'badge-warning' : 'badge-s
+uccess'}">${p.isUpdate ? 
+'Update' : 'New'}</span></
+td></tr>`).join('')}</tbod
+y></table></div>`;
+app.js:4530:              
+  <table class="data-table
+"><thead><tr>${isApprover 
+? `<th 
+style="width:36px"><input 
+type="checkbox" 
+id="so-select-all" 
+title="Select all 
+pending" onchange="soToggl
+eAll(this.checked)"></th>`
+ : '<th style="width:36px"
+></th>'}${ColumnManager.ge
+t('salesorders').filter(c 
+=> c.visible).map(c => `<t
+h>${c.label}</th>`).join('
+')}</tr></thead>
+app.js:5260:        
+<table class="data-table">
+<thead><tr><th>SL</th><th>
+Item</th><th>Qty</th><th>L
+isted</th><th>Rate</th><th
+>Dis%</th><th>Dis</th><th>
+Amount</th></tr></thead>
+app.js:5461:            
+<table class="data-table" 
+style="min-width:700px"><t
+head><tr>${ColumnManager.g
+et('purchaseorders').filte
+r(c => c.visible).map(c 
+=> `<th>${c.label}</th>`).
+join('')}</tr></thead>
+app.js:5525:              
+  <thead><tr><th>Date</th>
+<th>Invoice #</th><th>Supp
+lier</th><th>From 
+PO</th><th>Items</th><th s
+tyle="text-align:right">To
+tal</th><th>Status</th><th
+>Actions</th></tr></thead>
+app.js:5575:            <t
+head><tr><th>Item</th><th>
+Qty</th><th>Rate</th><th s
+tyle="text-align:right">Am
+ount</th></tr></thead>
+app.js:5810:        
+<table class="data-table">
+<thead><tr><th>Item</th><t
+h>Qty</th><th>Rate</th><th
+>Amount</th></tr></thead>
+app.js:5915:              
+  <table 
+class="data-table" id="tbl
+-invoices"><thead><tr><th 
+style="width:32px"><input 
+type="checkbox" 
+id="inv-check-all" 
+title="Select All" onchang
+e="document.querySelectorA
+ll('.inv-chk').forEach(c=>
+c.checked=this.checked)"><
+/th>${ColumnManager.get('i
+nvoices').filter(c => 
+c.visible).map(c => `<th>$
+{c.label}</th>`).join('')}
+</tr></thead>
+app.js:6015:              
+  <thead><tr><th>Date</th>
+<th>Receipt #</th><th>Mode
+</th><th>Amount</th><th>St
+atus</th><th>Link</th></tr
+></thead>
+app.js:6201:            
+<thead style="background:v
+ar(--bg-input)"><tr><th>Da
+te</th><th>Available 
+</th><th>Apply 
+</th></tr></thead>
+app.js:6816:        
+<table class="data-table">
+<thead><tr><th>SL</th><th>
+Item</th><th>Qty</th><th>R
+ate</th><th>Amount</th></t
+r></thead>
+app.js:6824:              
+      <thead style="backgr
+ound:var(--bg-input)"><tr>
+<th>Date</th><th>Voucher #
+</th><th>Mode</th><th>Note
+</th><th>Amount</th></tr><
+/thead>
+app.js:7297:        
+<th>Item Name</th>
+app.js:7331:          
+<tr><th>Tax type</th><th 
+class="tr">Taxable 
+amount</th><th 
+class="tr">Rate</th><th 
+class="tr">Tax 
+amount</th></tr>
+app.js:7543:              
+  <table 
+class="data-table" id="tbl
+-payments"><thead><tr>${Co
+lumnManager.get('payments'
+).filter(c => 
+c.visible).map(c => `<th>$
+{c.label}</th>`).join('')}
+</tr></thead>
+app.js:8689:              
+      <thead style="backgr
+ound:var(--bg-input)"><tr>
+<th>Invoice #</th><th>Due<
+/th><th>Allocate 
+</th></tr></thead>
+app.js:8992:              
+  <thead><tr>${ColumnManag
+er.get('expenses').filter(
+c => c.visible).map(c => `
+<th>${c.label}</th>`).join
+('')}</tr></thead>
+app.js:9120:              
+  <table class="data-table
+"><thead><tr>${ColumnManag
+er.get('packing').filter(c
+ => c.visible).map(c => `<
+th>${c.label}</th>`).join(
+'')}</tr></thead>
+app.js:9143:              
+  <table class="data-table
+"><thead><tr><th>Order #</
+th><th>Party</th><th>Flagg
+ed By</th><th>Reason</th><
+th>Notes</th><th>Line 
+Status</th>${isAdmin ? 
+'<th>Actions</th>' : 
+''}</tr></thead>
+app.js:9171:              
+      <th>Order #</th><th>
+Party</th><th>Packer</th><
+th>Time</th><th>Packages</
+th><th>Total</th><th>Actio
+ns</th>
+app.js:9192:              
+  <table class="data-table
+"><thead><tr><th>Order #</
+th><th>Party</th><th>Packe
+r</th><th>Time</th><th>Pac
+kages</th><th>Invoice</th>
+<th>Total</th></tr></thead
+>
+app.js:9606:              
+  <thead><tr><th>SL</th><t
+h>Item</th><th>Ordered</th
+><th>Picked Qty</th><th>Pi
+cked?</th></tr></thead>
+app.js:9960:              
+  <th>#</th><th>Order</th>
+<th>Party</th>
+app.js:9961:              
+  <th>Invoice 
+No</th><th>Vyapar 
+No</th><th style="text-ali
+gn:right">Amount</th>
+app.js:10138:             
+       <th>Order #</th><th
+>Invoice</th><th>Party</th
+><th>Total</th><th>Action<
+/th>
+app.js:10159:             
+   <table class="data-tabl
+e"><thead><tr>${ColumnMana
+ger.get('delivery').filter
+(c => c.visible).map(c => 
+`<th>${c.label}</th>`).joi
+n('')}</tr></thead>
+app.js:11084:            
+let html = '<div class="ta
+ble-wrapper"><table 
+class="data-table" id="tbl
+-allocations"><thead><tr><
+th>Collector</th><th>Invoi
+ce No</th><th>Date</th><th
+>Customer</th><th>Total Am
+t</th><th>Paid</th><th>Bal
+ance</th><th>Assigned On</
+th><th>Action</th></tr></t
+head><tbody>';
+app.js:11155:            
+let html = '<div class="ta
+ble-wrapper"><table 
+class="data-table" id="tbl
+-aging"><thead><tr><th>Ite
+m Name</th><th>Code</th><t
+h>Current 
+Stock</th><th>0-30 
+Days</th><th>31-60 
+Days</th><th>61-90 
+Days</th><th>>90 Days</th>
+<th>Expiry</th></tr></thea
+d><tbody>';
+app.js:11238:            
+let html = '<div class="ta
+ble-wrapper"><table 
+class="data-table" id="tbl
+-salesman-ach"><thead><tr>
+<th>Salesman</th><th>Targe
+t</th><th>Achievement</th>
+<th>Achievement %</th><th>
+Collections</th></tr></the
+ad><tbody>';
+app.js:11305:             
+       <div class="table-w
+rapper"><table 
+class="data-table" id="tbl
+-soa"><thead><tr><th>Date<
+/th><th>Type</th><th>Ref N
+o</th><th>Description</th>
+<th>Debit 
+(Out)</th><th>Credit (In)<
+/th><th>Balance</th></tr><
+/thead><tbody>`;
+app.js:11350:            
+let html = '<div class="ta
+ble-wrapper"><table 
+class="data-table" id="tbl
+-abc"><thead><tr><th>Rank<
+/th><th>Item 
+Name</th><th>Revenue 
+()</th><th>% 
+Share</th><th>Cumul %</th>
+<th>Class</th></tr></thead
+><tbody>';
+app.js:11503:             
+   <thead><tr><th>Date</th
+><th>Vyapar Invoice No</th
+><th>Party</th><th>Item</t
+h><th>Qty</th><th>Unit</th
+><th>Rate</th><th>Amount</
+th><th>GST%</th><th>Total<
+/th></tr></thead>
+app.js:11528:             
+   <thead><tr><th>Date</th
+><th>Receipt No</th><th>Pa
+rty</th><th>Invoice No</th
+><th>Mode</th><th>Ref</th>
+<th>Collected By</th><th s
+tyle="text-align:right">Am
+ount</th></tr></thead>
+app.js:11791:             
+   <th>#</th>
+app.js:11792:             
+   <th>Customer Name</th>
+app.js:11793:             
+   <th>Phone</th>
+app.js:11794:             
+   <th>Address</th>
+app.js:11796:             
+   <th>Last Sale</th>
+app.js:11797:             
+   <th>Days Inactive</th>
+app.js:11798:             
+   <th>Assigned To</th>
+app.js:11799:             
+   <th>Action</th>
+app.js:11943:             
+   
+<th>Date</th><th>Voucher 
+No</th><th>Party</th>
+app.js:11944:             
+   <th>Type</th><th>Mode</
+th><th>Allocated 
+Invoices</th>
+app.js:11946:             
+   <th>Collected 
+By</th><th>Note</th>
+app.js:12005:        <thea
+d><tr><th>Date</th><th>Inv
+oice</th><th>Party</th><th
+>Salesman</th><th style="t
+ext-align:right">Amount</t
+h></tr></thead>
+app.js:12031:            <
+thead><tr><th>Date</th><th
+>Invoice</th><th>Supplier<
+/th><th>Created 
+By</th><th style="text-ali
+gn:right">Amount</th></tr>
+</thead>
+app.js:12196:            <
+thead><tr><th>Date</th><th
+>Invoice</th><th>Party</th
+><th>Salesman</th><th styl
+e="text-align:right">Reven
+ue</th><th style="text-ali
+gn:right">Cost</th><th sty
+le="text-align:right">Prof
+it</th><th style="text-ali
+gn:right">Margin</th></tr>
+</thead>
+app.js:12247:            <
+thead><tr><th>Item</th><th
+>Category</th><th>Unit</th
+><th style="text-align:rig
+ht">Stock</th><th style="t
+ext-align:right">Purchase 
+Price</th><th style="text-
+align:right">Stock 
+Value</th></tr></thead>
+app.js:12342:            <
+thead><tr><th>Party</th><t
+h>Type</th><th>Pending 
+Inv.</th><th>Last 
+Payment</th><th style="tex
+t-align:right">Oldest 
+Age</th><th style="text-al
+ign:right">Balance</th><th
+>Status</th></tr></thead>
+app.js:12474:             
+       <th>Invoice 
+#</th><th>Party</th><th st
+yle="text-align:center">Da
+te</th>
+app.js:12509:            <
+thead><tr><th>Category</th
+><th style="text-align:rig
+ht">Amount</th><th style="
+text-align:right">%</th></
+tr></thead>
+app.js:12518:            <
+thead><tr><th>Date</th><th
+>Category</th><th>Note</th
+><th>Added By</th><th styl
+e="text-align:right">Amoun
+t</th></tr></thead>
+app.js:12557:            
+<thead><tr><th>Voucher 
+#</th><th>Pay 
+Date</th><th>Cheque #</th>
+<th>Party</th><th>Bank</th
+><th>Deposit Date</th><th 
+style="text-align:right">A
+mount</th><th>Status</th><
+th>Action</th></tr></thead
+>
+app.js:12613:             
+   <thead><tr><th>Salesman
+</th><th style="text-align
+:right">Invoices</th><th s
+tyle="text-align:right">Sa
+les </th><th style="text-a
+lign:right">Receipts</th><
+th style="text-align:right
+">Collections </th><th sty
+le="text-align:right">Coll
+ection %</th></tr></thead>
+app.js:12667:             
+   <thead><tr><th>Date</th
+><th>Type</th><th>Ref 
+#</th><th>Party / 
+Note</th><th style="text-a
+lign:right">Inflow 
+</th><th style="text-align
+:right">Outflow </th><th>B
+y</th></tr></thead>
+app.js:12767:             
+               
+<tr><th>Item</th><th style
+="text-align:right">Ord 
+Qty</th><th style="text-al
+ign:right">Ord 
+Value</th><th style="text-
+align:right;border-left:2p
+x solid 
+var(--border)">Inv 
+Qty</th><th style="text-al
+ign:right">Inv 
+Value</th></tr>
+app.js:12852:             
+           <tr><th>Date</t
+h><th>Voucher No</th><th>M
+ode</th><th>Allocated Invo
+ices</th><th>Party</th><th
+>Collected By</th><th styl
+e="text-align:right">Amt 
+Received</th><th style="te
+xt-align:right">Discount</
+th><th style="text-align:r
+ight">Total 
+Payment</th></tr>
+app.js:12903:             
+   <table class="data-tabl
+e"><thead><tr><th>Name</th
+><th>Phone</th><th>Actions
+</th></tr></thead>
+app.js:12947:             
+   <table class="data-tabl
+e"><thead><tr><th>Name</th
+><th>Phone</th><th>Vehicle
+</th><th>Actions</th></tr>
+</thead>
+app.js:12995:             
+       <thead><tr><th>Name
+</th><th>User ID</th><th>R
+oles</th><th>PIN</th><th>A
+ctions</th></tr></thead>
+app.js:13015:            <
+thead><tr><th>Role</th><th
+>Access</th></tr></thead>
+app.js:13410:             
+               
+<th>Code</th>
+app.js:13411:             
+               
+<th>Description</th>
+app.js:13412:             
+               
+<th>Prefix</th>
+app.js:13413:             
+               <th>FY</th>
+app.js:13414:             
+               <th>Last 
+No</th>
+app.js:13415:             
+               
+<th>Status</th>
+app.js:13603:             
+       
+<thead><tr><th>Term 
+Name</th><th style="width:
+110px">Days</th><th style=
+"width:50px"></th></tr></t
+head>
+app.js:14073:             
+               <tr><th>Dat
+e</th><th>Type</th><th>Ref
+ #</th><th>Doc Bal</th><th
+>Dr/Cr</th><th>Balance</th
+><th>Reason</th><th>By</th
+>${canEdit() ? 
+'<th>Actions</th>' : 
+''}</tr>
+app.js:14210:             
+       
+<tr><th>Transaction 
+Date</th><th>Ref 
+No</th><th>Transaction 
+Type</th><th>Linked 
+Invoice</th><th style="tex
+t-align:right">Linked 
+Amount</th></tr>
+app.js:14392:             
+   <table class="data-tabl
+e"><thead><tr><th>Unit 
+Name</th><th>Short Code</t
+h><th>Description</th><th>
+Actions</th></tr></thead>
+app.js:14877:             
+   <table class="data-tabl
+e"><thead><tr><th>Item</th
+><th>Qty</th><th>Unit</th>
+<th>Price</th><th>Amount</
+th><th></th></tr></thead>
+app.js:15086:             
+   <table class="data-tabl
+e"><thead><tr><th>Brand Na
+me</th><th>Description</th
+><th>Actions</th></tr></th
+ead>
+app.js:15955:        <thea
+d><tr><th>Name</th><th>Rol
+e</th><th>Phone</th><th>Mo
+nthly Salary</th><th>Join 
+Date</th><th>Status</th><t
+h>Actions</th></tr></thead
+>
+app.js:16097:        <thea
+d><tr><th>Staff</th><th>${
+rangeMode ? 'Bulk Range 
+Action' : 'Mark 
+Attendance'}</th><th style
+="text-align:center">This 
+Month (${selMonth})</th></
+tr></thead>
+app.js:16375:        <thea
+d><tr><th>Staff</th><th>Sa
+lary/Mo</th><th style="tex
+t-align:center">P</th><th 
+style="text-align:center">
+</th><th style="text-align
+:center">Eff.Days</th><th 
+style="text-align:right">E
+arned</th><th style="text-
+align:right">Adv 
+Balance</th><th style="tex
+t-align:right">Deducting</
+th><th style="text-align:r
+ight">Net Payable</th><th>
+Status</th><th>Actions</th
+></tr></thead>
+app.js:16410:        <thea
+d><tr><th>Staff</th><th>Da
+te</th><th style="text-ali
+gn:right">Given</th><th st
+yle="text-align:right">Ded
+ucted</th><th style="text-
+align:right">Balance</th><
+th>Notes</th><th>Action</t
+h></tr></thead>
+
+

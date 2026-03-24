@@ -4784,7 +4784,49 @@ async function renderSalesOrders() {
     orders.sort((a, b) => soStatusRank(a) - soStatusRank(b) || (b.date || '').localeCompare(a.date || ''));
     const isApprover = currentUser.role === 'Admin' || currentUser.role === 'Manager';
     const p = orders.filter(o => o.status === 'pending'), a = orders.filter(o => o.status === 'approved'), r = orders.filter(o => o.status === 'rejected');
-    pageContent.innerHTML = `
+    const isMobile = window.innerWidth < 768;
+
+    if (isMobile) {
+        pageContent.innerHTML = `
+        <!-- Compact Stats -->
+        <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:10px 12px;margin-bottom:10px">
+            <div style="display:flex;gap:0">
+                <div style="flex:1;text-align:center;border-right:1px solid var(--border);padding-right:8px">
+                    <div style="font-size:0.65rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">Pending</div>
+                    <div style="font-size:1.2rem;font-weight:800;color:#f59e0b">${p.length}</div>
+                </div>
+                <div style="flex:1;text-align:center;border-right:1px solid var(--border);padding:0 8px">
+                    <div style="font-size:0.65rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">Approved</div>
+                    <div style="font-size:1.2rem;font-weight:800;color:var(--success)">${a.length}</div>
+                </div>
+                <div style="flex:1;text-align:center;padding-left:8px">
+                    <div style="font-size:0.65rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">Rejected</div>
+                    <div style="font-size:1.2rem;font-weight:800;color:var(--danger)">${r.length}</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Compact Filter Strip -->
+        <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:10px">
+            <div style="display:flex;gap:6px;align-items:center;">
+                <input type="text" id="so-search" placeholder="Search orders..." oninput="filterSOTable()" style="flex:1;font-size:0.82rem;padding:7px 10px;border:1px solid var(--border);border-radius:7px;background:var(--bg-input);">
+                <button onclick="toggleSoFilters()" id="so-filter-toggle" style="border:1px solid var(--border);background:var(--bg-input);border-radius:7px;padding:7px 10px;font-size:0.85rem;cursor:pointer;flex-shrink:0">⚙️</button>
+                <button class="btn btn-primary btn-sm" onclick="openSalesOrderModal()" style="white-space:nowrap;padding:7px 14px;flex-shrink:0">+ Order</button>
+            </div>
+            <div id="so-extra-filters" style="display:none;margin-top:8px">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+                    <select id="so-status-filter" onchange="filterSOTable()" style="padding:7px;border:1px solid var(--border);border-radius:7px;font-size:0.78rem;background:var(--bg-input)"><option value="">All Status</option><option value="pending">Pending</option><option value="approved">Approved</option><option value="rejected">Rejected</option></select>
+                    <select id="so-priority-filter" onchange="filterSOTable()" style="padding:7px;border:1px solid var(--border);border-radius:7px;font-size:0.78rem;background:var(--bg-input)"><option value="">All Priority</option><option value="Urgent">Urgent</option><option value="Normal">Normal</option></select>
+                    <select id="so-sort" onchange="filterSOTable()" style="grid-column:span 2;padding:7px;border:1px solid var(--border);border-radius:7px;font-size:0.78rem;background:var(--bg-input)"><option value="date-desc">Sort: Date (Newest)</option><option value="date-asc">Sort: Date (Oldest)</option><option value="delivery-asc">Delivery (Earliest)</option><option value="delivery-desc">Delivery (Latest)</option></select>
+                </div>
+            </div>
+        </div>
+
+        <div id="so-list">${renderSoCards(orders, isApprover)}</div>
+        <tbody id="so-tbody" style="display:none"></tbody>
+        <table id="tbl-salesorders" style="display:none"><tbody></tbody></table>`;
+    } else {
+        pageContent.innerHTML = `
         <div class="stats-grid" style="margin-bottom:18px">
             <div class="stat-card amber"><div class="stat-icon"></div><div class="stat-value">${p.length}</div><div class="stat-label">Pending</div></div>
             <div class="stat-card green"><div class="stat-icon"></div><div class="stat-value">${a.length}</div><div class="stat-label">Approved</div></div>
@@ -4808,6 +4850,50 @@ async function renderSalesOrders() {
                 <tbody id="so-tbody">${renderSORows(orders, isApprover)}</tbody></table>
             </div>
         </div></div>`;
+    }
+}
+function toggleSoFilters() {
+    const extra = $('so-extra-filters');
+    const btn = $('so-filter-toggle');
+    if (!extra) return;
+    const open = extra.style.display !== 'none';
+    extra.style.display = open ? 'none' : 'block';
+    if (btn) {
+        btn.style.background = open ? 'var(--bg-input)' : 'var(--primary)';
+        btn.style.color = open ? '' : '#fff';
+    }
+}
+function renderSoCards(orders, isApprover) {
+    if (!orders.length) return `<div style="text-align:center;padding:40px 20px;color:var(--text-muted)"><div style="font-size:2rem;margin-bottom:8px">📦</div><div>No orders found</div></div>`;
+    return orders.map(o => {
+        const disp = getOrderDisplayStatusSync(o);
+        const isUrgent = o.isUrgent;
+        const delDate = o.expectedDeliveryDate ? `<span style="font-size:0.75rem;color:${new Date(o.expectedDeliveryDate) < new Date() && o.status !== 'delivered' ? 'var(--danger)' : 'var(--text-muted)'}">Delivery: ${fmtDate(o.expectedDeliveryDate)}</span>` : '';
+        return `<div data-so-id="${o.id}" style="background:var(--bg-card);border:1px solid var(--border);${isUrgent ? 'border-left:3px solid var(--danger);' : ''}border-radius:12px;padding:12px 14px;margin-bottom:10px;box-shadow:0 1px 4px rgba(0,0,0,0.05);position:relative" onclick="viewSalesOrder('${o.id}')">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
+                <div style="display:flex;flex-direction:column;gap:2px;flex:1;min-width:0;padding-right:8px">
+                    <div style="font-weight:700;font-size:1rem;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(o.partyName)}</div>
+                    <div style="font-size:0.75rem;color:var(--text-muted)">#${o.orderNo} · ${fmtDate(o.date)}</div>
+                </div>
+                <div style="text-align:right">
+                    <div style="font-size:1.1rem;font-weight:800;color:var(--text-primary)">${currency(o.total)}</div>
+                    <div style="font-size:0.7rem;color:var(--text-muted)">Total</div>
+                </div>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">
+                <div style="display:flex;flex-direction:column;gap:2px">
+                    <span class="badge ${disp.class}" style="font-size:0.65rem;padding:2px 6px;text-transform:capitalize;align-self:flex-start">${disp.text}${isUrgent ? ' (URGENT)' : ''}</span>
+                    ${delDate}
+                </div>
+                <div style="display:flex;gap:4px;align-items:center" onclick="event.stopPropagation()">
+                    ${o.status === 'pending' && isApprover ? `<button class="btn-icon" style="color:var(--success)" onclick="approveSalesOrder('${o.id}')" title="Approve"><span class="material-symbols-outlined" style="font-size:1.1rem">check_circle</span></button>` : ''}
+                    ${o.status === 'pending' && isApprover ? `<button class="btn-icon" style="color:var(--danger)" onclick="rejectSalesOrder('${o.id}')" title="Reject"><span class="material-symbols-outlined" style="font-size:1.1rem">cancel</span></button>` : ''}
+                    <button class="btn btn-outline btn-sm" style="padding:4px 8px;font-size:0.75rem;border-radius:6px" onclick="duplicateSalesOrder('${o.id}')">Duplicate</button>
+                    ${(o.status === 'pending' || (o.status === 'approved' && !o.packed && !o.invoiceNo)) && isApprover ? `<button class="btn btn-outline btn-sm" style="padding:4px 8px;font-size:0.75rem;border-radius:6px" onclick="editSalesOrder('${o.id}')">Edit</button>` : ''}
+                </div>
+            </div>
+        </div>`;
+    }).join('');
 }
 function getOrderDisplayStatusSync(o) {
     if (o.status !== 'approved') return { text: o.status, class: o.status === 'rejected' ? 'badge-danger' : 'badge-warning' };
@@ -4946,7 +5032,12 @@ async function filterSOTable() {
         return (b.date || '').localeCompare(a.date || '');
     });
     const isApprover = currentUser.role === 'Admin' || currentUser.role === 'Manager';
-    $('so-tbody').innerHTML = renderSORows(orders, isApprover);
+    const isMobile = window.innerWidth < 768;
+    if (isMobile) {
+        if ($('so-list')) $('so-list').innerHTML = renderSoCards(orders, isApprover);
+    } else {
+        if ($('so-tbody')) $('so-tbody').innerHTML = renderSORows(orders, isApprover);
+    }
     soUpdateBulkBtn();
 }
 async function openSalesOrderModal() {
@@ -6327,7 +6418,47 @@ async function renderInvoices() {
     const totalSale = sales.reduce((s, i) => s + i.total, 0);
     const balanceDue = sales.reduce((s, i) => s + Math.max(0, i.total - (pm[i.invoiceNo] || 0)), 0);
 
-    pageContent.innerHTML = `
+    const isMobile = window.innerWidth < 768;
+
+    if (isMobile) {
+        pageContent.innerHTML = `
+        <!-- Compact Stats -->
+        <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:10px 12px;margin-bottom:10px">
+            <div style="display:flex;gap:0">
+                <div style="flex:1;text-align:center;border-right:1px solid var(--border);padding-right:8px">
+                    <div style="font-size:0.65rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">Total Sale</div>
+                    <div style="font-size:1.2rem;font-weight:800;color:var(--text-primary)">${currency(totalSale)}</div>
+                </div>
+                <div style="flex:1;text-align:center;padding-left:8px">
+                    <div style="font-size:0.65rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">Balance Due</div>
+                    <div style="font-size:1.2rem;font-weight:800;color:var(--danger)">${currency(balanceDue)}</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Compact Filter Strip -->
+        <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:10px">
+            <div style="display:flex;gap:6px;align-items:center;">
+                <input type="date" id="inv-f-from" value="${today()}" onchange="filterInvTable2()" style="flex:1;font-size:0.78rem;padding:7px 8px;border:1px solid var(--border);border-radius:7px;background:var(--bg-input)">
+                <span style="color:var(--text-muted);font-size:0.8rem">–</span>
+                <input type="date" id="inv-f-to" value="${today()}" onchange="filterInvTable2()" style="flex:1;font-size:0.78rem;padding:7px 8px;border:1px solid var(--border);border-radius:7px;background:var(--bg-input)">
+                <button onclick="toggleInvFilters()" id="inv-filter-toggle" style="border:1px solid var(--border);background:var(--bg-input);border-radius:7px;padding:7px 10px;font-size:0.85rem;cursor:pointer;flex-shrink:0">⚙️</button>
+                <button class="btn btn-primary btn-sm" onclick="openInvoiceModal('sale')" style="white-space:nowrap;padding:7px 14px;flex-shrink:0">+ Sale</button>
+            </div>
+            <div id="inv-extra-filters" style="display:none;margin-top:8px">
+                <input type="text" id="inv-search2" placeholder="Party / Invoice #..." style="width:100%;margin-bottom:6px;padding:7px 10px;border:1px solid var(--border);border-radius:7px;font-size:0.82rem;background:var(--bg-input);box-sizing:border-box" oninput="filterInvTable2()">
+                <div style="display:flex;gap:6px">
+                    <select id="inv-type-filter" onchange="filterInvTable2()" style="flex:1;padding:7px;border:1px solid var(--border);border-radius:7px;font-size:0.78rem;background:var(--bg-input)"><option value="">All Types</option><option value="sale">Sale</option><option value="purchase">Purchase</option></select>
+                    <button class="btn btn-outline btn-sm" style="flex:1;padding:7px" onclick="openInvoiceModal('purchase')">+ Purchase</button>
+                </div>
+            </div>
+        </div>
+        
+        <div id="invoice-list">${renderInvoiceCards(visibleInvoices)}</div>
+        <tbody id="invoice-tbody" style="display:none"></tbody>
+        <table id="tbl-invoices" style="display:none"><tbody></tbody></table>`;
+    } else {
+        pageContent.innerHTML = `
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
             <div style="background:#fff;border-radius:12px;padding:14px 16px;box-shadow:0 1px 6px rgba(0,0,0,0.08)">
                 <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:4px">Total Sale</div>
@@ -6354,18 +6485,29 @@ async function renderInvoices() {
             </div>
         </div>
 
-        ${window.innerWidth < 768
-            ? `<div id="invoice-list">${renderInvoiceCards(visibleInvoices)}</div>`
-            : `<div class="card"><div class="card-body" style="padding:0"><div class="table-wrapper">
-                <table class="data-table" id="tbl-invoices"><thead><tr>
-                    <th style="width:32px"><input type="checkbox" id="inv-check-all" title="Select All" onchange="document.querySelectorAll('.inv-chk').forEach(c=>c.checked=this.checked)"></th>
-                    ${ColumnManager.get('invoices').filter(c => c.visible).map(c => `<th>${c.label}</th>`).join('')}
-                </tr></thead>
-                <tbody id="invoice-tbody">${renderInvoiceRows(visibleInvoices)}</tbody></table>
-            </div></div></div>`
-        }`;
+        <div class="card"><div class="card-body" style="padding:0"><div class="table-wrapper">
+            <table class="data-table" id="tbl-invoices"><thead><tr>
+                <th style="width:32px"><input type="checkbox" id="inv-check-all" title="Select All" onchange="document.querySelectorAll('.inv-chk').forEach(c=>c.checked=this.checked)"></th>
+                ${ColumnManager.get('invoices').filter(c => c.visible).map(c => `<th>${c.label}</th>`).join('')}
+            </tr></thead>
+            <tbody id="invoice-tbody">${renderInvoiceRows(visibleInvoices)}</tbody></table>
+        </div></div></div>
+        <div id="invoice-list" style="display:none"></div>`;
+    }
 
     initSwipeActions();
+}
+
+function toggleInvFilters() {
+    const extra = $('inv-extra-filters');
+    const btn = $('inv-filter-toggle');
+    if (!extra) return;
+    const open = extra.style.display !== 'none';
+    extra.style.display = open ? 'none' : 'block';
+    if (btn) {
+        btn.style.background = open ? 'var(--bg-input)' : 'var(--primary)';
+        btn.style.color = open ? '' : '#fff';
+    }
 }
 
 function exportInvoiceList() {
@@ -10267,7 +10409,82 @@ function renderPacking() {
         return (!savedFrom || d >= savedFrom) && (!savedTo || d <= savedTo);
     });
 
-    pageContent.innerHTML = `
+    const isMobile = window.innerWidth < 768;
+
+    if (isMobile) {
+        pageContent.innerHTML = `
+        <!-- Compact Stats -->
+        <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:10px 12px;margin-bottom:10px">
+            <div style="display:flex;gap:0;margin-bottom:8px">
+                <div style="flex:1;text-align:center;border-right:1px solid var(--border);padding-right:8px">
+                    <div style="font-size:0.65rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">Ready</div>
+                    <div style="font-size:1.2rem;font-weight:800;color:#f59e0b">${readyToPackRows.length}</div>
+                </div>
+                <div style="flex:1;text-align:center;padding-left:8px">
+                    <div style="font-size:0.65rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">Awaiting Inv</div>
+                    <div style="font-size:1.2rem;font-weight:800;color:#3b82f6">${packedNoInvoice.length}</div>
+                </div>
+            </div>
+            <div style="display:flex;gap:0;border-top:1px solid var(--border);padding-top:8px">
+                <div style="flex:1;text-align:center;border-right:1px solid var(--border);padding-right:8px">
+                    <div style="font-size:0.65rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">History</div>
+                    <div style="font-size:1.2rem;font-weight:800;color:var(--success)">${packedWithInvoice.length}</div>
+                </div>
+                <div style="flex:1;text-align:center;padding-left:8px">
+                    <div style="font-size:0.65rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">Flagged</div>
+                    <div style="font-size:1.2rem;font-weight:800;color:var(--danger)">${cannotCompleteOrders.length}</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Filter Strip -->
+        <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:14px">
+            <div style="display:flex;gap:6px;align-items:center;">
+                <input type="date" id="pick-from" value="${window._pickListFrom||''}" onchange="window._pickListFrom=this.value" style="flex:1;font-size:0.78rem;padding:7px 8px;border:1px solid var(--border);border-radius:7px;background:var(--bg-input)">
+                <span style="color:var(--text-muted);font-size:0.8rem">–</span>
+                <input type="date" id="pick-to" value="${window._pickListTo||today()}" onchange="window._pickListTo=this.value" style="flex:1;font-size:0.78rem;padding:7px 8px;border:1px solid var(--border);border-radius:7px;background:var(--bg-input)">
+                <button onclick="togglePackFilters()" id="pack-filter-toggle" style="border:1px solid var(--border);background:var(--bg-input);border-radius:7px;padding:7px 10px;font-size:0.85rem;cursor:pointer;flex-shrink:0">⚙️</button>
+            </div>
+            <div id="pack-extra-filters" style="display:none;margin-top:8px">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+                    <select id="pick-warehouse" onchange="window._pickListWarehouse=this.value" style="padding:7px;border:1px solid var(--border);border-radius:7px;font-size:0.75rem;background:var(--bg-input)">
+                        <option value="" ${!window._pickListWarehouse?'selected':''}>All Warehouses</option>
+                        <option value="Main Warehouse" ${window._pickListWarehouse==='Main Warehouse'?'selected':''}>Main</option>
+                        <option value="Store" ${window._pickListWarehouse==='Store'?'selected':''}>Store</option>
+                        <option value="Van Stock" ${window._pickListWarehouse==='Van Stock'?'selected':''}>Van</option>
+                    </select>
+                    <select id="pick-report-type" onchange="window._pickListReportType=this.value" style="padding:7px;border:1px solid var(--border);border-radius:7px;font-size:0.75rem;background:var(--bg-input)">
+                        <option value="item" ${window._pickListReportType!=='invoice'?'selected':''}>📦 Item</option>
+                        <option value="invoice" ${window._pickListReportType==='invoice'?'selected':''}>🧾 Invoice</option>
+                    </select>
+                    <button class="btn btn-outline btn-sm" onclick="printPickListPdf()" style="grid-column:span 2;padding:7px">📋 Pick List PDF</button>
+                </div>
+            </div>
+        </div>
+
+        <h3 style="margin-bottom:10px;font-size:1rem;color:var(--text-primary)"> Orders Ready for Packing</h3>
+        <div>${renderReadyToPackCards(readyToPackRows, isAdmin)}</div>
+
+        ${cannotCompleteOrders.length ? `<h3 style="margin-top:16px;margin-bottom:10px;font-size:1rem;color:var(--danger)"> Cannot Complete</h3>
+        <div>${renderCannotCompleteCards(cannotCompleteOrders, isAdmin)}</div>` : ''}
+
+        ${packedNoInvoice.length ? `<div style="display:flex;justify-content:space-between;align-items:center;margin-top:16px;margin-bottom:10px">
+            <h3 style="margin:0;font-size:1rem;color:#3b82f6"> Packed (Awaiting Invoice)</h3>
+            ${isAdmin ? `<button class="btn btn-primary btn-sm" style="padding:4px 10px;font-size:0.75rem" onclick="bulkGenerateInvoicesFromPacked()">Bulk</button>` : ''}
+        </div>
+        <div>${renderPackedNoInvoiceCards(packedNoInvoice, isAdmin)}</div>` : ''}
+
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:16px;margin-bottom:10px">
+            <h3 style="margin:0;font-size:1rem;color:var(--success)"> Packed History</h3>
+            <div style="display:flex;gap:4px">
+                <input type="date" value="${savedFrom}" onchange="window._packHistFrom=this.value;renderPacking()" style="width:105px;font-size:0.75rem;padding:4px 6px">
+                <input type="date" value="${savedTo}" onchange="window._packHistTo=this.value;renderPacking()" style="width:105px;font-size:0.75rem;padding:4px 6px">
+            </div>
+        </div>
+        <div>${renderPackedHistoryCards(filteredHistory)}</div>
+        `;
+    } else {
+        pageContent.innerHTML = `
         <div class="stats-grid" style="margin-bottom:18px">
             <div class="stat-card amber"><div class="stat-icon"></div><div class="stat-value">${readyToPackRows.length}</div><div class="stat-label">Ready to Pack</div></div>
             <div class="stat-card blue"><div class="stat-icon"></div><div class="stat-value">${packedNoInvoice.length}</div><div class="stat-label">Awaiting Invoice</div></div>
@@ -10383,6 +10600,112 @@ function renderPacking() {
                 </tr>`; }).join('') : '<tr><td colspan="8" class="empty-state"><p>No packed history for selected range</p></td></tr>'}</tbody></table>
             </div>
         </div></div>`;
+    }
+}
+
+function togglePackFilters() {
+    const extra = $('pack-extra-filters');
+    const btn = $('pack-filter-toggle');
+    if (!extra) return;
+    const open = extra.style.display !== 'none';
+    extra.style.display = open ? 'none' : 'block';
+    if (btn) {
+        btn.style.background = open ? 'var(--bg-input)' : 'var(--primary)';
+        btn.style.color = open ? '' : '#fff';
+    }
+}
+
+function renderReadyToPackCards(orders, isAdmin) {
+    if (!orders.length) return '<div style="text-align:center;padding:30px;color:var(--text-muted)">No orders waiting</div>';
+    return orders.map(o => `
+        <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:10px;box-shadow:0 1px 4px rgba(0,0,0,0.05)">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
+                <div style="font-weight:700;font-size:1rem;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(o.partyName)}</div>
+                <div style="font-size:0.75rem;color:var(--text-muted)">#${o.orderNo}</div>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                <span class="amount-green" style="font-size:1.1rem;font-weight:800">${currency(o.total)}</span>
+                <span style="font-size:0.75rem;color:var(--text-muted)">Items: ${o.items.length}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;padding-top:10px;border-top:1px solid var(--border)">
+                <div>${o.assignedPacker ? `<span class="badge badge-info" style="font-size:0.65rem">${o.assignedPacker}</span>` : '<span class="badge badge-warning" style="font-size:0.65rem">Unassigned</span>'}</div>
+                <div style="display:flex;gap:6px">
+                    ${!o.assignedPacker && isAdmin ? `<button class="btn btn-outline btn-sm" style="padding:4px 10px;font-size:0.75rem" onclick="openAssignPackerModal('${o.id}')"> Assign</button>` : ''}
+                    ${!o.assignedPacker && !isAdmin ? `<button class="btn btn-outline btn-sm" style="padding:4px 10px;font-size:0.75rem" onclick="selfAssign('${o.id}')"> Self Assign</button>` : ''}
+                    ${o.assignedPacker === currentUser.name || isAdmin ? `<button class="btn btn-primary btn-sm" style="padding:4px 10px;font-size:0.75rem" onclick="startPacking('${o.id}')"> Start</button>` : ''}
+                </div>
+            </div>
+        </div>
+    `).join('');
+}
+
+function renderCannotCompleteCards(orders, isAdmin) {
+    if (!orders.length) return '';
+    return orders.map(o => `
+        <div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:12px;padding:12px 14px;margin-bottom:10px;box-shadow:0 1px 4px rgba(0,0,0,0.05)">
+            <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+                <div style="font-weight:700;color:#991b1b">${escapeHtml(o.partyName)} (#${o.orderNo})</div>
+                <span class="badge badge-danger" style="font-size:0.65rem">${o.cannotCompleteReason || 'Flagged'}</span>
+            </div>
+            <div style="font-size:0.8rem;color:#7f1d1d;margin-bottom:8px">${o.cannotCompleteNotes || '-'}</div>
+            <div style="font-size:0.75rem;color:#991b1b;margin-bottom:8px">By: <strong>${o.cannotCompleteBy || '-'}</strong></div>
+            ${isAdmin ? `<div style="display:flex;gap:6px;padding-top:8px;border-top:1px solid #fca5a5">
+                <button class="btn btn-outline btn-sm" style="flex:1;border-color:#b91c1c;color:#b91c1c" onclick="clearCannotComplete('${o.id}')">Retry</button>
+                <button class="btn btn-danger btn-sm" style="flex:1" onclick="cancelOrderFromPacking('${o.id}')">Cancel Order</button>
+            </div>` : ''}
+        </div>
+    `).join('');
+}
+
+function renderPackedNoInvoiceCards(orders, isAdmin) {
+    if (!orders.length) return '';
+    return orders.map(o => `
+        <div style="background:var(--bg-card);border:1px solid var(--border);border-left:3px solid #3b82f6;border-radius:12px;padding:12px 14px;margin-bottom:10px;box-shadow:0 1px 4px rgba(0,0,0,0.05)">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
+                <div style="font-weight:700;font-size:0.95rem;color:var(--text-primary)">${escapeHtml(o.partyName)}</div>
+                <div style="font-size:0.75rem;color:var(--text-muted)">#${o.orderNo}</div>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                <span class="amount-green" style="font-size:1.05rem;font-weight:800">${currency(o.packedTotal || o.total)}</span>
+                <span style="font-size:0.75rem;color:#3b82f6;font-weight:600">${o.boxCount ? o.boxCount + ' Boxes' : 'Packed'}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;padding-top:10px;border-top:1px solid var(--border)">
+                <div style="font-size:0.75rem;color:var(--text-muted)">By: ${o.packedBy || '-'} ${o.packingDurationMins !== undefined ? '(' + o.packingDurationMins + 'm)' : ''}</div>
+                <div>${isAdmin ? `<button class="btn btn-outline btn-sm" style="padding:4px 10px;font-size:0.75rem" onclick="generateInvoiceFromPacked('${o.id}')"> Generate Invoice</button>` : '<span class="badge badge-warning" style="font-size:0.65rem">Awaiting Admin</span>'}</div>
+            </div>
+        </div>
+    `).join('');
+}
+
+function renderPackedHistoryCards(orders) {
+    if (!orders.length) return '<div style="text-align:center;padding:20px;color:var(--text-muted)">No history</div>';
+    return orders.map(o => {
+        const pkgs = o.packageNumbers || [];
+        const bc = o.boxCount || 0;
+        const cc = o.crateCount || 0;
+        const boxes = o.boxNumbers || (bc > 0 ? pkgs.slice(0, bc) : []);
+        const crates = o.crateNumbers || (cc > 0 ? pkgs.slice(bc, bc + cc) : []);
+        const boxDisplay = boxes.length ? boxes.map(n => `<span class="badge badge-outline" style="font-size:0.65rem;margin:1px;padding:2px 4px">${escapeHtml(n)}</span>`).join(' ') : '-';
+        const crateDisplay = crates.length ? crates.map(n => `<span class="badge badge-outline" style="font-size:0.65rem;margin:1px;padding:2px 4px;border-color:var(--warning);color:var(--warning)">${escapeHtml(n)}</span>`).join(' ') : '-';
+        return `
+        <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:10px;box-shadow:0 1px 4px rgba(0,0,0,0.05)">
+            <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+                <div style="font-weight:700;font-size:0.95rem;color:var(--text-primary)">${escapeHtml(o.partyName)}</div>
+                <div style="font-size:0.75rem;color:var(--text-muted)">Inv: ${o.invoiceNo || '-'}</div>
+            </div>
+            <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+                <span class="amount-green" style="font-size:1.05rem;font-weight:800">${currency(o.total)}</span>
+                <span style="font-size:0.75rem;color:var(--text-muted)">#${o.orderNo}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;padding-top:8px;border-top:1px solid var(--border)">
+                <div style="font-size:0.75rem;color:var(--text-muted)">By: ${o.packedBy || '-'}</div>
+                <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
+                    ${boxes.length ? `<div style="font-size:0.75rem">📦 ${boxDisplay}</div>` : ''}
+                    ${crates.length ? `<div style="font-size:0.75rem">📋 ${crateDisplay}</div>` : ''}
+                </div>
+            </div>
+        </div>`;
+    }).join('');
 }
 
 async function printPickListPdf() {
@@ -11543,7 +11866,65 @@ async function renderDelivery() {
         ...directInvoices.map(i => ({ source: 'invoice', id: i.id, orderNo: i.invoiceNo, invoiceNo: i.invoiceNo, partyName: i.partyName, partyId: i.partyId, total: i.total, items: i.items }))
     ];
 
-    pageContent.innerHTML = `
+    const isMobile = window.innerWidth < 768;
+
+    if (isMobile) {
+        pageContent.innerHTML = `
+        <!-- Compact Stats -->
+        <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:10px 12px;margin-bottom:10px">
+            <div style="display:flex;gap:0;margin-bottom:8px">
+                ${canEdit() ? `<div style="flex:1;text-align:center;border-right:1px solid var(--border);padding-right:8px">
+                    <div style="font-size:0.65rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">Ready</div>
+                    <div style="font-size:1.2rem;font-weight:800;color:#f59e0b">${readyToDispatch.length}</div>
+                </div>` : ''}
+                <div style="flex:1;text-align:center;${canEdit()?'padding-left:8px':''}">
+                    <div style="font-size:0.65rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">Transit</div>
+                    <div style="font-size:1.2rem;font-weight:800;color:#3b82f6">${dispatched.length}</div>
+                </div>
+            </div>
+            <div style="display:flex;gap:0;border-top:1px solid var(--border);padding-top:8px">
+                <div style="flex:1;text-align:center;border-right:1px solid var(--border);padding-right:8px">
+                    <div style="font-size:0.65rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">Delivered</div>
+                    <div style="font-size:1.2rem;font-weight:800;color:var(--success)">${delivered.length}</div>
+                </div>
+                <div style="flex:1;text-align:center;padding-left:8px">
+                    <div style="font-size:0.65rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">Failed</div>
+                    <div style="font-size:1.2rem;font-weight:800;color:var(--danger)">${undelivered.length + returned.length}</div>
+                </div>
+            </div>
+        </div>
+
+        ${(readyToDispatch.length && canEdit()) ? `
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+            <h3 style="font-size:1rem;margin:0;color:var(--text-primary)"> Ready to Dispatch (${readyToDispatch.length})</h3>
+            <div style="display:flex;align-items:center;gap:6px">
+                <input type="checkbox" id="chk-disp-all" onchange="document.querySelectorAll('.chk-disp-row').forEach(c=>c.checked=this.checked)" style="width:18px;height:18px">
+                <button class="btn btn-primary btn-sm" style="padding:4px 10px;font-size:0.75rem" onclick="openBulkDispatchModal()"> Bulk</button>
+            </div>
+        </div>
+        <div>${renderReadyToDispatchCards(readyToDispatch)}</div>` : ''}
+
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px;margin-bottom:10px">
+            <h3 style="font-size:1rem;margin:0;color:var(--text-primary)"> All Deliveries</h3>
+            <button class="btn btn-outline btn-sm" style="padding:4px 8px;font-size:0.75rem" onclick="printDeliveryRouteSheet()"> Print Route</button>
+        </div>
+        <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:14px">
+            <select id="del-status-filter" onchange="filterDelTable()" style="width:100%;padding:7px;border:1px solid var(--border);border-radius:7px;font-size:0.8rem;background:var(--bg-input)">
+                <option value="">All Statuses</option>
+                <option value="Dispatched">In Transit</option>
+                <option value="Delivered">Delivered</option>
+                <option value="Undelivered">Undelivered</option>
+                <option value="Returned">Returned</option>
+                <option value="Cancelled">Cancelled</option>
+            </select>
+        </div>
+
+        <div id="del-list">${renderDelCards(dels, allParties)}</div>
+        <tbody id="del-tbody" style="display:none"></tbody>
+        <table id="tbl-delivery" style="display:none"><tbody></tbody></table>
+        `;
+    } else {
+        pageContent.innerHTML = `
         <div class="stats-grid" style="margin-bottom:18px">
             ${canEdit() ? `<div class="stat-card amber"><div class="stat-icon"></div><div class="stat-value">${readyToDispatch.length}</div><div class="stat-label">Ready to Dispatch</div></div>` : ''}
             <div class="stat-card blue"><div class="stat-icon"></div><div class="stat-value">${dispatched.length}</div><div class="stat-label">In Transit</div></div>
@@ -11584,7 +11965,63 @@ async function renderDelivery() {
                 <tbody id="del-tbody">${renderDelRows(dels, allParties)}</tbody></table>
             </div>
         </div></div>`;
+    }
 }
+
+function renderReadyToDispatchCards(orders) {
+    if (!orders.length) return '';
+    return orders.map(o => `
+        <div style="background:var(--bg-card);border:1px solid var(--border);border-left:3px solid #f59e0b;border-radius:12px;padding:12px 14px;margin-bottom:10px;box-shadow:0 1px 4px rgba(0,0,0,0.05)">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
+                <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0;padding-right:8px">
+                    <input type="checkbox" class="chk-disp-row" value="${o.id}" data-source="${o.source}" data-orderno="${o.orderNo}" data-party="${escapeHtml(o.partyName)}" style="width:18px;height:18px">
+                    <div style="font-weight:700;font-size:1rem;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(o.partyName)}</div>
+                </div>
+                <div style="font-size:0.75rem;color:var(--text-muted)">#${o.orderNo}</div>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;padding-left:26px">
+                <span class="amount-green" style="font-size:1.05rem;font-weight:800">${currency(o.total)}</span>
+                <span class="badge badge-success" style="font-size:0.65rem">Inv: ${o.invoiceNo || '-'}</span>
+            </div>
+            <div style="display:flex;justify-content:flex-end;padding-top:10px;border-top:1px solid var(--border)">
+                <button class="btn btn-primary btn-sm" style="padding:4px 10px;font-size:0.75rem" onclick="openDispatchModalUnified('${o.id}','${o.source}')"> Dispatch</button>
+            </div>
+        </div>
+    `).join('');
+}
+
+function renderDelCards(dels, allParties) {
+    if (!dels.length) return '<div style="text-align:center;padding:30px;color:var(--text-muted)">No deliveries found</div>';
+    return dels.map(d => {
+        const bdgClass = d.status === 'Delivered' ? 'badge-success' : (d.status === 'Dispatched' ? 'badge-info' : (d.status === 'Cancelled' ? 'badge-danger' : 'badge-warning'));
+        const isSalesman = currentUser && currentUser.role === 'Salesman';
+        return `
+        <div data-del-id="${d.id}" style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:10px;box-shadow:0 1px 4px rgba(0,0,0,0.05);position:relative" onclick="viewDelivery('${d.id}')">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
+                <div style="font-weight:700;font-size:0.95rem;color:var(--text-primary);padding-right:8px">${escapeHtml(d.partyName)}</div>
+                <span class="badge ${bdgClass}" style="font-size:0.65rem;padding:2px 6px">${d.status}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                <div style="font-size:0.75rem;color:var(--text-muted);display:flex;flex-direction:column;gap:2px">
+                    <span>Date: ${fmtDate(d.date)}</span>
+                    <span style="color:#3b82f6;font-weight:600">By: ${d.deliveryPerson || '-'}</span>
+                </div>
+                <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">
+                    <span style="font-size:0.75rem;color:var(--text-muted)">Order: #${d.orderNo}</span>
+                    <span style="font-size:0.75rem;color:var(--success)">Inv: ${d.invoiceNo || '-'}</span>
+                </div>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;padding-top:10px;border-top:1px solid var(--border)">
+                <div style="display:flex;gap:4px">
+                    <button class="btn btn-outline btn-sm" style="padding:4px 8px;font-size:0.75rem;border-radius:6px" onclick="event.stopPropagation();printDeliverySlip('${d.id}')">🖨️ Print</button>
+                    ${d.status === 'Dispatched' && !isSalesman ? `<button class="btn btn-primary btn-sm" style="padding:4px 8px;font-size:0.75rem;border-radius:6px" onclick="event.stopPropagation();updateDelStatus('${d.id}')">Update</button>` : ''}
+                </div>
+                ${canEdit() && d.status !== 'Delivered' && d.status !== 'Cancelled' ? `<button class="btn btn-outline btn-sm" style="padding:4px 8px;font-size:0.75rem;border-radius:6px;border-color:var(--danger);color:var(--danger)" onclick="event.stopPropagation();cancelDelivery('${d.id}')">Cancel</button>` : ''}
+            </div>
+        </div>`;
+    }).join('');
+}
+
 function renderDelRows(dels, parties) {
     if (!dels.length) return '<tr><td colspan="9"><div class="empty-state"><p>No deliveries found</p></div></td></tr>';
     const cols = ColumnManager.get('delivery').filter(c => c.visible);
@@ -11670,7 +12107,13 @@ async function filterDelTable() {
         dels = dels.filter(d => d.deliveryPerson === currentUser.name);
     }
     if (st) dels = dels.filter(d => d.status === st);
-    $('del-tbody').innerHTML = renderDelRows(dels, DB.cache['parties'] || []);
+    
+    const isMobile = window.innerWidth < 768;
+    if (isMobile) {
+        if ($('del-list')) $('del-list').innerHTML = renderDelCards(dels, DB.cache['parties'] || []);
+    } else {
+        if ($('del-tbody')) $('del-tbody').innerHTML = renderDelRows(dels, DB.cache['parties'] || []);
+    }
 }
 
 async function openChangeDeliveryPerson(id) {

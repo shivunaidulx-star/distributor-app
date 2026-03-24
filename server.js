@@ -38,7 +38,7 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-    console.log(`\x1b[36m%s\x1b[0m`, `DistroManager Server Running!`);
+    console.log(`\x1b[36m%s\x1b[0m`, `Prakash Traders Server Running!`);
     console.log(`- Local:   http://localhost:${PORT}`);
     console.log(`- Network: http://${IP}:${PORT}`);
     console.log(`\nPress Ctrl+C to stop the server.`);
