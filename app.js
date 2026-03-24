@@ -68,7 +68,7 @@ const DB = {
     async loadCacheFromIDB() {
         try {
             await this.idb.init();
-            const keys = ['db_users', 'db_categories', 'db_uom', 'db_company', 'db_tax_settings', 'db_parties', 'db_inventory', 'db_sales_orders', 'db_invoices', 'db_payments', 'db_expenses', 'db_party_ledger', 'db_stock_ledger', 'db_packers', 'db_delivery_persons', 'db_delivery'];
+            const keys = ['db_users', 'db_categories', 'db_uom', 'db_company', 'db_tax_settings', 'db_parties', 'db_inventory', 'db_sales_orders', 'db_invoices', 'db_payments', 'db_expenses', 'db_party_ledger', 'db_stock_ledger', 'db_packers', 'db_delivery_persons', 'db_delivery', 'db_gps_logs'];
             await Promise.all(keys.map(async k => {
                 const val = await this.idb.get(k);
                 if (val) {
@@ -108,7 +108,7 @@ const DB = {
     async refresh() {
         // Core tables needed for Login & Dashboard basic structure
         const coreTables = ['users', 'categories', 'uom'];
-        const tables = ['parties', 'inventory', 'sales_orders', 'invoices', 'payments', 'expenses', 'party_ledger', 'stock_ledger', 'packers', 'delivery_persons', 'delivery'];
+        const tables = ['parties', 'inventory', 'sales_orders', 'invoices', 'payments', 'expenses', 'party_ledger', 'stock_ledger', 'packers', 'delivery_persons', 'delivery', 'gps_logs'];
 
         // Mark last refresh time
         this.cache._lastRefresh = Date.now();
@@ -1522,6 +1522,29 @@ async function ensureGeolocation(maximumAge = 300000) {
     });
 }
 
+// NEW: Action-based GPS tracking for salesmen
+async function logSalesmanAction(actionName, referenceId = '') {
+    if (!currentUser || currentUser.role !== 'Salesman') return;
+    try {
+        await ensureGeolocation(0); // Force fresh location fetch
+        if (!window._userCoords || !window._userCoords.lat) return;
+        const entry = {
+            id: generateId('gps'),
+            user_id: currentUser.userId, // use userId because id is local string
+            user_name: currentUser.name,
+            action: actionName,
+            reference_id: referenceId,
+            lat: window._userCoords.lat,
+            lng: window._userCoords.lng,
+            timestamp: new Date().toISOString(),
+            created_at: new Date().toISOString()
+        };
+        await DB.insert('gps_logs', entry);
+    } catch (e) {
+        console.warn('GPS log failed:', e);
+    }
+}
+
 window.forceHardRefresh = async function () {
     if ('serviceWorker' in navigator) {
         try {
@@ -2460,7 +2483,48 @@ async function renderParties() {
             <button onclick="window._partyBalanceFilter=null;renderParties()" style="margin-left:auto;background:none;border:none;cursor:pointer;font-size:1rem;padding:0;color:inherit"> Clear</button>
         </div>` : '';
 
-    pageContent.innerHTML = `
+    const isMobile = window.innerWidth < 768;
+    const totalReceivable = customers.reduce((s, c) => s + (c.balance < 0 ? Math.abs(c.balance) : 0), 0);
+
+    if (isMobile) {
+        pageContent.innerHTML = `
+        ${balFilterBadge}
+        <!-- Compact Stats -->
+        <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:10px 12px;margin-bottom:10px">
+            <div style="display:flex;gap:0">
+                <div style="flex:1;text-align:center;border-right:1px solid var(--border);padding-right:8px">
+                    <div style="font-size:0.65rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">Customers</div>
+                    <div style="font-size:1.2rem;font-weight:800;color:var(--text-primary)">${customers.length}</div>
+                </div>
+                <div style="flex:1;text-align:center;padding-left:8px">
+                    <div style="font-size:0.65rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">Receivables</div>
+                    <div style="font-size:1.2rem;font-weight:800;color:var(--success)">${currency(totalReceivable)}</div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Compact Filter Strip -->
+        <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:10px">
+            <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+                <input type="text" id="party-search" placeholder="Search parties..." oninput="filterPartyTable()" style="flex:1;font-size:0.82rem;padding:7px 10px;border:1px solid var(--border);border-radius:7px;background:var(--bg-input);">
+                <button onclick="togglePartyFilters()" id="party-filter-toggle" style="border:1px solid var(--border);background:var(--bg-input);border-radius:7px;padding:7px 10px;font-size:0.85rem;cursor:pointer;flex-shrink:0">⚙️</button>
+                ${!isSalesman() ? `<button class="btn btn-primary btn-sm" onclick="openPartyModal()" style="white-space:nowrap;padding:7px 14px;flex-shrink:0">+ Party</button>` : ''}
+            </div>
+            <div id="party-extra-filters" style="display:none;margin-top:8px">
+                <div style="display:flex;gap:6px;margin-bottom:8px">
+                    <button style="flex:1;padding:6px;font-size:0.75rem;border-radius:6px;border:1px solid var(--border);background:${_partyTab==='all'?'var(--primary)':'var(--bg-input)'};color:${_partyTab==='all'?'#fff':'var(--text-primary)'}" onclick="_partyTab='all';window._partyBalanceFilter=null;renderParties()">All</button>
+                    <button style="flex:1;padding:6px;font-size:0.75rem;border-radius:6px;border:1px solid var(--border);background:${_partyTab==='customer'?'var(--primary)':'var(--bg-input)'};color:${_partyTab==='customer'?'#fff':'var(--text-primary)'}" onclick="_partyTab='customer';window._partyBalanceFilter=null;renderParties()">Customers</button>
+                    <button style="flex:1;padding:6px;font-size:0.75rem;border-radius:6px;border:1px solid var(--border);background:${_partyTab==='supplier'?'var(--primary)':'var(--bg-input)'};color:${_partyTab==='supplier'?'#fff':'var(--text-primary)'}" onclick="_partyTab='supplier';window._partyBalanceFilter=null;renderParties()">Suppliers</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Cards -->
+        <div id="party-list">${renderPartyCards(shown)}</div>
+        <tbody id="party-tbody" style="display:none"></tbody>
+        <table id="tbl-parties" style="display:none"><tbody></tbody></table>`;
+    } else {
+        pageContent.innerHTML = `
         ${balFilterBadge}
         <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
             <button class="catalog-pill ${_partyTab === 'all' ? 'active' : ''}" onclick="_partyTab='all';window._partyBalanceFilter=null;renderParties()"> All Parties (${parties.length})</button>
@@ -2489,10 +2553,13 @@ async function renderParties() {
         </div>
         <div class="card"><div class="card-body">
             <div class="table-wrapper">
-                <table class="data-table" style="min-width:920px;width:100%"><thead><tr><th style="width:36px;text-align:center"><input type="checkbox" id="bulk-all-par" onchange="toggleSelectAllParties(this)" style="width:16px;height:16px;cursor:pointer"></th>${ColumnManager.get('parties').filter(c => c.visible).map(c => `<th>${c.label}</th>`).join('')}</tr></thead>
+                <table class="data-table" id="tbl-parties" style="min-width:920px;width:100%"><thead><tr><th style="width:36px;text-align:center"><input type="checkbox" id="bulk-all-par" onchange="toggleSelectAllParties(this)" style="width:16px;height:16px;cursor:pointer"></th>${ColumnManager.get('parties').filter(c => c.visible).map(c => `<th>${c.label}</th>`).join('')}</tr></thead>
                 <tbody id="party-tbody">${renderPartyRows(shown)}</tbody></table>
             </div>
         </div></div>
+        <div id="party-list" style="display:none"></div>`;
+    }
+    pageContent.innerHTML += `
         <input type="file" id="party-file-input" accept=".csv,.txt,.xlsx,.xls" style="display:none" onchange="processPartyImport(event)">`;
     initSwipeActions();
 }
@@ -2534,7 +2601,51 @@ async function filterPartyTable() {
         (p.postCode || '').includes(search) ||
         (p.address || '').toLowerCase().includes(search)
     );
-    $('party-tbody').innerHTML = renderPartyRows(parties);
+    const isMobile = window.innerWidth < 768;
+    if (isMobile) {
+        if ($('party-list')) $('party-list').innerHTML = renderPartyCards(parties);
+    } else {
+        if ($('party-tbody')) $('party-tbody').innerHTML = renderPartyRows(parties);
+    }
+}
+
+function togglePartyFilters() {
+    const extra = $('party-extra-filters');
+    const btn = $('party-filter-toggle');
+    if (!extra) return;
+    const open = extra.style.display !== 'none';
+    extra.style.display = open ? 'none' : 'block';
+    if (btn) {
+        btn.style.background = open ? 'var(--bg-input)' : 'var(--primary)';
+        btn.style.color = open ? '' : '#fff';
+    }
+}
+
+function renderPartyCards(parties) {
+    if (!parties.length) return `<div style="text-align:center;padding:40px 20px;color:var(--text-muted)"><div style="font-size:2rem;margin-bottom:8px">👥</div><div>No parties found</div></div>`;
+    return parties.map(p => {
+        const balColor = (p.balance || 0) < 0 ? 'var(--success)' : ((p.balance || 0) > 0 ? 'var(--danger)' : 'var(--text-muted)');
+        const balLabel = (p.balance || 0) < 0 ? '(Cr)' : ((p.balance || 0) > 0 ? '(Dr)' : '');
+        return `<div data-party-id="${p.id}" style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:10px;box-shadow:0 1px 4px rgba(0,0,0,0.05);position:relative" onclick="${canEdit() ? `openPartyModal('${p.id}')` : ''}">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
+                <div style="display:flex;flex-direction:column;gap:2px;flex:1;min-width:0;padding-right:8px">
+                    <div style="font-weight:700;font-size:1rem;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(p.name)}</div>
+                    <div style="font-size:0.75rem;color:var(--text-muted)"><span class="badge ${p.type === 'Customer' ? 'badge-success' : 'badge-info'}" style="font-size:0.6rem;padding:2px 5px;margin-right:4px">${p.type}</span>${escapeHtml(p.city || '')}</div>
+                </div>
+                <div style="text-align:right">
+                    <div style="font-size:1.1rem;font-weight:800;color:${balColor}">${currency(Math.abs(p.balance || 0))} ${balLabel}</div>
+                    <div style="font-size:0.7rem;color:var(--text-muted)">Balance</div>
+                </div>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
+                <div style="display:flex;gap:12px">
+                    ${p.phone ? `<a href="tel:${p.phone}" onclick="event.stopPropagation()" style="color:var(--primary);display:flex;align-items:center;gap:4px;font-size:0.8rem;text-decoration:none;font-weight:600"><span class="material-symbols-outlined" style="font-size:1.1rem">call</span> Call</a>` : ''}
+                    ${p.lat && p.lng ? `<span onclick="event.stopPropagation();openPartyMap('${p.lat}','${p.lng}','${escapeHtml(p.name)}')" style="color:var(--info);display:flex;align-items:center;gap:4px;font-size:0.8rem;cursor:pointer;font-weight:600"><span class="material-symbols-outlined" style="font-size:1.1rem">near_me</span> Map</span>` : ''}
+                </div>
+                ${canViewLedger() ? `<button class="btn btn-outline btn-sm" onclick="event.stopPropagation();openDedicatedPartyLedger('${p.id}')" style="padding:4px 10px;font-size:0.75rem;border-radius:6px">Ledger</button>` : ''}
+            </div>
+        </div>`;
+    }).join('');
 }
 async function onPartyTypeChange(sel) {
     if (sel.dataset.isNew === 'true') {
@@ -5420,6 +5531,9 @@ async function saveSalesOrder(id) {
 
             showToast(`Order submitted!`, 'success');
         }
+        
+        await logSalesmanAction(editId ? 'Edited Order' : 'Created Order', $('f-so-no').value);
+
         const andNew = window._saveAndNew; window._saveAndNew = false;
         closeModal();
         if (window._catalogOrderMode) {
@@ -7258,6 +7372,8 @@ async function saveInvoice(id) {
         if (fromOrderId) ops.push(DB.rawUpdate('sales_orders', fromOrderId, { invoice_no: invNo }));
 
         const [savedInv] = await Promise.all([DB.rawInsert('invoices', invData), ...ops]);
+        
+        await logSalesmanAction('Created Invoice', invNo);
 
         const andNew = window._saveAndNew;
         const andPrint = window._printAndNew;
@@ -8463,18 +8579,123 @@ async function viewPaymentDetails(id) {
             <button class="btn btn-outline" onclick="closeModal()">Close</button>
             ${canEdit() ? `<button class="btn btn-outline" style="color:var(--danger);border-color:var(--danger)" onclick="closeModal();deletePayment('${p.id}')"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-2px">delete</span> Delete</button>` : ''}
             ${canEdit() ? `<button class="btn btn-outline" onclick="closeModal();openEditPaymentModal('${p.id}')"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-2px">edit</span> Edit</button>` : ''}
-            <button class="btn btn-primary" onclick="printPaymentReceipt()"> Print Receipt</button>
+            <button class="btn btn-primary" onclick="printPaymentReceipt('${p.id}')"> Print Receipt</button>
         </div>
     `);
 }
-function printPaymentReceipt() {
-    const area = document.querySelector('#modal-body');
-    if (!area) return;
+function _getPaymentPrintCss() {
+    return `
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+  * { box-sizing: border-box; }
+  body { font-family: 'Inter', sans-serif; color: #1a1a1a; margin: 0; padding: 10px; font-size: 8.5pt; line-height: 1.4; background: #fff; }
+  .page { width: 148mm; padding: 8mm 10mm; margin: 0 auto; background: #fff; border: 1px solid #ccc; position: relative; }
+  .voucher-title { text-align: center; font-size: 1.2rem; font-weight: 800; font-style: italic; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; border-bottom: 2px solid #333; padding-bottom: 5px; }
+  .inv-header { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 12px; }
+  .inv-logo { min-width: 90px; max-width: 120px; }
+  .inv-co { flex: 1; text-align: left; font-size: 0.85rem; }
+  .co-name { font-size: 1.15rem; font-weight: 800; }
+  .meta-grid { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid #444; margin-bottom: 12px; }
+  .meta-cell { padding: 8px 10px; font-size: 0.82rem; }
+  .meta-cell label { font-size: 0.72rem; color: #555; font-weight: 700; text-transform: uppercase; display: block; margin-bottom: 2px; }
+  .party-name { font-weight: 800; font-size: 1.05rem; }
+  .details-tbl { width: 100%; border-collapse: collapse; border: 1px solid #444; margin-bottom: 16px; }
+  .details-tbl th { background: #444; color: #fff; padding: 7px 8px; font-size: 0.78rem; text-align: left; border: 1px solid #555; }
+  .details-tbl td { padding: 8px 8px; border: 1px solid #aaa; font-size: 0.9rem; }
+  .btn-print { margin-top:16px;padding:8px 20px;background:#f97316;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:1rem; display: block; margin: 20px auto 0; }
+  .sign-area { display: flex; justify-content: space-between; margin-top: 40px; padding: 0 10px; }
+  .sign-box { text-align: center; font-weight: 700; font-size: 0.8rem; border-top: 1px solid #333; padding-top: 5px; width: 120px; }
+  @media print {
+    @page { size: A5 portrait; margin: 0; }
+    body { padding: 0; margin: 0; }
+    .page { border: none; padding: 6mm 10mm; width: 100%; height: 100vh; margin: 0; max-height: unset; overflow: hidden; }
+    .btn-print { display: none !important; }
+  }`;
+}
+
+function _buildPaymentPageHtml(p, co) {
+    const isPayIn = p.type === 'in';
+    const title = isPayIn ? 'PAYMENT RECEIPT' : 'PAYMENT VOUCHER';
+    let allocationsHtml = '';
+    
+    if (p.allocations && Object.keys(p.allocations).length > 0) {
+        allocationsHtml = Object.entries(p.allocations).map(([inv, amt]) => 
+            `<tr><td colspan="2" style="font-size:0.8rem;color:#555">Against Invoice: <b>${escapeHtml(inv)}</b></td><td style="text-align:right">₹ ${(+amt).toFixed(2)}</td></tr>`
+        ).join('');
+    } else if (p.invoiceNo && p.invoiceNo !== 'Advance') {
+        allocationsHtml = `<tr><td colspan="2" style="font-size:0.8rem;color:#555">Against Invoice: <b>${escapeHtml(p.invoiceNo)}</b></td><td style="text-align:right">₹ ${(+p.amount).toFixed(2)}</td></tr>`;
+    } else {
+        allocationsHtml = `<tr><td colspan="2" style="font-size:0.8rem;color:#555">Advance / Unallocated</td><td style="text-align:right">₹ ${(+p.amount).toFixed(2)}</td></tr>`;
+    }
+
+    return `
+<div class="page">
+    <div class="voucher-title">${title}</div>
+    <div class="inv-header">
+        ${co.logo ? `<div class="inv-logo"><img src="${co.logo}" style="width:100%;max-height:60px;object-fit:contain"></div>` : ''}
+        <div class="inv-co">
+            <div class="co-name">${escapeHtml(co.name || 'Company Name')}</div>
+            <div>${escapeHtml(co.address || '')}</div>
+            ${co.city ? `<div>${escapeHtml(co.city)}</div>` : ''}
+            <div>${co.phone ? 'Ph: ' + escapeHtml(co.phone) : ''} ${co.gstin ? ' | GSTIN: ' + escapeHtml(co.gstin) : ''}</div>
+        </div>
+    </div>
+    
+    <div class="meta-grid">
+        <div class="meta-cell" style="border-right:1px solid #444; border-bottom:1px solid #444">
+            <label>Receipt No.</label>
+            <div style="font-weight:700;font-size:0.95rem">${escapeHtml(p.payNo || '-')}</div>
+        </div>
+        <div class="meta-cell" style="border-bottom:1px solid #444;text-align:right">
+            <label>Date</label>
+            <div style="font-weight:700;font-size:0.95rem">${fmtDate(p.date)}</div>
+        </div>
+        <div class="meta-cell" style="grid-column:span 2">
+            <label>${isPayIn ? 'Received From:' : 'Paid To:'}</label>
+            <div class="party-name">${escapeHtml(p.partyName)}</div>
+        </div>
+    </div>
+
+    <table class="details-tbl">
+        <thead>
+            <tr>
+                <th>Payment Mode</th>
+                <th>Note / Reference</th>
+                <th style="text-align:right;width:100px">Total Amount</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td style="font-weight:600">${escapeHtml(p.mode || 'Cash')}</td>
+                <td>${escapeHtml(p.note || '-')}</td>
+                <td style="text-align:right;font-weight:800;font-size:1.1rem;white-space:nowrap">₹ ${(+p.amount).toFixed(2)}</td>
+            </tr>
+            ${allocationsHtml}
+        </tbody>
+        <tfoot>
+            <tr>
+                <td colspan="3" style="background:#f5f5f5;font-weight:700;font-size:0.85rem;padding:8px">
+                    Amount in words: ${numberToWords(p.amount)} Rupees Only.
+                </td>
+            </tr>
+        </tfoot>
+    </table>
+
+    <div class="sign-area">
+        <div class="sign-box">Customer Signature</div>
+        <div class="sign-box">Authorized Signatory</div>
+    </div>
+</div>`;
+}
+
+function printPaymentReceipt(id) {
+    const p = DB.get('db_payments').find(x => x.id === id);
+    if (!p) return;
     const co = DB.getObj('db_company') || {};
-    const header = co.name ? `<div style="text-align:center;margin-bottom:12px"><h2 style="margin:0">${escapeHtml(co.name)}</h2>${co.address ? `<div style="font-size:0.85rem">${escapeHtml(co.address)}${co.city ? ', ' + escapeHtml(co.city) : ''}</div>` : ''}${co.phone ? `<div style="font-size:0.85rem">Ph: ${escapeHtml(co.phone)}</div>` : ''}</div><hr>` : '';
+    
     const w = window.open('', '_blank');
-    w.document.write(`<!DOCTYPE html><html><head><title>Payment Receipt</title><style>body{font-family:sans-serif;padding:20px;max-width:400px;margin:0 auto}table{width:100%;border-collapse:collapse}td{padding:8px 4px;border-bottom:1px dashed #eee}hr{border:none;border-top:1px solid #ccc}@media print{button{display:none}}</style></head><body>${header}${area.innerHTML}<button onclick="window.print()" style="margin-top:16px;padding:8px 20px;background:#f97316;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:1rem"> Print</button></body></html>`);
+    w.document.write(`<!DOCTYPE html><html><head><title>Payment Receipt - ${escapeHtml(p.partyName)}</title><style>${_getPaymentPrintCss()}</style></head><body>${_buildPaymentPageHtml(p, co)}<button class="btn-print" onclick="window.print()">🖨️ Print Voucher</button></body></html>`);
     w.document.close();
+    setTimeout(() => { w.print(); }, 600);
 }
 
 
@@ -8609,20 +8830,26 @@ async function openPaymentModal(prefillPartyId) {
             const ptType = $('f-pay-party-type')?.value || 'Customer';
             const customers = parties.filter(p => p.type === ptType);
 
-            // Show dropdown IMMEDIATELY using cached coords (no GPS wait)
-            const sortedParties = buildPartySearchList(customers);
             const onPartySelect = (party) => {
                 if ($('f-pay-party-id')) $('f-pay-party-id').value = party.id || '';
                 onPayPartyChange();
             };
-            initSearchDropdown('f-pay-party', sortedParties, onPartySelect);
+
+            // Show dropdown IMMEDIATELY using cached coords (no GPS wait)
+            initSearchDropdown('f-pay-party', buildPartySearchList(customers), onPartySelect);
             partyInput.dataset.initDone = "true";
 
-            // Silently refresh GPS in background — only re-sort if user isn't actively on the field
+            // Silently refresh GPS in background — if user hasn't typed anything, update the list seamlessly
             ensureGeolocation(0).then(coords => {
-                if (coords && !partyInput.dataset.selectedId && !partyInput.value
-                        && document.activeElement !== partyInput) {
+                if (coords && !partyInput.dataset.selectedId && !partyInput.value) {
                     initSearchDropdown('f-pay-party', buildPartySearchList(customers), onPartySelect);
+                    
+                    // If the dropdown happens to be open right now, refresh its visual state
+                    const dd = document.getElementById('f-pay-party-dropdown');
+                    if (dd && dd.classList.contains('open') && document.activeElement === partyInput) {
+                        const inputEvt = new Event('input');
+                        partyInput.dispatchEvent(inputEvt);
+                    }
                 }
             });
         }
@@ -8631,10 +8858,11 @@ async function openPaymentModal(prefillPartyId) {
     // Add the focus listener for manual clicks
     partyInput.addEventListener('focus', initPartySearch, { once: true });
 
-    // Show dropdown immediately — no GPS wait on auto-open
+    // Show dropdown immediately — no GPS wait on auto-open.
+    // Removed programmatic partyInput.focus(); to prevent mobile keyboard lock-ups
+    // where the user "cant enter the party name manually".
     initPartySearch().then(() => {
-        if (!prefillPartyId && partyInput && document.activeElement !== partyInput) {
-            partyInput.focus();
+        if (!prefillPartyId && partyInput) {
             const dd = document.getElementById('f-pay-party-dropdown');
             if (dd) dd.classList.add('open');
         }
@@ -9143,6 +9371,8 @@ async function savePayment(id) {
 
         // 8. Execute all operations
         await Promise.all(ops);
+        
+        await logSalesmanAction('Collected Payment', payRefNo);
 
         const andNew = window._saveAndNew;
         window._saveAndNew = false;
@@ -12395,6 +12625,8 @@ function renderReports() {
             <div class="report-card" onclick="showReport('userpayments')"><div class="report-icon-wrap"><div class="report-icon">💰</div></div><div class="report-text"><h4>User Collections</h4><p>Detailed salesman collections</p></div></div>
             <div class="report-card" onclick="showReport('pnl')"><div class="report-icon-wrap"><div class="report-icon">⚖️</div></div><div class="report-text"><h4>Profit & Loss</h4><p>Revenue vs expenses</p></div></div>
             <div class="report-card" onclick="showReport('invoice-pnl')"><div class="report-icon-wrap"><div class="report-icon">🧾</div></div><div class="report-text"><h4>Invoice P&L</h4><p>Profit per invoice</p></div></div>
+            <div class="report-card" onclick="showReport('item-ledger')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(16,185,129,0.12),rgba(5,150,105,0.08))"><div class="report-icon">📑</div></div><div class="report-text"><h4>Item Ledger Entries</h4><p>Detailed inventory movement log</p></div></div>
+            <div class="report-card" onclick="showReport('gps-tracking')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(59,130,246,0.12),rgba(37,99,235,0.08))"><div class="report-icon">📍</div></div><div class="report-text"><h4>Salesman GPS Log</h4><p>Action-based tracking & map</p></div></div>
             <div class="report-card" onclick="showReport('stock')"><div class="report-icon-wrap"><div class="report-icon">📦</div></div><div class="report-text"><h4>Stock Summary</h4><p>Current inventory levels</p></div></div>
             <div class="report-card" onclick="showReport('outstanding')"><div class="report-icon-wrap"><div class="report-icon">⏳</div></div><div class="report-text"><h4>Outstanding</h4><p>Party balances</p></div></div>
             <div class="report-card" onclick="showReport('expenses')"><div class="report-icon-wrap"><div class="report-icon">📉</div></div><div class="report-text"><h4>Expense Summary</h4><p>Category-wise breakdown</p></div></div>
@@ -12467,6 +12699,130 @@ async function showReport(type) {
         </div></div>
         <div id="r-s-out"></div>`;
         renderSalesRpt();
+    }
+
+    if (type === 'item-ledger') {
+        const stockLedger = await DB.getAll('stock_ledger');
+        window._rItemLedger = stockLedger.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+        
+        el.innerHTML = `
+        <div class="card" style="margin-bottom:14px">
+            <div class="card-header" style="padding-bottom:0;border-bottom:none">
+                <h3 style="margin:0">Item Ledger Entries</h3>
+                <p style="font-size:0.8rem;color:var(--text-muted);margin:4px 0 0">Chronological history of all stock movements (Business Central View)</p>
+            </div>
+            <div class="card-body padded" style="padding-top:12px;padding-bottom:12px">
+            <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
+                <div class="form-group"><label>Filter Item</label><input id="r-il-item" placeholder="Search item name..." oninput="renderItemLedgerRpt()" style="width:200px"></div>
+                <div class="form-group"><label>Entry Type</label>
+                    <select id="r-il-type" onchange="renderItemLedgerRpt()">
+                        <option value="">All Types</option>
+                        <option value="Sale">Sale (-)</option>
+                        <option value="Purchase">Purchase (+)</option>
+                        <option value="Opening">Opening (+)</option>
+                        <option value="Manual Adjustment">Manual Adjustment (+/-)</option>
+                        <option value="Return">Return (+)</option>
+                    </select>
+                </div>
+                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-item-ledger','ItemLedgerEntries_${today()}')"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export Excel</button></div>
+            </div>
+        </div></div>
+        <div id="r-il-out"></div>`;
+
+        window.renderItemLedgerRpt = function() {
+            const itemFlt = ($('r-il-item').value || '').toLowerCase();
+            const typeFlt = $('r-il-type').value;
+
+            let html = '<div class="table-wrapper"><table class="data-table" id="tbl-item-ledger"><thead><tr><th>Posting Date</th><th>Entry Type</th><th>Document No.</th><th>Item Name</th><th>Qty</th><th>Remaining Qty</th><th>Reason / Location</th><th>User ID</th></tr></thead><tbody>';
+            
+            let count = 0;
+            // The entries are already sorted by date descending (newest first)
+            for (const entry of window._rItemLedger) {
+                if (itemFlt && !(entry.item_name || '').toLowerCase().includes(itemFlt)) continue;
+                if (typeFlt && entry.entry_type !== typeFlt) continue;
+
+                count++;
+                if (count > 500 && !itemFlt) {
+                     // Limit to 500 if no search text to prevent browser lag
+                     html += `<tr><td colspan="8" style="text-align:center;color:var(--text-muted)">Showing latest 500 entries. Type a specific item to see more.</td></tr>`;
+                     break;
+                }
+
+                const qtySpan = entry.qty > 0 
+                                ? `<span style="color:var(--success);font-weight:600">+${entry.qty}</span>` 
+                                : (entry.qty < 0 ? `<span style="color:var(--danger);font-weight:600">${entry.qty}</span>` : '0');
+
+                html += `<tr>
+                    <td style="white-space:nowrap">${fmtDate(entry.date) || '-'}</td>
+                    <td><span class="badge ${entry.entry_type === 'Sale' ? 'badge-danger' : 'badge-success'}">${escapeHtml(entry.entry_type || '-')}</span></td>
+                    <td style="font-family:monospace;font-size:0.85rem">${escapeHtml(entry.document_no || '-')}</td>
+                    <td style="font-weight:600">${escapeHtml(entry.item_name || '-')}</td>
+                    <td style="text-align:center">${qtySpan}</td>
+                    <td style="text-align:center;font-weight:600">${entry.running_stock !== undefined ? entry.running_stock : '-'}</td>
+                    <td style="font-size:0.85rem">${escapeHtml(entry.reason || '-')}</td>
+                    <td style="font-size:0.8rem;color:var(--text-muted)">${escapeHtml(entry.created_by || '-')}</td>
+                </tr>`;
+            }
+            if (count === 0) html += `<tr><td colspan="8" style="text-align:center">No ledger entries found.</td></tr>`;
+            html += '</tbody></table></div>';
+            
+            $('r-il-out').innerHTML = html;
+        };
+        renderItemLedgerRpt();
+    }
+
+    if (type === 'gps-tracking') {
+        const logs = (await DB.getAll('gps_logs')).sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp));
+        const users = [...new Set(logs.map(l => l.user_name))].filter(Boolean).sort();
+        
+        el.innerHTML = `
+        <div class="card" style="margin-bottom:14px">
+            <div class="card-header" style="padding-bottom:0;border-bottom:none">
+                <h3 style="margin:0">Salesman Action & GPS Log</h3>
+                <p style="font-size:0.8rem;color:var(--text-muted);margin:4px 0 0">Locations captured during Order creation, Invoicing, and Payment collection.</p>
+            </div>
+            <div class="card-body padded" style="padding-top:12px;padding-bottom:12px">
+            <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
+                <div class="form-group"><label>Date Filter</label><input type="date" id="r-gps-date" value="${today()}" onchange="renderGpsRpt()"></div>
+                <div class="form-group"><label>Salesman</label>
+                    <select id="r-gps-user" onchange="renderGpsRpt()">
+                        <option value="">All Salesmen</option>
+                        ${users.map(u => `<option>${escapeHtml(u)}</option>`).join('')}
+                    </select>
+                </div>
+                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-gps','GPS_Logs_${today()}')"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button></div>
+            </div>
+        </div></div>
+        <div id="r-gps-out"></div>`;
+
+        window.renderGpsRpt = function() {
+            const dateFlt = $('r-gps-date').value;
+            const userFlt = $('r-gps-user').value;
+
+            let html = '<div class="table-wrapper"><table class="data-table" id="tbl-gps"><thead><tr><th>Timestamp</th><th>Salesman</th><th>Action Type</th><th>Reference No.</th><th>Location (Lat, Lng)</th><th>Map View</th></tr></thead><tbody>';
+            let count = 0;
+            
+            for (const log of logs) {
+                const logDate = log.timestamp ? log.timestamp.substring(0, 10) : '';
+                if (dateFlt && logDate !== dateFlt) continue;
+                if (userFlt && log.user_name !== userFlt) continue;
+                
+                count++;
+                const mapLink = `https://www.google.com/maps?q=${log.lat},${log.lng}`;
+                html += `<tr>
+                    <td style="white-space:nowrap">${fmtDate(log.timestamp)} <span style="font-size:0.75rem;color:var(--text-muted);margin-left:4px">${new Date(log.timestamp).toLocaleTimeString([], {timeStyle:'short'})}</span></td>
+                    <td style="font-weight:600">${escapeHtml(log.user_name || '-')}</td>
+                    <td><span class="badge badge-info">${escapeHtml(log.action || '-')}</span></td>
+                    <td style="font-family:monospace;font-size:0.85rem">${escapeHtml(log.reference_id || '-')}</td>
+                    <td style="font-size:0.8rem;color:var(--text-muted)">${log.lat ? Number(log.lat).toFixed(5) : ''}, ${log.lng ? Number(log.lng).toFixed(5) : ''}</td>
+                    <td><a href="${mapLink}" target="_blank" class="btn btn-outline btn-sm" style="padding:2px 8px;font-size:0.75rem"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-2px">map</span> View Map</a></td>
+                </tr>`;
+            }
+            if (count === 0) html += `<tr><td colspan="6" style="text-align:center">No GPS actions recorded for selected criteria.</td></tr>`;
+            html += '</tbody></table></div>';
+            $('r-gps-out').innerHTML = html;
+        };
+        renderGpsRpt();
     }
 
     if (type === 'collection-allocations') {
@@ -17897,7 +18253,8 @@ async function renderHRPayroll() {
         const advPending = +myAllAdvs.reduce((t, a) => t + Math.max(0, (a.amount || 0) - (a.deducted || 0)), 0).toFixed(2);
 
         // Simulate how much will be deducted this month (FIFO)
-        let toDeduct = 0, rem = earned;
+        // Allow deducting advances even when earned=0 (e.g. absent month, clear advance balance)
+        let toDeduct = 0, rem = advPending;
         for (const adv of myAllAdvs) {
             if (rem <= 0) break;
             const bal = Math.max(0, (adv.amount || 0) - (adv.deducted || 0));
@@ -18062,6 +18419,18 @@ function updateNetPayable(staffId, earned) {
 // --- Payroll Process: Mark Salary as Paid (Unified & Secured) ---
 async function markSalaryPaid(staffId, staffName, month, monthlySalary, workingDays, daysEff, earned) {
     try {
+        // Guard: prevent duplicate — clean up any stuck 'processing' record first
+        const { data: existingRec } = await supabaseClient.from('salary_records')
+            .select('id,status').eq('staff_id', staffId).eq('month', month).maybeSingle();
+        if (existingRec) {
+            if (existingRec.status === 'paid') {
+                showToast('Salary already marked paid for this month.', 'info');
+                return renderHRPayroll();
+            }
+            // Stuck in 'processing' — delete stale record before re-processing
+            await supabaseClient.from('salary_records').delete().eq('id', existingRec.id);
+        }
+
         const { data: allAdvs, error: advErr } = await supabaseClient
             .from('salary_advances').select('*')
             .eq('staff_id', staffId)
@@ -18072,7 +18441,7 @@ async function markSalaryPaid(staffId, staffName, month, monthlySalary, workingD
         const pendingAdvs = (allAdvs || []).filter(a => ((a.amount || 0) - (a.deducted || 0)) > 0.01);
         const deductInput = document.getElementById('deduct-' + staffId);
         const totalPending = pendingAdvs.reduce((t, a) => t + ((a.amount || 0) - (a.deducted || 0)), 0);
-        const finalDeductionAmount = deductInput ? parseFloat(deductInput.value || 0) : Math.min(earned, totalPending);
+        const finalDeductionAmount = deductInput ? parseFloat(deductInput.value || 0) : totalPending;
 
         let remainingToDeduct = finalDeductionAmount;
         const advanceOps = [];
@@ -18085,7 +18454,8 @@ async function markSalaryPaid(staffId, staffName, month, monthlySalary, workingD
             advanceOps.push({ id: adv.id, deductNow, oldDeducted: adv.deducted || 0 });
         }
 
-        const netPayable = +(earned - finalDeductionAmount).toFixed(2);
+        // Net payable cannot be negative — advance deduction clears to ₹0 minimum
+        const netPayable = +Math.max(0, earned - finalDeductionAmount).toFixed(2);
         const salData = {
             id: 'sal_' + Date.now() + '_' + staffId.slice(-4),
             staff_id: staffId, staff_name: staffName, month,
@@ -18096,7 +18466,7 @@ async function markSalaryPaid(staffId, staffName, month, monthlySalary, workingD
             paid_date: today(), paid_by: currentUser.name
         };
 
-        if (!confirm(`Confirm Salary for ${staffName}?\nNet: ${currency(netPayable)}`)) return;
+        if (!confirm(`Confirm Salary for ${staffName}?\nEarned: ${currency(earned)}\nAdv Deducted: ${currency(finalDeductionAmount)}\nNet Payable: ${currency(netPayable)}`)) return;
 
         // Step 1: Insert salary record
         const { error: insertErr } = await supabaseClient.from('salary_records').insert(salData);
@@ -18127,7 +18497,9 @@ async function markSalaryPaid(staffId, staffName, month, monthlySalary, workingD
                 await supabaseClient.from('salary_records').delete().eq('id', salData.id);
                 throw new Error('Transaction failed during advance deductions. Rolled back. ' + errMessage);
             } else {
-                await supabaseClient.from('salary_records').update({ status: 'paid' }).eq('id', salData.id);
+                const { error: statusErr } = await supabaseClient
+                    .from('salary_records').update({ status: 'paid' }).eq('id', salData.id);
+                if (statusErr) throw new Error('Advance deducted but status update failed: ' + statusErr.message);
             }
         }
 
