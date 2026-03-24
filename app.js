@@ -5514,46 +5514,48 @@ window.updateSoTotal = function () {
 function renderSOLines() {
     const el = $('so-lines-list'); if (!el) return;
 
-    const header = `<div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:2px solid var(--border);font-size:0.7rem;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px;width:100%">
-        <span style="width:20px;text-align:center">#</span>
-        <span style="flex:1">Item</span>
-        <span style="width:45px;text-align:center">Qty</span>
-        <span style="width:25px;text-align:center">UOM</span>
-        <span style="width:65px;text-align:right">Price</span>
-        <span style="width:40px;text-align:center">Dis%</span>
-        <span style="width:50px;text-align:center">Dis</span>
-        <span style="width:75px;text-align:right">Amount</span>
-        <span style="width:24px"></span>
-    </div>`;
-
-    el.innerHTML = header + soItems.map((li, i) => {
+    el.innerHTML = soItems.map((li, i) => {
         const edited = li.listedPrice !== undefined && Math.abs(li.price - li.listedPrice) > 0.01;
-        const alertStyle = li._priceAlert ? 'background:rgba(239, 68, 68, 0.05); border-left:3px solid var(--danger); padding-left:5px' : (edited ? 'background:rgba(245,158,11,0.05); border-left:3px solid var(--warning); padding-left:5px' : '');
-
-        return `<div style="display:flex;align-items:center;gap:6px;padding:6px 0;border-bottom:1px solid var(--border);${alertStyle};width:100%">
-            <span style="width:20px;text-align:center;font-size:0.75rem;color:var(--text-muted)">${i + 1}</span>
-            <div style="flex:1;min-width:140px;max-width:300px">
-                <div style="font-size:0.8rem;font-weight:600;white-space:normal;word-break:break-word;line-height:1.2">${li.name}</div>
-                ${li._priceAlert ? `<div style="font-size:0.6rem;color:var(--danger);font-weight:700"> < ${currency(li.purchasePrice)}</div>` : ''}
+        const borderColor = li._priceAlert ? 'var(--danger)' : edited ? 'var(--warning)' : 'var(--border)';
+        return `<div style="border:1px solid ${borderColor};border-radius:8px;padding:8px 10px;margin-bottom:6px;background:var(--surface)">
+            <!-- Row 1: index + name + delete -->
+            <div style="display:flex;align-items:flex-start;gap:6px;margin-bottom:6px">
+                <span style="font-size:0.72rem;color:var(--text-muted);min-width:16px;padding-top:2px">${i + 1}.</span>
+                <div style="flex:1;font-size:0.85rem;font-weight:600;line-height:1.3;word-break:break-word">${escapeHtml(li.name)}</div>
+                <button class="btn-icon" onclick="removeSOLine(${i})" style="color:var(--danger);flex-shrink:0;font-size:1rem;padding:0 2px;line-height:1"></button>
             </div>
-            <input type="number" value="${li.qty}" min="1" style="width:45px;padding:4px 2px;border-radius:4px;border:1px solid var(--border);text-align:center;font-size:0.75rem" onchange="updateSOLine(${i},'qty',this.value)">
-            <span style="font-size:0.7rem;color:var(--text-muted);width:25px;text-align:center">${li.unit || 'Pcs'}</span>
-            <div style="width:65px;text-align:right">
-                ${edited ? `<div style="font-size:0.55rem;text-decoration:line-through;color:var(--text-muted)">${currency(li.listedPrice)}</div>` : ''}
-                <input type="number" value="${(+li.price).toFixed(2)}" min="0" step="0.01" style="width:65px;padding:4px 2px;border-radius:4px;border:1px solid ${edited ? 'var(--warning)' : 'var(--border)'};text-align:right;font-size:0.75rem;${edited ? 'color:var(--warning);font-weight:600' : ''}" onchange="updateSOLine(${i},'price',this.value)">
+            <!-- Row 2: Qty | UOM | Price | Dis% | Amount -->
+            <div style="display:grid;grid-template-columns:60px 50px 1fr 60px 70px;gap:4px;align-items:center">
+                <div>
+                    <div style="font-size:0.6rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;margin-bottom:2px">Qty</div>
+                    <input type="number" value="${li.qty}" min="1" style="width:100%;padding:4px 4px;border-radius:4px;border:1px solid var(--border);text-align:center;font-size:0.8rem;box-sizing:border-box" onchange="updateSOLine(${i},'qty',this.value)">
+                </div>
+                <div>
+                    <div style="font-size:0.6rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;margin-bottom:2px">UOM</div>
+                    <div style="font-size:0.75rem;font-weight:600;padding:4px 2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(li.unit || 'Pcs')}</div>
+                </div>
+                <div>
+                    <div style="font-size:0.6rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;margin-bottom:2px">Price ₹${edited ? ` <span style="text-decoration:line-through;color:var(--text-muted)">${currency(li.listedPrice)}</span>` : ''}</div>
+                    <input type="number" value="${(+li.price).toFixed(2)}" min="0" step="0.01" style="width:100%;padding:4px 4px;border-radius:4px;border:1px solid ${edited ? 'var(--warning)' : 'var(--border)'};text-align:right;font-size:0.8rem;box-sizing:border-box;${edited ? 'color:var(--warning);font-weight:600' : ''}" onchange="updateSOLine(${i},'price',this.value)">
+                </div>
+                <div>
+                    <div style="font-size:0.6rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;margin-bottom:2px">Dis%</div>
+                    <input type="number" value="${li.discountPct || 0}" min="0" max="100" step="0.01" style="width:100%;padding:4px 4px;border-radius:4px;border:1px solid var(--border);text-align:center;font-size:0.8rem;box-sizing:border-box" onchange="updateSOLine(${i},'discountPct',this.value)">
+                </div>
+                <div style="text-align:right">
+                    <div style="font-size:0.6rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;margin-bottom:2px">Amount</div>
+                    <div style="font-size:0.9rem;font-weight:800;color:${li._priceAlert ? 'var(--danger)' : 'var(--accent)'}">${currency(li.amount)}</div>
+                </div>
             </div>
-            <input type="number" value="${li.discountPct || 0}" min="0" max="100" step="0.01" style="width:40px;padding:4px 2px;border-radius:4px;border:1px solid var(--border);text-align:center;font-size:0.75rem" onchange="updateSOLine(${i},'discountPct',this.value)">
-            <input type="number" value="${li.discountAmt || 0}" min="0" step="0.01" style="width:50px;padding:4px 2px;border-radius:4px;border:1px solid var(--border);text-align:center;font-size:0.75rem" onchange="updateSOLine(${i},'discountAmt',this.value)">
-            <span style="width:75px;text-align:right;font-weight:700;font-size:0.8rem;color:${li._priceAlert ? 'var(--danger)' : 'inherit'}">${currency(li.amount)}</span>
-            <button class="btn-icon" onclick="removeSOLine(${i})" style="flex-shrink:0;color:var(--danger);width:24px"></button>
+            ${li._priceAlert ? `<div style="font-size:0.65rem;color:var(--danger);font-weight:700;margin-top:4px"> Selling below purchase price (${currency(li.purchasePrice)})</div>` : ''}
         </div>`;
     }).join('');
 
     updateSoTotal();
 }
-function openSoItemSubModal() { const el = $('so-item-sub-modal'); if (el) el.classList.add('active'); }
+function openSoItemSubModal() { const el = $('so-item-sub-modal'); if (el) { el.classList.add('active'); setTimeout(() => { const inp = $('f-so-item-input'); if (inp) inp.focus(); }, 150); } }
 function closeSoItemSubModal() { const el = $('so-item-sub-modal'); if (el) el.classList.remove('active'); }
-function openInvItemSubModal() { const el = $('inv-item-sub-modal'); if (el) el.classList.add('active'); }
+function openInvItemSubModal() { const el = $('inv-item-sub-modal'); if (el) { el.classList.add('active'); setTimeout(() => { const inp = $('f-inv-item-input'); if (inp) inp.focus(); }, 150); } }
 function closeInvItemSubModal() { const el = $('inv-item-sub-modal'); if (el) el.classList.remove('active'); }
 
 async function saveSalesOrder(id) {
@@ -7281,44 +7283,41 @@ function updateInvoiceLine(idx, field, value) {
 }
 function renderInvoiceLines() {
     const el = $('inv-lines-list'); if (!el) return;
-    const invType = ($('f-inv-type') || {}).value;
 
-    const header = `<div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:2px solid var(--border);font-size:0.7rem;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px;width:100%">
-        <span style="width:20px;text-align:center">#</span>
-        <span style="flex:1">Item</span>
-        <span style="width:45px;text-align:center">Qty</span>
-        <span style="width:25px;text-align:center">UOM</span>
-        <span style="width:65px;text-align:right">Price</span>
-        <span style="width:40px;text-align:center">Dis%</span>
-        <span style="width:50px;text-align:center">Dis</span>
-        <span style="width:75px;text-align:right">Amount</span>
-        <span style="width:24px"></span>
-    </div>`;
-
-    el.innerHTML = header + invoiceItems.map((li, i) => {
+    el.innerHTML = invoiceItems.map((li, i) => {
         const edited = li.listedPrice !== undefined && Math.abs(li.price - li.listedPrice) > 0.01;
-        const gstLabel = li.gstRate ? `<span style="font-size:0.7rem;color:var(--text-muted)">Base ${currency(li.baseAmount || li.amount)} + GST ${li.gstRate}%: ${currency(li.taxAmount || 0)}</span>` : '';
-        const alertStyle = li._priceAlert ? 'background:rgba(239, 68, 68, 0.05); border-left:3px solid var(--danger); padding-left:5px' : (edited ? 'background:rgba(245,158,11,0.05); border-left:3px solid var(--warning); padding-left:5px' : '');
-
-        return `<div style="padding:6px 0;border-bottom:1px solid var(--border);${alertStyle}">
-            <div style="display:flex;align-items:center;gap:6px;width:100%">
-                <span style="width:20px;text-align:center;font-size:0.75rem;color:var(--text-muted)">${i + 1}</span>
-                <div style="flex:1;min-width:140px;max-width:300px">
-                    <div style="font-size:0.8rem;font-weight:600;white-space:normal;word-break:break-word;line-height:1.2">${li.name}</div>
-                    ${li._priceAlert ? `<div style="font-size:0.6rem;color:var(--danger);font-weight:700"> < ${currency(li.purchasePrice)}</div>` : ''}
-                </div>
-                <input type="number" value="${li.qty}" min="0.001" step="any" style="width:45px;padding:4px 2px;border-radius:4px;border:1px solid var(--border);text-align:center;font-size:0.75rem" onchange="updateInvoiceLine(${i},'qty',this.value)">
-                <span style="font-size:0.7rem;color:var(--text-muted);width:25px;text-align:center">${li.unit || 'Pcs'}</span>
-                <div style="width:65px;text-align:right">
-                    ${edited ? `<div style="font-size:0.55rem;text-decoration:line-through;color:var(--text-muted)">${currency(li.listedPrice)}</div>` : ''}
-                    <input type="number" value="${(+li.price).toFixed(2)}" min="0" step="0.01" style="width:65px;padding:4px 2px;border-radius:4px;border:1px solid ${edited ? 'var(--warning)' : 'var(--border)'};text-align:right;font-size:0.75rem;${edited ? 'color:var(--warning);font-weight:600' : ''}" onchange="updateInvoiceLine(${i},'price',this.value)">
-                </div>
-                <input type="number" value="${li.discountPct || 0}" min="0" max="100" step="0.01" placeholder="%" title="Discount %" style="width:40px;padding:4px 2px;border-radius:4px;border:1px solid var(--border);text-align:center;font-size:0.75rem" onchange="updateInvoiceLine(${i},'discountPct',this.value)">
-                <input type="number" value="${li.discountAmt || 0}" min="0" step="0.01" placeholder="" title="Discount " style="width:50px;padding:4px 2px;border-radius:4px;border:1px solid var(--border);text-align:center;font-size:0.75rem" onchange="updateInvoiceLine(${i},'discountAmt',this.value)">
-                <span style="width:75px;text-align:right;font-weight:700;font-size:0.8rem;color:${li._priceAlert ? 'var(--danger)' : 'inherit'}">${currency(li.amount)}</span>
-                <button class="btn-icon" onclick="removeInvoiceLine(${i})" style="flex-shrink:0;color:var(--danger);width:24px"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>
+        const borderColor = li._priceAlert ? 'var(--danger)' : edited ? 'var(--warning)' : 'var(--border)';
+        const gstLabel = li.gstRate ? `<div style="font-size:0.65rem;color:var(--text-muted);margin-top:4px">Base ${currency(li.baseAmount || li.amount)} + GST ${li.gstRate}%: ${currency(li.taxAmount || 0)}</div>` : '';
+        return `<div style="border:1px solid ${borderColor};border-radius:8px;padding:8px 10px;margin-bottom:6px;background:var(--surface)">
+            <div style="display:flex;align-items:flex-start;gap:6px;margin-bottom:6px">
+                <span style="font-size:0.72rem;color:var(--text-muted);min-width:16px;padding-top:2px">${i + 1}.</span>
+                <div style="flex:1;font-size:0.85rem;font-weight:600;line-height:1.3;word-break:break-word">${escapeHtml(li.name)}</div>
+                <button class="btn-icon" onclick="removeInvoiceLine(${i})" style="color:var(--danger);flex-shrink:0;font-size:1rem;padding:0 2px;line-height:1"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>
             </div>
-            ${gstLabel ? `<div style="padding-left:32px;margin-top:2px">${gstLabel}</div>` : ''}
+            <div style="display:grid;grid-template-columns:60px 50px 1fr 60px 70px;gap:4px;align-items:center">
+                <div>
+                    <div style="font-size:0.6rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;margin-bottom:2px">Qty</div>
+                    <input type="number" value="${li.qty}" min="0.001" step="any" style="width:100%;padding:4px 4px;border-radius:4px;border:1px solid var(--border);text-align:center;font-size:0.8rem;box-sizing:border-box" onchange="updateInvoiceLine(${i},'qty',this.value)">
+                </div>
+                <div>
+                    <div style="font-size:0.6rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;margin-bottom:2px">UOM</div>
+                    <div style="font-size:0.75rem;font-weight:600;padding:4px 2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(li.unit || 'Pcs')}</div>
+                </div>
+                <div>
+                    <div style="font-size:0.6rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;margin-bottom:2px">Price ₹${edited ? ` <span style="text-decoration:line-through;color:var(--text-muted)">${currency(li.listedPrice)}</span>` : ''}</div>
+                    <input type="number" value="${(+li.price).toFixed(2)}" min="0" step="0.01" style="width:100%;padding:4px 4px;border-radius:4px;border:1px solid ${edited ? 'var(--warning)' : 'var(--border)'};text-align:right;font-size:0.8rem;box-sizing:border-box;${edited ? 'color:var(--warning);font-weight:600' : ''}" onchange="updateInvoiceLine(${i},'price',this.value)">
+                </div>
+                <div>
+                    <div style="font-size:0.6rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;margin-bottom:2px">Dis%</div>
+                    <input type="number" value="${li.discountPct || 0}" min="0" max="100" step="0.01" style="width:100%;padding:4px 4px;border-radius:4px;border:1px solid var(--border);text-align:center;font-size:0.8rem;box-sizing:border-box" onchange="updateInvoiceLine(${i},'discountPct',this.value)">
+                </div>
+                <div style="text-align:right">
+                    <div style="font-size:0.6rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;margin-bottom:2px">Amount</div>
+                    <div style="font-size:0.9rem;font-weight:800;color:${li._priceAlert ? 'var(--danger)' : 'var(--accent)'}">${currency(li.amount)}</div>
+                </div>
+            </div>
+            ${li._priceAlert ? `<div style="font-size:0.65rem;color:var(--danger);font-weight:700;margin-top:4px"> Selling below purchase price (${currency(li.purchasePrice)})</div>` : ''}
+            ${gstLabel}
         </div>`;
     }).join('');
     // Auto round-off for sale invoices on every line change
