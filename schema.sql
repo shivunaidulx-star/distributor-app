@@ -71,7 +71,8 @@ CREATE TABLE IF NOT EXISTS inventory (
     warehouse TEXT DEFAULT 'Main Warehouse',
     price_tiers JSONB DEFAULT '[]',
     batches JSONB DEFAULT '[]',
-    photo TEXT
+    photo TEXT,
+    gst_rate NUMERIC DEFAULT 0
 );
 ALTER TABLE inventory ADD COLUMN IF NOT EXISTS item_code TEXT;
 ALTER TABLE inventory ADD COLUMN IF NOT EXISTS sub_category TEXT;
@@ -84,6 +85,7 @@ ALTER TABLE inventory ADD COLUMN IF NOT EXISTS warehouse TEXT DEFAULT 'Main Ware
 ALTER TABLE inventory ADD COLUMN IF NOT EXISTS price_tiers JSONB DEFAULT '[]';
 ALTER TABLE inventory ADD COLUMN IF NOT EXISTS batches JSONB DEFAULT '[]';
 ALTER TABLE inventory ADD COLUMN IF NOT EXISTS photo TEXT;
+ALTER TABLE inventory ADD COLUMN IF NOT EXISTS gst_rate NUMERIC DEFAULT 0;
 
 -- ─────────────────────────────────────────────
 -- 4. SALES ORDERS

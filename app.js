@@ -139,35 +139,53 @@ const DB = {
         } catch (e) { console.error('Core Refresh Error:', e); }
 
         const _bgLoad = (actualTable, query) => {
-            query.then(res => {
-                if (res.error) { console.error(`Bg Refresh Error ${actualTable}:`, res.error); return; }
+            Promise.resolve(query).then(res => {
+                if (!res || res.error) { console.warn(`Bg Refresh Error ${actualTable}:`, res?.error?.message || 'unknown'); return; }
                 const camel = this._toCamel(res.data || []);
                 this.cache[actualTable] = camel;
                 this.idb.set('db_' + actualTable, camel).catch(console.error);
-                // Trigger a UI refresh if we are on a page that needs this data
+                // Only trigger silent re-render on safe read-only pages — never during active form editing
+                const safePages = ['salesorders', 'invoices', 'payments', 'parties', 'inventory', 'delivery', 'catalog', 'dashboard'];
+                const isFormActive = document.querySelector('.sub-modal.active') !== null
+                    || document.querySelector('#modal-overlay:not(.hidden)') !== null;
                 const isCatalog = currentPage === 'catalog';
-                if (currentPage === actualTable || (actualTable === 'sales_orders' && currentPage === 'salesorders') || (isCatalog && (actualTable === 'sales_orders' || actualTable === 'inventory' || actualTable === 'parties'))) {
+                const needsRefresh = !isFormActive && (
+                    currentPage === actualTable
+                    || (actualTable === 'sales_orders' && currentPage === 'salesorders')
+                    || (isCatalog && (actualTable === 'sales_orders' || actualTable === 'inventory' || actualTable === 'parties'))
+                );
+                if (needsRefresh && safePages.includes(currentPage)) {
                     clearTimeout(this._bgNavTimer);
-                    this._bgNavTimer = setTimeout(() => navigateTo(currentPage, { silent: true }), 300);
+                    this._bgNavTimer = setTimeout(() => {
+                        // Double-check a modal/form didn't open in the 500ms gap
+                        const stillSafe = !document.querySelector('.sub-modal.active')
+                            && !document.querySelector('#modal-overlay:not(.hidden)');
+                        if (stillSafe) navigateTo(currentPage, { silent: true });
+                    }, 500);
                 }
                 if (actualTable === 'invoices' || actualTable === 'sales_orders') {
                     if (this.cache['invoices'] && this.cache['sales_orders']) repairCancelledInvoiceOrders();
                 }
+            }).catch(err => {
+                console.warn(`Bg load failed (${actualTable}): ${err.message}`);
             });
         };
 
+        // Helper: wrap query with 20s timeout to prevent hanging
+        const withT = (q) => Promise.race([q, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 20000))]);
+
         // 3. Batch 1: fire immediately (most-needed tables)
-        batch1.forEach(t => _bgLoad(this.mapTable(t), supabaseClient.from(this.mapTable(t)).select('*')));
+        batch1.forEach(t => _bgLoad(this.mapTable(t), withT(supabaseClient.from(this.mapTable(t)).select('*'))));
 
         // 4. Batch 2: fire after 2s delay so batch1 gets bandwidth priority
         setTimeout(() => {
-            batch2.forEach(t => _bgLoad(this.mapTable(t), supabaseClient.from(this.mapTable(t)).select('*')));
+            batch2.forEach(t => _bgLoad(this.mapTable(t), withT(supabaseClient.from(this.mapTable(t)).select('*'))));
         }, 2000);
 
         // 5. Ledger tables: load last 6 months only (unbounded = very slow on large data)
         setTimeout(() => {
-            _bgLoad('party_ledger', supabaseClient.from('party_ledger').select('*').gte('date', ledgerDateFrom).order('date', { ascending: false }));
-            _bgLoad('stock_ledger', supabaseClient.from('stock_ledger').select('*').gte('date', ledgerDateFrom).order('date', { ascending: false }));
+            _bgLoad('party_ledger', withT(supabaseClient.from('party_ledger').select('*').gte('date', ledgerDateFrom).order('date', { ascending: false })));
+            _bgLoad('stock_ledger', withT(supabaseClient.from('stock_ledger').select('*').gte('date', ledgerDateFrom).order('date', { ascending: false })));
         }, 4000);
 
         // gps_logs: NOT auto-loaded — fetch on demand in GPS admin view only
@@ -180,10 +198,10 @@ const DB = {
         // 3. Setup Auto-Sync (every 5 minutes or when tab becomes visible)
         if (!this._syncInit) {
             this._syncInit = true;
-            setInterval(() => this.backgroundSync(), 5 * 60 * 1000); // 5 min
+            setInterval(() => this.backgroundSync(), 10 * 60 * 1000); // 10 min (was 5 — too aggressive on mobile)
             window.addEventListener('visibilitychange', () => {
-                if (document.visibilityState === 'visible' && (Date.now() - this.cache._lastRefresh > 2 * 60 * 1000)) {
-                    console.log('Tab visible, auto-refreshing stale data...');
+                if (document.visibilityState === 'visible' && (Date.now() - this.cache._lastRefresh > 5 * 60 * 1000)) {
+                    console.log('Tab visible, refreshing data (stale > 5 min)...');
                     this.backgroundSync();
                 }
             });
@@ -191,21 +209,41 @@ const DB = {
     },
 
     backgroundSync: async function () {
+        // Guard: only one sync at a time
+        if (this._bgSyncing) { console.log('Background sync already running, skipping.'); return; }
+        this._bgSyncing = true;
         console.log('Running background sync...');
-        const tables = ['sales_orders', 'invoices', 'payments', 'inventory', 'parties'];
-        const success = await this.refreshTables(tables);
-        if (success) {
-            this.cache._lastRefresh = Date.now();
-            console.log('Background sync completed successfully.');
-        } else {
-            console.warn('Background sync partial failure. Timestamp not updated.');
+        try {
+            const tables = ['sales_orders', 'invoices', 'payments', 'inventory', 'parties'];
+            const success = await this.refreshTables(tables);
+            if (success) {
+                this.cache._lastRefresh = Date.now();
+                console.log('Background sync completed.');
+            }
+        } catch (e) {
+            console.warn('Background sync error:', e.message);
+        } finally {
+            this._bgSyncing = false;
         }
     },
 
     async refreshTables(tableList) {
-        const results = await Promise.all(tableList.map(t => supabaseClient.from(this.mapTable(t)).select('*')));
+        // Wrap each query with a 15-second timeout so a hanging request doesn't freeze the app
+        const withTimeout = (promise, ms = 15000) => {
+            const t = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms));
+            return Promise.race([promise, t]);
+        };
+        const results = await Promise.allSettled(
+            tableList.map(t => withTimeout(supabaseClient.from(this.mapTable(t)).select('*')))
+        );
         let allSuccess = true;
-        results.forEach((res, i) => {
+        results.forEach((result, i) => {
+            if (result.status === 'rejected') {
+                console.warn(`Bg refresh timeout/error (${tableList[i]}):`, result.reason?.message);
+                allSuccess = false;
+                return;
+            }
+            const res = result.value;
             if (res.error) {
                 console.error(`Error refreshing ${tableList[i]}:`, res.error);
                 allSuccess = false;
@@ -2170,7 +2208,6 @@ async function renderDashboard() {
             <div class="section-toolbar" style="margin-top:8px"><h3>Quick Actions</h3></div>
             <div class="quick-actions">
                 <button class="quick-action-btn" onclick="navigateTo('delivery')"><span class="qa-icon">🚚</span><span class="qa-label">My Deliveries</span></button>
-                <button class="quick-action-btn" onclick="navigateTo('deliverypersons')"><span class="qa-icon">🧑‍✈️</span><span class="qa-label">Del. Persons</span></button>
                 <button class="quick-action-btn" onclick="openPartyGpsModal()"><span class="qa-icon">📍</span><span class="qa-label">Update GPS</span></button>
             </div>
             <div class="card"><div class="card-header"><h3>My Active Dispatches</h3></div><div class="card-body">
@@ -2680,6 +2717,25 @@ async function onPartyTypeChange(sel) {
     }
 }
 
+function onPartyAreaChange(el) {
+    const area = (el.value || '').toLowerCase().trim();
+    if (!area) return;
+    const termsEl = document.getElementById('f-party-terms');
+    if (!termsEl) return;
+    // Auto-set payment terms only if not already chosen by user
+    if (termsEl.value) return; // already has a value, don't overwrite
+    const terms = getPaymentTermsList();
+    if (area.includes('town')) {
+        // Find "7 Days" or "Net 7" option
+        const t = terms.find(t => t.name === '7 Days') || terms.find(t => t.name === 'Net 7') || terms.find(t => t.days === 7);
+        if (t) termsEl.value = t.name;
+    } else if (area.includes('route')) {
+        // Find "COD" or "Due on Receipt" option
+        const t = terms.find(t => t.name === 'COD') || terms.find(t => t.name === 'Due on Receipt') || terms.find(t => t.days === 0);
+        if (t) termsEl.value = t.name;
+    }
+}
+
 async function openPartyModal(id) {
     const parties = await DB.getAll('parties');
     const p = id ? parties.find(x => x.id === id) : null;
@@ -2695,7 +2751,7 @@ async function openPartyModal(id) {
         <div class="form-row"><div class="form-group"><label>Type</label><select id="f-party-type" data-is-new="${!p}" onchange="onPartyTypeChange(this)"><option ${p && p.type === 'Customer' ? 'selected' : ''}>Customer</option><option ${p && p.type === 'Supplier' ? 'selected' : ''}>Supplier</option></select></div>
         <div class="form-group"><label>Phone</label><input id="f-party-phone" value="${p ? p.phone || '' : ''}"></div></div>
         <div class="form-row"><div class="form-group"><label>Party Group / Category</label><input id="f-party-group" value="${p ? p.group || '' : ''}" placeholder="e.g. Retailer, Wholesaler, Chain..."></div>
-        <div class="form-group"><label>Area / Route</label><input id="f-party-area" value="${p ? p.area || '' : ''}" placeholder="e.g. North Zone, Route-1"></div></div>
+        <div class="form-group"><label>Area / Route</label><input id="f-party-area" value="${p ? p.area || '' : ''}" placeholder="e.g. Town, Route-1" onchange="onPartyAreaChange(this)" onblur="onPartyAreaChange(this)"></div></div>
         <div class="form-row"><div class="form-group"><label>City</label><input id="f-party-city" value="${p ? p.city || '' : ''}"></div>
         <div class="form-group"><label>Post Code</label><input id="f-party-postcode" value="${p ? p.postCode || '' : ''}" placeholder="PIN / ZIP"></div></div>
         <div class="form-row"><div class="form-group"><label>GSTIN</label><input id="f-party-gstin" value="${p ? p.gstin || '' : ''}"></div>
@@ -5066,6 +5122,7 @@ async function filterSOTable() {
 }
 async function openSalesOrderModal() {
     soItems = [];
+    window._soExpandedLines = new Set();
     currentPage = 'salesorders';
     pageTitle.textContent = 'New Sales Order';
 
@@ -5191,6 +5248,8 @@ async function openSalesOrderModal() {
 
     // Show party dropdown immediately with cached GPS; silently re-sort in background
     initSearchDropdown('f-so-party', buildPartySearchList(customers));
+    // Auto-focus party field so user can start typing immediately
+    setTimeout(() => { const inp = $('f-so-party'); if (inp) inp.focus(); }, 100);
     // Use maximumAge:0 for truly fresh location; only re-sort if user isn't actively on the field
     ensureGeolocation(0).then(() => {
         const inp = $('f-so-party');
@@ -5388,12 +5447,18 @@ function addSOLine() {
 
     // Add the new line with listedPrice for comparison
     const roundedPrice = +price.toFixed(2);
+    const itemGstRate = +(itemObj.gstRate || 0);
+    const lineAmount = +(qty * roundedPrice).toFixed(2);
+    const lineBase = itemGstRate > 0 ? +(lineAmount / (1 + itemGstRate / 100)).toFixed(2) : lineAmount;
+    const lineTax = +(lineAmount - lineBase).toFixed(2);
     soItems.push({
         itemId, name: itemObj.name, qty, price: roundedPrice,
         listedPrice: +unitListedPrice.toFixed(2),
         purchasePrice: +unitPurchasePrice.toFixed(2),
         discountAmt: 0, discountPct: 0,
-        amount: +(qty * roundedPrice).toFixed(2), unit, primaryQty
+        amount: lineAmount, unit, primaryQty,
+        gstRate: itemGstRate, baseAmount: lineBase, taxAmount: lineTax,
+        hsn: itemObj.hsn || ''
     });
 
     // Retroactively update existing lines for the same item if the price tier changed
@@ -5457,6 +5522,11 @@ function updateSOLine(idx, field, value) {
 
     li.amount = +((li.qty * li.price) - (li.discountAmt || 0)).toFixed(2);
 
+    // Recalculate GST components after amount changes
+    const gstR = +(li.gstRate || 0);
+    li.baseAmount = gstR > 0 ? +(li.amount / (1 + gstR / 100)).toFixed(2) : li.amount;
+    li.taxAmount = +(li.amount - li.baseAmount).toFixed(2);
+
     // Price Alert Logic
     const unitPrice = li.qty > 0 ? li.amount / li.qty : 0;
     li._priceAlert = (unitPrice < (li.purchasePrice || 0) - 0.01);
@@ -5499,11 +5569,27 @@ window.updateSoTotal = function () {
     const totalDiscount = discAmt;
     let finalTotal = subtotal - totalDiscount;
 
+    // Build GST breakdown from per-item rates
+    const hasItemGst = soItems.some(li => (li.gstRate || 0) > 0);
+    let gstLines = '';
+    let totalTax = 0;
+    if (hasItemGst) {
+        const rateMap = {};
+        soItems.forEach(li => {
+            if ((li.gstRate || 0) > 0) rateMap[li.gstRate] = (rateMap[li.gstRate] || 0) + (li.taxAmount || 0);
+        });
+        totalTax = Object.values(rateMap).reduce((s, v) => s + v, 0);
+        gstLines = Object.entries(rateMap).sort((a, b) => +a[0] - +b[0])
+            .map(([r, amt]) => `<span style="color:var(--text-muted)">GST ${r}% <i>(Incl.)</i>: <b>${currency(amt)}</b></span>`).join('');
+    }
+
     const el = $('so-total-display');
     if (el) {
         el.innerHTML = `
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;font-size:0.82rem;text-align:right;width:100%">
-            <span style="color:var(--text-muted)">Subtotal: <b>${currency(subtotal)}</b></span>
+            ${gstLines}
+            ${totalTax ? `<span style="color:var(--text-muted)">Total GST <i>(Included)</i>: <b>${currency(totalTax)}</b></span>` : ''}
+            <span style="color:var(--text-muted)${hasItemGst ? ';border-top:1px dashed var(--border);padding-top:3px;margin-top:2px;width:100%' : ''}">Subtotal: <b>${currency(subtotal)}</b></span>
             ${totalDiscount ? `<span style="color:var(--danger)">Discount: <b>-${currency(totalDiscount)}</b></span>` : ''}
             <span style="color:var(--text-muted);border-top:1px dashed var(--border);padding-top:3px;margin-top:2px;width:100%"></span>
             <span style="font-size:1.15rem;font-weight:800;color:var(--accent)">Total: ${currency(Math.max(0, finalTotal))}</span>
@@ -5513,22 +5599,33 @@ window.updateSoTotal = function () {
 
 function renderSOLines() {
     const el = $('so-lines-list'); if (!el) return;
+    if (!window._soExpandedLines) window._soExpandedLines = new Set();
 
     el.innerHTML = soItems.map((li, i) => {
         const edited = li.listedPrice !== undefined && Math.abs(li.price - li.listedPrice) > 0.01;
         const borderColor = li._priceAlert ? 'var(--danger)' : edited ? 'var(--warning)' : 'var(--border)';
-        return `<div style="border:1px solid ${borderColor};border-radius:8px;padding:8px 10px;margin-bottom:6px;background:var(--surface)">
-            <!-- Row 1: index + name + delete -->
-            <div style="display:flex;align-items:flex-start;gap:6px;margin-bottom:6px">
-                <span style="font-size:0.72rem;color:var(--text-muted);min-width:16px;padding-top:2px">${i + 1}.</span>
-                <div style="flex:1;font-size:0.85rem;font-weight:600;line-height:1.3;word-break:break-word">${escapeHtml(li.name)}</div>
-                <button class="btn-icon" onclick="removeSOLine(${i})" style="color:var(--danger);flex-shrink:0;font-size:1rem;padding:0 2px;line-height:1"></button>
+        const isExpanded = window._soExpandedLines.has(i);
+        const discSummary = li.discountPct > 0 ? ` · ${li.discountPct}% off` : (li.discountAmt > 0 ? ` · -${currency(li.discountAmt)}` : '');
+        return `<div style="border:1px solid ${borderColor};border-radius:8px;margin-bottom:6px;background:var(--surface);overflow:hidden">
+            <!-- Collapsed header — always visible, click to expand -->
+            <div style="display:flex;align-items:center;gap:6px;padding:8px 10px;cursor:pointer" onclick="toggleSOLine(${i})">
+                <span style="font-size:0.72rem;color:var(--text-muted);min-width:16px;flex-shrink:0">${i + 1}.</span>
+                <div style="flex:1;min-width:0">
+                    <div style="font-size:0.85rem;font-weight:600;line-height:1.2;word-break:break-word">${escapeHtml(li.name)}</div>
+                    <div style="font-size:0.72rem;color:var(--text-muted);margin-top:2px">${li.qty} ${escapeHtml(li.unit || 'Pcs')} × ${currency(li.price)}${discSummary}${li.gstRate ? ` · GST ${li.gstRate}%` : ''}</div>
+                </div>
+                <div style="text-align:right;flex-shrink:0">
+                    <div style="font-size:0.95rem;font-weight:800;color:${li._priceAlert ? 'var(--danger)' : 'var(--accent)'}">${currency(li.amount)}</div>
+                </div>
+                <span style="font-size:0.75rem;color:var(--text-muted);flex-shrink:0;padding-left:4px">${isExpanded ? '▲' : '▼'}</span>
+                <button class="btn-icon" onclick="event.stopPropagation();removeSOLine(${i})" style="color:var(--danger);flex-shrink:0;font-size:1rem;padding:0 2px;line-height:1"></button>
             </div>
-            <!-- Row 2: Qty | UOM | Price | Dis% | Amount -->
-            <div style="display:grid;grid-template-columns:60px 50px 1fr 60px 70px;gap:4px;align-items:center">
+            <!-- Expanded edit controls -->
+            ${isExpanded ? `<div style="padding:8px 10px;padding-top:0;border-top:1px solid var(--border)">
+            <div style="display:grid;grid-template-columns:60px 50px 1fr 60px 70px;gap:4px;align-items:center;margin-top:8px">
                 <div>
                     <div style="font-size:0.6rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;margin-bottom:2px">Qty</div>
-                    <input type="number" value="${li.qty}" min="1" style="width:100%;padding:4px 4px;border-radius:4px;border:1px solid var(--border);text-align:center;font-size:0.8rem;box-sizing:border-box" onchange="updateSOLine(${i},'qty',this.value)">
+                    <input type="number" value="${li.qty}" min="1" style="width:100%;padding:4px;border-radius:4px;border:1px solid var(--border);text-align:center;font-size:0.8rem;box-sizing:border-box" onchange="updateSOLine(${i},'qty',this.value)">
                 </div>
                 <div>
                     <div style="font-size:0.6rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;margin-bottom:2px">UOM</div>
@@ -5536,23 +5633,32 @@ function renderSOLines() {
                 </div>
                 <div>
                     <div style="font-size:0.6rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;margin-bottom:2px">Price ₹${edited ? ` <span style="text-decoration:line-through;color:var(--text-muted)">${currency(li.listedPrice)}</span>` : ''}</div>
-                    <input type="number" value="${(+li.price).toFixed(2)}" min="0" step="0.01" style="width:100%;padding:4px 4px;border-radius:4px;border:1px solid ${edited ? 'var(--warning)' : 'var(--border)'};text-align:right;font-size:0.8rem;box-sizing:border-box;${edited ? 'color:var(--warning);font-weight:600' : ''}" onchange="updateSOLine(${i},'price',this.value)">
+                    <input type="number" value="${(+li.price).toFixed(2)}" min="0" step="0.01" style="width:100%;padding:4px;border-radius:4px;border:1px solid ${edited ? 'var(--warning)' : 'var(--border)'};text-align:right;font-size:0.8rem;box-sizing:border-box;${edited ? 'color:var(--warning);font-weight:600' : ''}" onchange="updateSOLine(${i},'price',this.value)">
                 </div>
                 <div>
                     <div style="font-size:0.6rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;margin-bottom:2px">Dis%</div>
-                    <input type="number" value="${li.discountPct || 0}" min="0" max="100" step="0.01" style="width:100%;padding:4px 4px;border-radius:4px;border:1px solid var(--border);text-align:center;font-size:0.8rem;box-sizing:border-box" onchange="updateSOLine(${i},'discountPct',this.value)">
+                    <input type="number" value="${li.discountPct || 0}" min="0" max="100" step="0.01" style="width:100%;padding:4px;border-radius:4px;border:1px solid var(--border);text-align:center;font-size:0.8rem;box-sizing:border-box" onchange="updateSOLine(${i},'discountPct',this.value)">
                 </div>
                 <div style="text-align:right">
                     <div style="font-size:0.6rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;margin-bottom:2px">Amount</div>
                     <div style="font-size:0.9rem;font-weight:800;color:${li._priceAlert ? 'var(--danger)' : 'var(--accent)'}">${currency(li.amount)}</div>
                 </div>
             </div>
+            ${li.gstRate ? `<div style="font-size:0.65rem;color:var(--text-muted);margin-top:6px">Base ${currency(li.baseAmount || li.amount)} + GST ${li.gstRate}%: ${currency(li.taxAmount || 0)}</div>` : ''}
             ${li._priceAlert ? `<div style="font-size:0.65rem;color:var(--danger);font-weight:700;margin-top:4px"> Selling below purchase price (${currency(li.purchasePrice)})</div>` : ''}
+            </div>` : `${li._priceAlert ? `<div style="padding:4px 10px 8px;font-size:0.65rem;color:var(--danger);font-weight:700"> Selling below purchase price</div>` : ''}`}
         </div>`;
     }).join('');
 
     updateSoTotal();
 }
+
+window.toggleSOLine = function(i) {
+    if (!window._soExpandedLines) window._soExpandedLines = new Set();
+    if (window._soExpandedLines.has(i)) window._soExpandedLines.delete(i);
+    else window._soExpandedLines.add(i);
+    renderSOLines();
+};
 function openSoItemSubModal() { const el = $('so-item-sub-modal'); if (el) { el.classList.add('active'); setTimeout(() => { const inp = $('f-so-item-input'); if (inp) inp.focus(); }, 150); } }
 function closeSoItemSubModal() { const el = $('so-item-sub-modal'); if (el) el.classList.remove('active'); }
 function openInvItemSubModal() { const el = $('inv-item-sub-modal'); if (el) { el.classList.add('active'); setTimeout(() => { const inp = $('f-inv-item-input'); if (inp) inp.focus(); }, 150); } }
@@ -11090,7 +11196,7 @@ async function renderPackOrderPage() {
         return `
                         <div class="pack-card" id="pack-row-${idx}">
                             <div class="pack-card-photo" onclick="packViewPhoto('${li.itemId}','${escapeHtml(li.name)}','${o.id}')">
-                                ${item && item.photo ? `<img src="${item.photo}">` : ''}
+                                ${item && item.photo ? `<img src="${item.photo}">` : '<span style="font-size:1.6rem;opacity:0.35">📷</span>'}
                             </div>
                             <div class="pack-card-info">
                                 <div class="pack-card-name">${escapeHtml(li.name)}</div>
@@ -11144,15 +11250,24 @@ async function renderPackOrderPage() {
 
 // --- Packing Photo Helpers ---
 function packViewPhoto(itemId, itemName, orderId) {
-    // Open a fullscreen-style view of the product photo
     const inv = DB.get('db_inventory');
-    const item = inv.find(x => x.id === itemId);
-    if (!item || !item.photo) return;
-    openModal(itemName, `
+    const item = inv ? inv.find(x => x.id === itemId) : null;
+    const backBtn = `<button class="btn btn-outline" onclick="${orderId ? `closeModal();startPacking('${orderId}')` : 'closeModal()'}"> Back</button>`;
+    if (!item || !item.photo) {
+        openModal(escapeHtml(itemName), `
+            <div style="text-align:center;padding:32px 16px;color:var(--text-muted)">
+                <div style="font-size:3rem;margin-bottom:10px">📷</div>
+                <div style="font-size:0.9rem">No photo uploaded for this item.</div>
+                <div style="font-size:0.78rem;margin-top:6px">Add a photo from Item Master → Edit Item.</div>
+            </div>
+            <div class="modal-actions">${backBtn}</div>`);
+        return;
+    }
+    openModal(escapeHtml(itemName), `
         <div style="text-align:center;padding:8px">
             <img src="${item.photo}" style="max-width:100%;max-height:70vh;border-radius:10px;object-fit:contain">
         </div>
-        <div class="modal-actions"><button class="btn btn-outline" onclick="${orderId ? `startPacking('${orderId}')` : 'closeModal()'}"> Back to Order</button></div>`);
+        <div class="modal-actions">${backBtn}</div>`);
 }
 
 function packAddItemPhoto(itemId, rowIdx) {
@@ -12552,6 +12667,9 @@ function calcDistanceKm(lat1, lng1, lat2, lng2) {
 }
 
 async function printDeliveryRouteSheet() {
+    // Open window FIRST (synchronously) before any await — mobile browsers block window.open after async gaps
+    const w = window.open('', '_blank');
+    if (w) w.document.write('<html><body style="font-family:sans-serif;padding:20px;text-align:center"><p style="font-size:1.2rem;margin-top:80px"> Loading route sheet...</p></body></html>');
     const [dels, allParties] = await Promise.all([DB.getAll('delivery'), DB.getAll('parties'), DB.getAll('salesorders')]);
     const dispatched = dels.filter(d => d.status === 'Dispatched');
     const co = DB.getObj('db_company') || {};
@@ -12686,7 +12804,8 @@ async function printDeliveryRouteSheet() {
         <div style="font-size:0.85rem;color:#666">Route Sheet &nbsp;|&nbsp; Printed: ${new Date().toLocaleString('en-IN')}${hasWarehouseGps ? ' &nbsp;|&nbsp;  GPS-optimised route' : ''}</div>
     </div><hr style="margin-bottom:16px">`;
 
-    const w = window.open('', '_blank');
+    if (!w) { alert('Popup blocked. Please allow popups for this site.'); return; }
+    w.document.open();
     w.document.write(`<!DOCTYPE html><html><head><title>Route Sheet</title>
     <style>body{font-family:sans-serif;padding:20px;max-width:960px;margin:0 auto}@media print{button{display:none}.no-print{display:none}}</style>
     </head><body>${header}${sections || '<p>No dispatched deliveries</p>'}
@@ -12795,6 +12914,36 @@ async function dispatchOrder(orderId) {
     closeModal();
     await renderDelivery();
     showToast(`${o.orderNo} dispatched!`, 'success');
+}
+
+function updateDelStatus(id) {
+    const dels = DB.cache['delivery'] || [];
+    const d = dels.find(x => x.id === id);
+    if (!d) return;
+    openModal('Update Delivery', `
+        <div style="margin-bottom:14px;padding:12px 14px;background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.25);border-radius:8px">
+            <div style="font-weight:700;font-size:0.95rem">${escapeHtml(d.partyName || '')}</div>
+            <div style="font-size:0.8rem;color:var(--text-muted);margin-top:2px">Order: ${d.orderNo || '-'} &nbsp;|&nbsp; Invoice: ${d.invoiceNo || '-'}</div>
+        </div>
+        <div style="font-size:0.85rem;color:var(--text-muted);margin-bottom:12px">Choose the delivery outcome:</div>
+        <div style="display:flex;flex-direction:column;gap:10px">
+            <button class="btn btn-primary" style="padding:12px;font-size:0.95rem" onclick="confirmDelivered('${id}')"> Mark as Delivered</button>
+            <button class="btn btn-outline" style="padding:12px;font-size:0.95rem;border-color:var(--danger);color:var(--danger)" onclick="closeModal();openUndeliveredModal('${id}')">↩️ Cannot Deliver / Return</button>
+        </div>
+        <div class="modal-actions" style="margin-top:12px">
+            <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+        </div>`);
+}
+
+async function confirmDelivered(id) {
+    try {
+        await DB.update('delivery', id, { status: 'Delivered', deliveredAt: today() });
+        closeModal();
+        await renderDelivery();
+        showToast('Marked as Delivered', 'success');
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
 }
 
 async function updateDeliveryStatus(id, status) {
@@ -15680,7 +15829,9 @@ function getPaymentTermsList() {
     const co = DB.getObj('db_company') || {};
     if (co.paymentTermsList && co.paymentTermsList.length) return co.paymentTermsList;
     return [
+        { name: 'COD', days: 0 },
         { name: 'Due on Receipt', days: 0 },
+        { name: '7 Days', days: 7 },
         { name: 'Net 7', days: 7 },
         { name: 'Net 15', days: 15 },
         { name: 'Net 30', days: 30 },

@@ -3166,7 +3166,9 @@ body.pay-form-open .pay-page-footer {
     font-size: 1.5rem;
     flex-shrink: 0;
     overflow: hidden;
+    cursor: pointer;
 }
+.pack-card-photo:active { opacity: 0.75; }
 .pack-card-photo img { width: 100%; height: 100%; object-fit: cover; }
 
 .pack-card-info { flex: 1; min-width: 0; }
