@@ -1,4 +1,4 @@
-/* ============================================
+﻿/* ============================================
    Prakash Traders  Core Application (Refactored)
    ============================================ */
 
@@ -3752,9 +3752,13 @@ function openItemModal(id) {
             </div>
             <div style="flex:1">
                 <div style="font-size:0.82rem;color:var(--text-muted);margin-bottom:4px">Item Photo (optional)</div>
-                <input type="file" id="f-item-photo" accept="image/*" style="display:none" onchange="previewItemPhoto(event)">
-                <button class="btn btn-outline btn-sm" onclick="document.getElementById('f-item-photo').click()" style="font-size:0.78rem"> Upload Photo</button>
-                ${i && (i.imageUrl || i.photo) ? ' <button class="btn btn-outline btn-sm" onclick="removeItemPhoto()" style="font-size:0.78rem"> Remove</button>' : ''}
+                <input type="file" id="f-item-photo-gallery" accept="image/*" style="display:none" onchange="previewItemPhoto(event)">
+                <input type="file" id="f-item-photo-camera" accept="image/*" capture="environment" style="display:none" onchange="previewItemPhoto(event)">
+                <div style="display:flex;gap:6px;flex-wrap:wrap">
+                    <button class="btn btn-outline btn-sm" onclick="document.getElementById('f-item-photo-camera').click()" style="font-size:0.78rem">📷 Camera</button>
+                    <button class="btn btn-outline btn-sm" onclick="document.getElementById('f-item-photo-gallery').click()" style="font-size:0.78rem">🖼️ Gallery</button>
+                    ${i && (i.imageUrl || i.photo) ? '<button class="btn btn-outline btn-sm" onclick="removeItemPhoto()" style="font-size:0.78rem"> Remove</button>' : ''}
+                </div>
             </div>
             <input type="hidden" id="f-item-existing-url" value="${i && i.imageUrl ? i.imageUrl : (i && i.photo ? i.photo : '')}">
         </div>
@@ -11398,10 +11402,12 @@ function packViewPhoto(itemId, itemName, orderId) {
                 <div style="font-size:3rem;margin-bottom:10px">📷</div>
                 <div style="font-size:0.9rem;font-weight:600;margin-bottom:6px">No photo uploaded for this item.</div>
                 <div style="font-size:0.78rem;margin-bottom:20px;color:var(--text-muted)">Take a photo now to add it to the item catalogue.</div>
-                <input type="file" id="pack-modal-photo-input" accept="image/*" capture="environment" style="display:none" onchange="packAddPhotoFromModal('${itemId}','${escapeHtml(itemName)}','${orderId}',this)">
-                <button class="btn btn-primary" style="width:100%;padding:12px;font-size:1rem;border-radius:12px;margin-bottom:8px" onclick="document.getElementById('pack-modal-photo-input').click()">
-                    📷 Take / Upload Photo
-                </button>
+                <input type="file" id="pack-modal-photo-camera" accept="image/*" capture="environment" style="display:none" onchange="packAddPhotoFromModal('${itemId}','${escapeHtml(itemName)}','${orderId}',this)">
+                <input type="file" id="pack-modal-photo-gallery" accept="image/*" style="display:none" onchange="packAddPhotoFromModal('${itemId}','${escapeHtml(itemName)}','${orderId}',this)">
+                <div style="display:flex;gap:10px;justify-content:center;margin-bottom:8px">
+                    <button class="btn btn-primary" style="flex:1;padding:12px;font-size:1rem;border-radius:12px" onclick="document.getElementById('pack-modal-photo-camera').click()">📷 Camera</button>
+                    <button class="btn btn-outline" style="flex:1;padding:12px;font-size:1rem;border-radius:12px" onclick="document.getElementById('pack-modal-photo-gallery').click()">🖼️ Gallery</button>
+                </div>
             </div>
             <div class="modal-actions">${backBtn}</div>`);
         return;
@@ -11411,8 +11417,12 @@ function packViewPhoto(itemId, itemName, orderId) {
             <img src="${item.photo}" style="max-width:100%;max-height:70vh;border-radius:10px;object-fit:contain">
         </div>
         <div style="margin-top:8px;text-align:center">
-            <input type="file" id="pack-modal-photo-replace" accept="image/*" capture="environment" style="display:none" onchange="packAddPhotoFromModal('${itemId}','${escapeHtml(itemName)}','${orderId}',this)">
-            <button class="btn btn-outline btn-sm" onclick="document.getElementById('pack-modal-photo-replace').click()">🔄 Replace Photo</button>
+            <input type="file" id="pack-modal-photo-replace-camera" accept="image/*" capture="environment" style="display:none" onchange="packAddPhotoFromModal('${itemId}','${escapeHtml(itemName)}','${orderId}',this)">
+            <input type="file" id="pack-modal-photo-replace-gallery" accept="image/*" style="display:none" onchange="packAddPhotoFromModal('${itemId}','${escapeHtml(itemName)}','${orderId}',this)">
+            <div style="display:flex;gap:8px;justify-content:center">
+                <button class="btn btn-outline btn-sm" onclick="document.getElementById('pack-modal-photo-replace-camera').click()">📷 Retake</button>
+                <button class="btn btn-outline btn-sm" onclick="document.getElementById('pack-modal-photo-replace-gallery').click()">🖼️ Gallery</button>
+            </div>
         </div>
         <div class="modal-actions">${backBtn}</div>`);
 }
@@ -11422,7 +11432,7 @@ function packAddItemPhoto(itemId, rowIdx) {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = 'image/*';
-    input.capture = 'environment'; // prefer rear camera on mobile
+    // No forced capture — let OS picker show both Camera and Gallery options
     input.style.display = 'none';
     document.body.appendChild(input);
     input.onchange = async function () {
@@ -12311,6 +12321,7 @@ function renderDelCards(dels, allParties) {
                 <div style="font-size:0.75rem;color:var(--text-muted);display:flex;flex-direction:column;gap:2px">
                     <span>Date: ${fmtDate(d.date)}</span>
                     <span style="color:#3b82f6;font-weight:600">By: ${d.deliveryPerson || '-'}</span>
+                    ${d.dispatchedAt ? `<span style="color:var(--text-muted);font-size:0.7rem">Dispatched: ${fmtDate(d.dispatchedAt)}</span>` : ''}
                 </div>
                 <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">
                     <span style="font-size:0.75rem;color:var(--text-muted)">Order: #${d.orderNo}</span>
@@ -12457,6 +12468,95 @@ async function saveChangeDeliveryPerson(id) {
     await renderDelivery();
     showToast('Delivery person updated!', 'success');
 }
+
+// viewDelivery = alias used by mobile delivery cards and table view buttons
+function viewDelivery(id) {
+    viewDeliveryDetail(id);
+}
+
+async function printDeliverySlip(id) {
+    const [dels, allParties, inventory, allInvoices] = await Promise.all([
+        DB.getAll('delivery'), DB.getAll('parties'),
+        DB.getAll('inventory'), DB.getAll('invoices')
+    ]);
+    const d = dels.find(x => x.id === id);
+    if (!d) return alert('Delivery not found.');
+    const party = allParties.find(p => p.id === d.partyId) || {};
+    const inv = d.invoiceNo ? allInvoices.find(i => i.invoiceNo === d.invoiceNo) : null;
+    const co = DB.ls.getObj('db_company') || {};
+    const items = d.items || [];
+
+    // Package info
+    let pkgs = d.packageNumbers || [];
+    let bc = d.boxCount || 0, cc = d.crateCount || 0;
+    let boxes = d.boxNumbers || [], crates = d.crateNumbers || [];
+    if (!pkgs.length && !boxes.length && !crates.length && d.orderId) {
+        const so = (DB.cache['salesorders'] || []).find(o => o.id === d.orderId);
+        if (so) { bc = so.boxCount||0; cc = so.crateCount||0; boxes = so.boxNumbers||[]; crates = so.crateNumbers||[]; }
+    }
+    if (!boxes.length && bc > 0) boxes = pkgs.slice(0, bc);
+    if (!crates.length && cc > 0) crates = pkgs.slice(bc, bc + cc);
+    const pkgStr = [
+        boxes.length ? '📦 ' + boxes.join(', ') : '',
+        crates.length ? '📋 ' + crates.join(', ') : ''
+    ].filter(Boolean).join(' | ') || '-';
+
+    const itemRows = items.map(li => {
+        const invItem = inventory.find(x => x.id === li.itemId || x.name === li.name);
+        const photoCell = invItem && invItem.photo
+            ? `<img src="${invItem.photo}" style="width:40px;height:40px;object-fit:cover;border-radius:4px">`
+            : '';
+        const amt = (li.qty||0) * (li.price||li.salePrice||0);
+        return `<tr><td style="border:1px solid #ddd;padding:5px">${photoCell}</td><td style="border:1px solid #ddd;padding:5px;font-weight:600">${li.name||''}</td><td style="border:1px solid #ddd;padding:5px;text-align:center">${li.qty||0} ${li.unit||''}</td><td style="border:1px solid #ddd;padding:5px;text-align:right">${(li.price||li.salePrice||0).toFixed(2)}</td><td style="border:1px solid #ddd;padding:5px;text-align:right;font-weight:700">${amt.toFixed(2)}</td></tr>`;
+    }).join('');
+
+    const slipHtml = `<!DOCTYPE html><html><head><title>Delivery Slip - ${d.orderNo}</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <style>body{font-family:sans-serif;padding:16px;max-width:600px;margin:0 auto;font-size:14px}h2{margin:0 0 4px}table{width:100%;border-collapse:collapse}@media print{.no-print{display:none}}</style>
+    </head><body>
+    <div style="text-align:center;border-bottom:2px solid #333;padding-bottom:10px;margin-bottom:12px">
+        <h2>${co.name || 'Delivery Slip'}</h2>
+        <div style="font-size:12px;color:#666">${co.address||''} ${co.city||''}</div>
+        <div style="font-size:12px;color:#666">${co.phone||''} ${co.gstin ? '| GSTIN: '+co.gstin : ''}</div>
+    </div>
+    <table style="margin-bottom:12px;font-size:13px"><tr><td style="padding:3px 8px 3px 0"><strong>Order #:</strong></td><td>${d.orderNo}</td><td style="padding:3px 8px"><strong>Invoice:</strong></td><td>${d.invoiceNo||'-'}</td></tr>
+    <tr><td style="padding:3px 8px 3px 0"><strong>Party:</strong></td><td colspan="3">${d.partyName}</td></tr>
+    <tr><td style="padding:3px 8px 3px 0"><strong>Address:</strong></td><td colspan="3">${party.address||party.city||'-'}</td></tr>
+    <tr><td style="padding:3px 8px 3px 0"><strong>Phone:</strong></td><td>${party.phone||'-'}</td><td style="padding:3px 8px"><strong>Status:</strong></td><td>${d.status}</td></tr>
+    <tr><td style="padding:3px 8px 3px 0"><strong>Del. By:</strong></td><td>${d.deliveryPerson||'-'}</td><td style="padding:3px 8px"><strong>Date:</strong></td><td>${d.dispatchedAt || d.date || '-'}</td></tr>
+    <tr><td style="padding:3px 8px 3px 0"><strong>Packages:</strong></td><td colspan="3">${pkgStr}</td></tr>
+    </table>
+    <table style="width:100%;border-collapse:collapse;margin-bottom:12px;font-size:12px">
+    <thead><tr style="background:#f3f4f6"><th style="border:1px solid #ddd;padding:5px">Photo</th><th style="border:1px solid #ddd;padding:5px">Item</th><th style="border:1px solid #ddd;padding:5px">Qty</th><th style="border:1px solid #ddd;padding:5px;text-align:right">Rate</th><th style="border:1px solid #ddd;padding:5px;text-align:right">Amt</th></tr></thead>
+    <tbody>${itemRows}</tbody>
+    <tfoot><tr><td colspan="4" style="border:1px solid #ddd;padding:6px;text-align:right;font-weight:700">Total</td><td style="border:1px solid #ddd;padding:6px;text-align:right;font-weight:700">${(d.total||0).toFixed(2)}</td></tr></tfoot>
+    </table>
+    ${inv && inv.dueDate ? `<div style="background:#fff7ed;border:1px solid #f97316;border-radius:6px;padding:8px;margin-bottom:10px;font-size:12px">⚠️ <strong>Due Date: ${inv.dueDate}</strong> | Balance: ${currency ? '' : '₹'}${(d.total||0).toFixed(2)}</div>` : ''}
+    <div style="margin-top:24px;display:flex;justify-content:space-between">
+        <div style="text-align:center;width:45%"><div style="border-top:1px solid #333;padding-top:4px;font-size:11px">Delivery Person Signature</div></div>
+        <div style="text-align:center;width:45%"><div style="border-top:1px solid #333;padding-top:4px;font-size:11px">Customer Signature</div></div>
+    </div>
+    <div class="no-print" style="margin-top:16px;text-align:center;display:flex;gap:10px;justify-content:center">
+        <button onclick="window.print()" style="padding:10px 24px;background:#f97316;color:#fff;border:none;border-radius:8px;font-size:1rem;cursor:pointer">🖨️ Print</button>
+        <button onclick="document.getElementById('del-slip-modal').remove()" style="padding:10px 24px;background:#6b7280;color:#fff;border:none;border-radius:8px;font-size:1rem;cursor:pointer">✕ Close</button>
+    </div>
+    </body></html>`;
+
+    // Use in-app full-screen modal with iframe to avoid window.open popup block
+    let existingModal = document.getElementById('del-slip-modal');
+    if (existingModal) existingModal.remove();
+    const overlay = document.createElement('div');
+    overlay.id = 'del-slip-modal';
+    overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:10000;background:#fff;display:flex;flex-direction:column';
+    const iframe = document.createElement('iframe');
+    iframe.style.cssText = 'flex:1;border:none;width:100%;height:100%';
+    overlay.appendChild(iframe);
+    document.body.appendChild(overlay);
+    iframe.contentDocument.open();
+    iframe.contentDocument.write(slipHtml);
+    iframe.contentDocument.close();
+}
+
 
 async function viewDeliveryDetail(id) {
     const [dels, allParties, inventory] = await Promise.all([
@@ -12632,11 +12732,22 @@ async function markDelivered(id) {
         let qrImgHtml = '';
         if (co.upi && typeof QRCode !== 'undefined' && amt > 0) {
             const upiStr = `upi://pay?pa=${co.upi}&pn=${encodeURIComponent(co.name || '')}&am=${amt.toFixed(2)}&cu=INR&tn=${encodeURIComponent((d.invoiceNo || d.orderNo || '') + ' - ' + (d.partyName || ''))}`;
-            const div = document.createElement('div');
-            new QRCode(div, { text: upiStr, width: 180, height: 180, correctLevel: QRCode.CorrectLevel.M });
-            const obj = div.querySelector('canvas') || div.querySelector('img');
-            if (obj) qrImgHtml = `<img src="${obj.toDataURL ? obj.toDataURL() : obj.src}" alt="UPI QR" style="display:block;margin:8px auto;border:1px solid var(--border);border-radius:8px;padding:8px;background:#fff;width:180px">
-                <div style="font-size:0.78rem;color:var(--text-muted);text-align:center;margin-top:2px">Scan with any UPI App</div>`;
+            try {
+                const qrDiv = document.createElement('div');
+                document.body.appendChild(qrDiv);
+                new QRCode(qrDiv, { text: upiStr, width: 180, height: 180, correctLevel: QRCode.CorrectLevel.M });
+                await new Promise(r => setTimeout(r, 100)); // let QR render
+                const obj = qrDiv.querySelector('canvas') || qrDiv.querySelector('img');
+                if (obj) {
+                    const src = obj.toDataURL ? obj.toDataURL() : obj.src;
+                    qrImgHtml = `<img src="${src}" alt="UPI QR" style="display:block;margin:8px auto;border:1px solid var(--border);border-radius:8px;padding:8px;background:#fff;width:170px">
+                        <div style="font-size:0.78rem;color:var(--text-muted);text-align:center;margin-top:2px">Scan with any UPI App</div>
+                        <div style="font-size:0.72rem;color:var(--text-muted);text-align:center">${co.upi}</div>`;
+                }
+                document.body.removeChild(qrDiv);
+            } catch(e) {
+                qrImgHtml = `<div style="font-size:0.82rem;color:var(--warning);padding:8px">UPI: ${co.upi} | Amount: ₹${amt.toFixed(2)}</div>`;
+            }
         } else if (!co.upi) {
             qrImgHtml = `<div style="font-size:0.82rem;color:var(--warning);background:rgba(245,158,11,0.1);padding:8px;border-radius:6px;margin-top:8px">Set UPI ID in Company Setup to show QR code</div>`;
         }
@@ -12830,9 +12941,15 @@ function calcDistanceKm(lat1, lng1, lat2, lng2) {
 }
 
 async function printDeliveryRouteSheet() {
-    // Open window FIRST (synchronously) before any await — mobile browsers block window.open after async gaps
-    const w = window.open('', '_blank');
-    if (w) w.document.write('<html><body style="font-family:sans-serif;padding:20px;text-align:center"><p style="font-size:1.2rem;margin-top:80px"> Loading route sheet...</p></body></html>');
+    // Show loading overlay immediately (no popup needed)
+    let routeOverlay = document.getElementById('route-sheet-modal');
+    if (routeOverlay) routeOverlay.remove();
+    routeOverlay = document.createElement('div');
+    routeOverlay.id = 'route-sheet-modal';
+    routeOverlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:10000;background:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center';
+    routeOverlay.innerHTML = '<p style="font-size:1.2rem;color:#666">⏳ Building route sheet...</p>';
+    document.body.appendChild(routeOverlay);
+
     const [dels, allParties] = await Promise.all([DB.getAll('delivery'), DB.getAll('parties'), DB.getAll('salesorders')]);
     const dispatched = dels.filter(d => d.status === 'Dispatched');
     const co = DB.getObj('db_company') || {};
@@ -12967,24 +13084,25 @@ async function printDeliveryRouteSheet() {
         <div style="font-size:0.85rem;color:#666">Route Sheet &nbsp;|&nbsp; Printed: ${new Date().toLocaleString('en-IN')}${hasWarehouseGps ? ' &nbsp;|&nbsp;  GPS-optimised route' : ''}</div>
     </div><hr style="margin-bottom:16px">`;
 
-    if (!w) { alert('Popup blocked. Please allow popups for this site.'); return; }
-    w.document.open();
-    w.document.write(`<!DOCTYPE html><html><head><title>Route Sheet</title>
+    const routeHtml = `<!DOCTYPE html><html><head><title>Route Sheet</title>
     <style>body{font-family:sans-serif;padding:20px;max-width:960px;margin:0 auto}@media print{button{display:none}.no-print{display:none}}</style>
     </head><body>${header}${sections || '<p>No dispatched deliveries</p>'}
-    <button onclick="window.print()" style="margin-top:16px;padding:8px 20px;background:#f97316;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:1rem"> Print Route Sheet</button>
-    <script>
-    function moveRow(btn, dir) {
-        const row = btn.closest('tr');
-        const tbody = row.parentNode;
-        if (dir === -1 && row.previousElementSibling) tbody.insertBefore(row, row.previousElementSibling);
-        if (dir === 1 && row.nextElementSibling) tbody.insertBefore(row.nextElementSibling, row);
-        // Re-number
-        Array.from(tbody.querySelectorAll('.seq-num')).forEach((el, i) => el.textContent = i + 1);
-    }
-    </script>
-    </body></html>`);
-    w.document.close();
+    <div class="no-print" style="margin-top:16px;display:flex;gap:10px">
+        <button onclick="window.print()" style="padding:8px 20px;background:#f97316;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:1rem"> Print Route Sheet</button>
+        <button onclick="document.getElementById('route-sheet-modal').remove()" style="padding:8px 20px;background:#6b7280;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:1rem">✕ Close</button>
+    </div>
+    <script>function moveRow(btn,dir){const row=btn.closest('tr');const tbody=row.parentNode;if(dir===-1&&row.previousElementSibling)tbody.insertBefore(row,row.previousElementSibling);if(dir===1&&row.nextElementSibling)tbody.insertBefore(row.nextElementSibling,row);Array.from(tbody.querySelectorAll('.seq-num')).forEach((el,i)=>el.textContent=i+1);}<\/script>
+    </body></html>`;
+
+    // Render into in-app iframe overlay (avoids window.open popup blocking on mobile)
+    routeOverlay.innerHTML = '';
+    routeOverlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:10000;background:#fff;display:flex;flex-direction:column';
+    const iframe = document.createElement('iframe');
+    iframe.style.cssText = 'flex:1;border:none;width:100%;height:100%';
+    routeOverlay.appendChild(iframe);
+    iframe.contentDocument.open();
+    iframe.contentDocument.write(routeHtml);
+    iframe.contentDocument.close();
 }
 
 async function openDispatchModalUnified(id, source) {
