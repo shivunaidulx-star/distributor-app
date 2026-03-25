@@ -5618,7 +5618,7 @@ function renderSOLines() {
                     <div style="font-size:0.95rem;font-weight:800;color:${li._priceAlert ? 'var(--danger)' : 'var(--accent)'}">${currency(li.amount)}</div>
                 </div>
                 <span style="font-size:0.75rem;color:var(--text-muted);flex-shrink:0;padding-left:4px">${isExpanded ? '▲' : '▼'}</span>
-                <button class="btn-icon" onclick="event.stopPropagation();removeSOLine(${i})" style="color:var(--danger);flex-shrink:0;font-size:1rem;padding:0 2px;line-height:1"></button>
+                <button class="btn-icon" onclick="event.stopPropagation();removeSOLine(${i})" style="color:var(--danger);flex-shrink:0;padding:4px 6px;line-height:1"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>
             </div>
             <!-- Expanded edit controls -->
             ${isExpanded ? `<div style="padding:8px 10px;padding-top:0;border-top:1px solid var(--border)">
