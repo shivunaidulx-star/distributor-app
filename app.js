@@ -3974,13 +3974,19 @@ function saveItemBatch() {
     if (!pp) return alert('Purchase Price is mandatory for a new MRP batch');
     if (!sp) return alert('Sale Price is mandatory for a new MRP batch');
     currentItemBatches.push({ id: 'b_' + Date.now().toString(36), mrp: Math.round(mrp), purchasePrice: Math.round(pp), salePrice: Math.round(sp), qty, receivedDate: date, isActive: true });
-    // Sync main form fields to new batch
-    if ($('f-item-mrp')) $('f-item-mrp').value = mrp;
-    if ($('f-item-pp')) $('f-item-pp').value = pp;
-    if ($('f-item-sp')) $('f-item-sp').value = sp;
+    // Preserve batches before re-opening item modal (openItemModal resets currentItemBatches from DB)
+    const savedBatches = currentItemBatches.slice();
     closeModal();
-    // Re-open item modal to show batches (use stored id)
+    // Re-open item modal to restore full item form
     openItemModal(window._editItemId || '');
+    // Restore the in-memory batches (including the new one just added, not yet saved to DB)
+    currentItemBatches = savedBatches;
+    renderItemBatches();
+    // Sync main form fields to reflect the new batch prices
+    const sync = syncItemPricesFromBatches(currentItemBatches);
+    if (sync.mrp) { const el = $('f-item-mrp'); if (el) el.value = sync.mrp; }
+    if (sync.salePrice) { const el = $('f-item-sp'); if (el) el.value = sync.salePrice; }
+    if (sync.purchasePrice) { const el = $('f-item-pp'); if (el) el.value = sync.purchasePrice; }
 }
 
 async function saveItem(id) {
