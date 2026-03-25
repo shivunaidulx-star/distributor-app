@@ -12320,9 +12320,10 @@ function renderDelCards(dels, allParties) {
                 </div>
             </div>
             <div style="display:flex;justify-content:space-between;align-items:center;padding-top:10px;border-top:1px solid var(--border)">
-                <div style="display:flex;gap:4px">
+                <div style="display:flex;gap:4px;flex-wrap:wrap">
                     <button class="btn btn-outline btn-sm" style="padding:4px 8px;font-size:0.75rem;border-radius:6px" onclick="event.stopPropagation();printDeliverySlip('${d.id}')">🖨️ Print</button>
                     ${d.status === 'Dispatched' && !isSalesman ? `<button class="btn btn-primary btn-sm" style="padding:4px 8px;font-size:0.75rem;border-radius:6px" onclick="event.stopPropagation();updateDelStatus('${d.id}')">Update</button>` : ''}
+                    ${(d.status === 'Undelivered' || d.status === 'Returned') && canEdit() ? `<button class="btn btn-primary btn-sm" style="padding:4px 8px;font-size:0.75rem;border-radius:6px" onclick="event.stopPropagation();reDispatchOrder('${d.id}')">🔄 Re-Dispatch</button>` : ''}
                 </div>
                 ${canEdit() && d.status !== 'Delivered' && d.status !== 'Cancelled' ? `<button class="btn btn-outline btn-sm" style="padding:4px 8px;font-size:0.75rem;border-radius:6px;border-color:var(--danger);color:var(--danger)" onclick="event.stopPropagation();cancelDelivery('${d.id}')">Cancel</button>` : ''}
             </div>
@@ -13371,6 +13372,41 @@ async function executeCancelDeliveryInvoice(id) {
         closeModal();
         await renderDelivery();
     }
+}
+
+async function cancelDelivery(id) {
+    const dels = await DB.getAll('delivery');
+    const d = dels.find(x => x.id === id);
+    if (!d) return;
+    if (d.invoiceNo) {
+        // Has an invoice — delegate to full invoice cancellation flow
+        cancelDeliveryInvoice(id);
+        return;
+    }
+    // No invoice — simple cancel with reason
+    openModal('Cancel Delivery', `
+        <div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:8px;padding:12px;margin-bottom:14px;font-size:0.88rem">
+            <div><strong>Order:</strong> ${escapeHtml(d.orderNo)} &nbsp;|&nbsp; <strong>Party:</strong> ${escapeHtml(d.partyName)}</div>
+            <div style="margin-top:4px"><strong>Delivery Person:</strong> ${escapeHtml(d.deliveryPerson || '-')}</div>
+        </div>
+        <div class="form-group"><label>Cancel Reason *</label>
+            <input id="f-cancel-reason" placeholder="e.g. Party not available, Wrong address...">
+        </div>
+        <div class="modal-actions">
+            <button class="btn btn-outline" onclick="closeModal()">Back</button>
+            <button class="btn btn-danger" onclick="executeCancelDelivery('${id}')">✓ Cancel Delivery</button>
+        </div>`);
+}
+
+async function executeCancelDelivery(id) {
+    const reason = ($('f-cancel-reason') || {}).value.trim();
+    if (!reason) { alert('Please enter a cancel reason'); return; }
+    try {
+        await DB.update('delivery', id, { status: 'Cancelled', cancelReason: reason });
+        closeModal();
+        await renderDelivery();
+        showToast('Delivery cancelled', 'success');
+    } catch (e) { alert('Error: ' + e.message); }
 }
 
 // =============================================
