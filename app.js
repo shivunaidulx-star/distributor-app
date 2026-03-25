@@ -8156,10 +8156,10 @@ async function deleteInvoice(id) {
         if (!inv) throw new Error('Invoice not found');
 
         if (inv.status === 'posted') {
-            // ✅ Cancel instead of delete
-            await cancelDocument('invoices', id);
+            // Route through the full cancel flow (restores stock, party balance, ledger)
+            await executeCancelInvoice(id, { skipNav: true });
         } else {
-            // ✅ Allow delete only for draft
+            // Allow delete only for draft/cancelled
             await DB.delete('invoices', id);
             showToast('Invoice deleted!', 'warning');
         }
@@ -8238,8 +8238,8 @@ function _buildInvoicePageHtml(inv, party, order, co, qrUrl, copyLabel) {
     <div class="meta-cell" style="border-right:1px solid #555">
       <div class="meta-head">Transportation Details</div>
       <div class="meta-row"><span>Invoice Created By :</span><span style="font-weight:600">${escapeHtml(inv.createdBy||'-')}</span></div>
-      ${inv.deliveryDate ? `<div class="meta-row"><span>🚚 Delivery Date :</span><span style="font-weight:600">${fmtDate(inv.deliveryDate)}</span></div>` : '<div class="meta-row"><span>Delivery Date :</span><span>-</span></div>'}
-      ${inv.boxNo ? `<div class="meta-row"><span>📦 Box/Crate No. :</span><span style="font-weight:600">${escapeHtml(inv.boxNo)}</span></div>` : '<div class="meta-row"><span>Box/Crate No. :</span><span>-</span></div>'}
+      ${inv.deliveryDate ? `<div class="meta-row"><span>Delivery Date :</span><span style="font-weight:600">${fmtDate(inv.deliveryDate)}</span></div>` : '<div class="meta-row"><span>Delivery Date :</span><span>-</span></div>'}
+      ${inv.boxNo ? `<div class="meta-row"><span>Box/Crate No. :</span><span style="font-weight:600">${escapeHtml(inv.boxNo)}</span></div>` : '<div class="meta-row"><span>Box/Crate No. :</span><span>-</span></div>'}
       <div class="meta-row"><span>Delivered By :</span><span>_____________</span></div>
     </div>
     <div class="meta-cell">
@@ -8323,6 +8323,7 @@ function _buildInvoicePageHtml(inv, party, order, co, qrUrl, copyLabel) {
       <div style="flex:1"></div>
       <div style="text-align:right;padding:10px 8px;font-size:0.8rem">For : <strong>${escapeHtml(co.name||'')}</strong></div>
       <div class="sign-area">
+        ${co.signature ? `<div style="text-align:center;margin-bottom:4px"><img src="${co.signature}" style="max-height:50px;max-width:120px;object-fit:contain"></div>` : '<div style="height:44px"></div>'}
         <div style="border-top:1px solid #333;padding-top:5px;text-align:center;font-weight:700;font-size:0.8rem">Authorized Signatory</div>
       </div>
     </div>
@@ -16327,6 +16328,16 @@ async function renderCompanySetup() {
                 </div>
                 <input type="file" id="logo-upload" accept="image/*" style="display:none" onchange="handleLogoUpload(event)">
             </div>
+            <div class="form-group">
+                <label>Authorized Signature</label>
+                <div style="display:flex;align-items:center;gap:16px;margin-bottom:6px">
+                    ${co.signature ? `<img src="${co.signature}" style="max-height:50px;max-width:160px;object-fit:contain;border:1px solid var(--border);border-radius:8px;padding:4px;background:#fff" alt="Signature">` : '<div style="width:120px;height:44px;background:var(--bg-input);border:1px dashed var(--border);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:0.78rem;color:var(--text-muted)">No Signature</div>'}
+                    <div><button class="btn btn-outline btn-sm" onclick="document.getElementById('signature-upload').click()">Upload Signature</button>
+                    ${co.signature ? ' <button class="btn btn-outline btn-sm" onclick="removeCompanySignature()">Remove</button>' : ''}</div>
+                </div>
+                <input type="file" id="signature-upload" accept="image/*" style="display:none" onchange="handleSignatureUpload(event)">
+                <small style="color:var(--text-muted)">Appears on Tax Invoice in the Authorized Signatory box. Use a transparent PNG for best results.</small>
+            </div>
             <div class="form-group"><label>Company Name *</label><input id="f-co-name" value="${co.name || ''}"></div>
             <div class="form-row"><div class="form-group"><label>Phone</label><input id="f-co-phone" value="${co.phone || ''}"></div>
             <div class="form-group"><label>GSTIN</label><input id="f-co-gstin" value="${co.gstin || ''}"></div></div>
@@ -16588,6 +16599,27 @@ async function removeCompanyLogo() {
     await DB.saveSettings('db_company', co);
     renderCompanySetup();
     showToast('Logo removed.', 'info');
+}
+function handleSignatureUpload(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    showToast('Processing signature...', 'info');
+    compressImage(file, { maxWidth: 400, quality: 0.9 }).then(async dataUrl => {
+        const co = DB.getObj('db_company');
+        co.signature = dataUrl;
+        await DB.saveSettings('db_company', co);
+        renderCompanySetup();
+        showToast('Signature uploaded!', 'success');
+    }).catch(err => {
+        showToast('Failed to upload signature: ' + err.message, 'error');
+    });
+}
+async function removeCompanySignature() {
+    const co = DB.getObj('db_company');
+    delete co.signature;
+    await DB.saveSettings('db_company', co);
+    renderCompanySetup();
+    showToast('Signature removed.', 'info');
 }
 function openSmartReset() {
     window._resetOption = 'entries';
