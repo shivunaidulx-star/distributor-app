@@ -17775,27 +17775,32 @@ async function createOrderFromCatalog() {
         <div class="card" style="margin-top:12px">
             <div class="card-body">
                 <h4 style="margin-bottom:10px;font-size:0.9rem">Items</h4>
-                <div class="form-row" style="margin-bottom:8px">
-                    <div class="form-group">
-                        <label>Category Filter</label>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+                    <div class="form-group" style="margin-bottom:0">
+                        <label>Category</label>
                         <select id="f-so-cat-filter" onchange="onSOCatFilterChange()">
                             <option value="">All Categories</option>
                             ${categories.map(c => `<option value="${c.name}">${c.name}</option>`).join('')}
                         </select>
                     </div>
-                    <div class="form-group">
-                        <label>Sub-Category Filter</label>
+                    <div class="form-group" style="margin-bottom:0">
+                        <label>Sub-Category</label>
                         <select id="f-so-subcat-filter" onchange="onSOSubcatFilterChange()">
                             <option value="">All Sub-Categories</option>
                         </select>
                     </div>
                 </div>
-                <div class="form-row-3" style="margin-bottom:8px">
-                    <div class="form-group"><label>Item</label><input id="f-so-item-input" placeholder="Type item name or code..."></div>
-                    <div class="form-group"><label>Qty</label><input type="number" id="f-so-qty" value="1" min="1"></div>
-                    <div class="form-group"><label>UOM</label><select id="f-so-uom" onchange="onSOUomChange()"><option value="">--</option></select></div>
-                    <div class="form-group"><label>Price</label><input type="number" id="f-so-price" value="" min="0" step="0.01" placeholder="Listed"></div>
-                    <div class="form-group"><label>&nbsp;</label><button class="btn btn-primary btn-block" onclick="addSOLine()">Add</button></div>
+                <div class="form-group" style="margin-bottom:8px">
+                    <label>Item</label>
+                    <input id="f-so-item-input" placeholder="Type item name or code...">
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+                    <div class="form-group" style="margin-bottom:0"><label>Qty</label><input type="number" id="f-so-qty" value="1" min="1"></div>
+                    <div class="form-group" style="margin-bottom:0"><label>UOM</label><select id="f-so-uom" onchange="onSOUomChange()"><option value="">--</option></select></div>
+                </div>
+                <div style="display:grid;grid-template-columns:1fr auto;gap:10px;margin-bottom:10px;align-items:end">
+                    <div class="form-group" style="margin-bottom:0"><label>Price</label><input type="number" id="f-so-price" value="" min="0" step="0.01" placeholder="Listed"></div>
+                    <button class="btn btn-primary" onclick="addSOLine()" style="height:42px;padding:0 20px">+ Add</button>
                 </div>
                 <div class="table-wrapper"><div id="so-lines-list"></div></div>
                 <div style="text-align:right;font-size:1.1rem;font-weight:700;color:var(--accent);margin-top:8px" id="so-total-display">Total: ${currency(soItems.reduce((s, li) => s + li.amount, 0))}</div>
@@ -17811,6 +17816,8 @@ async function createOrderFromCatalog() {
 
     // Initialize party and item search dropdowns
     initSearchDropdown('f-so-party', buildPartySearchList(customers));
+    // Auto-focus party field so user can start typing immediately
+    setTimeout(() => { const inp = $('f-so-party'); if (inp) inp.focus(); }, 100);
     _soItemDropdown = initSearchDropdown('f-so-item-input', buildItemSearchList(inv), function (item) {
         $('f-so-price').value = item.salePrice || '';
         populateUomSelect($('f-so-uom'), item);
