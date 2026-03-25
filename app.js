@@ -3881,7 +3881,7 @@ function renderPriceTiers() {
         <div style="display:flex;gap:10px;align-items:center;margin-bottom:6px;">
             <div><span style="font-size:0.8rem">Min Qty:</span> <input type="number" style="width:70px;padding:4px;font-size:0.9rem;border-radius:4px;border:1px solid var(--border)" value="${t.minQty}" onchange="updatePriceTier(${i}, 'minQty', this.value)"></div>
             <div><span style="font-size:0.8rem">Price :</span> <input type="number" style="width:90px;padding:4px;font-size:0.9rem;border-radius:4px;border:1px solid var(--border)" value="${t.price}" onchange="updatePriceTier(${i}, 'price', this.value)"></div>
-            <button class="btn-icon" style="color:var(--danger);margin-top:14px" onclick="removePriceTier(${i})"></button>
+            <button class="btn-icon" style="color:var(--danger);margin-top:14px" onclick="removePriceTier(${i})"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>
         </div>
     `).join('');
 }
@@ -3915,7 +3915,7 @@ function renderItemBatches() {
                 </td>
                 <td style="padding:5px 6px;text-align:center">
                     <button class="btn btn-outline btn-sm" onclick="toggleItemBatchActive(${idx})" style="padding:2px 6px;font-size:0.75rem">${b.isActive === false ? 'Activate' : 'Deactivate'}</button>
-                    <button class="btn-icon" onclick="deleteItemBatch(${idx})" style="color:var(--danger);margin-left:4px"></button>
+                    <button class="btn-icon" onclick="deleteItemBatch(${idx})" style="color:var(--danger);margin-left:4px"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>
                 </td>
             </tr>`).join('')}
         </tbody></table>`;
@@ -5201,7 +5201,7 @@ async function openSalesOrderModal() {
     <div id="so-item-sub-modal" class="sub-modal">
         <div class="sub-modal-header">
             <h3>Add Item to Order</h3>
-            <button class="btn-icon" onclick="closeSoItemSubModal()"></button>
+            <button class="btn-icon" onclick="closeSoItemSubModal()"><span class="material-symbols-outlined">close</span></button>
         </div>
         <div class="sub-modal-body">
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
@@ -5927,7 +5927,7 @@ async function editSalesOrder(id) {
     <div id="so-item-sub-modal" class="sub-modal">
         <div class="sub-modal-header">
             <h3>Add Item to Order</h3>
-            <button class="btn-icon" onclick="closeSoItemSubModal()"></button>
+            <button class="btn-icon" onclick="closeSoItemSubModal()"><span class="material-symbols-outlined">close</span></button>
         </div>
         <div class="sub-modal-body">
             <div class="form-row" style="margin-bottom:8px">
@@ -6130,9 +6130,9 @@ async function renderPORows(orders) {
             total: `<td style="min-width:100px;text-align:right" class="amount-green">${currency(o.total)}</td>`,
             status: `<td style="min-width:100px"><span class="badge ${o.status === 'received' ? 'badge-success' : o.status === 'cancelled' ? 'badge-danger' : 'badge-warning'}">${o.status}</span></td>`,
             actions: `<td style="min-width:100px"><div class="action-btns">
-                <button class="btn-icon" onclick="viewPurchaseOrder('${o.id}')"></button>
-                ${o.status === 'pending' ? `<button class="btn-icon" style="color:var(--success)" onclick="receivePO('${o.id}')" title="Receive Goods"></button>` : ''}
-                ${o.status === 'pending' ? `<button class="btn-icon" onclick="deletePO('${o.id}')"></button>` : ''}
+                <button class="btn-icon" onclick="viewPurchaseOrder('${o.id}')" title="View"><span class="material-symbols-outlined" style="font-size:1.1rem">visibility</span></button>
+                ${o.status === 'pending' ? `<button class="btn-icon" style="color:var(--success)" onclick="receivePO('${o.id}')" title="Receive Goods"><span class="material-symbols-outlined" style="font-size:1.1rem">inventory</span></button>` : ''}
+                ${o.status === 'pending' ? `<button class="btn-icon" style="color:var(--danger)" onclick="deletePO('${o.id}')" title="Delete"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>` : ''}
             </div></td>`,
         };
         return `<tr>${cols.map(c => cellMap[c.key] || '').join('')}</tr>`;
@@ -6305,7 +6305,7 @@ function renderDILines() {
             <span style="width:60px;text-align:center">${li.qty}</span>
             <span style="width:90px;text-align:right">@ ${currency(li.price)}</span>
             <span style="width:90px;text-align:right;font-weight:600;color:var(--accent)">${currency(li.amount)}</span>
-            <button class="btn-icon" onclick="poItems.splice(${i},1);renderDILines()" style="color:var(--danger)"></button>
+            <button class="btn-icon" onclick="poItems.splice(${i},1);renderDILines()" style="color:var(--danger)"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>
         </div>`).join('');
     if ($('di-total-display')) $('di-total-display').textContent = `Total: ${currency(poItems.reduce((s, l) => s + l.amount, 0))}`;
 }
@@ -6425,7 +6425,7 @@ function renderPOLines() {
             <span style="width:70px;text-align:center">${li.qty} ${li.unit || ''}</span>
             <span style="width:100px;text-align:right">@ ${currency(li.price)}</span>
             <span style="width:100px;text-align:right;font-weight:600;color:var(--accent)">${currency(li.amount)}</span>
-            <button class="btn-icon" onclick="poItems.splice(${i},1);renderPOLines()" style="color:var(--danger)"></button>
+            <button class="btn-icon" onclick="poItems.splice(${i},1);renderPOLines()" style="color:var(--danger)"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>
         </div>`).join('');
     $('po-total-display').textContent = `Total: ${currency(poItems.reduce((s, l) => s + l.amount, 0))}`;
 }
@@ -6979,7 +6979,7 @@ async function openInvoiceModal(type = 'sale', preserveItems = false) {
         <div id="inv-item-sub-modal" class="sub-modal">
             <div class="sub-modal-header">
                 <h3>Add Item</h3>
-                <button class="btn-icon" onclick="closeInvItemSubModal()"></button>
+                <button class="btn-icon" onclick="closeInvItemSubModal()"><span class="material-symbols-outlined">close</span></button>
             </div>
             <div class="sub-modal-body">
                 <div class="form-row" style="margin-bottom:8px; grid-template-columns: 1fr 1fr">
@@ -8550,37 +8550,105 @@ function _getInvoicePrintCss() {
 }
 
 function _openInvoicePrintWindow(bodyHtml, title) {
-    const isMobile = window.innerWidth < 768;
-    if (isMobile) {
-        // Mobile: inject into current page to avoid popup blocker
-        let overlay = document.getElementById('inv-print-overlay');
-        if (!overlay) {
-            overlay = document.createElement('div');
-            overlay.id = 'inv-print-overlay';
-            document.body.appendChild(overlay);
-        }
-        overlay.innerHTML = `
-            <style id="inv-print-style">${_getInvoicePrintCss()}
-              #inv-print-overlay { position:fixed;inset:0;z-index:99999;background:#fff;overflow-y:auto;padding:10px; }
-              #inv-print-close-btn { position:fixed;top:10px;right:10px;z-index:100000;background:#f97316;color:#fff;border:none;border-radius:50%;width:40px;height:40px;font-size:1.2rem;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,0.3); }
-            </style>
-            <button id="inv-print-close-btn" onclick="document.getElementById('inv-print-overlay').remove()" title="Close">✕</button>
-            ${bodyHtml}`;
-        setTimeout(() => window.print(), 600);
-        window.addEventListener('afterprint', () => {
-            const el = document.getElementById('inv-print-overlay');
-            if (el) el.remove();
-        }, { once: true });
-    } else {
-        // Desktop: open a new window as before
-        const printWindow = window.open('', '_blank', 'width=900,height=800');
-        if (!printWindow) { alert('Popup blocked — please allow popups for this site and try again.'); return; }
-        const html = `<!DOCTYPE html><html><head><title>Invoice ${escapeHtml(title)}</title><style>${_getInvoicePrintCss()}</style></head><body>${bodyHtml}</body></html>`;
-        printWindow.document.write(html);
-        printWindow.document.close();
-        setTimeout(() => { printWindow.print(); }, 900);
-    }
+    // Build full-screen overlay with Vyapar-style action bar
+    let overlay = document.getElementById('inv-print-overlay');
+    if (overlay) overlay.remove();
+    overlay = document.createElement('div');
+    overlay.id = 'inv-print-overlay';
+    document.body.appendChild(overlay);
+
+    const css = _getInvoicePrintCss();
+    overlay.innerHTML = `
+        <style>
+            #inv-print-overlay {
+                position:fixed;inset:0;z-index:99999;background:#f1f3f5;
+                display:flex;flex-direction:column;overflow:hidden;
+            }
+            #inv-print-topbar {
+                display:flex;align-items:center;gap:10px;
+                background:#1e293b;color:#fff;padding:10px 16px;
+                font-size:0.95rem;font-weight:600;flex-shrink:0;
+            }
+            #inv-print-topbar button {
+                background:none;border:none;color:#fff;font-size:1.3rem;
+                cursor:pointer;padding:4px 8px;border-radius:6px;line-height:1;
+            }
+            #inv-print-topbar button:hover { background:rgba(255,255,255,0.15); }
+            #inv-print-doc-area {
+                flex:1;overflow-y:auto;padding:16px;
+                display:flex;justify-content:center;
+            }
+            #inv-print-doc-area .doc-wrap {
+                background:#fff;box-shadow:0 4px 24px rgba(0,0,0,0.18);
+                border-radius:4px;width:100%;max-width:600px;
+            }
+            #inv-print-action-bar {
+                background:#fff;border-top:1px solid #e2e8f0;
+                padding:12px 16px;display:flex;gap:10px;
+                justify-content:center;flex-shrink:0;
+                box-shadow:0 -2px 12px rgba(0,0,0,0.08);
+            }
+            #inv-print-action-bar button {
+                flex:1;max-width:160px;padding:11px 8px;
+                border-radius:10px;font-size:0.88rem;font-weight:600;
+                border:none;cursor:pointer;display:flex;flex-direction:column;
+                align-items:center;gap:4px;transition:opacity 0.2s;
+            }
+            #inv-print-action-bar button:active { opacity:0.75; }
+            #inv-print-action-bar button .ab-icon { font-size:1.4rem; }
+            .ab-share  { background:#6366f1;color:#fff; }
+            .ab-download { background:#0ea5e9;color:#fff; }
+            .ab-print  { background:#f97316;color:#fff; }
+            @media print {
+                #inv-print-topbar, #inv-print-action-bar { display:none !important; }
+                #inv-print-overlay { background:#fff; display:block !important; overflow:visible !important; }
+                #inv-print-doc-area { overflow:visible;padding:0; }
+                ${css}
+            }
+        </style>
+        <style>${css}</style>
+        <div id="inv-print-topbar">
+            <button onclick="document.getElementById('inv-print-overlay').remove()" title="Close">✕</button>
+            <span style="flex:1">${escapeHtml(title)}</span>
+        </div>
+        <div id="inv-print-doc-area">
+            <div class="doc-wrap">${bodyHtml}</div>
+        </div>
+        <div id="inv-print-action-bar">
+            <button class="ab-share" onclick="_invPdfShare('${escapeHtml(title)}')">
+                <span class="ab-icon">📤</span>Share
+            </button>
+            <button class="ab-download" onclick="window.print()">
+                <span class="ab-icon">💾</span>Save PDF
+            </button>
+            <button class="ab-print" onclick="window.print()">
+                <span class="ab-icon">🖨️</span>Print
+            </button>
+        </div>`;
+
+    // Close on afterprint (user printed or saved)
+    window.addEventListener('afterprint', () => {
+        const el = document.getElementById('inv-print-overlay');
+        if (el) el.remove();
+    }, { once: true });
 }
+
+async function _invPdfShare(title) {
+    const el = document.querySelector('#inv-print-doc-area .doc-wrap');
+    if (!el) return;
+    // Use Web Share API if supported
+    if (navigator.share) {
+        try {
+            // Share as text fallback
+            await navigator.share({ title: title, text: 'Invoice: ' + title, url: window.location.href });
+            return;
+        } catch (e) { /* user cancelled or not supported */ }
+    }
+    // Fallback: trigger print-to-PDF
+    window.print();
+}
+
+
 
 
 // =============================================
@@ -8970,11 +9038,84 @@ function printPaymentReceipt(id) {
     const p = DB.get('db_payments').find(x => x.id === id);
     if (!p) return;
     const co = DB.getObj('db_company') || {};
-    
-    const w = window.open('', '_blank');
-    w.document.write(`<!DOCTYPE html><html><head><title>Payment Receipt - ${escapeHtml(p.partyName)}</title><style>${_getPaymentPrintCss()}</style></head><body>${_buildPaymentPageHtml(p, co)}<button class="btn-print" onclick="window.print()">🖨️ Print Voucher</button></body></html>`);
-    w.document.close();
-    setTimeout(() => { w.print(); }, 600);
+    const bodyHtml = _buildPaymentPageHtml(p, co);
+    const title = `Payment Receipt - ${p.partyName}`;
+    const css = _getPaymentPrintCss();
+
+    let overlay = document.getElementById('inv-print-overlay');
+    if (overlay) overlay.remove();
+    overlay = document.createElement('div');
+    overlay.id = 'inv-print-overlay';
+    document.body.appendChild(overlay);
+    overlay.innerHTML = `
+        <style>
+            #inv-print-overlay {
+                position:fixed;inset:0;z-index:99999;background:#f1f3f5;
+                display:flex;flex-direction:column;overflow:hidden;
+            }
+            #inv-print-topbar {
+                display:flex;align-items:center;gap:10px;
+                background:#1e293b;color:#fff;padding:10px 16px;
+                font-size:0.95rem;font-weight:600;flex-shrink:0;
+            }
+            #inv-print-topbar button {
+                background:none;border:none;color:#fff;font-size:1.3rem;
+                cursor:pointer;padding:4px 8px;border-radius:6px;
+            }
+            #inv-print-doc-area {
+                flex:1;overflow-y:auto;padding:16px;
+                display:flex;justify-content:center;
+            }
+            #inv-print-doc-area .doc-wrap {
+                background:#fff;box-shadow:0 4px 24px rgba(0,0,0,0.18);
+                border-radius:4px;width:100%;max-width:600px;padding:16px;
+            }
+            #inv-print-action-bar {
+                background:#fff;border-top:1px solid #e2e8f0;
+                padding:12px 16px;display:flex;gap:10px;
+                justify-content:center;flex-shrink:0;
+                box-shadow:0 -2px 12px rgba(0,0,0,0.08);
+            }
+            #inv-print-action-bar button {
+                flex:1;max-width:160px;padding:11px 8px;
+                border-radius:10px;font-size:0.88rem;font-weight:600;
+                border:none;cursor:pointer;display:flex;flex-direction:column;
+                align-items:center;gap:4px;
+            }
+            #inv-print-action-bar button .ab-icon { font-size:1.4rem; }
+            .ab-share { background:#6366f1;color:#fff; }
+            .ab-download { background:#0ea5e9;color:#fff; }
+            .ab-print { background:#f97316;color:#fff; }
+            @media print {
+                #inv-print-topbar, #inv-print-action-bar { display:none !important; }
+                #inv-print-overlay { background:#fff;display:block !important;overflow:visible !important; }
+                #inv-print-doc-area { overflow:visible;padding:0; }
+                ${css}
+            }
+        </style>
+        <style>${css}</style>
+        <div id="inv-print-topbar">
+            <button onclick="document.getElementById('inv-print-overlay').remove()">✕</button>
+            <span style="flex:1">${escapeHtml(title)}</span>
+        </div>
+        <div id="inv-print-doc-area">
+            <div class="doc-wrap">${bodyHtml}</div>
+        </div>
+        <div id="inv-print-action-bar">
+            <button class="ab-share" onclick="_invPdfShare('${escapeHtml(title)}')">
+                <span class="ab-icon">📤</span>Share
+            </button>
+            <button class="ab-download" onclick="window.print()">
+                <span class="ab-icon">💾</span>Save PDF
+            </button>
+            <button class="ab-print" onclick="window.print()">
+                <span class="ab-icon">🖨️</span>Print
+            </button>
+        </div>`;
+    window.addEventListener('afterprint', () => {
+        const el = document.getElementById('inv-print-overlay');
+        if (el) el.remove();
+    }, { once: true });
 }
 
 
@@ -11163,7 +11304,7 @@ async function renderPackOrderPage() {
         <div class="pack-workbench">
             <div class="pack-header">
                 <div class="pack-meta">
-                    <span class="pack-back" onclick="navigateTo('packing')"> Back</span>
+                    <span class="pack-back" onclick="navigateTo('packing')">← Back</span>
                     <h2 class="pack-title">Order ${o.orderNo}</h2>
                     <p class="pack-party">${escapeHtml(o.partyName)} | Total: ${currency(o.total)}</p>
                 </div>
@@ -11230,10 +11371,10 @@ async function renderPackOrderPage() {
             </div>
 
             <div class="pack-footer">
-                <button class="btn btn-outline" onclick="markAllPicked(${o.items.length})"> All Picked</button>
-                <button class="btn btn-outline" onclick="showBarcodeScanner('${orderId}')"> Scan</button>
-                <button class="btn btn-danger" onclick="cannotCompletePacking('${orderId}')"> Fail</button>
-                <button class="btn btn-primary" id="btn-complete-packing" disabled onclick="completePacking('${orderId}')"> Complete</button>
+                <button class="btn btn-outline" onclick="markAllPicked(${o.items.length})">✅ All Picked</button>
+                <button class="btn btn-outline" onclick="showBarcodeScanner('${orderId}')">📷 Scan</button>
+                <button class="btn btn-danger" onclick="cannotCompletePacking('${orderId}')">❌ Fail</button>
+                <button class="btn btn-primary" id="btn-complete-packing" disabled onclick="completePacking('${orderId}')">✅ Complete</button>
             </div>
         </div>
     `;
@@ -11255,10 +11396,14 @@ function packViewPhoto(itemId, itemName, orderId) {
     const backBtn = `<button class="btn btn-outline" onclick="${orderId ? `closeModal();startPacking('${orderId}')` : 'closeModal()'}"> Back</button>`;
     if (!item || !item.photo) {
         openModal(escapeHtml(itemName), `
-            <div style="text-align:center;padding:32px 16px;color:var(--text-muted)">
+            <div style="text-align:center;padding:24px 16px;color:var(--text-muted)">
                 <div style="font-size:3rem;margin-bottom:10px">📷</div>
-                <div style="font-size:0.9rem">No photo uploaded for this item.</div>
-                <div style="font-size:0.78rem;margin-top:6px">Add a photo from Item Master → Edit Item.</div>
+                <div style="font-size:0.9rem;font-weight:600;margin-bottom:6px">No photo uploaded for this item.</div>
+                <div style="font-size:0.78rem;margin-bottom:20px;color:var(--text-muted)">Take a photo now to add it to the item catalogue.</div>
+                <input type="file" id="pack-modal-photo-input" accept="image/*" capture="environment" style="display:none" onchange="packAddPhotoFromModal('${itemId}','${escapeHtml(itemName)}','${orderId}',this)">
+                <button class="btn btn-primary" style="width:100%;padding:12px;font-size:1rem;border-radius:12px;margin-bottom:8px" onclick="document.getElementById('pack-modal-photo-input').click()">
+                    📷 Take / Upload Photo
+                </button>
             </div>
             <div class="modal-actions">${backBtn}</div>`);
         return;
@@ -11266,6 +11411,10 @@ function packViewPhoto(itemId, itemName, orderId) {
     openModal(escapeHtml(itemName), `
         <div style="text-align:center;padding:8px">
             <img src="${item.photo}" style="max-width:100%;max-height:70vh;border-radius:10px;object-fit:contain">
+        </div>
+        <div style="margin-top:8px;text-align:center">
+            <input type="file" id="pack-modal-photo-replace" accept="image/*" capture="environment" style="display:none" onchange="packAddPhotoFromModal('${itemId}','${escapeHtml(itemName)}','${orderId}',this)">
+            <button class="btn btn-outline btn-sm" onclick="document.getElementById('pack-modal-photo-replace').click()">🔄 Replace Photo</button>
         </div>
         <div class="modal-actions">${backBtn}</div>`);
 }
@@ -11306,6 +11455,21 @@ function packAddItemPhoto(itemId, rowIdx) {
     input.oncancel = () => { document.body.removeChild(input); };
     input.click();
 }
+
+async function packAddPhotoFromModal(itemId, itemName, orderId, inputEl) {
+    const file = inputEl.files[0];
+    if (!file) return;
+    showToast('Processing photo...', 'info');
+    try {
+        const dataUrl = await compressImage(file, { maxWidth: 1024, quality: 0.75 });
+        await DB.update('inventory', itemId, { photo: dataUrl });
+        showToast('Photo saved!', 'success');
+        packViewPhoto(itemId, itemName, orderId);
+    } catch (err) {
+        showToast('Failed to save photo: ' + err.message, 'error');
+    }
+}
+
 
 // --- Barcode Verification ---
 function showBarcodeScanner(orderId) {
@@ -11427,14 +11591,14 @@ function checkAllPicked(rowCount) {
         if (qty > 0) {
             anyToBePacked = true;
             if (pickedCtrl.checked) {
-                if (statusBadge) { statusBadge.textContent = ''; statusBadge.title = 'Picked '; }
+                if (statusBadge) { statusBadge.textContent = '✅'; statusBadge.title = 'Picked ✅'; }
             } else {
                 allValid = false;
-                if (statusBadge) { statusBadge.textContent = ''; statusBadge.title = 'Qty set  tick Picked checkbox to confirm'; }
+                if (statusBadge) { statusBadge.textContent = '⏳'; statusBadge.title = 'Qty set — tick Picked checkbox to confirm'; }
             }
         } else {
             pickedCtrl.checked = false;
-            if (statusBadge) { statusBadge.textContent = ''; statusBadge.title = 'Not Picked / Short qty'; }
+            if (statusBadge) { statusBadge.textContent = '⚪'; statusBadge.title = 'Not Picked / Short qty'; }
         }
     }
     const btn = $('btn-complete-packing');
@@ -16159,7 +16323,7 @@ async function renderCompanySetup() {
                         ${getPaymentTermsList().map((t, i) => `<tr>
                             <td><input id="pt-name-${i}" value="${escapeHtml(t.name)}" style="width:100%;border:none;background:transparent;font-size:0.9rem" placeholder="e.g. Net 30"></td>
                             <td><input id="pt-days-${i}" type="number" value="${t.days}" min="0" style="width:80px;border:none;background:transparent;font-weight:600;text-align:center"></td>
-                            <td><button class="btn-icon" style="color:var(--danger)" onclick="deletePaymentTerm(${i})" title="Delete"></button></td>
+                            <td><button class="btn-icon" style="color:var(--danger)" onclick="deletePaymentTerm(${i})" title="Delete"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button></td>
                         </tr>`).join('')}
                     </tbody>
                 </table>
@@ -16337,7 +16501,7 @@ function addPaymentTermRow() {
     const tr = document.createElement('tr');
     tr.innerHTML = `<td><input id="pt-name-${i}" style="width:100%;border:none;background:transparent;font-size:0.9rem" placeholder="e.g. Net 30"></td>
         <td><input id="pt-days-${i}" type="number" min="0" value="0" style="width:80px;border:none;background:transparent;font-weight:600;text-align:center"></td>
-        <td><button class="btn-icon" style="color:var(--danger)" onclick="this.closest('tr').remove()" title="Delete"></button></td>`;
+        <td><button class="btn-icon" style="color:var(--danger)" onclick="this.closest('tr').remove()" title="Delete"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button></td>`;
     tbody.appendChild(tr);
     const inp = document.getElementById('pt-name-' + i);
     if (inp) inp.focus();
@@ -17440,7 +17604,7 @@ async function openCatalogCart() {
                     <td><span class="catalog-uom-badge">${c.unit}</span></td>
                     <td>${c.price}</td>
                     <td class="amount-green" style="font-weight:600">${currency(c.qty * c.price)}</td>
-                    <td><button class="btn-icon" onclick="removeFromCartByIdx(${idx})" style="color:var(--danger)"></button></td>
+                    <td><button class="btn-icon" onclick="removeFromCartByIdx(${idx})" style="color:var(--danger)"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button></td>
                 </tr>`).join('')}</tbody></table>
             </div>
         </div>
@@ -18513,9 +18677,9 @@ async function renderStaffMaster() {
             <td>${s.join_date ? fmtDate(s.join_date) : '-'}</td>
             <td><span class="badge ${s.status === 'active' ? 'badge-success' : 'badge-danger'}">${s.status || 'active'}</span></td>
             <td><div class="action-btns">
-                ${isAdmin ? `<button class="btn-icon" onclick="openStaffModal('${s.id}')"></button>
-                <button class="btn-icon" onclick="toggleStaffStatus('${s.id}','${s.status || 'active'}')" title="${s.status === 'inactive' ? 'Activate' : 'Deactivate'}">${s.status === 'inactive' ? '' : ''}</button>
-                <button class="btn-icon" onclick="openStaffAdvance('${s.id}','${escapeHtml(s.name)}')" title="Give Advance"></button>` : ''}
+                ${isAdmin ? `<button class="btn-icon" onclick="openStaffModal('${s.id}')" title="Edit"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button>
+                <button class="btn-icon" onclick="toggleStaffStatus('${s.id}','${s.status || 'active'}')" title="${s.status === 'inactive' ? 'Activate' : 'Deactivate'}"><span class="material-symbols-outlined" style="font-size:1.1rem">${s.status === 'inactive' ? 'toggle_off' : 'toggle_on'}</span></button>
+                <button class="btn-icon" onclick="openStaffAdvance('${s.id}','${escapeHtml(s.name)}')" title="Give Advance"><span class="material-symbols-outlined" style="font-size:1.1rem">payments</span></button>` : ''}
             </div></td>
         </tr>`).join('') : '<tr><td colspan="7"><div class="empty-state"><p>No staff added yet</p></div></td></tr>'}
         </tbody>
