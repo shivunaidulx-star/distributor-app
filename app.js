@@ -12538,7 +12538,7 @@ async function printDeliverySlip(id) {
     </div>
     <div class="no-print" style="margin-top:16px;text-align:center;display:flex;gap:10px;justify-content:center">
         <button onclick="window.print()" style="padding:10px 24px;background:#f97316;color:#fff;border:none;border-radius:8px;font-size:1rem;cursor:pointer">🖨️ Print</button>
-        <button onclick="document.getElementById('del-slip-modal').remove()" style="padding:10px 24px;background:#6b7280;color:#fff;border:none;border-radius:8px;font-size:1rem;cursor:pointer">✕ Close</button>
+        <button onclick="window.parent.document.getElementById('del-slip-modal').remove()" style="padding:10px 24px;background:#6b7280;color:#fff;border:none;border-radius:8px;font-size:1rem;cursor:pointer">✕ Close</button>
     </div>
     </body></html>`;
 
@@ -12548,6 +12548,16 @@ async function printDeliverySlip(id) {
     const overlay = document.createElement('div');
     overlay.id = 'del-slip-modal';
     overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:10000;background:#fff;display:flex;flex-direction:column';
+
+    // Back button in the parent document (always visible, not inside iframe)
+    const topBar = document.createElement('div');
+    topBar.className = 'no-print';
+    topBar.style.cssText = 'display:flex;align-items:center;gap:10px;background:#1e293b;color:#fff;padding:10px 16px;flex-shrink:0';
+    topBar.innerHTML = `<button onclick="document.getElementById('del-slip-modal').remove()" style="background:none;border:none;color:#fff;font-size:1.3rem;cursor:pointer;padding:4px 8px;border-radius:6px;line-height:1">← Back</button>
+        <span style="flex:1;font-weight:600;font-size:0.95rem">Delivery Slip - ${d.orderNo}</span>
+        <button onclick="document.getElementById('del-slip-modal').querySelector('iframe').contentWindow.print()" style="background:#f97316;border:none;color:#fff;padding:6px 14px;border-radius:8px;font-weight:600;cursor:pointer;font-size:0.85rem">🖨️ Print</button>`;
+    overlay.appendChild(topBar);
+
     const iframe = document.createElement('iframe');
     iframe.style.cssText = 'flex:1;border:none;width:100%;height:100%';
     overlay.appendChild(iframe);
