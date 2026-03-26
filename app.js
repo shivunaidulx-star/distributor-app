@@ -1673,6 +1673,33 @@ async function navigateTo(page, options = {}) {
     // Update FAB for this page
     updateFab(page);
 
+    // Mobile back button — show on sub-pages / More-sheet pages, hide on main tabs
+    const MOBILE_BACK_TARGETS = {
+        parties: 'dashboard', inventory: 'dashboard', payments: 'dashboard',
+        expenses: 'dashboard', packing: 'dashboard', delivery: 'dashboard',
+        reports: 'dashboard', purchaseorders: 'dashboard', packers: 'dashboard',
+        deliverypersons: 'dashboard', users: 'dashboard', setup: 'dashboard',
+        staffmaster: 'dashboard', attendance: 'staffmaster', hrpayroll: 'staffmaster',
+        customerrequests: 'dashboard', inventorysetup: 'setup',
+        categories: 'inventorysetup', uom: 'inventorysetup', noseries: 'setup',
+        partyledger: 'parties', packorder: 'packing',
+    };
+    const mobileBackBtn = document.getElementById('mobile-back-btn');
+    const sidebarToggle = document.getElementById('sidebar-toggle');
+    if (mobileBackBtn) {
+        const backTarget = MOBILE_BACK_TARGETS[page];
+        const isMobileView = window.innerWidth < 768;
+        if (backTarget && isMobileView) {
+            mobileBackBtn.style.display = '';
+            mobileBackBtn.onclick = () => navigateTo(backTarget);
+            if (sidebarToggle) sidebarToggle.style.display = 'none';
+        } else {
+            mobileBackBtn.style.display = 'none';
+            mobileBackBtn.onclick = null;
+            if (sidebarToggle) sidebarToggle.style.display = '';
+        }
+    }
+
     const titles = { dashboard: 'Dashboard', parties: 'Parties', partyledger: 'Party Ledger', inventorysetup: 'Inventory Setup', categories: 'Categories Master', uom: 'UOM Master', inventory: 'Inventory', catalog: 'Item Catalog', salesorders: 'Sales Orders', purchaseorders: 'Purchase Orders', invoices: 'Invoices', payments: 'Payments', expenses: 'Expenses', packing: 'Packing', delivery: 'Delivery', reports: 'Reports', packers: 'Packers Master', deliverypersons: 'Delivery Persons', users: 'Users & Roles', setup: 'Company Setup', noseries: 'No. Series Setup', customerrequests: 'Customer Requests', staffmaster: 'Staff Master', attendance: 'Attendance', hrpayroll: 'HR & Payroll', packorder: 'Pack Order' };
     pageTitle.textContent = titles[page] || page;
 
