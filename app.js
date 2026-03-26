@@ -3400,6 +3400,27 @@ async function commitPartyImport() {
 async function renderCategories() {
     const cats = await DB.getAll('categories');
     const container = $('inv-setup-content') || pageContent;
+    const isMobile = window.innerWidth < 768 && !$('inv-setup-content');
+    if (isMobile) {
+        container.innerHTML = `
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:10px">
+            <button class="btn btn-outline btn-sm" onclick="triggerCategorizeExcelImport()">Import</button>
+            <button class="btn btn-primary btn-sm" onclick="openCategoryModal()">+ Add</button>
+        </div>
+        <input type="file" id="f-cat-import" accept=".xlsx, .xls" style="display:none" onchange="importCategoriesExcel(event)">
+        ${cats.length ? cats.map(c => `
+        <div class="card" style="margin-bottom:8px;padding:12px 14px;display:flex;align-items:flex-start;gap:10px">
+            <div style="flex:1;min-width:0">
+                <div style="font-weight:700">${escapeHtml(c.name)}</div>
+                ${(c.subCategories || []).length ? `<div style="font-size:0.78rem;color:var(--text-muted);margin-top:3px">${(c.subCategories).join(' · ')}</div>` : ''}
+            </div>
+            <div style="display:flex;gap:4px;flex-shrink:0">
+                <button class="btn-icon" onclick="openCategoryModal('${c.id}')"><span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--warning)">edit</span></button>
+                <button class="btn-icon" onclick="deleteCategory('${c.id}')"><span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--danger)">delete</span></button>
+            </div>
+        </div>`).join('') : '<div class="empty-state"><p>No categories defined</p></div>'}`;
+        return;
+    }
     container.innerHTML = `
         <div class="section-toolbar">
             <h3 style="font-size:1rem"> Categories</h3>
@@ -3580,6 +3601,42 @@ function updateNavBadges(inventory) {
     if (badge) { badge.textContent = lowCount; badge.style.display = lowCount > 0 ? '' : 'none'; }
 }
 
+function renderInvCards(items, reservedMap = {}) {
+    if (!items.length) return '<div class="empty-state"><div class="empty-icon"></div><p>No items found</p></div>';
+    return items.map(i => {
+        const reserved = reservedMap[i.id] || 0;
+        const available = i.stock - reserved;
+        const isLow = available <= (i.lowStockAlert || 5);
+        const fb = getFifoBatch(i);
+        return `<div class="card" style="margin-bottom:8px;padding:0">
+            <div style="display:flex;align-items:center;gap:10px;padding:10px 12px">
+                ${(i.imageUrl || i.photo) ? `<img src="${i.imageUrl || i.photo}" style="width:44px;height:44px;border-radius:8px;object-fit:cover;flex-shrink:0">` : `<div style="width:44px;height:44px;border-radius:8px;background:var(--bg-secondary);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:1.4rem"></div>`}
+                <div style="flex:1;min-width:0">
+                    <div style="font-weight:700;font-size:0.92rem;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(i.name)}${i.active === false ? ' <span style="font-size:0.68rem;background:#fee2e2;color:#991b1b;padding:1px 5px;border-radius:4px">Inactive</span>' : ''}</div>
+                    ${i.itemCode ? `<div style="font-size:0.72rem;color:var(--text-muted)">Code: ${i.itemCode}</div>` : ''}
+                    <div style="font-size:0.72rem;color:var(--text-muted)">${i.category || ''} ${i.subCategory ? '· ' + i.subCategory : ''}</div>
+                </div>
+                <div style="text-align:right;flex-shrink:0">
+                    <div style="font-size:1rem;font-weight:800;color:${isLow ? 'var(--danger)' : 'var(--success)'}">${available}</div>
+                    <div style="font-size:0.65rem;color:var(--text-muted);text-transform:uppercase">Avail</div>
+                    ${reserved > 0 ? `<div style="font-size:0.68rem;color:var(--danger)">${reserved} rsvd</div>` : ''}
+                </div>
+            </div>
+            <div style="display:flex;border-top:1px solid var(--border);padding:7px 12px;gap:6px;align-items:center">
+                <div style="flex:1;font-size:0.78rem">
+                    <span style="color:var(--text-muted)">MRP:</span> <strong>${fb ? currency(fb.mrp) : (i.mrp ? currency(i.mrp) : '-')}</strong>
+                    <span style="margin-left:8px;color:var(--text-muted)">Sale:</span> <strong style="color:var(--accent)">${currency(i.salePrice)}</strong>
+                </div>
+                <div style="display:flex;gap:2px" onclick="event.stopPropagation()">
+                    ${canEdit() ? `<button class="btn-icon" style="color:var(--primary)" onclick="openStockAdjustmentModal('${i.id}')" title="Adjust"><span class="material-symbols-outlined" style="font-size:1.1rem">inventory</span></button>` : ''}
+                    <button class="btn-icon" style="color:var(--info)" onclick="viewItemLedger('${i.id}')" title="Ledger"><span class="material-symbols-outlined" style="font-size:1.1rem">list_alt</span></button>
+                    ${canEdit() ? `<button class="btn-icon" style="color:var(--warning)" onclick="openItemModal('${i.id}')" title="Edit"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button>` : ''}
+                </div>
+            </div>
+        </div>`;
+    }).join('');
+}
+
 async function renderInventory() {
     DB.showSkeleton(pageContent, 5);
     window._bulkItems = new Set();
@@ -3606,6 +3663,28 @@ async function renderInventory() {
 
     // Expose reservedMap globally so filterInvTable can use it during search
     window._inventoryReservedMap = reservedMap;
+
+    const isMobile = window.innerWidth < 768;
+
+    if (isMobile) {
+        pageContent.innerHTML = `
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+            <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center">
+                <div style="font-size:1.4rem;font-weight:800;color:#3b82f6">${totalItems}</div>
+                <div style="font-size:0.65rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">Items</div>
+            </div>
+            <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center;cursor:pointer" onclick="filterInvTableMobile('__low__')">
+                <div style="font-size:1.4rem;font-weight:800;color:${lowStock ? 'var(--danger)' : 'var(--success)'}">${lowStock}</div>
+                <div style="font-size:0.65rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">Low Stock</div>
+            </div>
+        </div>
+        <div style="display:flex;gap:6px;margin-bottom:10px">
+            <input type="text" id="inv-search" placeholder="Search items..." oninput="filterInvTableMobile()" style="flex:1;font-size:0.82rem;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input)">
+            ${canEdit() ? `<button class="btn btn-primary btn-sm" onclick="openItemModal()" style="white-space:nowrap;padding:8px 12px">+ Add</button>` : ''}
+        </div>
+        <div id="inv-list">${renderInvCards(items, reservedMap)}</div>`;
+        return;
+    }
 
     pageContent.innerHTML = `
         <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px">
@@ -3701,10 +3780,23 @@ function renderInvRows(items, reservedMap = {}, abcMap = {}) {
     }).join('');
 }
 function filterInvTable() {
-    const s = $('inv-search').value.toLowerCase();
-    let items = DB.get('db_inventory');
-    if (s) items = items.filter(i => i.name.toLowerCase().includes(s) || (i.hsn || '').toLowerCase().includes(s));
-    $('inv-tbody').innerHTML = renderInvRows(items, window._inventoryReservedMap || {}, getABCAnalysis(items));
+    const s = ($('inv-search') || {}).value?.toLowerCase() || '';
+    let items = DB.get('db_inventory') || [];
+    if (s && s !== '__low__') items = items.filter(i => i.name.toLowerCase().includes(s) || (i.hsn || '').toLowerCase().includes(s) || (i.itemCode || '').toLowerCase().includes(s) || (i.category || '').toLowerCase().includes(s));
+    if ($('inv-list')) {
+        $('inv-list').innerHTML = renderInvCards(items, window._inventoryReservedMap || {});
+    } else if ($('inv-tbody')) {
+        $('inv-tbody').innerHTML = renderInvRows(items, window._inventoryReservedMap || {}, getABCAnalysis(items));
+    }
+}
+function filterInvTableMobile(preset) {
+    const searchEl = $('inv-search');
+    if (preset === '__low__' && searchEl) { searchEl.value = ''; }
+    let items = DB.get('db_inventory') || [];
+    const s = searchEl ? searchEl.value.toLowerCase() : '';
+    if (s) items = items.filter(i => i.name.toLowerCase().includes(s) || (i.itemCode || '').toLowerCase().includes(s) || (i.category || '').toLowerCase().includes(s));
+    if (preset === '__low__') items = items.filter(i => (i.stock - (window._inventoryReservedMap?.[i.id] || 0)) <= (i.lowStockAlert || 5));
+    if ($('inv-list')) $('inv-list').innerHTML = renderInvCards(items, window._inventoryReservedMap || {});
 }
 let currentItemTiers = [];
 let currentItemBatches = [];
@@ -6128,6 +6220,60 @@ let poItems = [];
 async function renderPurchaseOrders() {
     const orders = await DB.getAll('purchaseorders');
     const p = orders.filter(o => o.status === 'pending'), r = orders.filter(o => o.status === 'received'), c = orders.filter(o => o.status === 'cancelled');
+    const isMobile = window.innerWidth < 768;
+
+    if (isMobile) {
+        const renderPOCards = (list) => {
+            if (!list.length) return '<div class="empty-state"><p>No purchase orders found</p></div>';
+            return list.slice().reverse().map(o => `
+            <div class="card" style="margin-bottom:8px;padding:0">
+                <div style="padding:10px 12px">
+                    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px">
+                        <div style="font-weight:700;color:var(--text-primary)">${o.poNo}</div>
+                        <span class="badge ${o.status === 'received' ? 'badge-success' : o.status === 'cancelled' ? 'badge-danger' : 'badge-warning'}">${o.status}</span>
+                    </div>
+                    <div style="font-size:0.82rem;color:var(--text-muted)">${escapeHtml(o.partyName)}</div>
+                    <div style="display:flex;justify-content:space-between;margin-top:6px;align-items:center">
+                        <span style="font-size:0.78rem;color:var(--text-muted)">${fmtDate(o.date)} · ${o.items.length} items</span>
+                        <span style="font-weight:700;color:var(--success)">${currency(o.total)}</span>
+                    </div>
+                </div>
+                <div style="display:flex;border-top:1px solid var(--border);padding:7px 12px;gap:6px">
+                    <button class="btn btn-outline btn-sm" style="flex:1" onclick="viewPurchaseOrder('${o.id}')">View</button>
+                    ${o.status === 'pending' ? `<button class="btn btn-primary btn-sm" style="flex:1" onclick="receivePO('${o.id}')">Receive</button>` : ''}
+                    ${o.status === 'pending' ? `<button class="btn-icon" style="color:var(--danger)" onclick="deletePO('${o.id}')"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>` : ''}
+                </div>
+            </div>`).join('');
+        };
+        window._renderPOCards = renderPOCards;
+
+        pageContent.innerHTML = `
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:10px">
+            <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:8px;text-align:center">
+                <div style="font-size:1.2rem;font-weight:800;color:#f59e0b">${p.length}</div>
+                <div style="font-size:0.6rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">Pending</div>
+            </div>
+            <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:8px;text-align:center">
+                <div style="font-size:1.2rem;font-weight:800;color:var(--success)">${r.length}</div>
+                <div style="font-size:0.6rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">Received</div>
+            </div>
+            <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:8px;text-align:center">
+                <div style="font-size:1.2rem;font-weight:800;color:var(--danger)">${c.length}</div>
+                <div style="font-size:0.6rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">Cancelled</div>
+            </div>
+        </div>
+        <div style="display:flex;gap:6px;margin-bottom:10px">
+            <button class="catalog-pill active" onclick="renderPurchaseOrders()" style="font-size:0.8rem">PO</button>
+            <button class="catalog-pill" onclick="renderPurchaseInvoices()" style="font-size:0.8rem">PI</button>
+            <select id="po-status-filter" onchange="filterPOTableMobile()" style="flex:1;font-size:0.8rem;padding:6px 8px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input)">
+                <option value="">All Status</option><option value="pending">Pending</option><option value="received">Received</option><option value="cancelled">Cancelled</option>
+            </select>
+            ${canEdit() ? `<button class="btn btn-primary btn-sm" onclick="openPurchaseOrderModal()" style="white-space:nowrap">+ PO</button>` : ''}
+        </div>
+        <div id="po-list">${renderPOCards(orders)}</div>`;
+        return;
+    }
+
     pageContent.innerHTML = `
         <div class="stats-grid-sm" style="margin-bottom:14px">
             <div class="stat-card amber"><div class="stat-icon"></div><div class="stat-value">${p.length}</div><div class="stat-label">Pending PO</div></div>
@@ -6174,11 +6320,18 @@ async function renderPORows(orders) {
 }
 
 async function filterPOTable() {
-    const s = $('po-search').value.toLowerCase(), st = $('po-status-filter').value;
+    const s = ($('po-search') || {}).value?.toLowerCase() || '', st = ($('po-status-filter') || {}).value || '';
     let orders = await DB.getAll('purchaseorders');
     if (s) orders = orders.filter(o => o.poNo.toLowerCase().includes(s) || o.partyName.toLowerCase().includes(s));
     if (st) orders = orders.filter(o => o.status === st);
-    $('po-tbody').innerHTML = await renderPORows(orders);
+    if ($('po-list') && window._renderPOCards) $('po-list').innerHTML = window._renderPOCards(orders);
+    else if ($('po-tbody')) $('po-tbody').innerHTML = await renderPORows(orders);
+}
+async function filterPOTableMobile() {
+    const st = ($('po-status-filter') || {}).value || '';
+    let orders = await DB.getAll('purchaseorders');
+    if (st) orders = orders.filter(o => o.status === st);
+    if ($('po-list') && window._renderPOCards) $('po-list').innerHTML = window._renderPOCards(orders);
 }
 
 async function renderPurchaseInvoices() {
@@ -15813,6 +15966,28 @@ async function generateUserPaymentReport() {
 // =============================================
 function renderPackers() {
     const packers = DB.cache['packers'] || [];
+    const isMobile = window.innerWidth < 768;
+    const mobileCards = packers.length ? packers.map(p => `
+        <div class="card" style="margin-bottom:8px;display:flex;align-items:center;gap:12px;padding:12px 14px">
+            <div style="width:40px;height:40px;border-radius:50%;background:var(--bg-secondary);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:1.2rem;font-weight:700;color:var(--accent)">${(p.name||'?')[0].toUpperCase()}</div>
+            <div style="flex:1;min-width:0">
+                <div style="font-weight:700">${escapeHtml(p.name)}</div>
+                ${p.phone ? `<a href="tel:${p.phone}" style="font-size:0.82rem;color:var(--success)">${p.phone}</a>` : '<span style="font-size:0.82rem;color:var(--text-muted)">No phone</span>'}
+            </div>
+            <div style="display:flex;gap:4px">
+                <button class="btn-icon" onclick="openPackerModal('${p.id}')"><span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--warning)">edit</span></button>
+                <button class="btn-icon" onclick="deletePacker('${p.id}')"><span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--danger)">delete</span></button>
+            </div>
+        </div>`).join('') : '<div class="empty-state"><p>No packers added yet</p></div>';
+
+    if (isMobile) {
+        pageContent.innerHTML = `
+        <div style="display:flex;justify-content:flex-end;margin-bottom:10px">
+            <button class="btn btn-primary" onclick="openPackerModal()">+ Add Packer</button>
+        </div>
+        ${mobileCards}`;
+        return;
+    }
     pageContent.innerHTML = `
         <div class="section-toolbar">
             <h3 style="font-size:1rem">Manage Packers</h3>
@@ -15857,6 +16032,29 @@ async function deletePacker(id) {
 // =============================================
 function renderDeliveryPersons() {
     const persons = DB.cache['delivery_persons'] || [];
+    const isMobile = window.innerWidth < 768;
+    const mobileCards = persons.length ? persons.map(p => `
+        <div class="card" style="margin-bottom:8px;display:flex;align-items:center;gap:12px;padding:12px 14px">
+            <div style="width:40px;height:40px;border-radius:50%;background:var(--bg-secondary);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:1.2rem;font-weight:700;color:var(--accent)">${(p.name||'?')[0].toUpperCase()}</div>
+            <div style="flex:1;min-width:0">
+                <div style="font-weight:700">${escapeHtml(p.name)}</div>
+                ${p.phone ? `<a href="tel:${p.phone}" style="font-size:0.82rem;color:var(--success)">${p.phone}</a>` : ''}
+                ${p.vehicle ? `<span style="font-size:0.78rem;color:var(--text-muted);margin-left:6px">${p.vehicle}</span>` : ''}
+            </div>
+            <div style="display:flex;gap:4px">
+                <button class="btn-icon" onclick="openDelPersonModal('${p.id}')"><span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--warning)">edit</span></button>
+                <button class="btn-icon" onclick="deleteDelPerson('${p.id}')"><span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--danger)">delete</span></button>
+            </div>
+        </div>`).join('') : '<div class="empty-state"><p>No delivery persons added yet</p></div>';
+
+    if (isMobile) {
+        pageContent.innerHTML = `
+        <div style="display:flex;justify-content:flex-end;margin-bottom:10px">
+            <button class="btn btn-primary" onclick="openDelPersonModal()">+ Add Delivery Person</button>
+        </div>
+        ${mobileCards}`;
+        return;
+    }
     pageContent.innerHTML = `
         <div class="section-toolbar">
             <h3 style="font-size:1rem">Manage Delivery Persons</h3>
@@ -15904,6 +16102,31 @@ async function deleteDelPerson(id) {
 function renderUsers() {
     const users = DB.cache['users'] || [];
     const roleBadgeClass = { Admin: 'badge-danger', Manager: 'badge-info', Salesman: 'badge-success', Delivery: 'badge-info', Packing: 'badge-warning' };
+    const isMobile = window.innerWidth < 768;
+    if (isMobile) {
+        pageContent.innerHTML = `
+        <div style="display:flex;justify-content:flex-end;margin-bottom:10px">
+            <button class="btn btn-primary" onclick="openUserModal()">+ Add User</button>
+        </div>
+        ${users.map(u => {
+            const roles = Array.isArray(u.roles) && u.roles.length ? u.roles : [u.role];
+            return `<div class="card" style="margin-bottom:8px;padding:12px 14px">
+                <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+                    <div style="width:40px;height:40px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-size:1.1rem;font-weight:700;color:#fff;flex-shrink:0">${(u.name||'?')[0].toUpperCase()}</div>
+                    <div style="flex:1;min-width:0">
+                        <div style="font-weight:700">${escapeHtml(u.name)}</div>
+                        <div style="font-size:0.78rem;font-family:monospace;color:var(--accent)">${escapeHtml(u.userId || u.name)}</div>
+                    </div>
+                    <div style="display:flex;gap:4px">
+                        <button class="btn-icon" onclick="openUserModal('${u.id}')"><span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--warning)">edit</span></button>
+                        ${users.length > 1 ? `<button class="btn-icon" onclick="deleteUser('${u.id}')"><span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--danger)">delete</span></button>` : ''}
+                    </div>
+                </div>
+                <div style="display:flex;flex-wrap:wrap;gap:4px">${roles.map(r => `<span class="badge ${roleBadgeClass[r] || 'badge-info'}">${r}</span>`).join('')}</div>
+            </div>`;
+        }).join('') || '<div class="empty-state"><p>No users</p></div>'}`;
+        return;
+    }
     pageContent.innerHTML = `
         <div class="section-toolbar">
             <h3 style="font-size:1rem">Users & Access</h3>
@@ -16317,6 +16540,34 @@ async function autoAssignPartyCodes() {
 async function renderNoSeries() {
     pageTitle.textContent = 'No. Series Setup';
     const data = await DB.getAll('no_series');
+    const isMobile = window.innerWidth < 768;
+
+    if (isMobile) {
+        pageContent.innerHTML = `
+        <div style="display:flex;justify-content:flex-end;margin-bottom:10px">
+            <button class="btn btn-primary btn-sm" onclick="openNoSeriesModal()">+ Add Series</button>
+        </div>
+        ${data.length ? data.map(s => `
+        <div class="card" style="margin-bottom:8px;padding:12px 14px">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
+                <div>
+                    <div style="font-weight:700;font-family:monospace;font-size:0.95rem">${escapeHtml(s.code || '')}</div>
+                    <div style="font-size:0.78rem;color:var(--text-muted)">${escapeHtml(s.description || '')}</div>
+                </div>
+                <span class="badge" style="background:${s.active ? '#dcfce7' : '#fee2e2'};color:${s.active ? '#166534' : '#991b1b'}">${s.active ? 'Active' : 'Inactive'}</span>
+            </div>
+            <div style="display:flex;gap:16px;font-size:0.8rem;margin-bottom:8px">
+                <div><span style="color:var(--text-muted)">Prefix: </span><strong style="font-family:monospace">${escapeHtml(s.prefix || '-')}</strong></div>
+                <div><span style="color:var(--text-muted)">FY: </span><strong>${escapeHtml(s.fy || '-')}</strong></div>
+                <div><span style="color:var(--text-muted)">Last#: </span><strong>${s.lastNo || 0}</strong></div>
+            </div>
+            <div style="display:flex;gap:8px">
+                <button class="btn btn-outline btn-sm" style="flex:1" onclick='openNoSeriesModal(${JSON.stringify(s.id)})'>Edit</button>
+                <button class="btn btn-outline btn-sm" style="flex:1;border-color:var(--warning);color:var(--warning)" onclick='resetSeries(${JSON.stringify(s.code)})'>Roll FY</button>
+            </div>
+        </div>`).join('') : '<div class="empty-state"><p>No series configured</p></div>'}`;
+        return;
+    }
 
     let html = `
         <div class="card">
@@ -18904,6 +19155,40 @@ async function renderStaffMaster() {
     const { data: staff, error } = await supabaseClient.from('staff').select('*').order('name');
     if (error) { pageContent.innerHTML = `<p style="color:red">Error: ${error.message}</p>`; return; }
     const isAdmin = currentUser && currentUser.role === 'Admin';
+    const isMobile = window.innerWidth < 768;
+
+    if (isMobile) {
+        pageContent.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+            <div style="font-size:0.82rem;color:var(--text-muted)">${staff.length} member(s)</div>
+            ${isAdmin ? `<button class="btn btn-primary btn-sm" onclick="openStaffModal()">+ Add Staff</button>` : ''}
+        </div>
+        ${staff.length ? staff.map(s => `
+        <div class="card" style="margin-bottom:8px;padding:0;opacity:${s.status === 'inactive' ? '0.65' : '1'}">
+            <div style="display:flex;align-items:center;gap:10px;padding:10px 12px">
+                <div style="width:42px;height:42px;border-radius:50%;background:var(--bg-secondary);display:flex;align-items:center;justify-content:center;font-size:1.1rem;font-weight:700;color:var(--accent);flex-shrink:0">${(s.name||'?')[0].toUpperCase()}</div>
+                <div style="flex:1;min-width:0">
+                    <div style="font-weight:700">${escapeHtml(s.name)}</div>
+                    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:2px">
+                        <span class="badge badge-info" style="font-size:0.68rem">${s.role || 'Staff'}</span>
+                        <span class="badge ${s.status === 'active' ? 'badge-success' : 'badge-danger'}" style="font-size:0.68rem">${s.status || 'active'}</span>
+                        ${s.phone ? `<a href="tel:${s.phone}" style="font-size:0.78rem;color:var(--success)">${s.phone}</a>` : ''}
+                    </div>
+                </div>
+                <div style="text-align:right;flex-shrink:0">
+                    <div style="font-weight:700;font-size:0.9rem">${currency(s.monthly_salary || 0)}</div>
+                    <div style="font-size:0.68rem;color:var(--text-muted)">Monthly</div>
+                </div>
+            </div>
+            ${isAdmin ? `<div style="display:flex;border-top:1px solid var(--border);padding:6px 12px;gap:6px">
+                <button class="btn btn-outline btn-sm" style="flex:1" onclick="openStaffModal('${s.id}')">Edit</button>
+                <button class="btn btn-outline btn-sm" style="flex:1" onclick="toggleStaffStatus('${s.id}','${s.status || 'active'}')">${s.status === 'inactive' ? 'Activate' : 'Deactivate'}</button>
+                <button class="btn btn-outline btn-sm" style="flex:1" onclick="openStaffAdvance('${s.id}','${escapeHtml(s.name)}')">Advance</button>
+            </div>` : ''}
+        </div>`).join('') : '<div class="empty-state"><p>No staff added yet</p></div>'}`;
+        return;
+    }
+
     pageContent.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
         <div>
