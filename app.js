@@ -13357,33 +13357,52 @@ async function openBulkDispatchModal() {
     </div>`);
 }
 
+let _bulkDispatching = false;
 async function confirmBulkDispatch() {
+    if (_bulkDispatching) return;
     const person = $('f-bulk-del-person').value;
     if (!person) { alert('Select a delivery person'); return; }
     const rows = JSON.parse(decodeURIComponent($('bulk-disp-rows').value));
+    _bulkDispatching = true;
     closeModal();
-    showToast('Dispatching', 'info');
+    showToast('Dispatching...', 'info');
     try {
-        const [orders, invoices] = await Promise.all([DB.getAll('salesorders'), DB.getAll('invoices')]);
-        const ops = rows.map(r => {
+        const [orders, invoices, dels] = await Promise.all([
+            DB.getAll('salesorders'), DB.getAll('invoices'), DB.getAll('delivery')
+        ]);
+        let dispatched = 0;
+        for (const r of rows) {
             let delData;
             if (r.source === 'order') {
                 const o = orders.find(x => x.id === r.id);
-                if (!o) return null;
-                delData = { orderId: o.id, orderNo: o.orderNo, partyName: o.partyName, partyId: o.partyId, invoiceNo: o.invoiceNo || '', deliveryPerson: person, status: 'Dispatched', dispatchedAt: today(), total: o.total, items: o.items, packageNumbers: o.packageNumbers || [], boxNumbers: o.boxNumbers || [], crateNumbers: o.crateNumbers || [], boxCount: o.boxCount || 0, crateCount: o.crateCount || 0 };
+                if (!o) continue;
+                // Skip if already dispatched (non-cancelled delivery exists)
+                const alreadyExists = dels.some(d => d.orderNo === o.orderNo && d.status !== 'Cancelled');
+                if (alreadyExists) continue;
+                delData = { orderId: o.id, orderNo: o.orderNo, partyName: o.partyName, partyId: o.partyId,
+                    invoiceNo: o.invoiceNo || '', deliveryPerson: person, status: 'Dispatched',
+                    dispatchedAt: today(), total: o.total, items: o.packedItems || o.items,
+                    packageNumbers: o.packageNumbers || [] };
             } else {
                 const inv = invoices.find(x => x.id === r.id);
-                if (!inv) return null;
-                delData = { orderId: inv.id, orderNo: inv.invoiceNo, partyName: inv.partyName, partyId: inv.partyId, invoiceNo: inv.invoiceNo, deliveryPerson: person, status: 'Dispatched', dispatchedAt: today(), total: inv.total, items: inv.items };
+                if (!inv) continue;
+                // Skip if already dispatched
+                const alreadyExists = dels.some(d => d.invoiceNo === inv.invoiceNo && d.status !== 'Cancelled');
+                if (alreadyExists) continue;
+                delData = { orderId: inv.id, orderNo: inv.invoiceNo, partyName: inv.partyName,
+                    partyId: inv.partyId, invoiceNo: inv.invoiceNo, deliveryPerson: person,
+                    status: 'Dispatched', dispatchedAt: today(), total: inv.total, items: inv.items };
             }
-            return DB.rawInsert('delivery', delData);
-        }).filter(Boolean);
-        await Promise.all(ops);
+            await DB.rawInsert('delivery', delData);
+            dispatched++;
+        }
         await DB.refreshTables(['delivery']);
         await renderDelivery();
-        showToast(` ${ops.length} order(s) dispatched to ${person}!`, 'success');
+        showToast(`${dispatched} order(s) dispatched to ${person}!`, 'success');
     } catch (err) {
         alert('Bulk Dispatch Error: ' + err.message);
+    } finally {
+        _bulkDispatching = false;
     }
 }
 
