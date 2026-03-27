@@ -2681,7 +2681,7 @@ async function filterPartyTable() {
     if (_partyTab === 'customer') parties = parties.filter(p => p.type === 'Customer');
     if (_partyTab === 'supplier') parties = parties.filter(p => p.type === 'Supplier');
     if (search) parties = parties.filter(p =>
-        p.name.toLowerCase().includes(search) ||
+        (p.name || '').toLowerCase().includes(search) ||
         (p.phone || '').includes(search) ||
         (p.city || '').toLowerCase().includes(search) ||
         (p.postCode || '').includes(search) ||
@@ -3121,24 +3121,24 @@ async function processOpeningBalImport(event) {
     for (let i = 1; i < lines.length; i++) {
         const cols = parseCSVLine(lines[i]);
         const [partyCode, partyName, partyType, invoiceNo, invoiceDate, amountStr, dueDate, notes] = cols;
-        if (!partyCode || !partyName || !invoiceNo || !invoiceDate || !amountStr) {
-            errors.push(`Row ${i + 1}: Missing required fields (Party Code, Party Name, Invoice No, Invoice Date, Amount)`);
+        if (!partyName || !invoiceNo || !invoiceDate || !amountStr) {
+            errors.push(`Row ${i + 1}: Missing required fields (Party Name, Invoice No, Invoice Date, Amount)`);
             continue;
         }
         const amount = parseFloat(amountStr);
         if (isNaN(amount) || amount <= 0) { errors.push(`Row ${i + 1}: Invalid amount "${amountStr}"`); continue; }
         // Find existing party by partyCode first, then by name
-        const existing = parties.find(p => p.partyCode && p.partyCode.toUpperCase() === partyCode.trim().toUpperCase())
-            || parties.find(p => p.name.toLowerCase() === partyName.trim().toLowerCase());
+        const existing = parties.find(p => p.partyCode && (p.partyCode || '').toUpperCase() === (partyCode || '').trim().toUpperCase())
+            || parties.find(p => (p.name || '').toLowerCase() === (partyName || '').trim().toLowerCase());
         preview.push({
-            partyCode: partyCode.trim().toUpperCase(),
-            partyName: partyName.trim(),
+            partyCode: (partyCode || '').trim().toUpperCase(),
+            partyName: (partyName || '').trim(),
             partyType: (partyType || 'Customer').trim() || 'Customer',
-            invoiceNo: invoiceNo.trim(),
-            invoiceDate: invoiceDate.trim(),
+            invoiceNo: (invoiceNo || '').trim(),
+            invoiceDate: (invoiceDate || '').trim(),
             amount,
-            dueDate: dueDate ? dueDate.trim() : '',
-            notes: notes ? notes.trim() : '',
+            dueDate: (dueDate || '').trim(),
+            notes: (notes || '').trim(),
             existingParty: existing || null,
             action: existing ? 'update' : 'create'
         });
@@ -3293,8 +3293,8 @@ function processPartyImport(event) {
 
             // Match by Name OR Party Code
             const existingParty = parties.find(p => 
-                p.name.toLowerCase() === name.toLowerCase() || 
-                (partyCode && p.partyCode && p.partyCode.toUpperCase() === partyCode)
+                (p.name || '').toLowerCase() === name.toLowerCase() || 
+                (partyCode && (p.partyCode || '').toUpperCase() === partyCode)
             );
 
             if (pendingPartyImports.some(p => p.name.toLowerCase() === name.toLowerCase())) {
@@ -3304,7 +3304,7 @@ function processPartyImport(event) {
                 errors.push(`Row ${i + 1}: Duplicate Party Code "${partyCode}" in file.`); continue;
             }
 
-            const partyType = typeStr.toLowerCase().includes('supp') ? 'Supplier' : 'Customer';
+            const partyType = (typeStr || '').toLowerCase().includes('supp') ? 'Supplier' : 'Customer';
             const balance = +(balStr || 0);
             const entry = {
                 name, partyCode: partyCode, type: partyType,
