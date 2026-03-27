@@ -3244,7 +3244,6 @@ async function confirmOpeningBalImport() {
                     discount_pct: 0,
                     discount_amt: 0,
                     status: 'posted',
-                    notes: r.notes || 'Opening balance',
                     created_by: currentUser ? currentUser.name : 'Import'
                 });
                 docCount++;
