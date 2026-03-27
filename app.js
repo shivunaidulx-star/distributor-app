@@ -896,7 +896,7 @@ async function addPartyLedgerEntry(partyId, partyName, type, amount, docNo, note
         type, amount, balance: party ? party.balance : 0,
         docNo: (docNo && typeof docNo === 'object') ? JSON.stringify(docNo) : (docNo || ''),
         notes: notes || '',
-        created_by: currentUser ? currentUser.userId : 'System'
+        createdBy: currentUser ? currentUser.userId : 'System'
     });
 }
 
@@ -1683,6 +1683,7 @@ async function navigateTo(page, options = {}) {
         customerrequests: 'dashboard', inventorysetup: 'setup',
         categories: 'inventorysetup', uom: 'inventorysetup', noseries: 'setup',
         partyledger: 'parties', packorder: 'packing',
+        stockledger: 'inventory',
     };
     const mobileBackBtn = document.getElementById('mobile-back-btn');
     const sidebarToggle = document.getElementById('sidebar-toggle');
@@ -1708,7 +1709,7 @@ async function navigateTo(page, options = {}) {
         pageContent.innerHTML = '<div style="display:flex;justify-content:center;align-items:center;height:200px"><div class="loader"></div></div>';
     }
 
-    const renderers = { dashboard: renderDashboard, parties: renderParties, partyledger: renderPartyLedgerLayout, inventorysetup: renderInventorySetup, categories: renderCategories, uom: renderUOM, inventory: renderInventory, catalog: renderCatalog, salesorders: renderSalesOrders, purchaseorders: renderPurchaseOrders, invoices: renderInvoices, payments: renderPayments, expenses: renderExpenses, packing: renderPacking, delivery: renderDelivery, reports: renderReports, packers: renderPackers, deliverypersons: renderDeliveryPersons, users: renderUsers, setup: renderCompanySetup, noseries: renderNoSeries, customerrequests: renderCustomerRequests, staffmaster: renderStaffMaster, attendance: renderAttendance, hrpayroll: renderHRPayroll, packorder: renderPackOrderPage };
+    const renderers = { dashboard: renderDashboard, parties: renderParties, partyledger: renderPartyLedgerLayout, inventorysetup: renderInventorySetup, categories: renderCategories, uom: renderUOM, inventory: renderInventory, catalog: renderCatalog, salesorders: renderSalesOrders, purchaseorders: renderPurchaseOrders, invoices: renderInvoices, payments: renderPayments, expenses: renderExpenses, packing: renderPacking, delivery: renderDelivery, reports: renderReports, packers: renderPackers, deliverypersons: renderDeliveryPersons, users: renderUsers, setup: renderCompanySetup, noseries: renderNoSeries, customerrequests: renderCustomerRequests, staffmaster: renderStaffMaster, attendance: renderAttendance, hrpayroll: renderHRPayroll, packorder: renderPackOrderPage, stockledger: () => renderStockLedger(null) };
 
     if (renderers[page]) {
         await renderers[page]();
@@ -2145,7 +2146,7 @@ async function renderDashboard() {
                 <div class="card" style="margin:0; border-left: 4px solid ${barColor}">
                     <div class="card-body" style="padding:16px">
                         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px">
-                            <h4 style="margin:0; font-size:0.9rem; color:var(--text-secondary)">🎯 Monthly Sales Target</h4>
+                            <h4 style="margin:0; font-size:0.9rem; color:var(--text-secondary)">Monthly Sales Target</h4>
                             <span style="font-weight:800; color:${barColor}">${achPct.toFixed(1)}%</span>
                         </div>
                         <div style="height:10px; background:var(--bg-body); border-radius:10px; overflow:hidden; margin-bottom:12px; border:1px solid var(--border)">
@@ -2167,7 +2168,7 @@ async function renderDashboard() {
                 <div class="card" style="margin:0; border-left: 4px solid #10b981">
                     <div class="card-body" style="padding:16px; display:flex; flex-direction:column; justify-content:center">
                         <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:8px">
-                            <h4 style="margin:0; font-size:0.9rem; color:var(--text-secondary)">💰 Today's Collection</h4>
+                            <h4 style="margin:0; font-size:0.9rem; color:var(--text-secondary)">Today's Collection</h4>
                             <span class="badge badge-success" style="font-size:0.75rem">${myTodayPayments.length} Receipts</span>
                         </div>
                         <div style="font-size:1.8rem; font-weight:800; color:#10b981; line-height:1.2">
@@ -2184,7 +2185,7 @@ async function renderDashboard() {
                 <div class="stat-card amber"><div class="stat-icon">⏳</div><div class="stat-value">${mySO.filter(o => o.status === 'pending').length}</div><div class="stat-label">My Pending</div></div>
                 <div class="stat-card green"><div class="stat-icon">✅</div><div class="stat-value">${mySO.filter(o => o.status === 'approved').length}</div><div class="stat-label">My Approved</div></div>
                 <div class="stat-card red"><div class="stat-icon">❌</div><div class="stat-value">${mySO.filter(o => o.status === 'rejected').length}</div><div class="stat-label">My Rejected</div></div>
-                <div class="stat-card blue"><div class="stat-icon">📦</div><div class="stat-value">${mySO.length}</div><div class="stat-label">Total Orders</div></div>
+                <div class="stat-card blue"><div class="stat-icon"></div><div class="stat-value">${mySO.length}</div><div class="stat-label">Total Orders</div></div>
             </div>
 
             <div class="section-toolbar" style="margin-top:8px"><h3>Quick Actions</h3></div>
@@ -2224,20 +2225,20 @@ async function renderDashboard() {
         const undelivered = myDels.filter(d => d.status === 'Undelivered');
         pageContent.innerHTML = `
             <div class="stats-grid">
-                <div class="stat-card blue"><div class="stat-icon">🚚</div><div class="stat-value">${dispatched.length}</div><div class="stat-label">In Transit</div></div>
+                <div class="stat-card blue"><div class="stat-icon"></div><div class="stat-value">${dispatched.length}</div><div class="stat-label">In Transit</div></div>
                 <div class="stat-card green"><div class="stat-icon">✅</div><div class="stat-value">${delivered.length}</div><div class="stat-label">Delivered</div></div>
-                <div class="stat-card red"><div class="stat-icon">↩️</div><div class="stat-value">${undelivered.length}</div><div class="stat-label">Undelivered</div></div>
-                <div class="stat-card amber"><div class="stat-icon">📦</div><div class="stat-value">${myDels.length}</div><div class="stat-label">Total Assigned</div></div>
+                <div class="stat-card red"><div class="stat-icon"></div><div class="stat-value">${undelivered.length}</div><div class="stat-label">Undelivered</div></div>
+                <div class="stat-card amber"><div class="stat-icon"></div><div class="stat-value">${myDels.length}</div><div class="stat-label">Total Assigned</div></div>
             </div>
             <div class="section-toolbar" style="margin-top:8px"><h3>Quick Actions</h3></div>
             <div class="quick-actions">
-                <button class="quick-action-btn" onclick="navigateTo('delivery')"><span class="qa-icon">🚚</span><span class="qa-label">My Deliveries</span></button>
+                <button class="quick-action-btn" onclick="navigateTo('delivery')"><span class="qa-icon material-symbols-outlined">local_shipping</span><span class="qa-label">My Deliveries</span></button>
                 <button class="quick-action-btn" onclick="openPartyGpsModal()"><span class="qa-icon">📍</span><span class="qa-label">Update GPS</span></button>
             </div>
             <div class="card"><div class="card-header"><h3>My Active Dispatches</h3></div><div class="card-body">
                 <div class="table-wrapper">
                     <table class="data-table"><thead><tr><th>Order #</th><th>Party</th><th>Invoice</th><th>Status</th></tr></thead>
-                    <tbody>${dispatched.slice(-5).reverse().map(d => `<tr><td style="font-weight:600">${d.orderNo}</td><td>${d.partyName}</td><td><span class="badge badge-info">${d.invoiceNo || '-'}</span></td><td><span class="badge badge-info">${d.status}</span></td></tr>`).join('') || '<tr><td colspan="4"><div class="empty-state"><span class="empty-icon">🚚</span><p>No active dispatches</p><p class="empty-subtitle">All deliveries are complete</p></div></td></tr>'}</tbody></table>
+                    <tbody>${dispatched.slice(-5).reverse().map(d => `<tr><td style="font-weight:600">${d.orderNo}</td><td>${d.partyName}</td><td><span class="badge badge-info">${d.invoiceNo || '-'}</span></td><td><span class="badge badge-info">${d.status}</span></td></tr>`).join('') || '<tr><td colspan="4"><div class="empty-state"><p>No active dispatches</p><p class="empty-subtitle">All deliveries are complete</p></div></td></tr>'}</tbody></table>
                 </div>
             </div></div>
             ${renderPartyNavWidget(parties)}`;
@@ -2253,12 +2254,12 @@ async function renderDashboard() {
         const packed = salesOrders.filter(o => o.packed && o.packedBy === currentUser.name);
         pageContent.innerHTML = `
             <div class="stats-grid">
-                <div class="stat-card amber"><div class="stat-icon">📋</div><div class="stat-value">${myQueue.length}</div><div class="stat-label">Packing Queue</div></div>
+                <div class="stat-card amber"><div class="stat-icon"></div><div class="stat-value">${myQueue.length}</div><div class="stat-label">Packing Queue</div></div>
                 <div class="stat-card green"><div class="stat-icon">✅</div><div class="stat-value">${packed.length}</div><div class="stat-label">Packed by Me</div></div>
             </div>
             <div class="section-toolbar" style="margin-top:8px"><h3>Quick Actions</h3></div>
             <div class="quick-actions">
-                <button class="quick-action-btn" onclick="navigateTo('packing')"><span class="qa-icon">📋</span><span class="qa-label">Packing Queue</span></button>
+                <button class="quick-action-btn" onclick="navigateTo('packing')"><span class="qa-icon material-symbols-outlined">inventory_2</span><span class="qa-label">Packing Queue</span></button>
             </div>
             ${myAssigned.length ? `<div class="card" style="margin-bottom:12px"><div class="card-header"><h3>Assigned to Me</h3></div><div class="card-body">
                 <div class="table-wrapper">
@@ -2336,9 +2337,9 @@ async function renderDashboard() {
     const tileHover = 'onmouseover="this.style.transform=\'translateY(-2px)\';this.style.boxShadow=\'0 6px 20px rgba(0,0,0,0.2)\'" onmouseout="this.style.transform=\'none\';this.style.boxShadow=\'none\'"';
 
     pageContent.innerHTML = `
-    ${pendingSO ? `<div class="dash-alert dash-alert-amber" onclick="navigateTo('salesorders')" style="cursor:pointer">📝 <strong>${pendingSO} Pending Orders</strong> awaiting approval &nbsp;<span style="color:var(--accent)">→ Review</span></div>` : ''}
-    ${approvedUnpacked ? `<div class="dash-alert dash-alert-blue" onclick="navigateTo('packing')" style="cursor:pointer">📋 <strong>${approvedUnpacked} Orders</strong> ready for packing &nbsp;<span style="color:var(--accent)">→ Pack Now</span></div>` : ''}
-    ${undeliveredCount ? `<div class="dash-alert dash-alert-red" onclick="navigateTo('delivery')" style="cursor:pointer">↩️ <strong>${undeliveredCount} Undelivered / Returned</strong> need attention &nbsp;<span style="color:var(--accent)">→ Handle</span></div>` : ''}
+    ${pendingSO ? `<div class="dash-alert dash-alert-amber" onclick="navigateTo('salesorders')" style="cursor:pointer"><strong>${pendingSO} Pending Orders</strong> awaiting approval &nbsp;<span style="color:var(--accent)">→ Review</span></div>` : ''}
+    ${approvedUnpacked ? `<div class="dash-alert dash-alert-blue" onclick="navigateTo('packing')" style="cursor:pointer"><strong>${approvedUnpacked} Orders</strong> ready for packing &nbsp;<span style="color:var(--accent)">→ Pack Now</span></div>` : ''}
+    ${undeliveredCount ? `<div class="dash-alert dash-alert-red" onclick="navigateTo('delivery')" style="cursor:pointer"><strong>${undeliveredCount} Undelivered / Returned</strong> need attention &nbsp;<span style="color:var(--accent)">→ Handle</span></div>` : ''}
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
         <div class="dash-kpi-card dash-kpi-green" onclick="window._partyBalanceFilter='receivable';navigateTo('parties')" style="cursor:pointer">
@@ -2407,7 +2408,7 @@ async function renderDashboard() {
     </div>
 
     ${(nonMovingItems.length || slowMovingItems.length) ? `
-    <div class="card" style="margin-bottom:14px"><div class="card-header" style="display:flex;justify-content:space-between;align-items:center"><h3>📉 Slow / Non-Moving Items</h3><span style="font-size:0.78rem;color:var(--text-muted)">Last 90 days</span></div><div class="card-body">
+    <div class="card" style="margin-bottom:14px"><div class="card-header" style="display:flex;justify-content:space-between;align-items:center"><h3>Slow / Non-Moving Items</h3><span style="font-size:0.78rem;color:var(--text-muted)">Last 90 days</span></div><div class="card-body">
         ${nonMovingItems.length ? `<div style="margin-bottom:14px"><div style="font-weight:600;color:var(--danger);font-size:0.88rem;margin-bottom:8px">🚫 Non-Moving (${nonMovingItems.length}) — Zero sales in 90 days</div>
         <table class="data-table"><thead><tr><th>Item</th><th>Stock</th><th>Last Sold</th></tr></thead><tbody>${nonMovingItems.slice(0, 8).map(i => `<tr><td style="font-weight:600">${i.name}</td><td><span class="badge badge-danger">${i.stock}</span></td><td style="color:var(--text-muted);font-size:0.82rem">${itemLastSoldMap[i.id] ? fmtDate(itemLastSoldMap[i.id]) : 'Never'}</td></tr>`).join('')}</tbody></table></div>` : ''}
         ${slowMovingItems.length ? `<div><div style="font-weight:600;color:var(--warning);font-size:0.88rem;margin-bottom:8px">🐢 Slow Moving (${slowMovingItems.length}) — ≤5 units in 90 days</div>
@@ -2592,7 +2593,7 @@ async function renderParties() {
         <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:10px">
             <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
                 <input type="text" id="party-search" placeholder="Search parties..." oninput="filterPartyTable()" style="flex:1;font-size:0.82rem;padding:7px 10px;border:1px solid var(--border);border-radius:7px;background:var(--bg-input);">
-                <button onclick="togglePartyFilters()" id="party-filter-toggle" style="border:1px solid var(--border);background:var(--bg-input);border-radius:7px;padding:7px 10px;font-size:0.85rem;cursor:pointer;flex-shrink:0">⚙️</button>
+                <button onclick="togglePartyFilters()" id="party-filter-toggle" style="border:1px solid var(--border);background:var(--bg-input);border-radius:7px;padding:7px 10px;font-size:0.85rem;cursor:pointer;flex-shrink:0"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-3px">tune</span></button>
                 ${!isSalesman() ? `<button class="btn btn-primary btn-sm" onclick="openPartyModal()" style="white-space:nowrap;padding:7px 14px;flex-shrink:0">+ Party</button>` : ''}
             </div>
             <div id="party-extra-filters" style="display:none;margin-top:8px">
@@ -3217,14 +3218,14 @@ async function confirmOpeningBalImport() {
                 // Party ledger entry
                 await DB.rawInsert('party_ledger', {
                     date: r.invoiceDate,
-                    party_id: partyId,
-                    party_name: partyName,
+                    partyId,
+                    partyName,
                     type: 'Opening Balance',
                     amount: r.amount,
                     balance: runningBal,
-                    doc_no: r.invoiceNo,
+                    docNo: r.invoiceNo,
                     notes: r.notes || 'Opening balance import',
-                    created_by: currentUser ? currentUser.name : 'Import'
+                    createdBy: currentUser ? currentUser.name : 'Import'
                 });
                 // Invoice record so it appears in invoices list & payment allocation
                 const invType = (r.partyType || 'Customer').toLowerCase().includes('supp') ? 'purchase' : 'sale';
@@ -3426,7 +3427,7 @@ async function renderCategories() {
             <h3 style="font-size:1rem"> Categories</h3>
             <div class="filter-group">
                 <button class="btn btn-outline" onclick="downloadCategoryTemplate()">📥 Template</button>
-                <button class="btn btn-outline" onclick="triggerCategorizeExcelImport()">📤 Import</button>
+                <button class="btn btn-outline" onclick="triggerCategorizeExcelImport()">Import</button>
                 <input type="file" id="f-cat-import" accept=".xlsx, .xls" style="display:none" onchange="importCategoriesExcel(event)">
                 <button class="btn btn-primary" onclick="openCategoryModal()">+ Add Category</button>
             </div>
@@ -3629,7 +3630,7 @@ function renderInvCards(items, reservedMap = {}) {
                 </div>
                 <div style="display:flex;gap:2px" onclick="event.stopPropagation()">
                     ${canEdit() ? `<button class="btn-icon" style="color:var(--primary)" onclick="openStockAdjustmentModal('${i.id}')" title="Adjust"><span class="material-symbols-outlined" style="font-size:1.1rem">inventory</span></button>` : ''}
-                    <button class="btn-icon" style="color:var(--info)" onclick="viewItemLedger('${i.id}')" title="Ledger"><span class="material-symbols-outlined" style="font-size:1.1rem">list_alt</span></button>
+                    <button class="btn-icon" style="color:var(--info)" onclick="renderStockLedger('${i.id}')" title="Ledger"><span class="material-symbols-outlined" style="font-size:1.1rem">list_alt</span></button>
                     ${canEdit() ? `<button class="btn-icon" style="color:var(--warning)" onclick="openItemModal('${i.id}')" title="Edit"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button>` : ''}
                 </div>
             </div>
@@ -3689,7 +3690,7 @@ async function renderInventory() {
     pageContent.innerHTML = `
         <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px">
             <div class="dash-pulse-tile" style="--tile-color:#3b82f6;animation-delay:0.04s">
-                <div class="dash-pulse-icon">📦</div>
+                <div class="dash-pulse-icon"></div>
                 <div class="dash-pulse-val dash-count" data-val="${totalItems}" style="color:#3b82f6">${totalItems}</div>
                 <div class="dash-pulse-lbl">Total Items</div>
             </div>
@@ -3699,12 +3700,12 @@ async function renderInventory() {
                 <div class="dash-pulse-lbl">Stock Qty</div>
             </div>
             <div class="dash-pulse-tile" style="--tile-color:#f59e0b;animation-delay:0.12s">
-                <div class="dash-pulse-icon">💰</div>
+                <div class="dash-pulse-icon"></div>
                 <div class="dash-pulse-val" style="color:#f59e0b;font-size:0.7rem">${currency(totalValue)}</div>
                 <div class="dash-pulse-lbl">Stock Value</div>
             </div>
             <div class="dash-pulse-tile${lowStock ? ' dash-pulse-alert' : ''}" onclick="document.getElementById('inv-search')&&(document.getElementById('inv-cat-filter').value='__low__',filterInvTable())" style="--tile-color:${lowStock ? '#ef4444' : '#10b981'};animation-delay:0.16s;cursor:${lowStock ? 'pointer' : 'default'}">
-                <div class="dash-pulse-icon">⚠️</div>
+                <div class="dash-pulse-icon"></div>
                 <div class="dash-pulse-val" style="color:${lowStock ? '#ef4444' : '#10b981'}">${lowStock}</div>
                 <div class="dash-pulse-lbl">Low Stock</div>
             </div>
@@ -3774,7 +3775,7 @@ function renderInvRows(items, reservedMap = {}, abcMap = {}) {
             reserved: `<td style="min-width:60px;text-align:center">${reserved > 0 ? `<span style="color:var(--danger);font-weight:600">${reserved}</span>` : '0'}</td>`,
             avail: `<td style="min-width:80px;text-align:center"><span class="badge ${available <= (i.lowStockAlert || 5) ? 'badge-danger' : 'badge-success'}">${available}</span></td>`,
             value: `<td style="min-width:110px;text-align:right">${currency(i.stock * i.purchasePrice)}</td>`,
-            actions: `<td style="min-width:150px"><div class="action-btns">${canEdit() ? `<button class="btn-icon" style="color:var(--primary)" onclick="openStockAdjustmentModal('${i.id}')" title="Adjust Stock"><span class="material-symbols-outlined" style="font-size:1.1rem">inventory</span></button>` : ''}<button class="btn-icon" style="color:var(--info)" onclick="viewItemLedger('${i.id}')" title="View Ledger"><span class="material-symbols-outlined" style="font-size:1.1rem">list_alt</span></button>${canEdit() ? `<button class="btn-icon" style="color:var(--warning)" onclick="openItemModal('${i.id}')" title="Edit"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button><button class="btn-icon" style="color:var(--danger)" onclick="deleteItem('${i.id}')" title="Delete"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>` : ''}</div></td>`,
+            actions: `<td style="min-width:150px"><div class="action-btns">${canEdit() ? `<button class="btn-icon" style="color:var(--primary)" onclick="openStockAdjustmentModal('${i.id}')" title="Adjust Stock"><span class="material-symbols-outlined" style="font-size:1.1rem">inventory</span></button>` : ''}<button class="btn-icon" style="color:var(--info)" onclick="renderStockLedger('${i.id}')" title="View Ledger"><span class="material-symbols-outlined" style="font-size:1.1rem">list_alt</span></button>${canEdit() ? `<button class="btn-icon" style="color:var(--warning)" onclick="openItemModal('${i.id}')" title="Edit"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button><button class="btn-icon" style="color:var(--danger)" onclick="deleteItem('${i.id}')" title="Delete"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>` : ''}</div></td>`,
         };
         return `<tr><td style="width:36px;text-align:center"><input type="checkbox" class="bulk-chk-item" data-id="${i.id}" onchange="toggleBulkItem('${i.id}',this)" style="width:16px;height:16px;cursor:pointer" ${window._bulkItems && window._bulkItems.has(i.id) ? 'checked' : ''}></td>${cols.map(c => cellMap[c.key] || '').join('')}</tr>`;
     }).join('');
@@ -4064,6 +4065,8 @@ function deleteItemBatch(idx) {
 
 function openAddBatchForm() {
     const today = new Date().toISOString().substring(0, 10);
+    // Snapshot current batches so Cancel can restore them (prevents openItemModal reset)
+    window._batchFormSnapshot = currentItemBatches.slice();
     openModal('Add MRP Batch', `
         <div style="background:rgba(249,115,22,0.08);border:1px solid rgba(249,115,22,0.3);border-radius:8px;padding:10px;margin-bottom:14px;font-size:0.83rem">
              When a new MRP is received, add it as a new batch. Purchase Price and Sale Price are mandatory.
@@ -4078,9 +4081,18 @@ function openAddBatchForm() {
         </div>
         <div class="form-group"><label>Opening Qty (this batch)</label><input type="number" id="f-batch-qty" value="0" min="0"></div>
         <div class="modal-actions">
-            <button class="btn btn-outline" onclick="closeModal();openItemModal(window._editItemId||'')">Cancel</button>
+            <button class="btn btn-outline" onclick="cancelAddBatchForm()">Cancel</button>
             <button class="btn btn-primary" onclick="saveItemBatch()">Add Batch</button>
         </div>`);
+}
+
+function cancelAddBatchForm() {
+    // Restore batches snapshot so in-progress (unsaved) batches are not lost
+    const snapshot = window._batchFormSnapshot || [];
+    closeModal();
+    openItemModal(window._editItemId || '');
+    currentItemBatches = snapshot;
+    renderItemBatches();
 }
 
 function onBatchMrpChange() {
@@ -4645,6 +4657,133 @@ async function viewItemLedger(itemId) {
         ${canEdit() ? `<button class="btn btn-primary" onclick="closeModal();openStockAdjustmentModal('${itemId}')"> Adjust Stock</button>` : ''}`);
 }
 
+// --- Stock Ledger Full-Screen Layout ---
+let _stockLedgerItemId = null;
+
+async function renderStockLedger(itemId) {
+    _stockLedgerItemId = itemId;
+    const [items, ledger] = await Promise.all([
+        DB.getAll('inventory'),
+        DB.getAll('stock_ledger')
+    ]);
+    const item = items.find(x => x.id === itemId);
+    if (!item) { navigateTo('inventory'); return; }
+
+    const itemLedger = ledger
+        .filter(e => e.itemId === itemId)
+        .sort((a, b) => new Date(a.date) - new Date(b.date) || String(a.id).localeCompare(String(b.id)));
+
+    pageContent.innerHTML = `
+        <div class="section-toolbar">
+            <h3 style="font-size:1rem;display:flex;align-items:center;gap:10px">
+                <button class="btn-icon" onclick="navigateTo('inventory')" title="Back to Inventory" style="font-size:1.2rem;padding:4px 8px">← Back</button>
+                Stock Ledger: ${escapeHtml(item.name)}
+            </h3>
+            <div class="filter-group">
+                <button class="btn btn-outline btn-sm" onclick="exportStockLedgerCSV('${itemId}')">Export</button>
+            </div>
+        </div>
+        <div class="card" style="margin-bottom:15px">
+            <div class="card-body" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+                <div>
+                    <span style="font-size:0.9rem;color:var(--text-muted)">${item.category || ''} ${item.itemCode ? '| Code: ' + item.itemCode : ''}</span>
+                </div>
+                <div style="text-align:right">
+                    <div style="font-size:0.8rem;color:var(--text-muted)">Current Stock</div>
+                    <div style="font-size:1.4rem;font-weight:700;color:${item.stock <= (item.lowStockAlert || 5) ? 'var(--danger)' : 'var(--success)'}">${item.stock} ${item.unit || 'Pcs'}</div>
+                </div>
+            </div>
+        </div>
+        <div class="card" style="margin-bottom:15px">
+            <div class="card-body" style="display:flex;gap:10px;flex-wrap:wrap;padding:12px">
+                <input type="date" id="sl-filter-from" class="search-box" style="width:auto" onchange="filterStockLedger()" title="From Date">
+                <input type="date" id="sl-filter-to" class="search-box" style="width:auto" onchange="filterStockLedger()" title="To Date">
+                <select id="sl-filter-type" class="search-box" style="width:auto" onchange="filterStockLedger()">
+                    <option value="">All Types</option>
+                    <option value="Purchase">Purchase</option>
+                    <option value="Sale">Sale</option>
+                    <option value="Adjustment">Adjustment</option>
+                    <option value="Opening">Opening</option>
+                    <option value="Return">Return</option>
+                </select>
+                <button class="btn btn-outline" onclick="document.getElementById('sl-filter-from').value='';document.getElementById('sl-filter-to').value='';document.getElementById('sl-filter-type').value='';filterStockLedger()">Clear</button>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-body" style="padding:0" id="sl-content">
+                ${renderStockLedgerRows(itemLedger)}
+            </div>
+        </div>
+    `;
+    window._stockLedgerAll = itemLedger;
+}
+
+function renderStockLedgerRows(entries) {
+    if (!entries.length) return '<div class="empty-state" style="padding:40px"><div class="empty-icon"></div><p>No ledger entries found.</p></div>';
+    const isMobile = window.innerWidth < 768;
+    if (isMobile) {
+        return `<div style="padding:8px">${entries.slice().reverse().map(e => `
+            <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:8px">
+                <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px">
+                    <div>
+                        <div style="font-weight:600;font-size:0.9rem">${fmtDate(e.date)}</div>
+                        <span class="badge ${e.qty > 0 ? 'badge-success' : 'badge-danger'}" style="font-size:0.72rem;margin-top:2px">${e.entryType || '-'}</span>
+                    </div>
+                    <div style="text-align:right">
+                        <div style="font-weight:800;font-size:1rem;color:${e.qty > 0 ? 'var(--success)' : 'var(--danger)'}">${e.qty > 0 ? '+' : ''}${e.qty}</div>
+                        <div style="font-size:0.75rem;color:var(--text-muted)">Bal: <strong>${e.runningStock}</strong></div>
+                    </div>
+                </div>
+                ${e.documentNo ? `<div style="font-size:0.75rem;color:var(--text-muted)">Doc: ${e.documentNo}</div>` : ''}
+                ${e.reason ? `<div style="font-size:0.75rem;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(e.reason)}</div>` : ''}
+            </div>`).join('')}</div>`;
+    }
+    return `<div class="table-wrapper" style="max-height:600px;overflow-y:auto">
+        <table class="data-table">
+            <thead style="position:sticky;top:0;background:var(--bg-body);z-index:10;box-shadow:0 1px 2px rgba(0,0,0,0.05)">
+                <tr><th>Date</th><th>Entry Type</th><th>Doc No</th><th>Qty In</th><th>Qty Out</th><th>Running Stock</th><th>Reason</th><th>By</th></tr>
+            </thead>
+            <tbody id="sl-tbody">
+                ${entries.slice().reverse().map(e => `<tr>
+                    <td style="white-space:nowrap">${fmtDate(e.date)}</td>
+                    <td><span class="badge ${e.qty > 0 ? 'badge-success' : 'badge-danger'}" style="white-space:nowrap">${e.entryType || '-'}</span></td>
+                    <td style="font-size:0.82rem;color:var(--text-muted)">${e.documentNo || '-'}</td>
+                    <td style="font-weight:700;color:var(--success);text-align:center">${e.qty > 0 ? e.qty : '-'}</td>
+                    <td style="font-weight:700;color:var(--danger);text-align:center">${e.qty < 0 ? Math.abs(e.qty) : '-'}</td>
+                    <td style="font-weight:600;text-align:center">${e.runningStock}</td>
+                    <td style="font-size:0.82rem;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(e.reason || '')}">${e.reason ? escapeHtml(e.reason) : '-'}</td>
+                    <td style="font-size:0.78rem">${e.createdBy || '-'}</td>
+                </tr>`).join('')}
+            </tbody>
+        </table>
+    </div>`;
+}
+
+function filterStockLedger() {
+    if (!window._stockLedgerAll) return;
+    const from = ($('sl-filter-from') || {}).value || '';
+    const to = ($('sl-filter-to') || {}).value || '';
+    const type = ($('sl-filter-type') || {}).value || '';
+    let entries = window._stockLedgerAll.slice();
+    if (from) entries = entries.filter(e => e.date >= from);
+    if (to) entries = entries.filter(e => e.date <= to);
+    if (type) entries = entries.filter(e => (e.entryType || '').includes(type));
+    const el = $('sl-content');
+    if (el) el.innerHTML = renderStockLedgerRows(entries);
+}
+
+async function exportStockLedgerCSV(itemId) {
+    const [items, ledger] = await Promise.all([DB.getAll('inventory'), DB.getAll('stock_ledger')]);
+    const item = items.find(x => x.id === itemId);
+    const entries = ledger.filter(e => e.itemId === itemId).sort((a, b) => new Date(a.date) - new Date(b.date));
+    if (!entries.length) return alert('No entries to export');
+    let csv = 'Date,Entry Type,Doc No,Qty,Running Stock,Reason,Created By\n';
+    entries.forEach(e => {
+        csv += `"${e.date}","${e.entryType || ''}","${e.documentNo || ''}",${e.qty},${e.runningStock},"${(e.reason || '').replace(/"/g, '')}","${e.createdBy || ''}"\n`;
+    });
+    downloadCSV(csv, `stock_ledger_${(item ? item.name : itemId).replace(/[^a-z0-9]/gi, '_')}_${today()}.csv`);
+}
+
 // --- CSV Download Helper ---
 async function downloadCSV(csvContent, fileName) {
     if (window.showSaveFilePicker) {
@@ -5016,7 +5155,7 @@ async function renderSalesOrders() {
         <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:10px">
             <div style="display:flex;gap:6px;align-items:center;">
                 <input type="text" id="so-search" placeholder="Search orders..." oninput="filterSOTable()" style="flex:1;font-size:0.82rem;padding:7px 10px;border:1px solid var(--border);border-radius:7px;background:var(--bg-input);">
-                <button onclick="toggleSoFilters()" id="so-filter-toggle" style="border:1px solid var(--border);background:var(--bg-input);border-radius:7px;padding:7px 10px;font-size:0.85rem;cursor:pointer;flex-shrink:0">⚙️</button>
+                <button onclick="toggleSoFilters()" id="so-filter-toggle" style="border:1px solid var(--border);background:var(--bg-input);border-radius:7px;padding:7px 10px;font-size:0.85rem;cursor:pointer;flex-shrink:0"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-3px">tune</span></button>
                 <button class="btn btn-primary btn-sm" onclick="openSalesOrderModal()" style="white-space:nowrap;padding:7px 14px;flex-shrink:0">+ Order</button>
             </div>
             <div id="so-extra-filters" style="display:none;margin-top:8px">
@@ -5070,7 +5209,7 @@ function toggleSoFilters() {
     }
 }
 function renderSoCards(orders, isApprover) {
-    if (!orders.length) return `<div style="text-align:center;padding:40px 20px;color:var(--text-muted)"><div style="font-size:2rem;margin-bottom:8px">📦</div><div>No orders found</div></div>`;
+    if (!orders.length) return `<div style="text-align:center;padding:40px 20px;color:var(--text-muted)"><div style="font-size:2rem;margin-bottom:8px"></div><div>No orders found</div></div>`;
     return orders.map(o => {
         const disp = getOrderDisplayStatusSync(o);
         const isUrgent = o.isUrgent;
@@ -5169,7 +5308,7 @@ function renderSORows(orders, isApprover) {
         const cellMap = {
             date: `<td style="min-width:90px">${fmtDate(o.date)}</td>`,
             orderNo: `<td style="min-width:100px;font-weight:600">${o.orderNo}${isUrgent ? ' <span class="badge badge-danger" style="font-size:0.6rem"></span>' : ''}</td>`,
-            party: `<td style="min-width:150px">${escapeHtml(o.partyName)}</td>`,
+            party: `<td style="min-width:150px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(o.partyName)}</td>`,
             delivery: `<td style="min-width:100px">${delDate}</td>`,
             items: `<td style="min-width:50px;text-align:center">${o.items.length}</td>`,
             total: `<td style="min-width:100px;text-align:right" class="amount-green">${currency(o.total)}</td>`,
@@ -6262,13 +6401,16 @@ async function renderPurchaseOrders() {
                 <div style="font-size:0.6rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">Cancelled</div>
             </div>
         </div>
-        <div style="display:flex;gap:6px;margin-bottom:10px">
+        <div style="display:flex;gap:6px;margin-bottom:6px">
             <button class="catalog-pill active" onclick="renderPurchaseOrders()" style="font-size:0.8rem">PO</button>
             <button class="catalog-pill" onclick="renderPurchaseInvoices()" style="font-size:0.8rem">PI</button>
-            <select id="po-status-filter" onchange="filterPOTableMobile()" style="flex:1;font-size:0.8rem;padding:6px 8px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input)">
+            ${canEdit() ? `<button class="btn btn-primary btn-sm" onclick="openPurchaseOrderModal()" style="white-space:nowrap">+ PO</button>` : ''}
+        </div>
+        <div style="display:flex;gap:6px;margin-bottom:10px">
+            <input type="text" id="po-search-mobile" placeholder="Search PO or supplier..." oninput="filterPOTableMobile()" style="flex:1;font-size:0.82rem;padding:6px 8px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input)">
+            <select id="po-status-filter" onchange="filterPOTableMobile()" style="width:auto;font-size:0.8rem;padding:6px 8px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input)">
                 <option value="">All Status</option><option value="pending">Pending</option><option value="received">Received</option><option value="cancelled">Cancelled</option>
             </select>
-            ${canEdit() ? `<button class="btn btn-primary btn-sm" onclick="openPurchaseOrderModal()" style="white-space:nowrap">+ PO</button>` : ''}
         </div>
         <div id="po-list">${renderPOCards(orders)}</div>`;
         return;
@@ -6329,8 +6471,10 @@ async function filterPOTable() {
 }
 async function filterPOTableMobile() {
     const st = ($('po-status-filter') || {}).value || '';
+    const s = ($('po-search-mobile') || {}).value?.toLowerCase() || '';
     let orders = await DB.getAll('purchaseorders');
     if (st) orders = orders.filter(o => o.status === st);
+    if (s) orders = orders.filter(o => (o.poNo || '').toLowerCase().includes(s) || (o.partyName || '').toLowerCase().includes(s));
     if ($('po-list') && window._renderPOCards) $('po-list').innerHTML = window._renderPOCards(orders);
 }
 
@@ -6769,7 +6913,7 @@ async function renderInvoices() {
                 <input type="date" id="inv-f-from" value="${today()}" onchange="filterInvTable2()" style="flex:1;font-size:0.78rem;padding:7px 8px;border:1px solid var(--border);border-radius:7px;background:var(--bg-input)">
                 <span style="color:var(--text-muted);font-size:0.8rem">–</span>
                 <input type="date" id="inv-f-to" value="${today()}" onchange="filterInvTable2()" style="flex:1;font-size:0.78rem;padding:7px 8px;border:1px solid var(--border);border-radius:7px;background:var(--bg-input)">
-                <button onclick="toggleInvFilters()" id="inv-filter-toggle" style="border:1px solid var(--border);background:var(--bg-input);border-radius:7px;padding:7px 10px;font-size:0.85rem;cursor:pointer;flex-shrink:0">⚙️</button>
+                <button onclick="toggleInvFilters()" id="inv-filter-toggle" style="border:1px solid var(--border);background:var(--bg-input);border-radius:7px;padding:7px 10px;font-size:0.85rem;cursor:pointer;flex-shrink:0"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-3px">tune</span></button>
                 <button class="btn btn-primary btn-sm" onclick="openInvoiceModal('sale')" style="white-space:nowrap;padding:7px 14px;flex-shrink:0">+ Sale</button>
             </div>
             <div id="inv-extra-filters" style="display:none;margin-top:8px">
@@ -6804,8 +6948,8 @@ async function renderInvoices() {
                 <div style="display:flex;flex-direction:column;gap:2px"><label style="font-size:0.7rem;font-weight:600;color:var(--text-muted)">TYPE</label><select id="inv-type-filter" class="form-control" style="width:110px;padding:5px 8px;font-size:0.82rem" onchange="filterInvTable2()"><option value="">All</option><option value="sale">Sale</option><option value="purchase">Purchase</option></select></div>
                 <div style="display:flex;flex-direction:column;gap:2px;flex:1;min-width:160px"><label style="font-size:0.7rem;font-weight:600;color:var(--text-muted)">SEARCH</label><input type="text" id="inv-search2" class="form-control" placeholder="Party / Invoice #..." style="padding:5px 8px;font-size:0.82rem" oninput="filterInvTable2()"></div>
                 <div style="display:flex;gap:6px;align-items:flex-end;flex-wrap:wrap">
-                    <button class="btn btn-outline" onclick="bulkPrintInvoices()" style="padding:5px 10px;font-size:0.8rem">🖨️ Bulk Print</button>
-                    <button class="btn btn-outline" onclick="exportInvoiceList()" style="padding:5px 10px;font-size:0.8rem">📊 Export</button>
+                    <button class="btn btn-outline" onclick="bulkPrintInvoices()" style="padding:5px 10px;font-size:0.8rem">Bulk Print</button>
+                    <button class="btn btn-outline" onclick="exportInvoiceList()" style="padding:5px 10px;font-size:0.8rem">Export</button>
                     <button class="btn btn-primary" onclick="openInvoiceModal('sale')" style="padding:5px 12px;font-size:0.85rem">+ Sale</button>
                     <button class="btn btn-primary" style="background:var(--info);padding:5px 12px;font-size:0.85rem" onclick="openInvoiceModal('purchase')">+ Purchase</button>
                 </div>
@@ -6874,7 +7018,7 @@ function renderInvoiceRows(invs) {
         const cellMap = {
             date: `<td style="min-width:90px">${fmtDate(i.date)}</td>`,
             invoiceNo: `<td style="min-width:140px;white-space:nowrap;font-weight:600;text-decoration:${i.status === 'cancelled' ? 'line-through' : 'none'}">${i.invoiceNo}${i.vyaparInvoiceNo ? `<br><span style="font-size:0.7rem;font-weight:500;color:var(--primary)">V: ${escapeHtml(i.vyaparInvoiceNo)}</span>` : ''}${i.assignedTo ? `<br><span style="font-size:0.68rem;color:var(--info);font-weight:600"> ${escapeHtml(i.assignedTo)}${i.handoverDate ? '  ' + fmtDate(i.handoverDate) : ''}</span>` : ''}</td>`,
-            party: `<td style="min-width:150px">${escapeHtml(i.partyName)}</td>`,
+            party: `<td style="min-width:150px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(i.partyName)}</td>`,
             type: `<td style="min-width:80px"><span class="badge ${i.type === 'sale' ? 'badge-success' : 'badge-info'}">${i.type}</span></td>`,
             status: `<td style="min-width:90px">${i.status === 'cancelled' ? '<span class="badge badge-danger">Cancelled</span>' : i.status === 'draft' ? '<span class="badge badge-warning">Draft</span>' : '<span class="badge badge-success">Posted</span>'}</td>`,
             items: `<td style="min-width:50px;text-align:center">${(i.items || []).length}</td>`,
@@ -6891,9 +7035,9 @@ function renderInvoiceRows(invs) {
                 ${canEdit() && i.type === 'sale' && i.status !== 'cancelled' ? `<button class="btn-icon" style="color:var(--warning)" onclick="openEditInvoiceModal('${i.id}')" title="Edit"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button>` : ''}
                 ${canEdit() && i.type === 'sale' && i.status !== 'cancelled' ? `<button class="btn-icon" style="color:var(--info)" onclick="openAssignInvoiceModal('${i.id}')" title="Assign"><span class="material-symbols-outlined" style="font-size:1.1rem">person_add</span></button>` : ''}
                 ${canPay && i.status !== 'cancelled' ? `<button class="btn-icon" style="color:var(--success)" onclick="openReceivePaymentForInvoice('${i.id}')" title="Payment"><span class="material-symbols-outlined" style="font-size:1.1rem">payments</span></button>` : ''}
-                <button class="btn-icon" style="font-size:1.1rem" onclick="viewInvoicePaymentHistory('${i.invoiceNo}')" title="History">🧾</button>
-                <button class="btn-icon" style="font-size:1.1rem" onclick="printInvoice('${i.id}')" title="Print">🖨️</button>
-                <button class="btn-icon" style="font-size:1.1rem" onclick="shareInvoice('${i.id}')" title="Share">📤</button>
+                <button class="btn-icon" onclick="viewInvoicePaymentHistory('${i.invoiceNo}')" title="History"><span class="material-symbols-outlined" style="font-size:1.1rem">receipt_long</span></button>
+                <button class="btn-icon" onclick="printInvoice('${i.id}')" title="Print"><span class="material-symbols-outlined" style="font-size:1.1rem">print</span></button>
+                <button class="btn-icon" onclick="shareInvoice('${i.id}')" title="Share"><span class="material-symbols-outlined" style="font-size:1.1rem">share</span></button>
                 ${canEdit() && i.status !== 'cancelled' ? `<button class="btn-icon" style="color:var(--danger)" onclick="cancelInvoiceDirectly('${i.id}')" title="Cancel"><span class="material-symbols-outlined" style="font-size:1.1rem">block</span></button>` : ''}
                 ${canEdit() ? `<button class="btn-icon" onclick="deleteInvoice('${i.id}')" title="Delete" style="color:var(--danger)"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>` : ''}
             </div></td>`,
@@ -6938,8 +7082,8 @@ function renderInvoiceCards(invs) {
                     <span>Due Date: ${dueStr}</span>
                 </div>
                 <div style="display:flex;gap:2px;align-items:center" onclick="event.stopPropagation()">
-                    <button class="btn-icon" style="font-size:1.2rem;width:36px;height:36px" onclick="printInvoice('${i.id}')" title="Print">🖨️</button>
-                    <button class="btn-icon" style="font-size:1.2rem;width:36px;height:36px" onclick="shareInvoice('${i.id}')" title="Share">📤</button>
+                    <button class="btn-icon" style="width:36px;height:36px" onclick="printInvoice('${i.id}')" title="Print"><span class="material-symbols-outlined" style="font-size:1.2rem">print</span></button>
+                    <button class="btn-icon" style="width:36px;height:36px" onclick="shareInvoice('${i.id}')" title="Share"><span class="material-symbols-outlined" style="font-size:1.2rem">share</span></button>
                     <button class="btn-icon" style="font-size:1.3rem;width:36px;height:36px;font-weight:700;color:var(--text-muted)" onclick="openInvoiceActionsMenu('${i.id}',event)" title="More actions">⋮</button>
                 </div>
             </div>
@@ -6958,10 +7102,10 @@ function openInvoiceActionsMenu(id, evt) {
     const actions = [
         { icon: '👁️', label: 'View Invoice', fn: `viewInvoice('${id}')` },
         canEdit() && i.type === 'sale' && i.status !== 'cancelled' ? { icon: '✏️', label: 'Edit Invoice', fn: `openEditInvoiceModal('${id}')` } : null,
-        { icon: '📋', label: 'Duplicate', fn: `duplicateInvoice('${id}')` },
-        canPay && i.status !== 'cancelled' ? { icon: '💰', label: 'Receive Payment', fn: `openReceivePaymentForInvoice('${id}')` } : null,
-        { icon: '🧾', label: 'Payment History', fn: `viewInvoicePaymentHistory('${i.invoiceNo}')` },
-        canEdit() && i.type === 'sale' && i.status !== 'cancelled' ? { icon: '👤', label: 'Assign to Salesman', fn: `openAssignInvoiceModal('${id}')` } : null,
+        { icon: '<span class="material-symbols-outlined" style="font-size:1.1rem">content_copy</span>', label: 'Duplicate', fn: `duplicateInvoice('${id}')` },
+        canPay && i.status !== 'cancelled' ? { icon: '<span class="material-symbols-outlined" style="font-size:1.1rem">payments</span>', label: 'Receive Payment', fn: `openReceivePaymentForInvoice('${id}')` } : null,
+        { icon: '<span class="material-symbols-outlined" style="font-size:1.1rem">receipt_long</span>', label: 'Payment History', fn: `viewInvoicePaymentHistory('${i.invoiceNo}')` },
+        canEdit() && i.type === 'sale' && i.status !== 'cancelled' ? { icon: '<span class="material-symbols-outlined" style="font-size:1.1rem">person</span>', label: 'Assign to Salesman', fn: `openAssignInvoiceModal('${id}')` } : null,
         canEdit() && i.status !== 'cancelled' ? { icon: '🚫', label: 'Cancel Invoice', fn: `cancelInvoiceDirectly('${id}')`, danger: true } : null,
         canEdit() ? { icon: '🗑️', label: 'Delete Invoice', fn: `deleteInvoice('${id}')`, danger: true } : null,
     ].filter(Boolean);
@@ -7115,7 +7259,7 @@ async function openInvoiceModal(type = 'sale', preserveItems = false) {
     const vyaparNo = await buildVyaparInvoiceNo();
     openModal(type === 'sale' ? 'Create Sale Invoice' : 'Create Purchase / Stock In', `
         <div class="form-row" style="grid-template-columns:repeat(auto-fit, minmax(130px, 1fr))"><div class="form-group"><label>Invoice #</label><input id="f-inv-no" value="${invNo}"></div><div class="form-group"><label>Date</label><input type="date" id="f-inv-date" value="${today()}" onchange="onInvDateChange()"></div><div class="form-group"><label>Due Date <span style="font-size:0.7rem;color:var(--text-muted)">auto</span></label><input type="date" id="f-inv-due-date" placeholder="Select party..."></div></div>
-        <div class="form-row" style="grid-template-columns:1fr 1fr"><div class="form-group"><label>🚚 Delivery Date</label><input type="date" id="f-inv-delivery-date" value="${today()}" onchange="this.dataset.manuallySet='1'"></div><div class="form-group"><label>📦 Box / Crate No.</label><input type="text" id="f-inv-box-no" placeholder="e.g. B-001, C-05"></div></div>
+        <div class="form-row" style="grid-template-columns:1fr 1fr"><div class="form-group"><label>Delivery Date</label><input type="date" id="f-inv-delivery-date" value="${today()}" onchange="this.dataset.manuallySet='1'"></div><div class="form-group"><label>Box / Crate No.</label><input type="text" id="f-inv-box-no" placeholder="e.g. B-001, C-05"></div></div>
         <input type="hidden" id="f-inv-from-order" value="">
         <input type="hidden" id="f-inv-type" value="${type}">
         ${type === 'sale' ? `
@@ -7798,11 +7942,11 @@ async function saveInvoice(id) {
 
             ops.push(DB.rawUpdate('inventory', item.id, { stock: newStock }));
             ops.push(DB.rawInsert('stock_ledger', {
-                date: dateVal, item_id: item.id, item_name: item.name,
-                entry_type: invType === 'sale' ? 'Sale' : 'Purchase',
-                qty: qtyChange, running_stock: newStock, document_no: invNo,
+                date: dateVal, itemId: item.id, itemName: item.name,
+                entryType: invType === 'sale' ? 'Sale' : 'Purchase',
+                qty: qtyChange, runningStock: newStock, documentNo: invNo,
                 reason: invType === 'sale' ? 'Sale Invoice' : 'Purchase Invoice',
-                created_by: currentUser.userId
+                createdBy: currentUser.userId
             }));
         }
 
@@ -7818,10 +7962,10 @@ async function saveInvoice(id) {
         const newBal = +((matched.balance || 0) + balChange).toFixed(2);
         ops.push(DB.rawUpdate('parties', partyId, { balance: newBal }));
         ops.push(DB.rawInsert('party_ledger', {
-            date: dateVal, party_id: partyId, party_name: partyName,
+            date: dateVal, partyId, partyName,
             type: invType === 'sale' ? 'Sale Invoice' : 'Purchase Invoice',
-            amount: balChange, balance: newBal, doc_no: invNo,
-            notes: invType === 'sale' ? 'Sale' : 'Purchase', created_by: currentUser.userId
+            amount: balChange, balance: newBal, docNo: invNo,
+            notes: invType === 'sale' ? 'Sale' : 'Purchase', createdBy: currentUser.userId
         }));
 
         const invData = {
@@ -7964,7 +8108,7 @@ async function viewInvoice(id) {
             </div>`;
         })()}
         </div>
-        <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Close</button>${canEdit() && i.status !== 'cancelled' && i.type === 'sale' ? `<button class="btn btn-outline" onclick="openEditInvoiceModal('${i.id}')" style="color:var(--warning);border-color:var(--warning)"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">edit</span> Edit Items</button>` : ''}<button class="btn btn-outline" onclick="shareInvoice('${i.id}')">📤 Share</button><button class="btn btn-primary" onclick="printInvoice('${i.id}')">🖨️ Print</button></div>`);
+        <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Close</button>${canEdit() && i.status !== 'cancelled' && i.type === 'sale' ? `<button class="btn btn-outline" onclick="openEditInvoiceModal('${i.id}')" style="color:var(--warning);border-color:var(--warning)"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">edit</span> Edit Items</button>` : ''}<button class="btn btn-outline" onclick="shareInvoice('${i.id}')">Share</button><button class="btn btn-primary" onclick="printInvoice('${i.id}')">Print</button></div>`);
 }
 
 async function openEditInvoiceModal(id) {
@@ -8044,33 +8188,53 @@ async function saveEditedInvoice(id) {
 
         const ops = [];
 
-        // 1. Reverse original stock effects
+        // 1. Reverse original stock effects (including batch qty restoration)
         for (const li of (inv.items || [])) {
             const item = inventory.find(x => x.id === li.itemId);
             if (!item) continue;
             const effectiveQty = li.packedQty !== undefined ? li.packedQty : li.qty;
             const reverseQty = effectiveQty; // restore sold qty back to stock
             item.stock = (item.stock || 0) + reverseQty;
-            ops.push(DB.rawUpdate('inventory', item.id, { stock: item.stock }));
+            const itemUpdateReverse = { stock: item.stock };
+            // Restore batch qty: add back to newest active batch (reverse of FIFO)
+            if (item.batches && item.batches.length) {
+                const batches = JSON.parse(JSON.stringify(item.batches));
+                const active = batches.filter(b => b.isActive !== false).sort((a, b) => (a.receivedDate || '') < (b.receivedDate || '') ? -1 : 1);
+                const target = active[active.length - 1] || batches[batches.length - 1];
+                if (target) target.qty = (target.qty || 0) + reverseQty;
+                itemUpdateReverse.batches = batches;
+                Object.assign(itemUpdateReverse, syncItemPricesFromBatches(batches));
+                item.batches = batches;
+            }
+            ops.push(DB.rawUpdate('inventory', item.id, itemUpdateReverse));
             ops.push(DB.rawInsert('stock_ledger', {
-                date: inv.date, item_id: item.id, item_name: item.name,
-                entry_type: 'Invoice Edit Reversal', qty: reverseQty,
-                running_stock: item.stock, document_no: inv.invoiceNo,
-                reason: `Edit reversal: ${inv.invoiceNo}`, created_by: currentUser.userId
+                date: inv.date, itemId: item.id, itemName: item.name,
+                entryType: 'Invoice Edit Reversal', qty: reverseQty,
+                runningStock: item.stock, documentNo: inv.invoiceNo,
+                reason: `Edit reversal: ${inv.invoiceNo}`, createdBy: currentUser.userId
             }));
         }
 
-        // 2. Apply new stock effects
+        // 2. Apply new stock effects (including FIFO batch qty deduction)
         for (const li of invoiceItems) {
             const item = inventory.find(x => x.id === li.itemId);
             if (!item) continue;
             item.stock = (item.stock || 0) - li.qty;
-            ops.push(DB.rawUpdate('inventory', item.id, { stock: item.stock }));
+            const itemUpdateNew = { stock: item.stock };
+            if (item.batches && item.batches.length) {
+                const batchResult = deductBatchQtyFifo(item, li.qty);
+                if (batchResult && batchResult.updatedBatches) {
+                    itemUpdateNew.batches = batchResult.updatedBatches;
+                    Object.assign(itemUpdateNew, batchResult.priceSync || {});
+                    item.batches = batchResult.updatedBatches;
+                }
+            }
+            ops.push(DB.rawUpdate('inventory', item.id, itemUpdateNew));
             ops.push(DB.rawInsert('stock_ledger', {
-                date: inv.date, item_id: item.id, item_name: item.name,
-                entry_type: 'Sale', qty: -li.qty,
-                running_stock: item.stock, document_no: inv.invoiceNo,
-                reason: `Edited Invoice ${inv.invoiceNo}`, created_by: currentUser.userId
+                date: inv.date, itemId: item.id, itemName: item.name,
+                entryType: 'Sale', qty: -li.qty,
+                runningStock: item.stock, documentNo: inv.invoiceNo,
+                reason: `Edited Invoice ${inv.invoiceNo}`, createdBy: currentUser.userId
             }));
         }
 
@@ -8081,10 +8245,10 @@ async function saveEditedInvoice(id) {
             ops.push(DB.rawUpdate('parties', party.id, { balance: newBal }));
             if (Math.abs(balDiff) > 0.001) {
                 ops.push(DB.rawInsert('party_ledger', {
-                    date: inv.date, party_id: party.id, party_name: party.name,
+                    date: inv.date, partyId: party.id, partyName: party.name,
                     type: 'Invoice Edit', amount: balDiff,
-                    balance: newBal, doc_no: inv.invoiceNo,
-                    notes: `Invoice ${inv.invoiceNo} edited`, created_by: currentUser.userId
+                    balance: newBal, docNo: inv.invoiceNo,
+                    notes: `Invoice ${inv.invoiceNo} edited`, createdBy: currentUser.userId
                 }));
             }
         }
@@ -8108,6 +8272,13 @@ async function saveEditedInvoice(id) {
         }));
 
         await Promise.all(ops);
+
+        // BUG 3: Recalculate running stock for all affected items
+        const affectedItemIds = new Set();
+        for (const li of (inv.items || [])) { if (li.itemId) affectedItemIds.add(li.itemId); }
+        for (const li of invoiceItems) { if (li.itemId) affectedItemIds.add(li.itemId); }
+        await Promise.all([...affectedItemIds].map(itemId => recalculateStockLedger(itemId)));
+
         await DB.refreshTables(['invoices', 'inventory', 'parties', 'expenses', 'stock_ledger', 'party_ledger']);
         closeModal();
         await renderInvoices();
@@ -8115,6 +8286,26 @@ async function saveEditedInvoice(id) {
     } catch (err) {
         endSave();
         alert('Error saving invoice edits: ' + err.message);
+    }
+}
+
+async function recalculateStockLedger(itemId) {
+    try {
+        const { data, error } = await supabaseClient
+            .from('stock_ledger')
+            .select('*')
+            .eq('item_id', itemId)
+            .order('date', { ascending: true })
+            .order('id', { ascending: true });
+        if (error || !data || !data.length) return;
+        let running = 0;
+        for (const entry of data) {
+            running = +(running + (entry.qty || 0)).toFixed(2);
+            await DB.rawUpdate('stock_ledger', entry.id, { runningStock: running });
+        }
+        await DB.refreshTables(['stock_ledger']);
+    } catch (e) {
+        console.warn('recalculateStockLedger error for item', itemId, e);
     }
 }
 
@@ -8534,7 +8725,7 @@ async function printInvoice(id) {
     const party = parties.find(p => p.id === inv.partyId) || {};
     const order = orders.find(o => o.orderNo === inv.fromOrder) || {};
     const bodyHtml = _buildInvoicePageHtml(inv, party, order, co, qrUrl, 'ORIGINAL FOR RECIPIENT')
-        + '<div class="copy-divider">✂ - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -</div>'
+        + '<div class="copy-divider">- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -</div>'
         + _buildInvoicePageHtml(inv, party, order, co, qrUrl, 'DUPLICATE FOR COLLECTION');
 
     _openInvoicePrintWindow(bodyHtml, inv.vyaparInvoiceNo || inv.invoiceNo);
@@ -8553,10 +8744,10 @@ body { font-family: Arial, Helvetica, sans-serif; color: #1a1a1a; margin: 0; pad
 .meta-cell { padding: 6px 8px; font-size: 0.75rem; }
 .meta-head { font-weight: 800; background: #444; color: #fff; margin: -6px -8px 5px; padding: 3px 8px; font-size: 0.72rem; }
 .meta-row { display: flex; justify-content: space-between; gap: 4px; padding: 1px 0; }
-.party-name { font-weight: 800; font-size: 0.88rem; }
+.party-name { font-weight: 800; font-size: 0.88rem; overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%; }
 .items-tbl { width: 100%; border-collapse: collapse; border: 1px solid #444; margin-top: 0; }
 .items-tbl th { background: #444; color: #fff; padding: 5px 4px; font-size: 0.7rem; text-align: left; border: 1px solid #555; }
-.items-tbl td { padding: 4px 4px; border: 1px solid #aaa; font-size: 8pt; }
+.items-tbl td { padding: 4px 4px; border: 1px solid #aaa; font-size: 8pt; word-break:break-word; }
 .items-tbl tfoot td { background: #f5f5f5; font-size: 8pt; }
 .tr { text-align: right; }
 .bottom-grid { display: grid; grid-template-columns: 55% 45%; border: 1px solid #444; border-top: none; }
@@ -8624,11 +8815,25 @@ async function shareInvoice(id) {
         const blob = await _buildInvoicePdfBlob(inv, party, order, co, qrUrl);
         const fileName = `Invoice-${invNo}.pdf`;
         const file = new File([blob], fileName, { type: 'application/pdf' });
-        // Share PDF file — no text field so only the PDF is sent (prevents text-only fallback)
-        if (navigator.canShare && navigator.canShare({ files: [file] })) {
-            await navigator.share({ files: [file], title: fileName });
+        const shareTitle = `Invoice ${invNo}`;
+        const shareText = `Invoice ${invNo} | ${inv.partyName || ''} | ₹${(inv.total || 0).toFixed(2)}`;
+        if (navigator.share) {
+            if (navigator.canShare && navigator.canShare({ files: [file] })) {
+                // Share with file attachment — include title and text for better platform support
+                await navigator.share({ files: [file], title: shareTitle, text: shareText });
+            } else {
+                // Platform doesn't support file sharing — download PDF and open WhatsApp with text
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url; a.download = fileName; a.click();
+                setTimeout(() => URL.revokeObjectURL(url), 5000);
+                showToast('PDF downloaded. Opening WhatsApp to share invoice details...', 'info');
+                const waPhone = party.phone ? party.phone.replace(/\D/g, '') : '';
+                const waUrl = `https://wa.me/${waPhone}?text=${encodeURIComponent(shareText)}`;
+                setTimeout(() => window.open(waUrl, '_blank'), 800);
+            }
         } else {
-            // Fallback: download the PDF directly
+            // navigator.share not supported — download the PDF directly
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url; a.download = fileName; a.click();
@@ -8636,6 +8841,7 @@ async function shareInvoice(id) {
             showToast('PDF downloaded — share from your files app', 'info');
         }
     } catch (err) {
+        if (err.name === 'AbortError') return; // User dismissed share dialog — not an error
         console.error('shareInvoice error:', err);
         alert('Could not generate PDF: ' + err.message);
     }
@@ -8678,7 +8884,7 @@ async function bulkPrintInvoices() {
         const order = orders.find(o => o.orderNo === inv.fromOrder) || {};
         if (idx > 0) bodyHtml += '<div class="page-break"></div>';
         bodyHtml += _buildInvoicePageHtml(inv, party, order, co, qrUrl, 'ORIGINAL FOR RECIPIENT')
-            + '<div class="copy-divider">✂ - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -</div>'
+            + '<div class="copy-divider">- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -</div>'
             + _buildInvoicePageHtml(inv, party, order, co, qrUrl, 'DUPLICATE FOR COLLECTION');
     });
 
@@ -8701,10 +8907,10 @@ function _getInvoicePrintCss() {
   .meta-cell { padding: 7px 9px; font-size: 0.78rem; }
   .meta-head { font-weight: 800; background: #444; color: #fff; margin: -7px -9px 6px; padding: 4px 9px; font-size: 0.75rem; }
   .meta-row { display: flex; justify-content: space-between; gap: 6px; padding: 1px 0; }
-  .party-name { font-weight: 800; font-size: 0.92rem; }
+  .party-name { font-weight: 800; font-size: 0.92rem; overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%; }
   .items-tbl { width: 100%; border-collapse: collapse; border: 1px solid #444; margin-top: 0; }
   .items-tbl th { background: #444; color: #fff; padding: 6px 5px; font-size: 0.72rem; text-align: left; border: 1px solid #555; }
-  .items-tbl td { padding: 5px 5px; border: 1px solid #aaa; font-size: 8.5pt; }
+  .items-tbl td { padding: 5px 5px; border: 1px solid #aaa; font-size: 8.5pt; word-break:break-word; }
   .items-tbl tfoot td { background: #f5f5f5; font-size: 8.5pt; }
   .tr { text-align: right; }
   .bottom-grid { display: grid; grid-template-columns: 55% 45%; border: 1px solid #444; border-top: none; }
@@ -8722,7 +8928,7 @@ function _getInvoicePrintCss() {
   .sign-area { padding: 6px 10px 8px; text-align: right; }
   .copy-divider { text-align: center; font-size: 7.5pt; color: #bbb; letter-spacing: 1px; padding: 2px 0; margin: 0; line-height: 1; }
   @media print {
-    @page { size: A5 portrait; margin: 0; }
+    @page { size: A5 portrait; margin: 8mm; }
     body { padding: 0; margin: 0; }
     .page { border: none; padding: 3mm 6mm; width: 100%; margin: 0; max-height: 100mm; overflow: hidden; }
     .copy-divider { color: #999; page-break-after: avoid; break-after: avoid; }
@@ -8798,13 +9004,13 @@ function _openInvoicePrintWindow(bodyHtml, title) {
         </div>
         <div id="inv-print-action-bar">
             <button class="ab-share" onclick="_invPdfShare('${escapeHtml(title)}')">
-                <span class="ab-icon">📤</span>Share
+                <span class="ab-icon material-symbols-outlined">share</span>Share
             </button>
             <button class="ab-download" onclick="window.print()">
-                <span class="ab-icon">💾</span>Save PDF
+                <span class="ab-icon material-symbols-outlined">save</span>Save PDF
             </button>
             <button class="ab-print" onclick="window.print()">
-                <span class="ab-icon">🖨️</span>Print
+                <span class="ab-icon material-symbols-outlined">print</span>Print
             </button>
         </div>`;
 
@@ -8889,7 +9095,7 @@ async function renderPayments() {
                 <input type="date" id="pay-f-from" value="${monthStart}" onchange="filterPayTable()" style="flex:1;font-size:0.78rem;padding:7px 8px;border:1px solid var(--border);border-radius:7px;background:var(--bg-input)">
                 <span style="color:var(--text-muted);font-size:0.8rem">–</span>
                 <input type="date" id="pay-f-to" value="${today1}" onchange="filterPayTable()" style="flex:1;font-size:0.78rem;padding:7px 8px;border:1px solid var(--border);border-radius:7px;background:var(--bg-input)">
-                <button onclick="togglePayFilters()" id="pay-filter-toggle" style="border:1px solid var(--border);background:var(--bg-input);border-radius:7px;padding:7px 10px;font-size:0.85rem;cursor:pointer;flex-shrink:0">⚙️</button>
+                <button onclick="togglePayFilters()" id="pay-filter-toggle" style="border:1px solid var(--border);background:var(--bg-input);border-radius:7px;padding:7px 10px;font-size:0.85rem;cursor:pointer;flex-shrink:0"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-3px">tune</span></button>
                 <button class="btn btn-primary btn-sm" onclick="openPaymentModal()" style="white-space:nowrap;padding:7px 14px;flex-shrink:0">+ Record</button>
             </div>
             <div id="pay-extra-filters" style="display:none">
@@ -8957,7 +9163,7 @@ function togglePayFilters() {
 }
 
 function renderPayCards(pays) {
-    if (!pays.length) return `<div style="text-align:center;padding:40px 20px;color:var(--text-muted)"><div style="font-size:2rem;margin-bottom:8px">💸</div><div>No payments found</div></div>`;
+    if (!pays.length) return `<div style="text-align:center;padding:40px 20px;color:var(--text-muted)"><div style="margin-bottom:8px"></div><div>No payments found</div></div>`;
     return pays.map(p => {
         const isIn = p.type === 'in';
         const amtColor = isIn ? 'var(--success)' : 'var(--danger)';
@@ -9285,13 +9491,13 @@ function printPaymentReceipt(id) {
         </div>
         <div id="inv-print-action-bar">
             <button class="ab-share" onclick="_invPdfShare('${escapeHtml(title)}')">
-                <span class="ab-icon">📤</span>Share
+                <span class="ab-icon material-symbols-outlined">share</span>Share
             </button>
             <button class="ab-download" onclick="window.print()">
-                <span class="ab-icon">💾</span>Save PDF
+                <span class="ab-icon material-symbols-outlined">save</span>Save PDF
             </button>
             <button class="ab-print" onclick="window.print()">
-                <span class="ab-icon">🖨️</span>Print
+                <span class="ab-icon material-symbols-outlined">print</span>Print
             </button>
         </div>`;
     window.addEventListener('afterprint', () => {
@@ -9946,14 +10152,14 @@ async function savePayment(id) {
             // Add Unified Ledger Entry
             ops.push(DB.rawInsert('party_ledger', {
                 date: dateVal,
-                party_id: payPartyId,
-                party_name: payPartyName,
+                partyId: payPartyId,
+                partyName: payPartyName,
                 type: payType === 'in' ? 'Payment In' : 'Payment Out',
                 amount: balChange,
                 balance: newBal,
-                doc_no: payRefNo,
+                docNo: payRefNo,
                 notes: `${payRows.map(r => r.mode).join('+')} | Disc: ${currency(disc)}`,
-                created_by: currentUser ? currentUser.userId : 'System'
+                createdBy: currentUser ? currentUser.userId : 'System'
             }));
         }
 
@@ -10652,7 +10858,7 @@ function toggleExpFilters() {
 }
 
 function renderExpCards(expenses) {
-    if (!expenses.length) return `<div style="text-align:center;padding:40px 20px;color:var(--text-muted)"><div style="font-size:2rem;margin-bottom:8px">💸</div><div>No expenses found</div></div>`;
+    if (!expenses.length) return `<div style="text-align:center;padding:40px 20px;color:var(--text-muted)"><div style="margin-bottom:8px"></div><div>No expenses found</div></div>`;
     const parties = DB.get('db_parties') || [];
     return expenses.map(e => {
         const party = e.partyId ? parties.find(p => p.id === e.partyId) : null;
@@ -10709,7 +10915,7 @@ async function renderExpenses() {
                 <input type="date" id="exp-f-from" value="${today()}" onchange="filterExpTable()" style="flex:1;font-size:0.78rem;padding:7px 8px;border:1px solid var(--border);border-radius:7px;background:var(--bg-input)">
                 <span style="color:var(--text-muted);font-size:0.8rem">–</span>
                 <input type="date" id="exp-f-to" value="${today()}" onchange="filterExpTable()" style="flex:1;font-size:0.78rem;padding:7px 8px;border:1px solid var(--border);border-radius:7px;background:var(--bg-input)">
-                <button onclick="toggleExpFilters()" id="exp-filter-toggle" style="border:1px solid var(--border);background:var(--bg-input);border-radius:7px;padding:7px 10px;font-size:0.85rem;cursor:pointer;flex-shrink:0">⚙️</button>
+                <button onclick="toggleExpFilters()" id="exp-filter-toggle" style="border:1px solid var(--border);background:var(--bg-input);border-radius:7px;padding:7px 10px;font-size:0.85rem;cursor:pointer;flex-shrink:0"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-3px">tune</span></button>
                 <button class="btn btn-primary btn-sm" onclick="openExpenseModal()" style="white-space:nowrap;padding:7px 14px;flex-shrink:0">+ New</button>
             </div>
             <div id="exp-extra-filters" style="display:none">
@@ -10903,7 +11109,7 @@ function renderPacking() {
                 <input type="date" id="pick-from" value="${window._pickListFrom||''}" onchange="window._pickListFrom=this.value" style="flex:1;font-size:0.78rem;padding:7px 8px;border:1px solid var(--border);border-radius:7px;background:var(--bg-input)">
                 <span style="color:var(--text-muted);font-size:0.8rem">–</span>
                 <input type="date" id="pick-to" value="${window._pickListTo||today()}" onchange="window._pickListTo=this.value" style="flex:1;font-size:0.78rem;padding:7px 8px;border:1px solid var(--border);border-radius:7px;background:var(--bg-input)">
-                <button onclick="togglePackFilters()" id="pack-filter-toggle" style="border:1px solid var(--border);background:var(--bg-input);border-radius:7px;padding:7px 10px;font-size:0.85rem;cursor:pointer;flex-shrink:0">⚙️</button>
+                <button onclick="togglePackFilters()" id="pack-filter-toggle" style="border:1px solid var(--border);background:var(--bg-input);border-radius:7px;padding:7px 10px;font-size:0.85rem;cursor:pointer;flex-shrink:0"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-3px">tune</span></button>
             </div>
             <div id="pack-extra-filters" style="display:none;margin-top:8px">
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
@@ -10914,10 +11120,10 @@ function renderPacking() {
                         <option value="Van Stock" ${window._pickListWarehouse==='Van Stock'?'selected':''}>Van</option>
                     </select>
                     <select id="pick-report-type" onchange="window._pickListReportType=this.value" style="padding:7px;border:1px solid var(--border);border-radius:7px;font-size:0.75rem;background:var(--bg-input)">
-                        <option value="item" ${window._pickListReportType!=='invoice'?'selected':''}>📦 Item</option>
-                        <option value="invoice" ${window._pickListReportType==='invoice'?'selected':''}>🧾 Invoice</option>
+                        <option value="item" ${window._pickListReportType!=='invoice'?'selected':''}>Item</option>
+                        <option value="invoice" ${window._pickListReportType==='invoice'?'selected':''}>Invoice</option>
                     </select>
-                    <button class="btn btn-outline btn-sm" onclick="printPickListPdf()" style="grid-column:span 2;padding:7px">📋 Pick List PDF</button>
+                    <button class="btn btn-outline btn-sm" onclick="printPickListPdf()" style="grid-column:span 2;padding:7px">Pick List PDF</button>
                 </div>
             </div>
         </div>
@@ -10962,10 +11168,10 @@ function renderPacking() {
                 <option value="Van Stock" ${window._pickListWarehouse==='Van Stock'?'selected':''}>Van Stock</option>
             </select>
             <select id="pick-report-type" onchange="window._pickListReportType=this.value" style="padding:5px 8px;font-size:0.82rem">
-                <option value="item" ${window._pickListReportType!=='invoice'?'selected':''}>📦 Item-wise</option>
-                <option value="invoice" ${window._pickListReportType==='invoice'?'selected':''}>🧾 Invoice-wise</option>
+                <option value="item" ${window._pickListReportType!=='invoice'?'selected':''}>Item-wise</option>
+                <option value="invoice" ${window._pickListReportType==='invoice'?'selected':''}>Invoice-wise</option>
             </select>
-            <button class="btn btn-outline" onclick="printPickListPdf()" style="border-color:#1e293b;color:#1e293b;padding:5px 12px">📋 Pick List PDF</button>
+            <button class="btn btn-outline" onclick="printPickListPdf()" style="border-color:#1e293b;color:#1e293b;padding:5px 12px">Pick List PDF</button>
             <button class="btn btn-outline" onclick="openColumnPersonalizer('packing','renderPacking')" style="border-color:var(--accent);color:var(--accent);padding:5px 10px"> Columns</button>
         </div></div>
         <div class="card" style="margin-bottom:24px"><div class="card-body">
@@ -11042,7 +11248,7 @@ function renderPacking() {
         </div>
         <div class="card"><div class="card-body">
             <div class="table-wrapper">
-                <table class="data-table"><thead><tr><th>Order #</th><th>Party</th><th>Packer</th><th>Time</th><th>📦 Boxes</th><th>📋 Crates</th><th>Invoice</th><th>Total</th></tr></thead>
+                <table class="data-table"><thead><tr><th>Order #</th><th>Party</th><th>Packer</th><th>Time</th><th>Boxes</th><th>Crates</th><th>Invoice</th><th>Total</th></tr></thead>
                 <tbody>${filteredHistory.length ? filteredHistory.map(o => {
                     const pkgs = o.packageNumbers || [];
                     const bc = o.boxCount || 0;
@@ -11160,8 +11366,8 @@ function renderPackedHistoryCards(orders) {
             <div style="display:flex;justify-content:space-between;padding-top:8px;border-top:1px solid var(--border)">
                 <div style="font-size:0.75rem;color:var(--text-muted)">By: ${o.packedBy || '-'}</div>
                 <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
-                    ${boxes.length ? `<div style="font-size:0.75rem">📦 ${boxDisplay}</div>` : ''}
-                    ${crates.length ? `<div style="font-size:0.75rem">📋 ${crateDisplay}</div>` : ''}
+                    ${boxes.length ? `<div style="font-size:0.75rem">Boxes: ${boxDisplay}</div>` : ''}
+                    ${crates.length ? `<div style="font-size:0.75rem">Crates: ${crateDisplay}</div>` : ''}
                 </div>
             </div>
         </div>`;
@@ -11226,7 +11432,7 @@ async function printPickListPdf() {
                 const amt = +(li.amount || (qty * rate) || 0);
                 return `<tr>
                     <td style="text-align:center">${idx + 1}</td>
-                    <td style="font-weight:600">${escapeHtml(li.name)}</td>
+                    <td style="font-weight:600;word-break:break-word;max-width:200px">${escapeHtml(li.name)}</td>
                     <td style="font-size:7.5pt">${escapeHtml(invItem ? invItem.hsn || '-' : '-')}</td>
                     <td>${escapeHtml(invItem ? invItem.category || '-' : '-')}</td>
                     <td>${escapeHtml(wh)}</td>
@@ -11241,8 +11447,8 @@ async function printPickListPdf() {
             const gst = inv.gst ? (invAmt * inv.gst / 100) : 0;
             return `<div class="inv-block">
                 <div class="inv-block-header">
-                    <span>🧾 <strong>${escapeHtml(invNo)}</strong> &nbsp;|&nbsp; ${escapeHtml(inv.partyName)}</span>
-                    <span>${fmtDate(inv.date)}${inv.deliveryDate ? ' &nbsp;🚚 ' + fmtDate(inv.deliveryDate) : ''}${inv.boxNo ? ' &nbsp;📦 ' + escapeHtml(inv.boxNo) : ''} &nbsp;|&nbsp; ${filteredItems.length} items &nbsp;|&nbsp; Qty: ${invQty}</span>
+                    <span><strong>${escapeHtml(invNo)}</strong> &nbsp;|&nbsp; <span style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:bottom">${escapeHtml(inv.partyName)}</span></span>
+                    <span>${fmtDate(inv.date)}${inv.deliveryDate ? ' &nbsp;Del: ' + fmtDate(inv.deliveryDate) : ''}${inv.boxNo ? ' &nbsp;Box: ' + escapeHtml(inv.boxNo) : ''} &nbsp;|&nbsp; ${filteredItems.length} items &nbsp;|&nbsp; Qty: ${invQty}</span>
                 </div>
                 <table>
                     <thead><tr>
@@ -11282,7 +11488,7 @@ async function printPickListPdf() {
         bodyHtml = `
         <div class="rpt-header">
             <div>
-                <div class="rpt-title">🧾 Invoice-wise Pick List</div>
+                <div class="rpt-title">Invoice-wise Pick List</div>
                 <div class="rpt-sub">${escapeHtml(co.name || '')} &nbsp;|&nbsp; Date: ${dateLabel} &nbsp;|&nbsp; Warehouse: ${warehouse || 'All'}</div>
                 <div style="margin-top:5px">
                     <span class="badge-stat">${pickInvoices.length} Invoices</span>
@@ -11329,7 +11535,7 @@ async function printPickListPdf() {
         const totalQty = rows.reduce((s, r) => s + r.totalQty, 0);
         const tableRows = rows.map((r, i) => `<tr>
             <td style="text-align:center">${i + 1}</td>
-            <td style="font-weight:600">${escapeHtml(r.name)}</td>
+            <td style="font-weight:600;word-break:break-word;max-width:200px">${escapeHtml(r.name)}</td>
             <td>${escapeHtml(r.hsn)}</td>
             <td>${escapeHtml(r.category)}</td>
             <td>${escapeHtml(r.warehouse)}</td>
@@ -11342,7 +11548,7 @@ async function printPickListPdf() {
         bodyHtml = `
         <div class="rpt-header">
             <div>
-                <div class="rpt-title">📦 Item-wise Pick List</div>
+                <div class="rpt-title">Item-wise Pick List</div>
                 <div class="rpt-sub">${escapeHtml(co.name || '')} &nbsp;|&nbsp; Date: ${dateLabel} &nbsp;|&nbsp; Warehouse: ${warehouse || 'All'}</div>
                 <div style="margin-top:5px">
                     <span class="badge-stat">${pickInvoices.length} Invoices</span>
@@ -11373,7 +11579,7 @@ async function printPickListPdf() {
     }
 
     const html = `<!DOCTYPE html><html><head><title>Pick List</title><style>${sharedCss}</style></head><body>
-    <div style="text-align:right;margin-bottom:6px"><button onclick="window.print()" style="background:#1e293b;color:#fff;border:none;border-radius:5px;padding:6px 18px;font-size:9pt;cursor:pointer">🖨️ Print</button></div>
+    <div style="text-align:right;margin-bottom:6px"><button onclick="window.print()" style="background:#1e293b;color:#fff;border:none;border-radius:5px;padding:6px 18px;font-size:9pt;cursor:pointer">Print</button></div>
     ${bodyHtml}</body></html>`;
 
     const win = window.open('', '_blank', 'width=1100,height=760');
@@ -12510,7 +12716,7 @@ function renderDelCards(dels, allParties) {
             </div>
             <div style="display:flex;justify-content:space-between;align-items:center;padding-top:10px;border-top:1px solid var(--border)">
                 <div style="display:flex;gap:4px;flex-wrap:wrap">
-                    <button class="btn btn-outline btn-sm" style="padding:4px 8px;font-size:0.75rem;border-radius:6px" onclick="event.stopPropagation();printDeliverySlip('${d.id}')">🖨️ Print</button>
+                    <button class="btn btn-outline btn-sm" style="padding:4px 8px;font-size:0.75rem;border-radius:6px" onclick="event.stopPropagation();printDeliverySlip('${d.id}')">Print</button>
                     ${d.status === 'Dispatched' && !isSalesman ? `<button class="btn btn-primary btn-sm" style="padding:4px 8px;font-size:0.75rem;border-radius:6px" onclick="event.stopPropagation();updateDelStatus('${d.id}')">Update</button>` : ''}
                     ${(d.status === 'Undelivered' || d.status === 'Returned') && canEdit() ? `<button class="btn btn-primary btn-sm" style="padding:4px 8px;font-size:0.75rem;border-radius:6px" onclick="event.stopPropagation();reDispatchOrder('${d.id}')">🔄 Re-Dispatch</button>` : ''}
                 </div>
@@ -12540,7 +12746,7 @@ function renderDelRows(dels, parties) {
         if (!crates.length && cc > 0) crates = pkgNums.slice(bc, bc + cc);
         const boxDisp = boxes.length ? boxes.map(n => `<span class="badge badge-outline" style="font-size:0.68rem">${n}</span>`).join(' ') : '-';
         const crateDisp = crates.length ? crates.map(n => `<span class="badge badge-outline" style="font-size:0.68rem;border-color:var(--warning);color:var(--warning)">${n}</span>`).join(' ') : '-';
-        const pkgDisplay = `<div>📦 ${boxDisp}</div><div style="margin-top:2px">📋 ${crateDisp}</div>`;
+        const pkgDisplay = `<div>Boxes: ${boxDisp}</div><div style="margin-top:2px">Crates: ${crateDisp}</div>`;
         const gpsBtn = party && party.lat && party.lng ? `<button class="btn-icon" onclick="openPartyMap('${party.lat}','${party.lng}','${escapeHtml(d.partyName)}')" title="Navigate" style="font-size:0.8rem"><span class="material-symbols-outlined" style="font-size:1.1rem">map</span></button>` : '';
         const actions = `<div class="action-btns">
             <button class="btn-icon" onclick="viewDeliveryDetail('${d.id}')" title="View Detail"><span class="material-symbols-outlined" style="font-size:1.1rem">visibility</span></button>
@@ -12550,7 +12756,7 @@ function renderDelRows(dels, parties) {
             ` : ''}
             ${d.status === 'Undelivered' ? `
                 <button class="btn btn-primary btn-sm" onclick="reDispatchOrder('${d.id}')">🔄 Re-Dispatch</button>
-                <button class="btn btn-outline btn-sm" onclick="confirmReturn('${d.id}')">📦 Return</button>
+                <button class="btn btn-outline btn-sm" onclick="confirmReturn('${d.id}')">Return</button>
                 ${d.invoiceNo && currentUser ? `<button class="btn btn-outline btn-sm" style="border-color:var(--danger);color:var(--danger)" onclick="cancelDeliveryInvoice('${d.id}')">✕ Cancel Inv.</button>` : ''}
             ` : ''}
             ${d.status === 'Returned' ? `
@@ -12677,8 +12883,8 @@ async function printDeliverySlip(id) {
     if (!boxes.length && bc > 0) boxes = pkgs.slice(0, bc);
     if (!crates.length && cc > 0) crates = pkgs.slice(bc, bc + cc);
     const pkgStr = [
-        boxes.length ? '📦 ' + boxes.join(', ') : '',
-        crates.length ? '📋 ' + crates.join(', ') : ''
+        boxes.length ? 'Boxes: ' + boxes.join(', ') : '',
+        crates.length ? 'Crates: ' + crates.join(', ') : ''
     ].filter(Boolean).join(' | ') || '-';
 
     const itemRows = items.map(li => {
@@ -12687,12 +12893,12 @@ async function printDeliverySlip(id) {
             ? `<img src="${invItem.photo}" style="width:40px;height:40px;object-fit:cover;border-radius:4px">`
             : '';
         const amt = (li.qty||0) * (li.price||li.salePrice||0);
-        return `<tr><td style="border:1px solid #ddd;padding:5px">${photoCell}</td><td style="border:1px solid #ddd;padding:5px;font-weight:600">${li.name||''}</td><td style="border:1px solid #ddd;padding:5px;text-align:center">${li.qty||0} ${li.unit||''}</td><td style="border:1px solid #ddd;padding:5px;text-align:right">${(li.price||li.salePrice||0).toFixed(2)}</td><td style="border:1px solid #ddd;padding:5px;text-align:right;font-weight:700">${amt.toFixed(2)}</td></tr>`;
+        return `<tr><td style="border:1px solid #ddd;padding:5px">${photoCell}</td><td style="border:1px solid #ddd;padding:5px;font-weight:600;word-break:break-word;max-width:200px">${li.name||''}</td><td style="border:1px solid #ddd;padding:5px;text-align:center">${li.qty||0} ${li.unit||''}</td><td style="border:1px solid #ddd;padding:5px;text-align:right">${(li.price||li.salePrice||0).toFixed(2)}</td><td style="border:1px solid #ddd;padding:5px;text-align:right;font-weight:700">${amt.toFixed(2)}</td></tr>`;
     }).join('');
 
     const slipHtml = `<!DOCTYPE html><html><head><title>Delivery Slip - ${d.orderNo}</title>
     <meta name="viewport" content="width=device-width,initial-scale=1">
-    <style>body{font-family:sans-serif;padding:16px;max-width:600px;margin:0 auto;font-size:14px}h2{margin:0 0 4px}table{width:100%;border-collapse:collapse}@media print{.no-print{display:none}}</style>
+    <style>body{font-family:sans-serif;padding:16px;max-width:600px;margin:0 auto;font-size:14px}h2{margin:0 0 4px}table{width:100%;border-collapse:collapse}@media print{@page{size:A4 portrait;margin:10mm}.no-print{display:none}}</style>
     </head><body>
     <div style="text-align:center;border-bottom:2px solid #333;padding-bottom:10px;margin-bottom:12px">
         <h2>${co.name || 'Delivery Slip'}</h2>
@@ -12701,7 +12907,7 @@ async function printDeliverySlip(id) {
     </div>
     <table style="margin-bottom:12px;font-size:13px"><tr><td style="padding:3px 8px 3px 0"><strong>Order #:</strong></td><td>${d.orderNo}</td><td style="padding:3px 8px"><strong>Invoice:</strong></td><td>${d.invoiceNo||'-'}</td></tr>
     <tr><td style="padding:3px 8px 3px 0"><strong>Party:</strong></td><td colspan="3">${d.partyName}</td></tr>
-    <tr><td style="padding:3px 8px 3px 0"><strong>Address:</strong></td><td colspan="3">${party.address||party.city||'-'}</td></tr>
+    <tr><td style="padding:3px 8px 3px 0"><strong>Address:</strong></td><td colspan="3" style="word-break:break-word;max-width:300px">${party.address||party.city||'-'}</td></tr>
     <tr><td style="padding:3px 8px 3px 0"><strong>Phone:</strong></td><td>${party.phone||'-'}</td><td style="padding:3px 8px"><strong>Status:</strong></td><td>${d.status}</td></tr>
     <tr><td style="padding:3px 8px 3px 0"><strong>Del. By:</strong></td><td>${d.deliveryPerson||'-'}</td><td style="padding:3px 8px"><strong>Date:</strong></td><td>${d.dispatchedAt || d.date || '-'}</td></tr>
     <tr><td style="padding:3px 8px 3px 0"><strong>Packages:</strong></td><td colspan="3">${pkgStr}</td></tr>
@@ -12711,13 +12917,13 @@ async function printDeliverySlip(id) {
     <tbody>${itemRows}</tbody>
     <tfoot><tr><td colspan="4" style="border:1px solid #ddd;padding:6px;text-align:right;font-weight:700">Total</td><td style="border:1px solid #ddd;padding:6px;text-align:right;font-weight:700">${(d.total||0).toFixed(2)}</td></tr></tfoot>
     </table>
-    ${inv && inv.dueDate ? `<div style="background:#fff7ed;border:1px solid #f97316;border-radius:6px;padding:8px;margin-bottom:10px;font-size:12px">⚠️ <strong>Due Date: ${inv.dueDate}</strong> | Balance: ${currency ? '' : '₹'}${(d.total||0).toFixed(2)}</div>` : ''}
+    ${inv && inv.dueDate ? `<div style="background:#fff7ed;border:1px solid #f97316;border-radius:6px;padding:8px;margin-bottom:10px;font-size:12px"><strong>Due Date: ${inv.dueDate}</strong> | Balance: ${currency ? '' : '₹'}${(d.total||0).toFixed(2)}</div>` : ''}
     <div style="margin-top:24px;display:flex;justify-content:space-between">
         <div style="text-align:center;width:45%"><div style="border-top:1px solid #333;padding-top:4px;font-size:11px">Delivery Person Signature</div></div>
         <div style="text-align:center;width:45%"><div style="border-top:1px solid #333;padding-top:4px;font-size:11px">Customer Signature</div></div>
     </div>
     <div class="no-print" style="margin-top:16px;text-align:center;display:flex;gap:10px;justify-content:center">
-        <button onclick="window.print()" style="padding:10px 24px;background:#f97316;color:#fff;border:none;border-radius:8px;font-size:1rem;cursor:pointer">🖨️ Print</button>
+        <button onclick="window.print()" style="padding:10px 24px;background:#f97316;color:#fff;border:none;border-radius:8px;font-size:1rem;cursor:pointer">Print</button>
         <button onclick="window.parent.document.getElementById('del-slip-modal').remove()" style="padding:10px 24px;background:#6b7280;color:#fff;border:none;border-radius:8px;font-size:1rem;cursor:pointer">✕ Close</button>
     </div>
     </body></html>`;
@@ -12735,11 +12941,20 @@ async function printDeliverySlip(id) {
     topBar.style.cssText = 'display:flex;align-items:center;gap:10px;background:#1e293b;color:#fff;padding:10px 16px;flex-shrink:0';
     topBar.innerHTML = `<button onclick="document.getElementById('del-slip-modal').remove()" style="background:none;border:none;color:#fff;font-size:1.3rem;cursor:pointer;padding:4px 8px;border-radius:6px;line-height:1">← Back</button>
         <span style="flex:1;font-weight:600;font-size:0.95rem">Delivery Slip - ${d.orderNo}</span>
-        <button onclick="document.getElementById('del-slip-modal').querySelector('iframe').contentWindow.print()" style="background:#f97316;border:none;color:#fff;padding:6px 14px;border-radius:8px;font-weight:600;cursor:pointer;font-size:0.85rem">🖨️ Print</button>`;
+        <button id="del-slip-print-btn" disabled style="background:#9ca3af;border:none;color:#fff;padding:6px 14px;border-radius:8px;font-weight:600;cursor:not-allowed;font-size:0.85rem">Print</button>`;
     overlay.appendChild(topBar);
 
     const iframe = document.createElement('iframe');
     iframe.style.cssText = 'flex:1;border:none;width:100%;height:100%';
+    iframe.onload = function() {
+        const printBtn = document.getElementById('del-slip-print-btn');
+        if (printBtn) {
+            printBtn.disabled = false;
+            printBtn.style.background = '#f97316';
+            printBtn.style.cursor = 'pointer';
+            printBtn.onclick = function() { iframe.contentWindow.print(); };
+        }
+    };
     overlay.appendChild(iframe);
     document.body.appendChild(overlay);
     iframe.contentDocument.open();
@@ -12849,8 +13064,8 @@ async function viewDeliveryDetail(id) {
     if (!dBoxes.length && dbc > 0) dBoxes = pkgs.slice(0, dbc);
     if (!dCrates.length && dcc > 0) dCrates = pkgs.slice(dbc, dbc + dcc);
     const pkgHtml = (dBoxes.length || dCrates.length) ? `<div style="margin-bottom:12px;display:flex;gap:16px;flex-wrap:wrap">
-        ${dBoxes.length ? `<div><span style="font-size:0.78rem;color:var(--text-muted)">📦 Boxes: </span>${dBoxes.map(n => `<span class="badge badge-outline" style="font-size:0.7rem">${escapeHtml(n)}</span>`).join(' ')}</div>` : ''}
-        ${dCrates.length ? `<div><span style="font-size:0.78rem;color:var(--text-muted)">📋 Crates: </span>${dCrates.map(n => `<span class="badge badge-outline" style="font-size:0.7rem;border-color:var(--warning);color:var(--warning)">${escapeHtml(n)}</span>`).join(' ')}</div>` : ''}
+        ${dBoxes.length ? `<div><span style="font-size:0.78rem;color:var(--text-muted)">Boxes: </span>${dBoxes.map(n => `<span class="badge badge-outline" style="font-size:0.7rem">${escapeHtml(n)}</span>`).join(' ')}</div>` : ''}
+        ${dCrates.length ? `<div><span style="font-size:0.78rem;color:var(--text-muted)">Crates: </span>${dCrates.map(n => `<span class="badge badge-outline" style="font-size:0.7rem;border-color:var(--warning);color:var(--warning)">${escapeHtml(n)}</span>`).join(' ')}</div>` : ''}
     </div>` : '';
 
     const actionHtml = d.status === 'Dispatched'
@@ -12943,12 +13158,12 @@ async function markDelivered(id) {
         }
         codHtml = `
         <div style="background:#fff7ed;border:2px solid #f97316;border-radius:10px;padding:14px;margin-bottom:16px">
-            <div style="font-size:1rem;font-weight:700;color:#ea580c;margin-bottom:4px">⚠️ Collect Payment Before Delivering</div>
+            <div style="font-size:1rem;font-weight:700;color:#ea580c;margin-bottom:4px">Collect Payment Before Delivering</div>
             <div style="font-size:0.75rem;color:#ea580c;margin-bottom:10px;font-weight:600">${codReason}</div>
             <div style="font-size:0.9rem;margin-bottom:12px">Balance Due: <strong style="font-size:1.15rem;color:var(--danger)">${currency(amt)}</strong> from <strong>${escapeHtml(d.partyName)}</strong></div>
             <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:4px">
                 <button class="btn btn-outline btn-sm" onclick="toggleDelQr()" id="del-qr-btn" style="border-color:#f97316;color:#ea580c">📱 Show UPI QR</button>
-                <button class="btn btn-sm" onclick="toggleDelCashCollected()" id="del-cash-btn" style="background:#fff;border:1.5px solid var(--border);color:var(--text-primary)">📋 Mark Cash Collected</button>
+                <button class="btn btn-sm" onclick="toggleDelCashCollected()" id="del-cash-btn" style="background:#fff;border:1.5px solid var(--border);color:var(--text-primary)">Mark Cash Collected</button>
             </div>
             <div id="del-qr-box" style="display:none;text-align:center;margin-top:8px">${qrImgHtml}</div>
         </div>
@@ -13229,8 +13444,8 @@ async function printDeliveryRouteSheet() {
                     if (!rBoxes.length && rbc > 0) rBoxes = rpkgs.slice(0, rbc);
                     if (!rCrates.length && rcc > 0) rCrates = rpkgs.slice(rbc, rbc + rcc);
                     const parts = [];
-                    if (rBoxes.length) parts.push('📦 ' + rBoxes.join(', '));
-                    if (rCrates.length) parts.push('📋 ' + rCrates.join(', '));
+                    if (rBoxes.length) parts.push('Boxes: ' + rBoxes.join(', '));
+                    if (rCrates.length) parts.push('Crates: ' + rCrates.join(', '));
                     return parts.join('<br>') || rpkgs.join(', ') || '-';
                 })()}</td>
                 <td style="text-align:right">${(d.total || 0).toFixed(2)}</td>
@@ -13256,7 +13471,7 @@ async function printDeliveryRouteSheet() {
             <th style="border:1px solid #ddd;padding:6px">Order</th>
             <th style="border:1px solid #ddd;padding:6px">Party &amp; Location</th>
             <th style="border:1px solid #ddd;padding:6px">Phone</th>
-            <th style="border:1px solid #ddd;padding:6px">📦 Boxes / 📋 Crates</th>
+            <th style="border:1px solid #ddd;padding:6px">Boxes / Crates</th>
             <th style="border:1px solid #ddd;padding:6px;text-align:right">Amount</th>
             <th style="border:1px solid #ddd;padding:6px">Signature</th>
         </tr></thead>
@@ -13362,6 +13577,26 @@ async function dispatchOrderUnified(id, source) {
     };
 
     await DB.insert('delivery', delData);
+
+    // BUG 4: Add audit-trail stock ledger entries for each dispatched item
+    if (Array.isArray(items)) {
+        const inventory = await DB.getAll('inventory');
+        for (const item of items) {
+            const invItem = inventory.find(x => x.id === (item.itemId || item.id));
+            await DB.rawInsert('stock_ledger', {
+                date: today(),
+                itemId: item.itemId || item.id,
+                itemName: item.name || item.itemName || '',
+                entryType: 'Dispatched',
+                qty: 0,
+                runningStock: invItem ? (invItem.stock || 0) : 0,
+                documentNo: orderNo,
+                reason: 'Dispatched to ' + partyName,
+                createdBy: currentUser ? (currentUser.userId || '') : ''
+            });
+        }
+    }
+
     closeModal();
     await renderDelivery();
     showToast(`${orderNo} dispatched with ${person}!`, 'success');
@@ -13399,7 +13634,7 @@ function updateDelStatus(id) {
         <div style="font-size:0.85rem;color:var(--text-muted);margin-bottom:12px">Choose the delivery outcome:</div>
         <div style="display:flex;flex-direction:column;gap:10px">
             <button class="btn btn-primary" style="padding:12px;font-size:0.95rem" onclick="confirmDelivered('${id}')"> Mark as Delivered</button>
-            <button class="btn btn-outline" style="padding:12px;font-size:0.95rem;border-color:var(--danger);color:var(--danger)" onclick="closeModal();openUndeliveredModal('${id}')">↩️ Cannot Deliver / Return</button>
+            <button class="btn btn-outline" style="padding:12px;font-size:0.95rem;border-color:var(--danger);color:var(--danger)" onclick="closeModal();openUndeliveredModal('${id}')">Cannot Deliver / Return</button>
         </div>
         <div class="modal-actions" style="margin-top:12px">
             <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
@@ -13440,7 +13675,7 @@ function openUndeliveredModal(id) {
             <label>Update Status To *</label>
             <select id="f-undel-status">
                 <option value="Undelivered">🔄 Undelivered — Re-dispatch later</option>
-                <option value="Returned">📦 Returned to Warehouse</option>
+                <option value="Returned">Returned to Warehouse</option>
             </select>
         </div>
         <div style="background:rgba(249,115,22,0.08);border:1px solid rgba(249,115,22,0.25);border-radius:8px;padding:10px;font-size:0.82rem;margin-bottom:4px">
@@ -13642,9 +13877,9 @@ async function cancelDeliveryInvoice(id) {
     const dels = await DB.getAll('delivery');
     const d = dels.find(x => x.id === id);
     if (!d) return;
-    openModal('⚠️ Cancel Invoice', `
+    openModal('Cancel Invoice', `
         <div style="background:rgba(239,68,68,0.12);border:2px solid rgba(239,68,68,0.5);border-radius:10px;padding:14px;margin-bottom:14px">
-            <div style="font-size:1rem;font-weight:800;color:var(--danger);margin-bottom:10px">⚠️ WARNING — This cannot be undone!</div>
+            <div style="font-size:1rem;font-weight:800;color:var(--danger);margin-bottom:10px">WARNING — This cannot be undone!</div>
             <div style="font-size:0.88rem;margin-bottom:10px">
                 <strong>Invoice:</strong> ${escapeHtml(d.invoiceNo || 'N/A')} &nbsp;|&nbsp;
                 <strong>Party:</strong> ${escapeHtml(d.partyName)} &nbsp;|&nbsp;
@@ -13764,29 +13999,29 @@ function exportTableToExcel(tableId, filename) {
 function renderReports() {
     pageContent.innerHTML = `
         <div class="report-grid">
-            <div class="report-card" onclick="showReport('payment-report')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(16,185,129,0.12),rgba(249,115,22,0.08))"><div class="report-icon">💸</div></div><div class="report-text"><h4>Payment Report</h4><p>Pay In / Pay Out with filters</p></div></div>
-            <div class="report-card" onclick="showReport('sales')"><div class="report-icon-wrap"><div class="report-icon">📈</div></div><div class="report-text"><h4>Sales Report</h4><p>Sales invoices summary</p></div></div>
-            <div class="report-card" onclick="showReport('purchases')"><div class="report-icon-wrap"><div class="report-icon">🛒</div></div><div class="report-text"><h4>Purchase Report</h4><p>Purchase invoices summary</p></div></div>
-            <div class="report-card" onclick="showReport('usersales')"><div class="report-icon-wrap"><div class="report-icon">🧑‍💼</div></div><div class="report-text"><h4>User Sales</h4><p>Detailed salesman performance</p></div></div>
-            <div class="report-card" onclick="showReport('userpayments')"><div class="report-icon-wrap"><div class="report-icon">💰</div></div><div class="report-text"><h4>User Collections</h4><p>Detailed salesman collections</p></div></div>
-            <div class="report-card" onclick="showReport('pnl')"><div class="report-icon-wrap"><div class="report-icon">⚖️</div></div><div class="report-text"><h4>Profit & Loss</h4><p>Revenue vs expenses</p></div></div>
-            <div class="report-card" onclick="showReport('invoice-pnl')"><div class="report-icon-wrap"><div class="report-icon">🧾</div></div><div class="report-text"><h4>Invoice P&L</h4><p>Profit per invoice</p></div></div>
+            <div class="report-card" onclick="showReport('payment-report')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(16,185,129,0.12),rgba(249,115,22,0.08))"><div class="report-icon"><span class="material-symbols-outlined">payments</span></div></div><div class="report-text"><h4>Payment Report</h4><p>Pay In / Pay Out with filters</p></div></div>
+            <div class="report-card" onclick="showReport('sales')"><div class="report-icon-wrap"><div class="report-icon"><span class="material-symbols-outlined">trending_up</span></div></div><div class="report-text"><h4>Sales Report</h4><p>Sales invoices summary</p></div></div>
+            <div class="report-card" onclick="showReport('purchases')"><div class="report-icon-wrap"><div class="report-icon"><span class="material-symbols-outlined">shopping_cart</span></div></div><div class="report-text"><h4>Purchase Report</h4><p>Purchase invoices summary</p></div></div>
+            <div class="report-card" onclick="showReport('usersales')"><div class="report-icon-wrap"><div class="report-icon"><span class="material-symbols-outlined">badge</span></div></div><div class="report-text"><h4>User Sales</h4><p>Detailed salesman performance</p></div></div>
+            <div class="report-card" onclick="showReport('userpayments')"><div class="report-icon-wrap"><div class="report-icon"><span class="material-symbols-outlined">account_balance_wallet</span></div></div><div class="report-text"><h4>User Collections</h4><p>Detailed salesman collections</p></div></div>
+            <div class="report-card" onclick="showReport('pnl')"><div class="report-icon-wrap"><div class="report-icon"><span class="material-symbols-outlined">balance</span></div></div><div class="report-text"><h4>Profit & Loss</h4><p>Revenue vs expenses</p></div></div>
+            <div class="report-card" onclick="showReport('invoice-pnl')"><div class="report-icon-wrap"><div class="report-icon"><span class="material-symbols-outlined">receipt_long</span></div></div><div class="report-text"><h4>Invoice P&L</h4><p>Profit per invoice</p></div></div>
             <div class="report-card" onclick="showReport('item-ledger')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(16,185,129,0.12),rgba(5,150,105,0.08))"><div class="report-icon">📑</div></div><div class="report-text"><h4>Item Ledger Entries</h4><p>Detailed inventory movement log</p></div></div>
             <div class="report-card" onclick="showReport('gps-tracking')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(59,130,246,0.12),rgba(37,99,235,0.08))"><div class="report-icon">📍</div></div><div class="report-text"><h4>Salesman GPS Log</h4><p>Action-based tracking & map</p></div></div>
-            <div class="report-card" onclick="showReport('stock')"><div class="report-icon-wrap"><div class="report-icon">📦</div></div><div class="report-text"><h4>Stock Summary</h4><p>Current inventory levels</p></div></div>
+            <div class="report-card" onclick="showReport('stock')"><div class="report-icon-wrap"><div class="report-icon"><span class="material-symbols-outlined">inventory</span></div></div><div class="report-text"><h4>Stock Summary</h4><p>Current inventory levels</p></div></div>
             <div class="report-card" onclick="showReport('outstanding')"><div class="report-icon-wrap"><div class="report-icon">⏳</div></div><div class="report-text"><h4>Outstanding</h4><p>Party balances</p></div></div>
-            <div class="report-card" onclick="showReport('expenses')"><div class="report-icon-wrap"><div class="report-icon">📉</div></div><div class="report-text"><h4>Expense Summary</h4><p>Category-wise breakdown</p></div></div>
+            <div class="report-card" onclick="showReport('expenses')"><div class="report-icon-wrap"><div class="report-icon"><span class="material-symbols-outlined">trending_down</span></div></div><div class="report-text"><h4>Expense Summary</h4><p>Category-wise breakdown</p></div></div>
             <div class="report-card" onclick="showReport('chequeregister')"><div class="report-icon-wrap"><div class="report-icon">🏦</div></div><div class="report-text"><h4>Cheque Register</h4><p>Track cheque deposits & clearance</p></div></div>
             <div class="report-card" onclick="showReport('salesman')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(124,58,237,0.12),rgba(99,102,241,0.08))"><div class="report-icon">🏅</div></div><div class="report-text"><h4>Salesman Performance</h4><p>Invoices + collections by salesman</p></div></div>
             <div class="report-card" onclick="showReport('user-outstanding')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(239,68,68,0.12),rgba(249,115,22,0.08))"><div class="report-icon">👥</div></div><div class="report-text"><h4>Outstanding by User</h4><p>Pending bills grouped by salesman</p></div></div>
             <div class="report-card" onclick="showReport('collection-allocations')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(59,130,246,0.12),rgba(37,99,235,0.08))"><div class="report-icon">🔗</div></div><div class="report-text"><h4>Collection Allocations</h4><p>Track assigned invoices & payments</p></div></div>
             <div class="report-card" onclick="showReport('daybook')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(20,184,166,0.12),rgba(6,182,212,0.08))"><div class="report-icon">📅</div></div><div class="report-text"><h4>Day Book</h4><p>Date-wise transaction summary</p></div></div>
             <div class="report-card" onclick="showReport('stock-aging')"><div class="report-icon-wrap" style="background:var(--bg-primary)"><div class="report-icon">🕰️</div></div><div class="report-text"><h4>Stock Aging</h4><p>Stock staying >30/60/90 days</p></div></div>
-            <div class="report-card" onclick="showReport('salesman-ach')"><div class="report-icon-wrap" style="background:var(--bg-primary)"><div class="report-icon">🎯</div></div><div class="report-text"><h4>Target vs Achievement</h4><p>Salesman performance vs targets</p></div></div>
-            <div class="report-card" onclick="showReport('party-soa')"><div class="report-icon-wrap" style="background:var(--bg-primary)"><div class="report-icon">📜</div></div><div class="report-text"><h4>Statement of Account</h4><p>Full party ledger with print</p></div></div>
-            <div class="report-card" onclick="showReport('abc-analysis')"><div class="report-icon-wrap" style="background:var(--bg-primary)"><div class="report-icon">🔠</div></div><div class="report-text"><h4>ABC Analysis</h4><p>Revenue-based item classification</p></div></div>
-            <div class="report-card" onclick="showReport('indent')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(249,115,22,0.12),rgba(234,88,12,0.08))"><div class="report-icon">📝</div></div><div class="report-text"><h4>Purchase Indent</h4><p>Suggested PO based on 30d sales</p></div></div>
-            <div class="report-card" onclick="showReport('zero-sales')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(239,68,68,0.12),rgba(220,38,38,0.08))"><div class="report-icon">🚨</div></div><div class="report-text"><h4>Zero Sales Customers</h4><p>Inactive customers — assign salesman for follow-up</p></div></div>
+            <div class="report-card" onclick="showReport('salesman-ach')"><div class="report-icon-wrap" style="background:var(--bg-primary)"><div class="report-icon"><span class="material-symbols-outlined">track_changes</span></div></div><div class="report-text"><h4>Target vs Achievement</h4><p>Salesman performance vs targets</p></div></div>
+            <div class="report-card" onclick="showReport('party-soa')"><div class="report-icon-wrap" style="background:var(--bg-primary)"><div class="report-icon"><span class="material-symbols-outlined">description</span></div></div><div class="report-text"><h4>Statement of Account</h4><p>Full party ledger with print</p></div></div>
+            <div class="report-card" onclick="showReport('abc-analysis')"><div class="report-icon-wrap" style="background:var(--bg-primary)"><div class="report-icon"><span class="material-symbols-outlined">sort_by_alpha</span></div></div><div class="report-text"><h4>ABC Analysis</h4><p>Revenue-based item classification</p></div></div>
+            <div class="report-card" onclick="showReport('indent')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(249,115,22,0.12),rgba(234,88,12,0.08))"><div class="report-icon"><span class="material-symbols-outlined">edit_document</span></div></div><div class="report-text"><h4>Purchase Indent</h4><p>Suggested PO based on 30d sales</p></div></div>
+            <div class="report-card" onclick="showReport('zero-sales')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(239,68,68,0.12),rgba(220,38,38,0.08))"><div class="report-icon"><span class="material-symbols-outlined">warning</span></div></div><div class="report-text"><h4>Zero Sales Customers</h4><p>Inactive customers — assign salesman for follow-up</p></div></div>
         </div>
 
         <div class="section-toolbar" style="margin-top:28px">
@@ -13794,11 +14029,11 @@ function renderReports() {
         </div>
         <p style="font-size:0.82rem;color:var(--text-muted);margin-bottom:14px">Line-wise detailed reports for re-entry into Vyapar accounting software.</p>
         <div class="report-grid">
-            <div class="report-card" onclick="showReport('vyapar-sales')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(22,163,74,0.12),rgba(16,185,129,0.08))"><div class="report-icon">🟢</div></div><div class="report-text"><h4>Vyapar Sales Import</h4><p>Sales invoices  line-wise for Vyapar entry</p></div></div>
-            <div class="report-card" onclick="showReport('vyapar-payments')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(37,99,235,0.12),rgba(99,102,241,0.08))"><div class="report-icon">🔵</div></div><div class="report-text"><h4>Vyapar Payment In Import</h4><p>Payment receipts  line-wise for Vyapar entry</p></div></div>
+            <div class="report-card" onclick="showReport('vyapar-sales')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(22,163,74,0.12),rgba(16,185,129,0.08))"><div class="report-icon"><span class="material-symbols-outlined" style="color:#16a34a">upload_file</span></div></div><div class="report-text"><h4>Vyapar Sales Import</h4><p>Sales invoices  line-wise for Vyapar entry</p></div></div>
+            <div class="report-card" onclick="showReport('vyapar-payments')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(37,99,235,0.12),rgba(99,102,241,0.08))"><div class="report-icon"><span class="material-symbols-outlined" style="color:#2563eb">upload_file</span></div></div><div class="report-text"><h4>Vyapar Payment In Import</h4><p>Payment receipts  line-wise for Vyapar entry</p></div></div>
             <div class="report-card" onclick="showReport('payment-trend')">
                 <div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(124,45,18,0.12),rgba(249,115,22,0.08))">
-                    <div class="report-icon">📊</div>
+                    <div class="report-icon"><span class="material-symbols-outlined">bar_chart</span></div>
                 </div>
                 <div class="report-text">
                     <h4>Customer Payment Trend</h4>
@@ -14576,7 +14811,7 @@ async function showReport(type) {
         pageContent.innerHTML = `
         <div class="section-toolbar" style="flex-wrap:wrap;gap:8px;margin-bottom:16px">
             <button class="btn btn-outline" onclick="renderReports()"> Back</button>
-            <h3 style="flex:1;min-width:200px">🚨 Zero Sales Customers</h3>
+            <h3 style="flex:1;min-width:200px">Zero Sales Customers</h3>
             <button class="btn btn-outline" style="border-color:#16a34a;color:#16a34a" onclick="exportTableToExcel('tbl-zero-sales','ZeroSalesCustomers_${today()}')">
                 <span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export
             </button>
@@ -15258,10 +15493,10 @@ function renderIndentRpt() {
 
     out.innerHTML = `
     <div class="stats-grid-sm" style="margin-bottom:14px">
-        <div class="stat-card amber"><div class="stat-icon">📝</div><div class="stat-value">${totalItems}</div><div class="stat-label">Items to Order</div></div>
+        <div class="stat-card amber"><div class="stat-icon"></div><div class="stat-value">${totalItems}</div><div class="stat-label">Items to Order</div></div>
         <div class="stat-card red"><div class="stat-icon">🚫</div><div class="stat-value">${outOfStockCount}</div><div class="stat-label">Out of Stock</div></div>
-        <div class="stat-card orange" style="--sc-color:#f97316"><div class="stat-icon">⚠️</div><div class="stat-value">${lowStockCount}</div><div class="stat-label">Low Stock</div></div>
-        <div class="stat-card blue"><div class="stat-icon">💰</div><div class="stat-value">${currency(totalCost)}</div><div class="stat-label">Est. PO Value</div></div>
+        <div class="stat-card orange" style="--sc-color:#f97316"><div class="stat-icon"></div><div class="stat-value">${lowStockCount}</div><div class="stat-label">Low Stock</div></div>
+        <div class="stat-card blue"><div class="stat-icon"></div><div class="stat-value">${currency(totalCost)}</div><div class="stat-label">Est. PO Value</div></div>
     </div>
     <div class="card"><div class="card-body">
         <p style="font-size:0.78rem;color:var(--text-muted);margin-bottom:10px">
@@ -15314,7 +15549,7 @@ function renderStockRpt() {
         <div class="table-wrapper">
             <table class="data-table" id="tbl-stock">
             <thead><tr><th style="min-width:150px">Item</th><th style="min-width:120px">Category</th><th style="min-width:80px">Unit</th><th style="min-width:80px;text-align:right">Stock</th><th style="min-width:100px;text-align:right">Purchase Price</th><th style="min-width:110px;text-align:right">Stock Value</th></tr></thead>
-            <tbody>${items.map(i => { const low = i.stock <= (i.lowStockAlert || 5); return `<tr><td style="min-width:150px;font-weight:600">${escapeHtml(i.name)}</td><td style="min-width:120px">${i.category || '-'}</td><td style="min-width:80px">${i.unit || 'Pcs'}</td><td style="min-width:80px;text-align:right"><span class="badge ${i.stock <= 0 ? 'badge-danger' : low ? 'badge-warning' : 'badge-success'}">${i.stock}</span></td><td style="min-width:100px;text-align:right">${currency(i.purchasePrice || 0)}</td><td style="min-width:110px;text-align:right">${currency(i.stock * (i.purchasePrice || 0))}</td></tr>`; }).join('') || '<tr><td colspan="6" class="empty-state"><p>No items found</p></td></tr>'}
+            <tbody>${items.map(i => { const low = i.stock <= (i.lowStockAlert || 5); return `<tr><td style="min-width:150px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600">${escapeHtml(i.name)}</td><td style="min-width:120px">${i.category || '-'}</td><td style="min-width:80px">${i.unit || 'Pcs'}</td><td style="min-width:80px;text-align:right"><span class="badge ${i.stock <= 0 ? 'badge-danger' : low ? 'badge-warning' : 'badge-success'}">${i.stock}</span></td><td style="min-width:100px;text-align:right">${currency(i.purchasePrice || 0)}</td><td style="min-width:110px;text-align:right">${currency(i.stock * (i.purchasePrice || 0))}</td></tr>`; }).join('') || '<tr><td colspan="6" class="empty-state"><p>No items found</p></td></tr>'}
             <tr style="font-weight:700"><td colspan="5" style="text-align:right">Total Value</td><td style="min-width:110px;text-align:right">${currency(totalVal)}</td></tr>
             </tbody></table>
         </div>
@@ -17337,7 +17572,7 @@ async function renderPartyLedgerLayout() {
                                 <td style="font-size:0.8rem">${e.createdBy || '-'}</td>
                                 <td>
                                     <div class="action-btns" style="flex-wrap:nowrap">
-                                        ${entryType.includes('Invoice') ? `<button class="btn-icon" onclick="showPaymentHistory('${partyId}', '${docNo}')" title="Payment History"><span class="material-symbols-outlined" style="font-size:1.1rem">history</span></button><button class="btn-icon" style="font-size:1.1rem" onclick="printInvoiceByNo('${docNo}')" title="Print Invoice">🖨️</button><button class="btn-icon" style="font-size:1.1rem" onclick="shareInvoiceByNo('${docNo}')" title="Share Invoice">📤</button>` : ''}
+                                        ${entryType.includes('Invoice') ? `<button class="btn-icon" onclick="showPaymentHistory('${partyId}', '${docNo}')" title="Payment History"><span class="material-symbols-outlined" style="font-size:1.1rem">history</span></button><button class="btn-icon" onclick="printInvoiceByNo('${docNo}')" title="Print Invoice"><span class="material-symbols-outlined" style="font-size:1.1rem">print</span></button><button class="btn-icon" onclick="shareInvoiceByNo('${docNo}')" title="Share Invoice"><span class="material-symbols-outlined" style="font-size:1.1rem">share</span></button>` : ''}
                                         <div style="display:flex;gap:4px;justify-content:flex-end">
                                         ${canEdit() ? `<button class="btn-icon" onclick="editPartyLedgerEntry('${partyId}','${e.id}')" title="Edit Entry"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button><button class="btn-icon" onclick="deletePartyLedgerEntry('${partyId}','${e.id}')" title="Delete Entry" style="color:var(--danger)"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>` : ''}
                                     </div>
@@ -17497,7 +17732,10 @@ async function savePartyLedgerEntry(partyId, ledgerId) {
     try {
         // BUG-015 fix: save to Supabase so running balance is fresh on re-render
         await DB.update('party_ledger', ledgerId, { date, docNo: docNo, amount, notes: reason });
-        await recalculatePartyLedger(partyId);
+        recalculatePartyLedger(partyId);
+        // Persist updated running balances to Supabase for all affected entries
+        const updatedLedger = DB.get('db_party_ledger').filter(l => String(l.partyId) === String(partyId));
+        await Promise.all(updatedLedger.map(entry => DB.update('party_ledger', entry.id, { balance: entry.runningBalance })));
         closeModal();
         renderPartyLedgerLayout(); // Refresh UI (async, fetches fresh Supabase data)
         showToast('Ledger entry updated.', 'success');
@@ -17538,7 +17776,14 @@ function deletePartyLedgerEntry(partyId, ledgerId) {
     `);
 }
 
-function confirmDeleteLedgerEntry(partyId, ledgerId) {
+async function confirmDeleteLedgerEntry(partyId, ledgerId) {
+    try {
+        const { error } = await supabaseClient.from('party_ledger').delete().eq('id', ledgerId);
+        if (error) throw error;
+        await DB.refreshTables(['party_ledger']);
+    } catch (err) {
+        console.error('Error deleting ledger entry from Supabase:', err);
+    }
     let ledger = DB.get('db_party_ledger');
     ledger = ledger.filter(x => String(x.id) !== String(ledgerId));
     DB.set('db_party_ledger', ledger);
