@@ -3276,6 +3276,7 @@ function processPartyImport(event) {
     }
 
     function parseText(text) {
+        if (!text) return alert('Could not read file contents. Please try again.');
         const lines = text.split(/\r?\n/).filter(l => l.trim());
         if (lines.length < 2) return alert('File is empty or has no data rows');
         const errors = [];
@@ -3297,10 +3298,10 @@ function processPartyImport(event) {
                 (partyCode && (p.partyCode || '').toUpperCase() === partyCode)
             );
 
-            if (pendingPartyImports.some(p => p.name.toLowerCase() === name.toLowerCase())) {
+            if (pendingPartyImports.some(p => (p.name || '').toLowerCase() === name.toLowerCase())) {
                 errors.push(`Row ${i + 1}: Duplicate party "${name}" in file.`); continue;
             }
-            if (partyCode && pendingPartyImports.some(p => p.partyCode === partyCode)) {
+            if (partyCode && pendingPartyImports.some(p => (p.partyCode || '') === partyCode)) {
                 errors.push(`Row ${i + 1}: Duplicate Party Code "${partyCode}" in file.`); continue;
             }
 
@@ -3339,7 +3340,8 @@ function processPartyImport(event) {
         reader.readAsArrayBuffer(file);
     } else {
         const reader = new FileReader();
-        reader.onload = e => parseText(e.target.result);
+        reader.onload = e => parseText(e.target ? e.target.result : undefined);
+        reader.onerror = () => alert('Error reading file. Please try again.');
         reader.readAsText(file);
     }
 }
@@ -4891,6 +4893,7 @@ function processStockImport(event) {
     if (!file) return;
 
     function parseText(text) {
+        if (!text) return alert('Could not read file contents. Please try again.');
         const lines = text.split(/\r?\n/).filter(l => l.trim());
         if (lines.length < 2) return alert('File is empty or has no data rows');
         const items = DB.get('db_inventory');
@@ -4900,7 +4903,7 @@ function processStockImport(event) {
             const cols = parseCSVLine(lines[i]);
             if (cols.length < 4) { errors.push(`Row ${i + 1}: Not enough columns`); continue; }
             const [itemName, dateStr, typeStr, qtyStr, reason] = [cols[0].trim(), cols[1].trim(), cols[2].trim(), cols[3].trim(), (cols[4] || '').trim()];
-            const item = items.find(x => x.name.toLowerCase() === itemName.toLowerCase());
+            const item = items.find(x => (x.name || '').toLowerCase() === itemName.toLowerCase());
             if (!item) { errors.push(`Row ${i + 1}: Item "${itemName}" not found`); continue; }
             const qty = parseInt(qtyStr, 10);
             if (isNaN(qty) || qty <= 0) { errors.push(`Row ${i + 1}: Invalid qty "${qtyStr}"`); continue; }
@@ -4925,7 +4928,8 @@ function processStockImport(event) {
         reader.readAsArrayBuffer(file);
     } else {
         const reader = new FileReader();
-        reader.onload = e => parseText(e.target.result);
+        reader.onload = e => parseText(e.target ? e.target.result : undefined);
+        reader.onerror = () => alert('Error reading file. Please try again.');
         reader.readAsText(file);
     }
 }
@@ -5002,6 +5006,7 @@ function processItemImport(event) {
     if (!file) return;
 
     async function parseText(text) {
+        if (!text) return alert('Could not read file contents. Please try again.');
         const lines = text.split(/\r?\n/).filter(l => l.trim());
         if (lines.length < 2) return alert('File is empty or has no data rows');
         const errors = [];
@@ -5013,8 +5018,8 @@ function processItemImport(event) {
             if (cols.length < 3) { errors.push(`Row ${i + 1}: Not enough columns`); continue; }
             const [code, name, cat, subcat, hsn, gstRateStr, priUnit, secUOM, convStr, ppStr, spStr, mrpStr, stockStr, lowStr, warehouse, t1qty, t1price, t2qty, t2price] = cols.map(c => (c || '').trim());
             if (!name) continue;
-            const existingItem = items.find(it => it.name.toLowerCase() === name.toLowerCase());
-            if (pendingItemImports.some(it => it.name.toLowerCase() === name.toLowerCase())) { errors.push(`Row ${i + 1}: Duplicate item "${name}" in file.`); continue; }
+            const existingItem = items.find(it => (it.name || '').toLowerCase() === name.toLowerCase());
+            if (pendingItemImports.some(it => (it.name || '').toLowerCase() === name.toLowerCase())) { errors.push(`Row ${i + 1}: Duplicate item "${name}" in file.`); continue; }
             if (!cat) { errors.push(`Row ${i + 1}: Category required for "${name}"`); continue; }
             let catObj = categories.find(c => c.name.toLowerCase() === cat.toLowerCase());
             const catSubs = Array.isArray(catObj && catObj.subCategories) ? catObj.subCategories : [];
@@ -5066,7 +5071,8 @@ function processItemImport(event) {
         reader.readAsArrayBuffer(file);
     } else {
         const reader = new FileReader();
-        reader.onload = e => parseText(e.target.result);
+        reader.onload = e => parseText(e.target ? e.target.result : undefined);
+        reader.onerror = () => alert('Error reading file. Please try again.');
         reader.readAsText(file);
     }
 }
