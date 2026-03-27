@@ -1,4 +1,4 @@
-﻿/* ============================================
+/* ============================================
    Prakash Traders  Core Application (Refactored)
    ============================================ */
 
@@ -334,7 +334,7 @@ const DB = {
         const res = {};
         for (const key in obj) {
             const v = obj[key];
-            res[key] = (v === '' && (key.includes('date') || key.includes('at') || key.includes('_at') || key === 'item_code')) ? null : v;
+            res[key] = (v === '' && (key.includes('date') || key.includes('at') || key.includes('_at') || key === 'item_code' || key === 'party_code' || key === 'group')) ? null : v;
         }
         return res;
     },
@@ -3269,35 +3269,53 @@ function processPartyImport(event) {
     const file = event.target.files[0];
     if (!file) return;
 
+    if (file.name.match(/\.xlsx?$/i) && typeof XLSX === 'undefined') {
+        alert('Excel library (XLSX) not loaded. Please check your internet connection or use a CSV file.');
+        event.target.value = '';
+        return;
+    }
+
     function parseText(text) {
         const lines = text.split(/\r?\n/).filter(l => l.trim());
         if (lines.length < 2) return alert('File is empty or has no data rows');
         const errors = [];
         pendingPartyImports = [];
-        const parties = DB.get('db_parties');
+        const parties = DB.get('db_parties') || [];
         for (let i = 1; i < lines.length; i++) {
             const cols = parseCSVLine(lines[i]);
             if (cols.length < 2) { errors.push(`Row ${i + 1}: Not enough columns`); continue; }
             // Expected Order (matching template):
             // 0:PartyCode, 1:Name, 2:Type, 3:Phone, 4:GSTIN, 5:Address, 6:City, 7:PostCode, 8:Lat, 9:Lng, 10:OpeningBal, 11:CreditLimit, 12:PayTerms, 13:Blocked
-            const [partyCode, name, typeStr, phone, gstin, address, city, postCode, lat, lng, balStr, creditLimitStr, paymentTerms, blockedStr] = cols.map(c => (c || '').trim());
+            const [rawPartyCode, name, typeStr, phone, gstin, address, city, postCode, lat, lng, balStr, creditLimitStr, paymentTerms, blockedStr] = cols.map(c => (c || '').trim());
+            const partyCode = rawPartyCode ? rawPartyCode.toUpperCase() : null;
+
             if (!name) { errors.push(`Row ${i + 1}: Name is empty`); continue; }
-            const existingParty = parties.find(p => p.name.toLowerCase() === name.toLowerCase());
+
+            // Match by Name OR Party Code
+            const existingParty = parties.find(p => 
+                p.name.toLowerCase() === name.toLowerCase() || 
+                (partyCode && p.partyCode && p.partyCode.toUpperCase() === partyCode)
+            );
+
             if (pendingPartyImports.some(p => p.name.toLowerCase() === name.toLowerCase())) {
                 errors.push(`Row ${i + 1}: Duplicate party "${name}" in file.`); continue;
             }
+            if (partyCode && pendingPartyImports.some(p => p.partyCode === partyCode)) {
+                errors.push(`Row ${i + 1}: Duplicate Party Code "${partyCode}" in file.`); continue;
+            }
+
             const partyType = typeStr.toLowerCase().includes('supp') ? 'Supplier' : 'Customer';
             const balance = +(balStr || 0);
             const entry = {
-                name, partyCode: partyCode || null, type: partyType,
+                name, partyCode: partyCode, type: partyType,
                 phone: phone || '', city: city || '', gstin: gstin || '', address: address || '',
                 postCode: postCode || '',
-                lat: lat ? +lat : null,
-                lng: lng ? +lng : null,
-                balance: existingParty ? existingParty.balance : balance,
-                creditLimit: creditLimitStr ? +creditLimitStr : (existingParty ? existingParty.creditLimit : 0),
-                paymentTerms: paymentTerms || (existingParty ? existingParty.paymentTerms : ''),
-                blocked: blockedStr ? blockedStr.toLowerCase() === 'true' : (existingParty ? existingParty.blocked : false),
+                lat: (lat && !isNaN(lat)) ? +lat : null,
+                lng: (lng && !isNaN(lng)) ? +lng : null,
+                balance: existingParty ? (existingParty.balance || 0) : balance,
+                creditLimit: creditLimitStr ? +creditLimitStr : (existingParty ? (existingParty.creditLimit || 0) : 0),
+                paymentTerms: paymentTerms || (existingParty ? (existingParty.paymentTerms || '') : ''),
+                blocked: blockedStr ? blockedStr.toLowerCase() === 'true' : (existingParty ? !!existingParty.blocked : false),
                 isUpdate: !!existingParty
             };
             if (existingParty) entry.id = existingParty.id;
@@ -3307,11 +3325,16 @@ function processPartyImport(event) {
         event.target.value = '';
     }
 
-    if (file.name.match(/\.xlsx?$/i) && typeof XLSX !== 'undefined') {
+    if (file.name.match(/\.xlsx?$/i)) {
         const reader = new FileReader();
         reader.onload = e => {
-            const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
-            parseText(XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]]));
+            try {
+                const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
+                parseText(XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]]));
+            } catch (err) {
+                alert('Error reading Excel file: ' + err.message);
+                event.target.value = '';
+            }
         };
         reader.readAsArrayBuffer(file);
     } else {
@@ -3370,24 +3393,29 @@ async function commitPartyImport() {
     if (btn) { btn.disabled = true; btn.innerText = ' Importing...'; }
 
     let added = 0, updated = 0;
+    const total = pendingPartyImports.length;
 
     try {
-        for (const p of pendingPartyImports) {
+        for (let i = 0; i < total; i++) {
+            const p = pendingPartyImports[i];
+            if (btn && i % 5 === 0) btn.innerText = ` Importing (${i}/${total})...`;
+            
             const { isUpdate, id, ...data } = p;
             if (isUpdate) {
-                await DB.update('parties', id, data);
+                await DB.rawUpdate('parties', id, data);
                 updated++;
             } else {
-                await DB.insert('parties', data); // no id  Supabase auto-generates UUID
+                await DB.rawInsert('parties', data);
                 added++;
             }
         }
 
         pendingPartyImports = [];
+        await DB.refreshTables(['parties']);
         await renderParties();
         showToast(`Import complete! ${added} added, ${updated} updated.`, 'success');
     } catch (err) {
-        alert('Error during party import: ' + err.message);
+        alert('Error during party import: ' + (err.message || JSON.stringify(err)));
     } finally {
         closeModal();
     }
@@ -4931,6 +4959,12 @@ async function commitStockImport() {
     }
 }
 function parseCSVLine(line) {
+    if (!line) return [];
+    // Detect delimiter: use ; if it appears more than , or if , is not present
+    let delimiter = ',';
+    if (line.includes(';') && (line.split(';').length > line.split(',').length)) {
+        delimiter = ';';
+    }
     const result = []; let current = ''; let inQuotes = false;
     for (let i = 0; i < line.length; i++) {
         const ch = line[i];
@@ -4939,7 +4973,7 @@ function parseCSVLine(line) {
             else { current += ch; }
         } else {
             if (ch === '"') { inQuotes = true; }
-            else if (ch === ',') { result.push(current); current = ''; }
+            else if (ch === delimiter) { result.push(current); current = ''; }
             else { current += ch; }
         }
     }
