@@ -29,7 +29,8 @@
       "Bash(node --check \"c:/Users/Admin/.gemini/antigravity/scratch/distributor-app/app.js\")",
       "Bash(curl:*)",
       "Bash(node:*)",
-      "Bash(find C:UsersAdminAppDataLocalTempclaude -name *.output)"
+      "Bash(find C:UsersAdminAppDataLocalTempclaude -name *.output)",
+      "Bash(netlify sites:list)"
     ]
   }
 }

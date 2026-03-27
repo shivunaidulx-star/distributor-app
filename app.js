@@ -3284,10 +3284,13 @@ function processPartyImport(event) {
         const parties = DB.get('db_parties') || [];
         for (let i = 1; i < lines.length; i++) {
             const cols = parseCSVLine(lines[i]);
-            if (cols.length < 2) { errors.push(`Row ${i + 1}: Not enough columns`); continue; }
+            const colsMapped = cols.map(c => (c || '').trim());
+            // Silently skip phantom rows and structural group headers
+            if (colsMapped.length < 2 || colsMapped.filter(c => c).length < 2) continue;
+            
             // Expected Order (matching template):
             // 0:PartyCode, 1:Name, 2:Type, 3:Phone, 4:GSTIN, 5:Address, 6:City, 7:PostCode, 8:Lat, 9:Lng, 10:OpeningBal, 11:CreditLimit, 12:PayTerms, 13:Blocked
-            const [rawPartyCode, name, typeStr, phone, gstin, address, city, postCode, lat, lng, balStr, creditLimitStr, paymentTerms, blockedStr] = cols.map(c => (c || '').trim());
+            const [rawPartyCode, name, typeStr, phone, gstin, address, city, postCode, lat, lng, balStr, creditLimitStr, paymentTerms, blockedStr] = colsMapped;
             const partyCode = rawPartyCode ? rawPartyCode.toUpperCase() : null;
 
             if (!name) { errors.push(`Row ${i + 1}: Name is empty`); continue; }
@@ -3350,7 +3353,8 @@ function showPartyImportPreview(errors) {
     let html = '';
     if (errors && errors.length) {
         html += `<div style="margin-bottom:14px;padding:12px;background:var(--danger-soft);border:1px solid rgba(239,68,68,0.3);border-radius:8px;font-size:0.85rem">
-            <strong style="color:var(--danger)"> ${errors.length} Errors (Rows skipped)</strong>
+            <strong style="color:var(--danger)"> ${errors.length} Rows skipped</strong>
+            <p style="margin:4px 0 8px;font-size:0.75rem;color:var(--text-muted)">These rows were skipped because they appear to be group headers, sub-totals, or duplicates. You can safely ignore this and proceed.</p>
             <ul style="margin-top:6px;padding-left:14px;color:var(--danger);max-height:80px;overflow-y:auto">
                 ${errors.map(err => `<li>${err}</li>`).join('')}
             </ul>
@@ -4901,8 +4905,9 @@ function processStockImport(event) {
         pendingStockImports = [];
         for (let i = 1; i < lines.length; i++) {
             const cols = parseCSVLine(lines[i]);
-            if (cols.length < 4) { errors.push(`Row ${i + 1}: Not enough columns`); continue; }
-            const [itemName, dateStr, typeStr, qtyStr, reason] = [cols[0].trim(), cols[1].trim(), cols[2].trim(), cols[3].trim(), (cols[4] || '').trim()];
+            const colsMapped = cols.map(c => (c || '').trim());
+            if (colsMapped.length < 4 || colsMapped.filter(c => c).length < 2) continue;
+            const [itemName, dateStr, typeStr, qtyStr, reason] = colsMapped;
             const item = items.find(x => (x.name || '').toLowerCase() === itemName.toLowerCase());
             if (!item) { errors.push(`Row ${i + 1}: Item "${itemName}" not found`); continue; }
             const qty = parseInt(qtyStr, 10);
@@ -5015,8 +5020,9 @@ function processItemImport(event) {
         const categories = await DB.getAll('categories');
         for (let i = 1; i < lines.length; i++) {
             const cols = parseCSVLine(lines[i]);
-            if (cols.length < 3) { errors.push(`Row ${i + 1}: Not enough columns`); continue; }
-            const [code, name, cat, subcat, hsn, gstRateStr, priUnit, secUOM, convStr, ppStr, spStr, mrpStr, stockStr, lowStr, warehouse, t1qty, t1price, t2qty, t2price] = cols.map(c => (c || '').trim());
+            const colsMapped = cols.map(c => (c || '').trim());
+            if (colsMapped.length < 3 || colsMapped.filter(c => c).length < 2) continue;
+            const [code, name, cat, subcat, hsn, gstRateStr, priUnit, secUOM, convStr, ppStr, spStr, mrpStr, stockStr, lowStr, warehouse, t1qty, t1price, t2qty, t2price] = colsMapped;
             if (!name) continue;
             const existingItem = items.find(it => (it.name || '').toLowerCase() === name.toLowerCase());
             if (pendingItemImports.some(it => (it.name || '').toLowerCase() === name.toLowerCase())) { errors.push(`Row ${i + 1}: Duplicate item "${name}" in file.`); continue; }
