@@ -2,7 +2,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
-const PORT = 8081;
+const PORT = process.env.PORT || 8081;
 const IP = '192.168.1.107'; // Your local IP
 
 const MIME_TYPES = {
