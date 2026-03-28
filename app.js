@@ -378,9 +378,15 @@ const DB = {
         const actualTable = this.mapTable(table);
         const { data, error } = await supabaseClient.from(actualTable).update(this._clean(this._toSnake(row))).eq('id', id).select();
         if (error) { console.error(`Error updating ${actualTable}:`, error.message, '| sent:', JSON.stringify(this._toSnake(row))); throw error; }
-        // Note: data may be empty if RLS SELECT policy doesn't cover updated row — that's OK
+        // Immediately patch the specific item in cache so UI reflects changes without waiting for refreshTables
+        const updatedItem = data && data.length > 0 ? this._toCamel(data[0]) : { id, ...this._toCamel(row) };
+        if (this.cache[actualTable]) {
+            const idx = this.cache[actualTable].findIndex(x => x.id === id);
+            if (idx >= 0) this.cache[actualTable][idx] = { ...this.cache[actualTable][idx], ...updatedItem };
+            else this.cache[actualTable].push(updatedItem);
+        }
         await this.refreshTables([actualTable]);
-        return data && data.length > 0 ? this._toCamel(data[0]) : { id };
+        return updatedItem;
     },
 
     async delete(table, id) {
@@ -4230,13 +4236,11 @@ async function saveItem(id) {
         if (id) {
             const items = await DB.getAll('inventory');
             const item = items.find(x => x.id === id);
-            if (item) {
-                const oldStock = item.stock;
-                await DB.update('inventory', id, data);
-                if (newStock !== oldStock) {
-                    const diff = newStock - oldStock;
-                    await addLedgerEntry(id, name, diff > 0 ? 'Positive Adj' : 'Negative Adj', diff, 'EDIT-' + id.substr(0, 6).toUpperCase(), 'Manual edit');
-                }
+            const oldStock = item ? item.stock : newStock;
+            await DB.update('inventory', id, data);
+            if (newStock !== oldStock) {
+                const diff = newStock - oldStock;
+                await addLedgerEntry(id, name, diff > 0 ? 'Positive Adj' : 'Negative Adj', diff, 'EDIT-' + id.substr(0, 6).toUpperCase(), 'Manual edit');
             }
         } else {
             const inserted = await DB.insert('inventory', data);
