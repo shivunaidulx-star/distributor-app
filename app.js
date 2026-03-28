@@ -3887,10 +3887,24 @@ function deductBatchQtyFifo(item, qtyToDeduct) {
     return { updatedBatches: batches, priceSync: syncItemPricesFromBatches(batches) };
 }
 
-function openItemModal(id) {
+async function openItemModal(id) {
     window._editItemId = id || '';
     window._itemPhotoFile = null;
-    const i = id ? DB.get('db_inventory').find(x => x.id === id) : null;
+    // Always fetch fresh from Supabase for edit so sec_uom and other fields are never stale
+    let i = null;
+    if (id) {
+        const { data: freshRow } = await supabaseClient.from('inventory').select('*').eq('id', id).single();
+        if (freshRow) {
+            i = DB._toCamel(freshRow);
+            // Patch cache with fresh data
+            if (DB.cache['inventory']) {
+                const idx = DB.cache['inventory'].findIndex(x => x.id === id);
+                if (idx >= 0) DB.cache['inventory'][idx] = i;
+            }
+        } else {
+            i = DB.get('db_inventory').find(x => x.id === id) || null;
+        }
+    }
     currentItemTiers = i && i.priceTiers ? JSON.parse(JSON.stringify(i.priceTiers)) : [];
     currentItemBatches = i && i.batches ? JSON.parse(JSON.stringify(i.batches)) : [];
 
