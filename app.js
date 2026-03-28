@@ -18135,7 +18135,7 @@ async function renderCatalogCards(items) {
             <div class="catalog-card-action">
                 ${cartEntries.length ? `<div style="width:100%">
                     ${cartEntries.map(ce => `<div style="display:flex;align-items:center;justify-content:center;gap:6px;${cartEntries.length > 1 ? 'margin-bottom:4px' : ''}">
-                        <button class="catalog-qty-btn" onclick="updateCartQty('${i.id}',-1,'${ce.unit}')"></button>
+                        <button class="catalog-qty-btn" onclick="updateCartQty('${i.id}',-1,'${ce.unit}')">-</button>
                         <span style="font-weight:700;min-width:24px;text-align:center">${ce.qty}</span>
                         <button class="catalog-qty-btn" onclick="updateCartQty('${i.id}',1,'${ce.unit}')">+</button>
                         <span style="font-size:0.72rem;color:var(--text-muted);min-width:28px">${ce.unit}</span>
