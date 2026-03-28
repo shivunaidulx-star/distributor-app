@@ -535,6 +535,7 @@ const ColumnManager = {
     PAGES: {
         inventory: [
             { key: 'name', label: 'Item Name', required: true },
+            { key: 'itemCode', label: 'Item Code', visible: true },
             { key: 'abc', label: 'ABC', visible: true },
             { key: 'warehouse', label: 'Warehouse', visible: false },
             { key: 'hsn', label: 'HSN', visible: false },
@@ -3656,24 +3657,27 @@ function renderInvCards(items, reservedMap = {}) {
         const available = i.stock - reserved;
         const isLow = available <= (i.lowStockAlert || 5);
         const fb = getFifoBatch(i);
-        return `<div class="card" style="margin-bottom:8px;padding:0">
-            <div style="display:flex;align-items:center;gap:10px;padding:10px 12px">
-                ${(i.imageUrl || i.photo) ? `<img src="${i.imageUrl || i.photo}" style="width:44px;height:44px;border-radius:8px;object-fit:cover;flex-shrink:0">` : `<div style="width:44px;height:44px;border-radius:8px;background:var(--bg-secondary);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:1.4rem"></div>`}
+        return `<div class="card" style="margin-bottom:8px;padding:0;border-radius:10px;overflow:hidden">
+            <div style="display:flex;align-items:center;gap:10px;padding:11px 12px">
+                ${(i.imageUrl || i.photo) ? `<img src="${i.imageUrl || i.photo}" style="width:46px;height:46px;border-radius:8px;object-fit:cover;flex-shrink:0">` : `<div style="width:46px;height:46px;border-radius:8px;background:linear-gradient(135deg,var(--primary-light,#fef3c7),var(--bg-secondary));display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:1.5rem"></div>`}
                 <div style="flex:1;min-width:0">
-                    <div style="font-weight:700;font-size:0.92rem;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(i.name)}${i.active === false ? ' <span style="font-size:0.68rem;background:#fee2e2;color:#991b1b;padding:1px 5px;border-radius:4px">Inactive</span>' : ''}</div>
-                    ${i.itemCode ? `<div style="font-size:0.72rem;color:var(--text-muted)">Code: ${i.itemCode}</div>` : ''}
-                    <div style="font-size:0.72rem;color:var(--text-muted)">${i.category || ''} ${i.subCategory ? '· ' + i.subCategory : ''}</div>
+                    <div style="font-weight:700;font-size:0.95rem;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:-0.01em">${escapeHtml(i.name)}${i.active === false ? ' <span style="font-size:0.66rem;background:#fee2e2;color:#991b1b;padding:1px 5px;border-radius:4px">Inactive</span>' : ''}</div>
+                    <div style="display:flex;align-items:center;gap:5px;margin-top:2px;flex-wrap:wrap">
+                        ${i.itemCode ? `<span style="font-family:monospace;font-size:0.72rem;font-weight:600;color:var(--accent);background:rgba(234,88,12,0.08);border:1px solid rgba(234,88,12,0.2);padding:1px 6px;border-radius:4px">${i.itemCode}</span>` : ''}
+                        <span style="font-size:0.72rem;color:var(--text-muted)">${i.category || ''}${i.subCategory ? ' · ' + i.subCategory : ''}</span>
+                    </div>
                 </div>
                 <div style="text-align:right;flex-shrink:0">
-                    <div style="font-size:1rem;font-weight:800;color:${isLow ? 'var(--danger)' : 'var(--success)'}">${available}</div>
-                    <div style="font-size:0.65rem;color:var(--text-muted);text-transform:uppercase">Avail</div>
-                    ${reserved > 0 ? `<div style="font-size:0.68rem;color:var(--danger)">${reserved} rsvd</div>` : ''}
+                    <div style="font-size:1.15rem;font-weight:800;color:${isLow ? 'var(--danger)' : 'var(--success)'};line-height:1">${available}</div>
+                    <div style="font-size:0.6rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.04em;margin-top:1px">Avail</div>
+                    ${reserved > 0 ? `<div style="font-size:0.67rem;color:var(--danger);margin-top:1px">${reserved} rsvd</div>` : ''}
                 </div>
             </div>
-            <div style="display:flex;border-top:1px solid var(--border);padding:7px 12px;gap:6px;align-items:center">
-                <div style="flex:1;font-size:0.78rem">
-                    <span style="color:var(--text-muted)">MRP:</span> <strong>${fb ? currency(fb.mrp) : (i.mrp ? currency(i.mrp) : '-')}</strong>
-                    <span style="margin-left:8px;color:var(--text-muted)">Sale:</span> <strong style="color:var(--accent)">${currency(i.salePrice)}</strong>
+            <div style="display:flex;border-top:1px solid var(--border);padding:7px 12px;gap:6px;align-items:center;background:var(--bg-secondary,rgba(0,0,0,0.02))">
+                <div style="flex:1;font-size:0.8rem;display:flex;gap:10px;flex-wrap:wrap">
+                    <span><span style="color:var(--text-muted);font-size:0.72rem">Sale</span> <strong style="color:var(--accent)">${currency(i.salePrice)}</strong></span>
+                    <span><span style="color:var(--text-muted);font-size:0.72rem">Pur</span> <strong style="color:var(--text-primary)">${currency(i.purchasePrice)}</strong></span>
+                    <span><span style="color:var(--text-muted);font-size:0.72rem">MRP</span> <strong style="color:var(--text-primary)">${fb ? currency(fb.mrp) : (i.mrp ? currency(i.mrp) : '-')}</strong></span>
                 </div>
                 <div style="display:flex;gap:2px" onclick="event.stopPropagation()">
                     ${canEdit() ? `<button class="btn-icon" style="color:var(--primary)" onclick="openStockAdjustmentModal('${i.id}')" title="Adjust"><span class="material-symbols-outlined" style="font-size:1.1rem">inventory</span></button>` : ''}
@@ -3811,7 +3815,8 @@ function renderInvRows(items, reservedMap = {}, abcMap = {}) {
         const abc = abcMap[i.id] || 'C';
         const abcClass = abc === 'A' ? 'badge-primary' : abc === 'B' ? 'badge-info' : 'badge-outline';
         const cellMap = {
-            name: `<td style="min-width:200px"><div style="display:flex;align-items:center;gap:8px">${(i.imageUrl || i.photo) ? `<img src="${i.imageUrl || i.photo}" style="width:32px;height:32px;border-radius:6px;object-fit:cover;flex-shrink:0">` : ''}<div><div style="color:var(--text-primary);font-weight:600">${i.name}${i.active === false ? ' <span class="badge badge-danger" style="font-size:0.7rem;padding:2px 5px">Inactive</span>' : ''}</div>${i.itemCode ? `<div style="font-size:0.75rem;color:var(--text-muted)">Code: ${i.itemCode}</div>` : ''}</div></div></td>`,
+            name: `<td style="min-width:200px"><div style="display:flex;align-items:center;gap:8px">${(i.imageUrl || i.photo) ? `<img src="${i.imageUrl || i.photo}" style="width:32px;height:32px;border-radius:6px;object-fit:cover;flex-shrink:0">` : ''}<div><div style="color:var(--text-primary);font-weight:700;font-size:0.9rem;letter-spacing:-0.01em">${i.name}${i.active === false ? ' <span class="badge badge-danger" style="font-size:0.7rem;padding:2px 5px">Inactive</span>' : ''}</div><div style="font-size:0.75rem;color:var(--text-muted)">${i.category || ''}${i.subCategory ? ' · ' + i.subCategory : ''}</div></div></div></td>`,
+            itemCode: `<td style="min-width:110px;font-family:monospace;font-size:0.82rem;color:var(--accent);font-weight:600">${i.itemCode || '-'}</td>`,
             abc: `<td style="min-width:40px;text-align:center"><span class="badge ${abcClass}" style="width:24px;text-align:center">${abc}</span></td>`,
             warehouse: `<td style="min-width:120px;font-size:0.85rem;color:var(--text-muted)">${i.warehouse || 'Main Warehouse'}</td>`,
             hsn: `<td style="min-width:80px">${i.hsn || '-'}</td>`,
