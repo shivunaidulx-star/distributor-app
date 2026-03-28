@@ -311,6 +311,9 @@ const DB = {
                 } catch (e) { } // Silently ignore if it's just normal text
             }
 
+            // Recursively convert nested objects and arrays (fixes JSONB fields like batches, priceTiers, items)
+            if (val && typeof val === 'object') val = this._toCamel(val);
+
             res[camel] = val;
         }
         return res;
@@ -3690,7 +3693,8 @@ async function renderInventory() {
     salesOrders.forEach(o => {
         if ((o.status === 'pending' || o.status === 'approved') && !o.packed) {
             o.items.forEach(li => {
-                reservedMap[li.itemId] = (reservedMap[li.itemId] || 0) + Number(li.qty);
+                const lid = li.itemId || li.item_id;
+                if (lid) reservedMap[lid] = (reservedMap[lid] || 0) + Number(li.qty);
             });
         }
     });
@@ -3803,7 +3807,7 @@ function renderInvRows(items, reservedMap = {}, abcMap = {}) {
             unit: `<td style="min-width:120px">${i.unit || 'Pcs'}${i.secUom ? `<br><span style="font-size:0.75rem;color:var(--text-muted)">1 ${i.unit} = ${i.secUomRatio || 0} ${i.secUom}</span>` : ''}</td>`,
             purchasePrice: `<td style="min-width:100px;text-align:right">${currency(i.purchasePrice)}${(() => { const nb = getLastActiveBatch(i); return nb && nb.purchasePrice !== i.purchasePrice ? `<br><span style="font-size:0.7rem;color:var(--text-muted)">Latest batch</span>` : ''; })()}</td>`,
             salePrice: `<td style="min-width:100px;text-align:right">${currency(i.salePrice)}${(() => { const fb = getFifoBatch(i); return fb && (fb.qty || 0) > 0 ? `<br><span style="font-size:0.7rem;color:var(--accent)">MRP ${fb.mrp}</span>` : ''; })()}</td>`,
-            mrp: `<td style="min-width:100px;text-align:right">${(() => { const fb = getFifoBatch(i); return fb ? currency(fb.mrp) : (i.mrp ? currency(i.mrp) : '-'); })()}${i.batches && i.batches.filter(b => b.isActive !== false).length > 1 ? `<br><span style="font-size:0.7rem;color:var(--text-muted)">${i.batches.filter(b => b.isActive !== false).length} batches</span>` : ''}</td>`,
+            mrp: `<td style="min-width:100px;text-align:right">${(() => { const fb = getFifoBatch(i); return fb ? currency(fb.mrp) : (i.mrp ? currency(i.mrp) : '-'); })()}${i.batches && getActiveBatches(i).length > 1 ? `<br><span style="font-size:0.7rem;color:var(--text-muted)">${getActiveBatches(i).length} batches</span>` : ''}</td>`,
             stock: `<td style="min-width:60px;text-align:center">${i.stock}</td>`,
             reserved: `<td style="min-width:60px;text-align:center">${reserved > 0 ? `<span style="color:var(--danger);font-weight:600">${reserved}</span>` : '0'}</td>`,
             avail: `<td style="min-width:80px;text-align:center"><span class="badge ${available <= (i.lowStockAlert || 5) ? 'badge-danger' : 'badge-success'}">${available}</span></td>`,
@@ -3837,7 +3841,7 @@ let currentItemBatches = [];
 
 //  Batch / MRP Helpers 
 function getActiveBatches(item) {
-    return (item.batches || []).filter(b => b.isActive !== false).sort((a, b) => (a.receivedDate || '') < (b.receivedDate || '') ? -1 : 1);
+    return (item.batches || []).filter(b => (b.isActive ?? b.is_active) !== false).sort((a, b) => (a.receivedDate || a.received_date || '') < (b.receivedDate || b.received_date || '') ? -1 : 1);
 }
 function getLastBatch(item) {
     const bs = item.batches || [];
@@ -3854,19 +3858,19 @@ function getFifoBatch(item) {
 }
 // Sync item prices using FIFO logic: salePrice/mrp from oldest with stock, purchasePrice from newest
 function syncItemPricesFromBatches(batches) {
-    const active = batches.filter(b => b.isActive !== false).sort((a, b) => (a.receivedDate || '') < (b.receivedDate || '') ? -1 : 1);
+    const active = batches.filter(b => (b.isActive ?? b.is_active) !== false).sort((a, b) => (a.receivedDate || a.received_date || '') < (b.receivedDate || b.received_date || '') ? -1 : 1);
     const fifo = active.find(b => (b.qty || 0) > 0) || active[0];
     const newest = active[active.length - 1];
     const update = {};
-    if (fifo) { update.mrp = fifo.mrp; update.salePrice = fifo.salePrice; }
-    if (newest) { update.purchasePrice = newest.purchasePrice; }
+    if (fifo) { update.mrp = fifo.mrp; update.salePrice = fifo.salePrice ?? fifo.sale_price; }
+    if (newest) { update.purchasePrice = newest.purchasePrice ?? newest.purchase_price; }
     return update;
 }
 // FIFO deduction: reduces batch qtys oldest-first, returns {updatedBatches, priceSync}
 function deductBatchQtyFifo(item, qtyToDeduct) {
     if (!item.batches || !item.batches.length) return { updatedBatches: null, priceSync: {} };
     const batches = JSON.parse(JSON.stringify(item.batches));
-    const active = batches.filter(b => b.isActive !== false).sort((a, b) => (a.receivedDate || '') < (b.receivedDate || '') ? -1 : 1);
+    const active = batches.filter(b => (b.isActive ?? b.is_active) !== false).sort((a, b) => (a.receivedDate || a.received_date || '') < (b.receivedDate || b.received_date || '') ? -1 : 1);
     let remaining = qtyToDeduct;
     for (const b of active) {
         if (remaining <= 0) break;
@@ -4057,26 +4061,28 @@ function renderItemBatches() {
             <th style="padding:4px 6px;text-align:center">Status</th>
             <th style="padding:4px 6px;text-align:center">Actions</th>
         </tr></thead>
-        <tbody>${currentItemBatches.map((b, idx) => `
-            <tr style="border-bottom:1px solid var(--border);opacity:${b.isActive === false ? 0.5 : 1}">
+        <tbody>${currentItemBatches.map((b, idx) => { const bActive = (b.isActive ?? b.is_active) !== false; const bPP = b.purchasePrice ?? b.purchase_price; const bSP = b.salePrice ?? b.sale_price; const bDate = b.receivedDate || b.received_date || '-'; return `
+            <tr style="border-bottom:1px solid var(--border);opacity:${bActive ? 1 : 0.5}">
                 <td style="padding:5px 6px;font-weight:600">${b.mrp}</td>
-                <td style="padding:5px 6px">${b.purchasePrice}</td>
-                <td style="padding:5px 6px">${b.salePrice}</td>
+                <td style="padding:5px 6px">${bPP}</td>
+                <td style="padding:5px 6px">${bSP}</td>
                 <td style="padding:5px 6px;text-align:center">${b.qty || 0}</td>
-                <td style="padding:5px 6px;color:var(--text-muted)">${b.receivedDate || '-'}</td>
+                <td style="padding:5px 6px;color:var(--text-muted)">${bDate}</td>
                 <td style="padding:5px 6px;text-align:center">
-                    <span class="badge ${b.isActive === false ? 'badge-danger' : 'badge-success'}">${b.isActive === false ? 'Inactive' : 'Active'}</span>
+                    <span class="badge ${bActive ? 'badge-success' : 'badge-danger'}">${bActive ? 'Active' : 'Inactive'}</span>
                 </td>
                 <td style="padding:5px 6px;text-align:center">
-                    <button class="btn btn-outline btn-sm" onclick="toggleItemBatchActive(${idx})" style="padding:2px 6px;font-size:0.75rem">${b.isActive === false ? 'Activate' : 'Deactivate'}</button>
+                    <button class="btn btn-outline btn-sm" onclick="toggleItemBatchActive(${idx})" style="padding:2px 6px;font-size:0.75rem">${bActive ? 'Deactivate' : 'Activate'}</button>
                     <button class="btn-icon" onclick="deleteItemBatch(${idx})" style="color:var(--danger);margin-left:4px"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>
                 </td>
-            </tr>`).join('')}
+            </tr>`; }).join('')}
         </tbody></table>`;
 }
 
 function toggleItemBatchActive(idx) {
-    currentItemBatches[idx].isActive = currentItemBatches[idx].isActive === false ? true : false;
+    const cur = currentItemBatches[idx].isActive ?? currentItemBatches[idx].is_active;
+    currentItemBatches[idx].isActive = cur === false ? true : false;
+    delete currentItemBatches[idx].is_active; // normalize to camelCase
     // Resync item prices after changing active status
     const sync = syncItemPricesFromBatches(currentItemBatches);
     if (sync.mrp) { const el = $('f-item-mrp'); if (el) el.value = sync.mrp; }
@@ -4215,7 +4221,9 @@ async function saveItem(id) {
     // Sync item prices using FIFO: salePrice/MRP from oldest active batch with stock, purchasePrice from newest
     if (currentItemBatches.length) {
         const priceSync = syncItemPricesFromBatches(currentItemBatches);
-        Object.assign(data, priceSync);
+        // Only apply defined values — don't overwrite form fields with undefined
+        const validSync = Object.fromEntries(Object.entries(priceSync).filter(([, v]) => v !== undefined && v !== null));
+        Object.assign(data, validSync);
     }
 
     try {

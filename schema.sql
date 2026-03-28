@@ -85,7 +85,9 @@ ALTER TABLE inventory ADD COLUMN IF NOT EXISTS warehouse TEXT DEFAULT 'Main Ware
 ALTER TABLE inventory ADD COLUMN IF NOT EXISTS price_tiers JSONB DEFAULT '[]';
 ALTER TABLE inventory ADD COLUMN IF NOT EXISTS batches JSONB DEFAULT '[]';
 ALTER TABLE inventory ADD COLUMN IF NOT EXISTS photo TEXT;
+ALTER TABLE inventory ADD COLUMN IF NOT EXISTS image_url TEXT;
 ALTER TABLE inventory ADD COLUMN IF NOT EXISTS gst_rate NUMERIC DEFAULT 0;
+ALTER TABLE inventory ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT true;
 
 -- ─────────────────────────────────────────────
 -- 4. SALES ORDERS
