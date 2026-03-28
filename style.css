@@ -443,7 +443,9 @@ table { border-collapse: collapse; width: 100%; }
 .main-content {
     flex: 1;
     margin-left: var(--sidebar-width);
-    min-height: 100vh;
+    height: 100vh;
+    overflow-y: auto;
+    overflow-x: hidden;
     display: flex;
     flex-direction: column;
 }

@@ -3693,9 +3693,10 @@ async function renderInventory() {
     DB.showSkeleton(pageContent, 5);
     window._bulkItems = new Set();
     // Fetch all required data in parallel
-    const [items, salesOrders] = await Promise.all([
+    const [items, salesOrders, categories] = await Promise.all([
         DB.getAll('inventory'),
-        DB.getAll('salesorders')
+        DB.getAll('salesorders'),
+        DB.getAll('categories')
     ]);
 
     updateNavBadges(items);
@@ -3735,6 +3736,15 @@ async function renderInventory() {
             <input type="text" id="inv-search" placeholder="Search items..." oninput="filterInvTableMobile()" style="flex:1;font-size:0.82rem;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input)">
             ${canEdit() ? `<button class="btn btn-primary btn-sm" onclick="openItemModal()" style="white-space:nowrap;padding:8px 12px">+ Add</button>` : ''}
         </div>
+        <div style="display:flex;gap:6px;margin-bottom:10px">
+            <select id="inv-cat-filter" onchange="window.onInvCatChange(); filterInvTableMobile()" style="flex:1;font-size:0.8rem;padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input)">
+                <option value="">All Categories</option>
+                ${categories.map(c => `<option value="${c.name}">${c.name}</option>`).join('')}
+            </select>
+            <select id="inv-subcat-filter" onchange="filterInvTableMobile()" style="flex:1;font-size:0.8rem;padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input)">
+                <option value="">All Sub-Cats</option>
+            </select>
+        </div>
         <div id="inv-list">${renderInvCards(items, reservedMap)}</div>`;
         return;
     }
@@ -3756,15 +3766,23 @@ async function renderInventory() {
                 <div class="dash-pulse-val" style="color:#f59e0b;font-size:0.7rem">${currency(totalValue)}</div>
                 <div class="dash-pulse-lbl">Stock Value</div>
             </div>
-            <div class="dash-pulse-tile${lowStock ? ' dash-pulse-alert' : ''}" onclick="document.getElementById('inv-search')&&(document.getElementById('inv-cat-filter').value='__low__',filterInvTable())" style="--tile-color:${lowStock ? '#ef4444' : '#10b981'};animation-delay:0.16s;cursor:${lowStock ? 'pointer' : 'default'}">
+            <div class="dash-pulse-tile${lowStock ? ' dash-pulse-alert' : ''}" onclick="document.getElementById('inv-search')&&(document.getElementById('inv-search').value='__low__',filterInvTable())" style="--tile-color:${lowStock ? '#ef4444' : '#10b981'};animation-delay:0.16s;cursor:${lowStock ? 'pointer' : 'default'}">
                 <div class="dash-pulse-icon"></div>
                 <div class="dash-pulse-val" style="color:${lowStock ? '#ef4444' : '#10b981'}">${lowStock}</div>
                 <div class="dash-pulse-lbl">Low Stock</div>
             </div>
         </div>
         <div class="section-toolbar">
-            <input class="search-box" id="inv-search" placeholder="Search items..." oninput="filterInvTable()">
+            <input class="search-box" style="width:180px" id="inv-search" placeholder="Search items..." oninput="filterInvTable()">
             <div class="filter-group" style="flex-wrap:wrap">
+                <select id="inv-cat-filter" onchange="window.onInvCatChange(); filterInvTable()" style="min-width:130px">
+                    <option value="">All Categories</option>
+                    ${categories.map(c => `<option value="${c.name}">${c.name}</option>`).join('')}
+                </select>
+                <select id="inv-subcat-filter" onchange="filterInvTable()" style="min-width:120px">
+                    <option value="">All Sub-Cats</option>
+                </select>
+                <div style="width:1px;height:32px;background:var(--border);margin:0 4px"></div>
                 <button class="btn btn-outline" onclick="openColumnPersonalizer('inventory','renderInventory')" style="border-color:var(--accent);color:var(--accent)"><span class="material-symbols-outlined" style="font-size:1.1rem">view_column</span> Columns</button>
                 ${canEdit() ? `<button class="btn btn-primary" onclick="openItemModal()"><span class="material-symbols-outlined" style="font-size:1.1rem">add</span> Add Item</button>
                 <button class="btn btn-outline" style="border-color:var(--primary);color:var(--primary)" onclick="showReport('indent')"><span class="material-symbols-outlined" style="font-size:1.1rem">description</span> Indent</button>
@@ -3833,23 +3851,54 @@ function renderInvRows(items, reservedMap = {}, abcMap = {}) {
         return `<tr><td style="width:36px;text-align:center"><input type="checkbox" class="bulk-chk-item" data-id="${i.id}" onchange="toggleBulkItem('${i.id}',this)" style="width:16px;height:16px;cursor:pointer" ${window._bulkItems && window._bulkItems.has(i.id) ? 'checked' : ''}></td>${cols.map(c => cellMap[c.key] || '').join('')}</tr>`;
     }).join('');
 }
+window.onInvCatChange = function() {
+    const catName = ($('inv-cat-filter') || {}).value;
+    const subSel = $('inv-subcat-filter');
+    if (!subSel) return;
+    subSel.innerHTML = '<option value="">All Sub-Cats</option>';
+    if (catName) {
+        const categories = DB.get('db_categories') || [];
+        const catObj = categories.find(c => c.name === catName);
+        if (catObj && catObj.subCategories) {
+            subSel.innerHTML += catObj.subCategories.map(s => `<option value="${s}">${s}</option>`).join('');
+        }
+    }
+};
+
 function filterInvTable() {
     const s = ($('inv-search') || {}).value?.toLowerCase() || '';
+    const cat = ($('inv-cat-filter') || {}).value || '';
+    const sub = ($('inv-subcat-filter') || {}).value || '';
     let items = DB.get('db_inventory') || [];
-    if (s && s !== '__low__') items = items.filter(i => i.name.toLowerCase().includes(s) || (i.hsn || '').toLowerCase().includes(s) || (i.itemCode || '').toLowerCase().includes(s) || (i.category || '').toLowerCase().includes(s));
+    
+    if (s && s === '__low__') items = items.filter(i => (i.stock - (window._inventoryReservedMap?.[i.id] || 0)) <= (i.lowStockAlert || 5));
+    else if (s) items = items.filter(i => i.name.toLowerCase().includes(s) || (i.hsn || '').toLowerCase().includes(s) || (i.itemCode || '').toLowerCase().includes(s) || (i.category || '').toLowerCase().includes(s));
+    
+    if (cat) items = items.filter(i => i.category === cat);
+    if (sub) items = items.filter(i => i.subCategory === sub);
+    
     if ($('inv-list')) {
         $('inv-list').innerHTML = renderInvCards(items, window._inventoryReservedMap || {});
     } else if ($('inv-tbody')) {
         $('inv-tbody').innerHTML = renderInvRows(items, window._inventoryReservedMap || {}, getABCAnalysis(items));
     }
 }
+
 function filterInvTableMobile(preset) {
     const searchEl = $('inv-search');
     if (preset === '__low__' && searchEl) { searchEl.value = ''; }
+    
+    const cat = ($('inv-cat-filter') || {}).value || '';
+    const sub = ($('inv-subcat-filter') || {}).value || '';
     let items = DB.get('db_inventory') || [];
     const s = searchEl ? searchEl.value.toLowerCase() : '';
+    
     if (s) items = items.filter(i => i.name.toLowerCase().includes(s) || (i.itemCode || '').toLowerCase().includes(s) || (i.category || '').toLowerCase().includes(s));
     if (preset === '__low__') items = items.filter(i => (i.stock - (window._inventoryReservedMap?.[i.id] || 0)) <= (i.lowStockAlert || 5));
+    
+    if (cat) items = items.filter(i => i.category === cat);
+    if (sub) items = items.filter(i => i.subCategory === sub);
+    
     if ($('inv-list')) $('inv-list').innerHTML = renderInvCards(items, window._inventoryReservedMap || {});
 }
 let currentItemTiers = [];
