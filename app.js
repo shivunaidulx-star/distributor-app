@@ -382,7 +382,9 @@ const DB = {
         const { data, error } = await supabaseClient.from(actualTable).update(this._clean(this._toSnake(row))).eq('id', id).select();
         if (error) { console.error(`Error updating ${actualTable}:`, error.message, '| sent:', JSON.stringify(this._toSnake(row))); throw error; }
         // Immediately patch the specific item in cache so UI reflects changes without waiting for refreshTables
-        const updatedItem = data && data.length > 0 ? this._toCamel(data[0]) : { id, ...this._toCamel(row) };
+        // NOTE: Do NOT call _toCamel(row) on the fallback — row is already camelCase, and _toCamel has a skip-list
+        // that drops fields like secUom/minStock (legacy hotfix), which would silently lose those values in cache.
+        const updatedItem = data && data.length > 0 ? this._toCamel(data[0]) : { ...row, id };
         if (this.cache[actualTable]) {
             const idx = this.cache[actualTable].findIndex(x => x.id === id);
             if (idx >= 0) this.cache[actualTable][idx] = { ...this.cache[actualTable][idx], ...updatedItem };
