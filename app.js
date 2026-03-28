@@ -300,6 +300,9 @@ const DB = {
         if (Array.isArray(obj)) return obj.map(v => this._toCamel(v));
         const res = {};
         for (const key in obj) {
+            // Hotfix: Ignore legacy/rogue camelCase columns in Supabase that overwrite active snake_case columns with nulls
+            if (['minStock', 'secUom', 'conversionFactor'].includes(key)) continue;
+
             const camel = key.replace(/([-_][a-z])/ig, ($1) => $1.toUpperCase().replace('-', '').replace('_', ''));
             let val = obj[key];
 
