@@ -5538,8 +5538,6 @@ async function openSalesOrderModal() {
         DB.getAll('categories')
     ]);
     const customers = parties.filter(p => p.type === 'Customer');
-    const orderNo = await nextNumber('SO-');
-
     pageContent.innerHTML = `
     <div style="max-width:680px;margin:0 auto;padding-bottom:100px">
         <!-- Header -->
@@ -5553,7 +5551,7 @@ async function openSalesOrderModal() {
             <div class="card-body">
                 <div style="font-size:0.75rem;font-weight:700;text-transform:uppercase;color:var(--text-muted);margin-bottom:12px;letter-spacing:0.05em">Order Details</div>
                 <div class="form-row" style="grid-template-columns:1fr 1fr">
-                    <div class="form-group"><label>Order #</label><input id="f-so-no" value="${orderNo}" readonly></div>
+                    <div class="form-group"><label>Order #</label><input id="f-so-no" value="Auto" readonly style="color:var(--text-muted)"></div>
                     <div class="form-group"><label>Date</label><input type="date" id="f-so-date" value="${today()}"></div>
                 </div>
                 <div class="form-row" style="grid-template-columns:1fr 1fr">
@@ -6144,14 +6142,16 @@ async function saveSalesOrder(id) {
         }
     }
 
+    let savedOrderNo = $('f-so-no').value;
     try {
         if (editId) {
             await DB.update('salesorders', editId, data);
             showToast(`Order updated!`, 'success');
         } else {
+            savedOrderNo = await nextNumber('SO-');
             const order = {
                 ...data,
-                orderNo: $('f-so-no').value,
+                orderNo: savedOrderNo,
                 status: 'pending',
                 createdBy: currentUser.name,
                 packed: false
@@ -6160,8 +6160,8 @@ async function saveSalesOrder(id) {
 
             showToast(`Order submitted!`, 'success');
         }
-        
-        await logSalesmanAction(editId ? 'Edited Order' : 'Created Order', $('f-so-no').value);
+
+        await logSalesmanAction(editId ? 'Edited Order' : 'Created Order', savedOrderNo);
 
         const andNew = window._saveAndNew; window._saveAndNew = false;
         closeModal();
@@ -6460,10 +6460,9 @@ async function duplicateSalesOrder(id) {
     });
 
     const customers = parties.filter(p => p.type === 'Customer');
-    const orderNo = await nextNumber('SO-');
 
     openModal('Duplicate Sales Order', `
-        <div class="form-row" style="grid-template-columns:1fr 1fr"><div class="form-group"><label>Order #</label><input id="f-so-no" value="${orderNo}"></div><div class="form-group"><label>Date</label><input type="date" id="f-so-date" value="${today()}"></div></div>
+        <div class="form-row" style="grid-template-columns:1fr 1fr"><div class="form-group"><label>Order #</label><input id="f-so-no" value="Auto" style="color:var(--text-muted)"></div><div class="form-group"><label>Date</label><input type="date" id="f-so-date" value="${today()}"></div></div>
         <div class="form-row" style="grid-template-columns:1fr 1fr"><div class="form-group"><label>Expected Delivery</label><input type="date" id="f-so-delivery" value="${orig.expectedDeliveryDate || ''}"></div><div class="form-group"><label>Priority</label><select id="f-so-priority"><option value="Normal" ${(orig.priority || 'Normal') === 'Normal' ? 'selected' : ''}>Normal</option><option value="Urgent" ${orig.priority === 'Urgent' ? 'selected' : ''}> Urgent</option></select></div></div>
         <div class="form-group"><label>Customer *</label>
             <input id="f-so-party" value="${orig.partyName}" data-selected-id="${orig.partyId}" placeholder="Type customer name or mobile...">
@@ -6735,11 +6734,10 @@ async function cancelPurchaseInvoice(id) {
 async function openDirectPurchaseInvoiceModal() {
     const [parties, inv] = await Promise.all([DB.getAll('parties'), DB.getAll('inventory')]);
     const suppliers = parties.filter(p => p.type === 'Supplier');
-    const invNo = await nextNumber('PINV-');
     poItems = [];
     openModal('Direct Purchase Invoice', `
         <div class="form-row">
-            <div class="form-group"><label>Invoice #</label><input id="f-di-no" value="${invNo}" readonly></div>
+            <div class="form-group"><label>Invoice #</label><input id="f-di-no" value="Auto" readonly style="color:var(--text-muted)"></div>
             <div class="form-group"><label>Date</label><input type="date" id="f-di-date" value="${today()}"></div>
         </div>
         <div class="form-group"><label>Supplier *</label>
@@ -6804,7 +6802,7 @@ async function saveDirectPurchaseInvoice() {
         const parties = await DB.getAll('parties');
         const party = parties.find(p => String(p.id) === String(partyId));
         if (!party) return alert('Supplier not found. Please re-select.');
-        const invNo = $('f-di-no').value;
+        const invNo = await nextNumber('PINV-');
         const invDate = $('f-di-date').value;
         const notes = ($('f-di-notes') || {}).value || '';
         const total = poItems.reduce((s, l) => s + l.amount, 0);
@@ -6848,10 +6846,8 @@ async function openPurchaseOrderModal() {
     poItems = [];
     const [parties, inv] = await Promise.all([DB.getAll('parties'), DB.getAll('inventory')]);
     const suppliers = parties.filter(p => p.type === 'Supplier');
-    const poNo = await nextNumber('PO-');
-
     openModal('Create Purchase Order', `
-        <div class="form-row"><div class="form-group"><label>PO #</label><input id="f-po-no" value="${poNo}" readonly></div><div class="form-group"><label>Date</label><input type="date" id="f-po-date" value="${today()}"></div></div>
+        <div class="form-row"><div class="form-group"><label>PO #</label><input id="f-po-no" value="Auto" readonly style="color:var(--text-muted)"></div><div class="form-group"><label>Date</label><input type="date" id="f-po-date" value="${today()}"></div></div>
         <div class="form-group"><label>Supplier *</label>
             <input id="f-po-party" placeholder="Type to search supplier..." autocomplete="off">
             <input id="f-po-party-id" type="hidden">
@@ -6926,7 +6922,7 @@ async function savePurchaseOrder() {
     if (!party) return alert('Supplier not found. Please re-select from the dropdown.');
 
     const po = {
-        poNo: $('f-po-no').value,
+        poNo: await nextNumber('PO-'),
         date: $('f-po-date').value,
         partyId,
         partyName: party.name,
@@ -7409,11 +7405,8 @@ async function openInvoiceModal(type = 'sale', preserveItems = false) {
         DB.getAll('categories')
     ]);
     const filteredParties = parties.filter(p => p.type === ptype);
-    const invNo = await nextNumber(type === 'sale' ? 'INV-' : 'PUR-');
-
-    const vyaparNo = await buildVyaparInvoiceNo();
     openModal(type === 'sale' ? 'Create Sale Invoice' : 'Create Purchase / Stock In', `
-        <div class="form-row" style="grid-template-columns:repeat(auto-fit, minmax(130px, 1fr))"><div class="form-group"><label>Invoice #</label><input id="f-inv-no" value="${invNo}"></div><div class="form-group"><label>Date</label><input type="date" id="f-inv-date" value="${today()}" onchange="onInvDateChange()"></div><div class="form-group"><label>Due Date <span style="font-size:0.7rem;color:var(--text-muted)">auto</span></label><input type="date" id="f-inv-due-date" placeholder="Select party..."></div></div>
+        <div class="form-row" style="grid-template-columns:repeat(auto-fit, minmax(130px, 1fr))"><div class="form-group"><label>Invoice #</label><input id="f-inv-no" value="Auto" placeholder="Auto-assigned" style="color:var(--text-muted)"></div><div class="form-group"><label>Date</label><input type="date" id="f-inv-date" value="${today()}" onchange="onInvDateChange()"></div><div class="form-group"><label>Due Date <span style="font-size:0.7rem;color:var(--text-muted)">auto</span></label><input type="date" id="f-inv-due-date" placeholder="Select party..."></div></div>
         <div class="form-row" style="grid-template-columns:1fr 1fr"><div class="form-group"><label>Delivery Date</label><input type="date" id="f-inv-delivery-date" value="${today()}" onchange="this.dataset.manuallySet='1'"></div><div class="form-group"><label>Box / Crate No.</label><input type="text" id="f-inv-box-no" placeholder="e.g. B-001, C-05"></div></div>
         <input type="hidden" id="f-inv-from-order" value="">
         <input type="hidden" id="f-inv-type" value="${type}">
@@ -7421,7 +7414,7 @@ async function openInvoiceModal(type = 'sale', preserveItems = false) {
         <div class="form-group">
             <label>Vyapar Invoice No. <span style="color:var(--error,#ef4444)">*</span></label>
             <div class="vyapar-inv-row">
-                <input id="f-vyapar-inv-no" value="${escapeHtml(vyaparNo)}" placeholder="e.g. PT-NS-1">
+                <input id="f-vyapar-inv-no" value="Auto" placeholder="Auto-assigned" style="color:var(--text-muted)">
             </div>
         </div>` : ''}
         <div class="form-group"><label>${ptype} *</label>
@@ -8078,8 +8071,14 @@ async function saveInvoice(id) {
     let total = +(sub + roundoff - discAmt).toFixed(2);
     total = Math.max(0, total);
 
-    const invNo = $('f-inv-no').value.trim();
-    const vyaparInvNo = invType === 'sale' ? ($('f-vyapar-inv-no')?.value.trim() || '') : '';
+    const rawInvNo = $('f-inv-no').value.trim();
+    const invNo = (!rawInvNo || rawInvNo === 'Auto')
+        ? await nextNumber(invType === 'sale' ? 'INV-' : 'PUR-')
+        : rawInvNo;
+    const rawVyaparNo = invType === 'sale' ? ($('f-vyapar-inv-no')?.value.trim() || '') : '';
+    const vyaparInvNo = (invType === 'sale' && (!rawVyaparNo || rawVyaparNo === 'Auto'))
+        ? await nextNumber('PT-NS-')
+        : rawVyaparNo;
     if (invType === 'sale' && !vyaparInvNo) { endSave(); return alert('Vyapar Invoice No. is mandatory.'); }
 
     const fromOrderId = ($('f-inv-from-order') || {}).value || '';
@@ -11865,14 +11864,18 @@ async function renderPackOrderPage() {
 
         // MRP Logic
         const activeBatches = item ? getActiveBatches(item) : [];
-        let mrpHtml = '';
-        if (activeBatches.length > 0) {
-            mrpHtml = `
-                            <select id="pack-mrp-${idx}" onchange="packMrpSelected(${idx})" class="pack-mrp-select" style="min-width:140px">
-                                <option value=""> Confirm MRP</option>
-                                ${activeBatches.map(b => `<option value="${b.id}" data-saleprice="${b.salePrice}" data-mrp="${b.mrp}">MRP ${b.mrp} (Qty:${b.qty})</option>`).join('')}
-                            </select>`;
-        }
+        let mrpHtml = `
+                <div id="mrp-wrapper-${idx}" style="display:flex;align-items:center;gap:4px">
+                    ${activeBatches.length > 0 ? `
+                    <select id="pack-mrp-${idx}" onchange="packMrpSelected(${idx})" class="pack-mrp-select" style="min-width:140px;flex:1">
+                        <option value=""> Confirm MRP</option>
+                        ${activeBatches.map(b => `<option value="${b.id}" data-saleprice="${b.salePrice}" data-mrp="${b.mrp}">MRP ${b.mrp} (Qty:${b.qty})</option>`).join('')}
+                    </select>
+                    <button class="btn-icon" onclick="packEditMrp(${idx}, '${li.itemId}')" title="Manual Entry" style="color:var(--primary);padding:4px"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button>
+                    ` : `
+                    <input type="number" id="pack-mrp-${idx}" class="form-control pack-mrp-input" placeholder="Enter MRP *(req)" style="min-width:140px;flex:1" oninput="packMrpInputChanged(${idx})">
+                    `}
+                </div>`;
 
         return `
                         <div class="pack-card" id="pack-row-${idx}">
@@ -12115,13 +12118,57 @@ function packLineChanged(idx, itemId, totalItemsCount) {
 
 function packMrpSelected(idx) {
     const sel = $(`pack-mrp-${idx}`);
-    if (!sel || !sel.value) return;
+    if (!sel) return;
+    if (!sel.value) {
+        sel.style.borderColor = '';
+        sel.style.color = '';
+        return;
+    }
     const priceInput = $(`pack-price-${idx}`);
     const selectedOption = sel.options[sel.selectedIndex];
     if (priceInput && selectedOption) priceInput.value = selectedOption.dataset.saleprice || 0;
     // Visual feedback
     sel.style.borderColor = 'var(--success)';
     sel.style.color = 'var(--success)';
+    checkAllPicked(document.querySelectorAll('[id^="pack-qty-"]').length);
+}
+
+function packEditMrp(idx, itemId) {
+    const container = $(`mrp-wrapper-${idx}`);
+    if (!container) return;
+    container.innerHTML = `
+        <input type="number" id="pack-mrp-${idx}" class="form-control pack-mrp-input" placeholder="Enter MRP *(req)" style="min-width:140px;flex:1" oninput="packMrpInputChanged(${idx})">
+        <button class="btn-icon" onclick="packRevertMrp(${idx}, '${itemId}')" title="Revert to Select" style="color:var(--text-muted);padding:4px"><span class="material-symbols-outlined" style="font-size:1.1rem">undo</span></button>`;
+    checkAllPicked(document.querySelectorAll('[id^="pack-qty-"]').length);
+}
+
+function packRevertMrp(idx, itemId) {
+    const inv = DB.get('db_inventory') || [];
+    const item = inv.find(x => x.id === itemId);
+    const activeBatches = item ? getActiveBatches(item) : [];
+    const container = $(`mrp-wrapper-${idx}`);
+    if (!container) return;
+    if (activeBatches.length > 0) {
+        container.innerHTML = `
+            <select id="pack-mrp-${idx}" onchange="packMrpSelected(${idx})" class="pack-mrp-select" style="min-width:140px;flex:1">
+                <option value=""> Confirm MRP</option>
+                ${activeBatches.map(b => `<option value="${b.id}" data-saleprice="${b.salePrice}" data-mrp="${b.mrp}">MRP ${b.mrp} (Qty:${b.qty})</option>`).join('')}
+            </select>
+            <button class="btn-icon" onclick="packEditMrp(${idx}, '${itemId}')" title="Manual Entry" style="color:var(--primary);padding:4px"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button>`;
+    }
+    checkAllPicked(document.querySelectorAll('[id^="pack-qty-"]').length);
+}
+
+function packMrpInputChanged(idx) {
+    const inp = $(`pack-mrp-${idx}`);
+    if (!inp) return;
+    if (inp.value) {
+        inp.style.borderColor = 'var(--success)';
+        inp.dataset.mrp = inp.value;
+    } else {
+        inp.style.borderColor = '';
+        delete inp.dataset.mrp;
+    }
     checkAllPicked(document.querySelectorAll('[id^="pack-qty-"]').length);
 }
 
@@ -12265,7 +12312,10 @@ function completePacking(orderId) {
                 }
             } else if (mrpSel.tagName === 'INPUT') {
                 batchId = mrpSel.value;
-                batchMrp = mrpSel.dataset.mrp;
+                batchMrp = mrpSel.dataset.mrp || mrpSel.value;
+                if (!batchMrp && packedQty > 0) {
+                    mrpPending = true;
+                }
             }
         }
 
@@ -18598,15 +18648,13 @@ async function createOrderFromCatalog() {
     const allParties = await DB.getAll('parties');
     const customers = allParties.filter(p => p.type === 'Customer');
     const categories = await DB.getAll('categories');
-    const orderNo = await nextNumber('SO-');
-
     // Render as a full dedicated page instead of a popup
     pageTitle.textContent = 'New Sales Order';
     pageContent.innerHTML = `
         <div class="card">
             <div class="card-body">
                 <div class="form-row" style="grid-template-columns:1fr 1fr">
-                    <div class="form-group"><label>Order #</label><input id="f-so-no" value="${orderNo}" readonly></div>
+                    <div class="form-group"><label>Order #</label><input id="f-so-no" value="Auto" readonly style="color:var(--text-muted)"></div>
                     <div class="form-group"><label>Date</label><input type="date" id="f-so-date" value="${today()}"></div>
                 </div>
                 <div class="form-row" style="grid-template-columns:1fr 1fr">
