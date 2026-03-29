@@ -1662,7 +1662,10 @@ function buildPartySearchList(parties) {
         code: p.partyCode || '',
         stockText: p.phone || '',
         // Enhanced search text to include the Code/ID
-        searchText: `${p.name} ${p.phone || ''} ${p.partyCode || ''}`.toLowerCase()
+        searchText: `${p.name} ${p.phone || ''} ${p.partyCode || ''}`.toLowerCase(),
+        paymentTerms: p.paymentTerms || '',
+        creditLimit: p.creditLimit || 0,
+        balance: p.balance || 0
     }));
 }
 
@@ -2697,6 +2700,7 @@ async function filterPartyTable() {
     if (_partyTab === 'supplier') parties = parties.filter(p => p.type === 'Supplier');
     if (search) parties = parties.filter(p =>
         (p.name || '').toLowerCase().includes(search) ||
+        (p.partyCode || '').toLowerCase().includes(search) ||
         (p.phone || '').includes(search) ||
         (p.city || '').toLowerCase().includes(search) ||
         (p.postCode || '').includes(search) ||
@@ -6239,7 +6243,12 @@ async function editSalesOrder(id) {
 
     soItems = orig.items.map(li => {
         const item = inv.find(x => x.id === li.itemId);
-        const latestListed = item ? item.salePrice : li.listedPrice || li.price;
+        let latestListed = item ? item.salePrice : li.listedPrice || li.price;
+        const activeUnit = li.unit || (item ? item.unit : 'Pcs');
+        if (item && activeUnit !== item.unit && item.secUom && activeUnit === item.secUom) {
+            const secRatio = +(item.secUomRatio) || 0;
+            if (secRatio > 0) latestListed = latestListed / secRatio;
+        }
         const discountAmt = li.discountAmt || 0;
         const discountPct = li.discountPct || 0;
         const amount = +((li.qty * li.price) - discountAmt).toFixed(2);
@@ -6435,7 +6444,12 @@ async function duplicateSalesOrder(id) {
 
     soItems = orig.items.map(li => {
         const item = inventory.find(x => x.id === li.itemId);
-        const latestPrice = item ? item.salePrice : li.price;
+        let latestPrice = item ? item.salePrice : li.price;
+        const activeUnit = li.unit || (item ? item.unit : 'Pcs');
+        if (item && activeUnit !== item.unit && item.secUom && activeUnit === item.secUom) {
+            const secRatio = +(item.secUomRatio) || 0;
+            if (secRatio > 0) latestPrice = latestPrice / secRatio;
+        }
         const discountAmt = li.discountAmt || 0;
         const discountPct = li.discountPct || 0;
         const amount = +((li.qty * latestPrice) - discountAmt).toFixed(2);
@@ -8144,7 +8158,7 @@ async function saveInvoice(id) {
         window._saveAndNew = false;
         window._printAndNew = false;
 
-        await DB.refreshTables(['invoices', 'inventory', 'parties', 'sales_orders']);
+        await DB.refreshTables(['invoices', 'inventory', 'parties', 'sales_orders', 'party_ledger', 'stock_ledger', 'expenses']);
         closeModal();
         fromOrderId ? await renderPacking() : await renderInvoices();
         showToast(`Invoice ${invNo} saved!`, 'success');
@@ -11866,7 +11880,12 @@ async function renderPackOrderPage() {
         const activeBatches = item ? getActiveBatches(item) : [];
         let mrpHtml = `
                 <div id="mrp-wrapper-${idx}" style="display:flex;align-items:center;gap:4px">
-                    ${activeBatches.length > 0 ? `
+                    ${activeBatches.length === 1 ? `
+                    <select id="pack-mrp-${idx}" onchange="packMrpSelected(${idx})" class="pack-mrp-select" style="min-width:140px;flex:1;border-color:var(--success);color:var(--success)">
+                        <option value="${activeBatches[0].id}" data-saleprice="${activeBatches[0].salePrice}" data-mrp="${activeBatches[0].mrp}" selected>MRP ${activeBatches[0].mrp}</option>
+                    </select>
+                    <button class="btn-icon" onclick="packEditMrp(${idx}, '${li.itemId}')" title="Manual Entry" style="color:var(--primary);padding:4px"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button>
+                    ` : activeBatches.length > 1 ? `
                     <select id="pack-mrp-${idx}" onchange="packMrpSelected(${idx})" class="pack-mrp-select" style="min-width:140px;flex:1">
                         <option value=""> Confirm MRP</option>
                         ${activeBatches.map(b => `<option value="${b.id}" data-saleprice="${b.salePrice}" data-mrp="${b.mrp}">MRP ${b.mrp} (Qty:${b.qty})</option>`).join('')}
@@ -12513,20 +12532,36 @@ async function generateInvoiceFromPacked(orderId) {
         const [parties, inv] = await Promise.all([DB.getAll('parties'), DB.getAll('inventory')]);
 
         // Populate global items
-        invoiceItems = packedItems.map(li => ({
-            itemId: li.itemId,
-            name: li.name,
-            qty: li.packedQty || li.qty,
-            price: li.price || li.salePrice || 0,
-            listedPrice: li.price || li.salePrice || 0,
-            discountAmt: li.discountAmt || 0,
-            discountPct: li.discountPct || 0,
-            amount: li.amount,
-            unit: li.uom || li.unit || 'Pcs',
-            primaryQty: li.packedQty || li.qty
-        }));
+        invoiceItems = packedItems.map(li => {
+            const invItem = inv.find(i => i.id === li.itemId);
+            const gstRate = +(li.gstRate || (invItem ? invItem.gstRate || 0 : 0));
+            const amount = li.amount || ((li.packedQty || li.qty) * (li.price || li.salePrice || 0));
+            const baseAmount = gstRate > 0 ? +(amount / (1 + gstRate / 100)).toFixed(2) : amount;
+            const taxAmount = +(amount - baseAmount).toFixed(2);
+            return {
+                itemId: li.itemId,
+                name: li.name,
+                qty: li.packedQty || li.qty,
+                price: li.price || li.salePrice || 0,
+                listedPrice: li.price || li.salePrice || 0,
+                discountAmt: li.discountAmt || 0,
+                discountPct: li.discountPct || 0,
+                amount,
+                unit: li.uom || li.unit || 'Pcs',
+                primaryQty: li.packedQty || li.qty,
+                gstRate, baseAmount, taxAmount
+            };
+        });
 
         await openInvoiceModal('sale', true);
+
+        // Sync GST field from per-item rates
+        const activeRates = [...new Set(invoiceItems.map(li => li.gstRate || 0).filter(r => r > 0))];
+        const gstFld = $('f-inv-gst');
+        if (gstFld) {
+            if (activeRates.length === 1) gstFld.value = activeRates[0];
+            else if (activeRates.length === 0) gstFld.value = 0;
+        }
 
         // Link the Party
         const party = parties.find(p => p.id === o.partyId);
@@ -13178,12 +13213,14 @@ async function printDeliverySlip(id) {
 
 
 async function viewDeliveryDetail(id) {
-    const [dels, allParties, inventory] = await Promise.all([
+    const [dels, allParties, inventory, , allUsers] = await Promise.all([
         DB.getAll('delivery'),
         DB.getAll('parties'),
         DB.getAll('inventory'),
-        DB.getAll('salesorders')  // ensure cache is populated for package fallback
+        DB.getAll('salesorders'),  // ensure cache is populated for package fallback
+        DB.getAll('users')
     ]);
+    const adminUsers = allUsers.filter(u => u.role === 'Admin' || u.role === 'Manager');
     const d = dels.find(x => x.id === id);
     if (!d) return alert('Delivery record not found.');
     const party = allParties.find(p => p.id === d.partyId);
@@ -13302,6 +13339,28 @@ async function viewDeliveryDetail(id) {
             <div><span style="color:var(--text-muted);font-size:0.75rem">Dispatched</span><br><strong>${d.dispatchedAt || '-'}</strong></div>
             ${d.deliveredAt ? `<div><span style="color:var(--text-muted);font-size:0.75rem">Delivered</span><br><strong style="color:var(--success)">${d.deliveredAt}</strong></div>` : ''}
             ${d.undeliveredReason ? `<div style="grid-column:span 2"><span style="color:var(--text-muted);font-size:0.75rem">Return Reason</span><br><strong style="color:var(--danger)">${escapeHtml(d.undeliveredReason)}</strong></div>` : ''}
+            ${d.codCollected
+                ? `<div style="grid-column:span 2"><span class="badge badge-success" style="font-size:0.72rem">💵 Cash Received${d.cashReceivedBy ? ` — by ${escapeHtml(d.cashReceivedBy)}` : ' at Delivery'}${d.cashReceivedAt ? ` on ${d.cashReceivedAt}` : ''}</span></div>`
+                : ''}
+            ${d.adminApprovedBy
+                ? `<div style="grid-column:span 2;background:rgba(245,158,11,0.1);border:1px solid var(--warning);border-radius:6px;padding:8px 10px">
+                    <span style="font-size:0.72rem;color:var(--warning);font-weight:700">⚠️ Admin Override — Payment Pending</span><br>
+                    <span style="font-size:0.8rem">Approved by <strong>${escapeHtml(d.adminApprovedBy)}</strong></span>
+                    ${!d.codCollected && canEdit() ? `
+                    <hr style="border-color:rgba(245,158,11,0.25);margin:8px 0">
+                    <div style="font-size:0.75rem;font-weight:700;color:#92400e;margin-bottom:6px">Mark Cash Received</div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px">
+                        <select id="del-cashrcv-admin" style="padding:5px 7px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text-primary);font-size:0.82rem">
+                            <option value="">— Select Admin —</option>
+                            ${adminUsers.map(u => `<option value="${escapeHtml(u.name)}">${escapeHtml(u.name)} (${u.role})</option>`).join('')}
+                        </select>
+                        <input type="password" id="del-cashrcv-pin" placeholder="Admin PIN" style="padding:5px 7px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text-primary);font-size:0.82rem">
+                    </div>
+                    <button class="btn btn-sm" onclick="adminMarkCashReceived('${d.id}')" style="background:var(--success);color:#fff;border:none;width:100%;font-weight:600">✓ Confirm Cash Received</button>
+                    <div id="cashrcv-status" style="display:none;margin-top:6px;font-size:0.8rem;font-weight:600;color:var(--success)"></div>
+                    ` : ''}
+                  </div>`
+                : ''}
         </div>
         ${pkgHtml}
         ${itemsHtml}
@@ -13312,17 +13371,51 @@ async function viewDeliveryDetail(id) {
         </div>`);
 }
 
+async function adminMarkCashReceived(deliveryId) {
+    const adminName = ($('del-cashrcv-admin') || {}).value;
+    const pin = ($('del-cashrcv-pin') || {}).value?.trim();
+    const statusEl = $('cashrcv-status');
+    const pinEl = $('del-cashrcv-pin');
+    if (!adminName) return alert('Select an Admin or Manager.');
+    if (!pin) return alert('Enter the admin PIN.');
+    const users = await DB.getAll('users');
+    const adminUser = users.find(u => u.name === adminName && (u.role === 'Admin' || u.role === 'Manager'));
+    if (!adminUser || adminUser.pin !== pin) {
+        if (pinEl) { pinEl.style.borderColor = 'var(--danger)'; pinEl.value = ''; }
+        return alert('Incorrect PIN. Please try again.');
+    }
+    await DB.update('delivery', deliveryId, {
+        codCollected: true,
+        cashReceivedBy: adminName,
+        cashReceivedAt: today()
+    });
+    if (statusEl) { statusEl.style.display = 'block'; statusEl.textContent = `✅ Cash received confirmed by ${adminName}`; }
+    if (pinEl) pinEl.style.borderColor = 'var(--success)';
+    document.querySelectorAll('#del-cashrcv-admin, #del-cashrcv-pin, [onclick*="adminMarkCashReceived"]').forEach(el => { el.disabled = true; el.style.opacity = '0.5'; });
+    showToast(`💵 Cash received confirmed by ${adminName}`, 'success');
+    try {
+        await supabaseClient.from('activity_logs').insert({
+            action: 'COD_CASH_RECEIVED',
+            details: `Delivery ${deliveryId} — cash received confirmed by ${adminName}`,
+            user_name: currentUser ? currentUser.name : 'Unknown',
+            created_at: new Date().toISOString()
+        });
+    } catch (e) { /* non-blocking */ }
+}
+
 async function markDelivered(id) {
     const dels = DB.cache['delivery'] || [];
     const d = dels.find(x => x.id === id);
     if (!d) return;
 
     // Check COD — party paymentTerms === 'COD'  OR  invoice dueDate ≤ today (due at/before delivery)
-    const [parties, invoices, payments] = await Promise.all([
+    const [parties, invoices, payments, allUsers] = await Promise.all([
         DB.cache['parties'] ? Promise.resolve(DB.cache['parties']) : DB.getAll('parties'),
         DB.cache['invoices'] ? Promise.resolve(DB.cache['invoices']) : DB.getAll('invoices'),
-        DB.cache['payments'] ? Promise.resolve(DB.cache['payments']) : DB.getAll('payments')
+        DB.cache['payments'] ? Promise.resolve(DB.cache['payments']) : DB.getAll('payments'),
+        DB.getAll('users')
     ]);
+    const adminUsers = allUsers.filter(u => u.role === 'Admin' || u.role === 'Manager');
     const party = parties.find(p => String(p.id) === String(d.partyId));
     const inv = d.invoiceNo ? invoices.find(i => i.invoiceNo === d.invoiceNo) : null;
 
@@ -13370,18 +13463,38 @@ async function markDelivered(id) {
         } else if (!co.upi) {
             qrImgHtml = `<div style="font-size:0.82rem;color:var(--warning);background:rgba(245,158,11,0.1);padding:8px;border-radius:6px;margin-top:8px">Set UPI ID in Company Setup to show QR code</div>`;
         }
+        const adminOptions = adminUsers.map(u => `<option value="${escapeHtml(u.name)}" data-userid="${escapeHtml(u.userId || u.name)}">${escapeHtml(u.name)} (${u.role})</option>`).join('');
         codHtml = `
         <div style="background:#fff7ed;border:2px solid #f97316;border-radius:10px;padding:14px;margin-bottom:16px">
-            <div style="font-size:1rem;font-weight:700;color:#ea580c;margin-bottom:4px">Collect Payment Before Delivering</div>
+            <div style="font-size:1rem;font-weight:700;color:#ea580c;margin-bottom:4px">⚠️ Collect Payment Before Delivering</div>
             <div style="font-size:0.75rem;color:#ea580c;margin-bottom:10px;font-weight:600">${codReason}</div>
             <div style="font-size:0.9rem;margin-bottom:12px">Balance Due: <strong style="font-size:1.15rem;color:var(--danger)">${currency(amt)}</strong> from <strong>${escapeHtml(d.partyName)}</strong></div>
-            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:4px">
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
                 <button class="btn btn-outline btn-sm" onclick="toggleDelQr()" id="del-qr-btn" style="border-color:#f97316;color:#ea580c">📱 Show UPI QR</button>
-                <button class="btn btn-sm" onclick="toggleDelCashCollected()" id="del-cash-btn" style="background:#fff;border:1.5px solid var(--border);color:var(--text-primary)">Mark Cash Collected</button>
+                <button class="btn btn-sm" onclick="toggleDelCashCollected()" id="del-cash-btn" style="background:#fff;border:1.5px solid var(--border);color:var(--text-primary)">💵 Mark Cash Collected</button>
             </div>
             <div id="del-qr-box" style="display:none;text-align:center;margin-top:8px">${qrImgHtml}</div>
+            <hr style="border-color:rgba(249,115,22,0.25);margin:10px 0">
+            <div style="font-size:0.78rem;font-weight:700;color:#92400e;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.04em">🔐 Admin Override — Deliver Without Payment</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+                <div>
+                    <label style="font-size:0.72rem;color:var(--text-muted);font-weight:600">Admin / Manager</label>
+                    <select id="del-admin-select" style="width:100%;padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text-primary);font-size:0.85rem">
+                        <option value="">— Select —</option>
+                        ${adminOptions}
+                    </select>
+                </div>
+                <div>
+                    <label style="font-size:0.72rem;color:var(--text-muted);font-weight:600">Admin PIN</label>
+                    <input type="password" id="del-admin-pin" placeholder="Enter PIN" style="width:100%;padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text-primary);font-size:0.85rem;box-sizing:border-box">
+                </div>
+            </div>
+            <button class="btn btn-sm" id="del-admin-approve-btn" onclick="verifyAdminDeliveryOverride()" style="background:#92400e;color:#fff;border:none;width:100%">🔓 Approve Delivery Without Payment</button>
+            <div id="del-admin-status" style="display:none;margin-top:8px;font-size:0.82rem;font-weight:600;color:var(--success)"></div>
         </div>
-        <input type="hidden" id="f-del-cod-collected" value="0">`;
+        <input type="hidden" id="f-del-cod-collected" value="0">
+        <input type="hidden" id="f-del-admin-approved" value="">
+        <input type="hidden" id="f-del-delivery-id" value="${id}">`;
     }
 
     const summaryHtml = `<div style="margin-bottom:14px;padding:12px;background:var(--bg-secondary);border-radius:8px;font-size:0.85rem">
@@ -13451,19 +13564,75 @@ function toggleDelCashCollected() {
     btn.style.borderColor = collected ? 'var(--border)' : 'var(--success)';
     btn.textContent = collected ? ' Mark Cash Collected' : '✓ Cash Collected';
 }
+async function verifyAdminDeliveryOverride() {
+    const selectEl = $('del-admin-select');
+    const pinEl = $('del-admin-pin');
+    const statusEl = $('del-admin-status');
+    const approveBtn = $('del-admin-approve-btn');
+    if (!selectEl || !pinEl) return;
+    const adminName = selectEl.value;
+    const pin = pinEl.value.trim();
+    if (!adminName) return alert('Select an Admin or Manager to approve.');
+    if (!pin) return alert('Enter the admin PIN.');
+    const users = await DB.getAll('users');
+    const adminUser = users.find(u => u.name === adminName && (u.role === 'Admin' || u.role === 'Manager'));
+    if (!adminUser || adminUser.pin !== pin) {
+        pinEl.style.borderColor = 'var(--danger)';
+        pinEl.value = '';
+        return alert('Incorrect PIN. Please try again.');
+    }
+    // PIN verified — set approval
+    const approvedEl = $('f-del-admin-approved');
+    if (approvedEl) approvedEl.value = adminName;
+    pinEl.style.borderColor = 'var(--success)';
+    selectEl.disabled = true;
+    pinEl.disabled = true;
+    if (approveBtn) { approveBtn.disabled = true; approveBtn.style.opacity = '0.5'; }
+    if (statusEl) {
+        statusEl.style.display = 'block';
+        statusEl.textContent = `✅ Approved by ${adminName} — delivery permitted without payment`;
+    }
+}
+
 async function confirmMarkDelivered(id) {
     const location = ($('f-del-location') || {}).value.trim();
     const lat = parseFloat(($('f-del-lat') || {}).value || '');
     const lng = parseFloat(($('f-del-lng') || {}).value || '');
-    const codCollected = ($('f-del-cod-collected') || {}).value === '1';
+    const codEl = $('f-del-cod-collected');
+    const codCollected = codEl ? codEl.value === '1' : false;
+    const adminApprovedEl = $('f-del-admin-approved');
+    const adminApprovedBy = adminApprovedEl ? adminApprovedEl.value.trim() : '';
+    if (codEl && !codCollected && !adminApprovedBy) {
+        return alert('Payment not confirmed.\nEither mark cash as collected, or get Admin approval to deliver without payment.');
+    }
     const update = { status: 'Delivered', deliveredAt: today() };
     if (location) update.deliveryLocation = location;
     if (!isNaN(lat) && !isNaN(lng)) { update.deliveryLat = lat; update.deliveryLng = lng; }
     if (codCollected) update.codCollected = true;
+    if (adminApprovedBy) {
+        update.adminApprovedBy = adminApprovedBy;
+        update.adminApprovalNote = 'Delivered without payment collection';
+    }
     await DB.update('delivery', id, update);
+    // Notify all logged-in admins about override
+    if (adminApprovedBy) {
+        const dels = DB.cache['delivery'] || [];
+        const d = dels.find(x => x.id === id);
+        const orderRef = d ? (d.orderNo || d.invoiceNo || id) : id;
+        const partyRef = d ? d.partyName : '';
+        try {
+            await supabaseClient.from('activity_logs').insert({
+                action: 'COD_DELIVERY_OVERRIDE',
+                details: `${orderRef} (${partyRef}) delivered WITHOUT payment — approved by ${adminApprovedBy}. Delivered by ${currentUser ? currentUser.name : 'Unknown'}.`,
+                user_name: currentUser ? currentUser.name : 'Unknown',
+                created_at: new Date().toISOString()
+            });
+        } catch (e) { /* non-blocking */ }
+        showToast(`⚠️ Delivery approved by ${adminApprovedBy} — payment pending for ${partyRef}`, 'warning', 6000);
+    }
     closeModal();
     await renderDelivery();
-    showToast(codCollected ? 'Delivery confirmed! Cash collected.' : 'Delivery confirmed!', 'success');
+    showToast(codCollected ? 'Delivery confirmed! Cash collected.' : adminApprovedBy ? `Delivery confirmed (Admin override: ${adminApprovedBy})` : 'Delivery confirmed!', 'success');
 }
 async function openQuickGpsUpdate(partyId, returnId, returnSource) {
     if (!partyId) return alert('No party linked to this record.');
@@ -13708,7 +13877,7 @@ async function printDeliveryRouteSheet() {
     </head><body>${header}${sections || '<p>No dispatched deliveries</p>'}
     <div class="no-print" style="margin-top:16px;display:flex;gap:10px">
         <button onclick="window.print()" style="padding:8px 20px;background:#f97316;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:1rem"> Print Route Sheet</button>
-        <button onclick="document.getElementById('route-sheet-modal').remove()" style="padding:8px 20px;background:#6b7280;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:1rem">✕ Close</button>
+        <button onclick="window.parent.document.getElementById('route-sheet-modal').remove()" style="padding:8px 20px;background:#6b7280;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:1rem">✕ Close</button>
     </div>
     <script>function moveRow(btn,dir){const row=btn.closest('tr');const tbody=row.parentNode;if(dir===-1&&row.previousElementSibling)tbody.insertBefore(row,row.previousElementSibling);if(dir===1&&row.nextElementSibling)tbody.insertBefore(row.nextElementSibling,row);Array.from(tbody.querySelectorAll('.seq-num')).forEach((el,i)=>el.textContent=i+1);}<\/script>
     </body></html>`;
