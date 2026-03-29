@@ -11840,11 +11840,11 @@ async function renderPackOrderPage() {
             mrpHtml = `
                             <select id="pack-mrp-${idx}" onchange="packMrpSelected(${idx})" class="pack-mrp-select">
                                 <option value=""> Confirm MRP</option>
-                                ${activeBatches.map(b => `<option value="${b.salePrice}" data-mrp="${b.mrp}">MRP ${b.mrp} (Qty:${b.qty})</option>`).join('')}
+                                ${activeBatches.map(b => `<option value="${b.id}" data-saleprice="${b.salePrice}" data-mrp="${b.mrp}">MRP ${b.mrp} (Qty:${b.qty})</option>`).join('')}
                             </select>`;
         } else if (activeBatches.length === 1) {
             mrpHtml = `<span class="pack-mrp-fixed">MRP ${activeBatches[0].mrp}</span>
-                                 <input type="hidden" id="pack-mrp-${idx}" value="${activeBatches[0].salePrice}" data-confirmed="1">`;
+                                 <input type="hidden" id="pack-mrp-${idx}" value="${activeBatches[0].id}" data-saleprice="${activeBatches[0].salePrice}" data-mrp="${activeBatches[0].mrp}" data-confirmed="1">`;
         }
 
         return `
@@ -12090,7 +12090,8 @@ function packMrpSelected(idx) {
     const sel = $(`pack-mrp-${idx}`);
     if (!sel || !sel.value) return;
     const priceInput = $(`pack-price-${idx}`);
-    if (priceInput) priceInput.value = sel.value;
+    const selectedOption = sel.options[sel.selectedIndex];
+    if (priceInput && selectedOption) priceInput.value = selectedOption.dataset.saleprice || 0;
     // Visual feedback
     sel.style.borderColor = 'var(--success)';
     sel.style.color = 'var(--success)';
@@ -12207,6 +12208,7 @@ function completePacking(orderId) {
     const orders = DB.get('db_salesorders');
     const o = orders.find(x => x.id === orderId); if (!o) return;
 
+    let mrpPending = false;
     const packedItems = o.items.map((li, idx) => {
         const qtyInput = $('pack-qty-' + idx);
         const uomSelInput = $('pack-uom-' + idx);
@@ -12219,22 +12221,32 @@ function completePacking(orderId) {
         const price = priceInput ? parseFloat(priceInput.value) : li.price;
         const discountPct = dPctInput ? parseFloat(dPctInput.value) || 0 : (li.discountPct || 0);
         const discountAmt = dAmtInput ? parseFloat(dAmtInput.value) || 0 : (li.discountAmt || 0);
-
+        
         const factor = uomSelInput && uomSelInput.options.length ? parseFloat(uomSelInput.options[uomSelInput.selectedIndex].dataset.factor) : 1;
-        // Total amount for the line = (Qty * Price) - Discount
         const amount = +((packedQty * price) - discountAmt).toFixed(2);
+        
+        const mrpSel = $(`pack-mrp-${idx}`);
+        let batchId = null;
+        let batchMrp = null;
+        if (mrpSel) {
+            if (mrpSel.tagName === 'SELECT') {
+                if (mrpSel.value) {
+                    batchId = mrpSel.value;
+                    batchMrp = mrpSel.options[mrpSel.selectedIndex].dataset.mrp;
+                } else if (packedQty > 0) {
+                    mrpPending = true;
+                }
+            } else if (mrpSel.tagName === 'INPUT') {
+                batchId = mrpSel.value;
+                batchMrp = mrpSel.dataset.mrp;
+            }
+        }
 
-        return { ...li, packedQty, selectedUom, uom: selectedUom, price, discountPct, discountAmt, amount, factor };
+        return { ...li, packedQty, selectedUom, uom: selectedUom, price, discountPct, discountAmt, amount, factor, batchId, batchMrp };
     }).filter(li => li.packedQty > 0);
 
     if (!packedItems.length) return alert('At least one item must have a packed quantity > 0');
-    // Check MRP confirmation for multi-batch items
-    let mrpPending = false;
-    o.items.forEach((_li, idx) => {
-        const mrpSel = $(`pack-mrp-${idx}`);
-        if (mrpSel && mrpSel.tagName === 'SELECT' && !mrpSel.value) mrpPending = true;
-    });
-    if (mrpPending) return alert('Please confirm the MRP batch for all items before completing packing.');
+    if (mrpPending) return alert('Please confirm the MRP batch for all packed items before completing.');
 
     const packingEndTime = new Date();
     // BUG-017 fix: use tracked start time (from when modal was first opened)
