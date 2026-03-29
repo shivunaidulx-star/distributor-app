@@ -7390,7 +7390,9 @@ function updateInvDueDate(party) {
     const termName = party ? (party.paymentTerms || '') : '';
     if (!termName) { dueDateEl.value = ''; dueDateEl.placeholder = 'No terms set'; return; }
     const terms = getPaymentTermsList();
-    const term = terms.find(t => t.name === termName);
+    const normalise = s => s.toLowerCase().replace(/\s+/g, '');
+    const term = terms.find(t => t.name === termName) ||
+                 terms.find(t => normalise(t.name) === normalise(termName));
     if (!term) { dueDateEl.value = ''; return; }
     const invDateEl = $('f-inv-date');
     const base = invDateEl ? invDateEl.value : today();
@@ -8284,7 +8286,9 @@ async function viewInvoice(id) {
 
 async function openEditInvoiceModal(id) {
     if (!canEdit()) return alert('Access Denied');
-    const invoices = await DB.getAll('invoices');
+    const [invoices, inventoryData, categories] = await Promise.all([
+        DB.getAll('invoices'), DB.getAll('inventory'), DB.getAll('categories')
+    ]);
     const inv = invoices.find(i => i.id === id);
     if (!inv) return;
     if (inv.status === 'cancelled') return alert('Cannot edit a cancelled invoice.');
@@ -8325,11 +8329,64 @@ async function openEditInvoiceModal(id) {
                 <div id="inv-total-display" style="font-size:1.4rem;font-weight:700;color:var(--accent)">...</div>
             </div>
         </div>
+        <div id="inv-item-sub-modal" class="sub-modal">
+            <div class="sub-modal-header">
+                <h3>Add Item</h3>
+                <button class="btn-icon" onclick="closeInvItemSubModal()"><span class="material-symbols-outlined">close</span></button>
+            </div>
+            <div class="sub-modal-body">
+                <div class="form-row" style="margin-bottom:8px; grid-template-columns: 1fr 1fr">
+                    <div class="form-group">
+                        <label>Category Filter</label>
+                        <select id="f-inv-cat-filter" onchange="onInvCatFilterChange()">
+                            <option value="">All Categories</option>
+                            ${categories.map(c => `<option value="${c.name}">${c.name}</option>`).join('')}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Sub-Category Filter</label>
+                        <select id="f-inv-subcat-filter" onchange="onInvSubcatFilterChange()">
+                            <option value="">All Sub-Categories</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="inv-item-entry" style="background:var(--bg-input);padding:10px;border-radius:8px;margin-bottom:12px;border:1px solid var(--border)">
+                    <div style="display:grid;grid-template-columns:2fr 1fr;gap:10px;margin-bottom:10px">
+                        <div class="form-group" style="margin-bottom:0">
+                            <label style="font-size:0.75rem">Item</label>
+                            <input id="f-inv-item-input" placeholder="Search..." style="background:#fff">
+                        </div>
+                        <div class="form-group" style="margin-bottom:0">
+                            <label style="font-size:0.75rem">Qty</label>
+                            <input type="number" id="f-inv-qty" value="1" min="1" style="background:#fff">
+                        </div>
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1.5fr auto;gap:10px;align-items:end">
+                        <div class="form-group" style="margin-bottom:0">
+                            <label style="font-size:0.75rem">UOM</label>
+                            <select id="f-inv-uom" onchange="onInvUomChange()" style="background:#fff"><option value="">--</option></select>
+                        </div>
+                        <div class="form-group" style="margin-bottom:0">
+                            <label style="font-size:0.75rem">Price</label>
+                            <input type="number" id="f-inv-price" value="" min="0" step="0.01" placeholder="Listed" style="background:#fff">
+                        </div>
+                        <button class="btn btn-primary" onclick="addInvoiceLine()" style="height:38px;padding:0 16px">Add</button>
+                    </div>
+                </div>
+                <button class="btn btn-outline btn-block" onclick="closeInvItemSubModal()" style="margin-top:10px">Done Adding</button>
+            </div>
+        </div>
     `, `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;width:100%">
         <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
         <div style="visibility:hidden"></div>
         <button class="btn btn-primary" onclick="saveEditedInvoice('${id}')"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">save</span> Save Changes</button>
     </div>`, true);
+
+    // Initialize item search dropdown for adding new items
+    _invItemDropdown = initSearchDropdown('f-inv-item-input', buildItemSearchList(inventoryData), function (item) {
+        $('f-inv-price').value = item.salePrice || '';
+        populateUomSelect($('f-inv-uom'), item);
+    });
 
     renderInvoiceLines();
     updateInvoiceTotal();
@@ -10889,6 +10946,7 @@ window.saveEditedPayment = async function (id) {
         await DB.adminUpdate('payments', id, updateData);
 
         closeModal();
+        await DB.refreshTables(['payments', 'parties', 'party_ledger']);
         await renderPayments();
         showToast('Payment updated successfully!', 'success');
     } catch (err) {
@@ -11876,7 +11934,7 @@ async function renderPackOrderPage() {
                 ${o.items.map((li, idx) => {
         const item = inv.find(x => x.id === li.itemId);
         const displayStock = item ? item.stock : 0;
-        const currentUom = li.selectedUom || li.uom || (item ? item.unit : 'Pcs');
+        const currentUom = li.selectedUom || li.uom || li.unit || (item ? item.unit : 'Pcs');
         const uomList = item ? [{ name: item.unit || 'Pcs', factor: 1, price: li.price || item.salePrice || 0 }, ...(item.uoms || [])] : [];
 
         // MRP Logic
@@ -12313,7 +12371,7 @@ function completePacking(orderId) {
         const dAmtInput = $(`pack-discount-amt-${idx}`);
 
         const packedQty = Math.max(0, qtyInput ? +qtyInput.value : li.qty);
-        const selectedUom = uomSelInput ? uomSelInput.value : (li.uom || 'Pcs');
+        const selectedUom = uomSelInput ? uomSelInput.value : (li.uom || li.unit || 'Pcs');
         const price = priceInput ? parseFloat(priceInput.value) : li.price;
         const discountPct = dPctInput ? parseFloat(dPctInput.value) || 0 : (li.discountPct || 0);
         const discountAmt = dAmtInput ? parseFloat(dAmtInput.value) || 0 : (li.discountAmt || 0);
@@ -18117,11 +18175,11 @@ async function savePartyLedgerEntry(partyId, ledgerId) {
 
     try {
         // BUG-015 fix: save to Supabase so running balance is fresh on re-render
-        await DB.update('party_ledger', ledgerId, { date, docNo: docNo, amount, notes: reason });
+        await DB.update('party_ledger', ledgerId, { date, documentNo: docNo, amount, reason });
         recalculatePartyLedger(partyId);
         // Persist updated running balances to Supabase for all affected entries
         const updatedLedger = DB.get('db_party_ledger').filter(l => String(l.partyId) === String(partyId));
-        await Promise.all(updatedLedger.map(entry => DB.update('party_ledger', entry.id, { balance: entry.runningBalance })));
+        await Promise.all(updatedLedger.map(entry => DB.update('party_ledger', entry.id, { runningBalance: entry.runningBalance })));
         closeModal();
         renderPartyLedgerLayout(); // Refresh UI (async, fetches fresh Supabase data)
         showToast('Ledger entry updated.', 'success');
