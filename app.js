@@ -4152,7 +4152,8 @@ function renderItemBatches() {
                 </td>
                 <td style="padding:5px 6px;text-align:center">
                     <button class="btn btn-outline btn-sm" onclick="toggleItemBatchActive(${idx})" style="padding:2px 6px;font-size:0.75rem">${bActive ? 'Deactivate' : 'Activate'}</button>
-                    <button class="btn-icon" onclick="deleteItemBatch(${idx})" style="color:var(--danger);margin-left:4px"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>
+                    <button class="btn-icon" onclick="openAddBatchForm(${idx})" style="color:var(--primary);margin-left:4px" title="Edit"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button>
+                    <button class="btn-icon" onclick="deleteItemBatch(${idx})" style="color:var(--danger);margin-left:4px" title="Delete"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>
                 </td>
             </tr>`; }).join('')}
         </tbody></table>`;
@@ -4181,25 +4182,30 @@ function deleteItemBatch(idx) {
     renderItemBatches();
 }
 
-function openAddBatchForm() {
+function openAddBatchForm(editIdx = -1) {
     let el = $('inline-batch-form');
-    if (el) return; // already open
-    const today = new Date().toISOString().substring(0, 10);
+    if (el) el.remove();
+    let b = null;
+    let today = new Date().toISOString().substring(0, 10);
+    if (editIdx > -1) {
+        b = currentItemBatches[editIdx];
+        today = b.receivedDate || b.received_date || today;
+    }
     const formHtml = `
         <div id="inline-batch-form" style="background:var(--bg-body);border:1px dashed var(--primary);border-radius:8px;padding:12px;margin-bottom:14px;">
-            <div style="font-weight:600;margin-bottom:8px;color:var(--primary);font-size:0.9rem">Add New MRP Batch</div>
+            <div style="font-weight:600;margin-bottom:8px;color:var(--primary);font-size:0.9rem">${b ? 'Edit MRP Batch' : 'Add New MRP Batch'}</div>
             <div class="form-row">
-                <div class="form-group"><label>MRP  *</label><input type="number" id="f-batch-mrp" placeholder="Max Retail Price" autofocus></div>
+                <div class="form-group"><label>MRP  *</label><input type="number" id="f-batch-mrp" value="${b ? b.mrp : ''}" placeholder="Max Retail Price" autofocus></div>
                 <div class="form-group"><label>Date Received</label><input type="date" id="f-batch-date" value="${today}"></div>
             </div>
             <div class="form-row">
-                <div class="form-group"><label>Purchase Price  *</label><input type="number" id="f-batch-pp" placeholder="Your cost price" step="1" min="0"></div>
-                <div class="form-group"><label>Sale Price  *</label><input type="number" id="f-batch-sp" placeholder="Price to customer" step="1" min="0"></div>
+                <div class="form-group"><label>Purchase Price  *</label><input type="number" id="f-batch-pp" value="${b ? (b.purchasePrice||b.purchase_price||'') : ''}" placeholder="Your cost price" step="1" min="0"></div>
+                <div class="form-group"><label>Sale Price  *</label><input type="number" id="f-batch-sp" value="${b ? (b.salePrice||b.sale_price||'') : ''}" placeholder="Price to customer" step="1" min="0"></div>
             </div>
-            <div class="form-group"><label>Opening Qty (this batch)</label><input type="number" id="f-batch-qty" value="0" min="0"></div>
+            <div class="form-group"><label>Opening Qty</label><input type="number" id="f-batch-qty" value="${b ? (b.qty||0) : 0}" min="0"></div>
             <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:10px">
                 <button class="btn btn-outline btn-sm" onclick="cancelAddBatchForm()">Cancel</button>
-                <button class="btn btn-primary btn-sm" onclick="saveItemBatch()">Add Batch</button>
+                <button class="btn btn-primary btn-sm" onclick="saveItemBatch(${editIdx})">${b ? 'Save Changes' : 'Add Batch'}</button>
             </div>
         </div>
     `;
@@ -4216,7 +4222,7 @@ function onBatchMrpChange() {
     // Optional: could auto-suggest prices based on margin
 }
 
-function saveItemBatch() {
+function saveItemBatch(editIdx = -1) {
     const mrp = +($('f-batch-mrp') || {}).value;
     const pp = +($('f-batch-pp') || {}).value;
     const sp = +($('f-batch-sp') || {}).value;
@@ -4226,7 +4232,16 @@ function saveItemBatch() {
     if (!pp) return alert('Purchase Price is mandatory for a new MRP batch');
     if (!sp) return alert('Sale Price is mandatory for a new MRP batch');
     
-    currentItemBatches.push({ id: 'b_' + Date.now().toString(36), mrp: Math.round(mrp), purchasePrice: Math.round(pp), salePrice: Math.round(sp), qty, receivedDate: date, isActive: true });
+    if (editIdx > -1) {
+        const b = currentItemBatches[editIdx];
+        b.mrp = Math.round(mrp);
+        b.purchasePrice = Math.round(pp);
+        b.salePrice = Math.round(sp);
+        b.qty = qty;
+        b.receivedDate = date;
+    } else {
+        currentItemBatches.push({ id: 'b_' + Date.now().toString(36), mrp: Math.round(mrp), purchasePrice: Math.round(pp), salePrice: Math.round(sp), qty, receivedDate: date, isActive: true });
+    }
     
     // Sync main form fields to reflect the new batch prices
     const sync = syncItemPricesFromBatches(currentItemBatches);
@@ -4234,6 +4249,7 @@ function saveItemBatch() {
     if (sync.salePrice) { const el = $('f-item-sp'); if (el) el.value = sync.salePrice; }
     if (sync.purchasePrice) { const el = $('f-item-pp'); if (el) el.value = sync.purchasePrice; }
     
+    cancelAddBatchForm(); // remove inline form
     renderItemBatches();
 }
 
@@ -6226,6 +6242,10 @@ async function editSalesOrder(id) {
         const latestListed = item ? item.salePrice : li.listedPrice || li.price;
         const discountAmt = li.discountAmt || 0;
         const discountPct = li.discountPct || 0;
+        const amount = +((li.qty * li.price) - discountAmt).toFixed(2);
+        const gstRate = li.gstRate || (item ? (item.gstRate || 0) : 0);
+        const baseAmount = gstRate > 0 ? +(amount / (1 + gstRate / 100)).toFixed(2) : amount;
+        const taxAmount = +(amount - baseAmount).toFixed(2);
         return {
             itemId: li.itemId,
             name: li.name,
@@ -6234,9 +6254,12 @@ async function editSalesOrder(id) {
             listedPrice: latestListed,
             discountAmt,
             discountPct,
-            amount: +((li.qty * li.price) - discountAmt).toFixed(2),
+            amount,
             unit: li.unit || (item ? item.unit : 'Pcs'),
-            purchasePrice: li.purchasePrice || (item ? item.purchasePrice : 0)
+            purchasePrice: li.purchasePrice || (item ? item.purchasePrice : 0),
+            gstRate, baseAmount, taxAmount,
+            hsn: li.hsn || (item ? item.hsn : ''),
+            primaryQty: li.primaryQty || li.qty
         };
     });
 
@@ -6415,6 +6438,10 @@ async function duplicateSalesOrder(id) {
         const latestPrice = item ? item.salePrice : li.price;
         const discountAmt = li.discountAmt || 0;
         const discountPct = li.discountPct || 0;
+        const amount = +((li.qty * latestPrice) - discountAmt).toFixed(2);
+        const gstRate = item ? (item.gstRate || 0) : (li.gstRate || 0);
+        const baseAmount = gstRate > 0 ? +(amount / (1 + gstRate / 100)).toFixed(2) : amount;
+        const taxAmount = +(amount - baseAmount).toFixed(2);
         return {
             itemId: li.itemId,
             name: li.name,
@@ -6423,9 +6450,12 @@ async function duplicateSalesOrder(id) {
             listedPrice: latestPrice,
             discountAmt,
             discountPct,
-            amount: +((li.qty * latestPrice) - discountAmt).toFixed(2),
+            amount,
             unit: li.unit || (item ? item.unit : 'Pcs'),
-            purchasePrice: li.purchasePrice || (item ? item.purchasePrice : 0)
+            purchasePrice: li.purchasePrice || (item ? item.purchasePrice : 0),
+            gstRate, baseAmount, taxAmount,
+            hsn: li.hsn || (item ? item.hsn : ''),
+            primaryQty: li.primaryQty || li.qty
         };
     });
 
@@ -11836,15 +11866,12 @@ async function renderPackOrderPage() {
         // MRP Logic
         const activeBatches = item ? getActiveBatches(item) : [];
         let mrpHtml = '';
-        if (activeBatches.length > 1) {
+        if (activeBatches.length > 0) {
             mrpHtml = `
-                            <select id="pack-mrp-${idx}" onchange="packMrpSelected(${idx})" class="pack-mrp-select">
+                            <select id="pack-mrp-${idx}" onchange="packMrpSelected(${idx})" class="pack-mrp-select" style="min-width:140px">
                                 <option value=""> Confirm MRP</option>
                                 ${activeBatches.map(b => `<option value="${b.id}" data-saleprice="${b.salePrice}" data-mrp="${b.mrp}">MRP ${b.mrp} (Qty:${b.qty})</option>`).join('')}
                             </select>`;
-        } else if (activeBatches.length === 1) {
-            mrpHtml = `<span class="pack-mrp-fixed">MRP ${activeBatches[0].mrp}</span>
-                                 <input type="hidden" id="pack-mrp-${idx}" value="${activeBatches[0].id}" data-saleprice="${activeBatches[0].salePrice}" data-mrp="${activeBatches[0].mrp}" data-confirmed="1">`;
         }
 
         return `
@@ -18543,17 +18570,24 @@ async function createOrderFromCatalog() {
             unitPrice = baseListedPrice / secRatio;
         }
 
+        const lineAmount = +(qty * unitPrice).toFixed(2);
+        const itemGstRate = +(itemObj.gstRate || 0);
+        const lineBase = itemGstRate > 0 ? +(lineAmount / (1 + itemGstRate / 100)).toFixed(2) : lineAmount;
+        const lineTax = +(lineAmount - lineBase).toFixed(2);
         soItems.push({
             itemId: itemObj.id,
             name: itemObj.name,
             qty: qty,
             price: +unitPrice.toFixed(2),
             listedPrice: +unitPrice.toFixed(2),
+            purchasePrice: +(itemObj.purchasePrice || 0),
             discountAmt: 0,
             discountPct: 0,
-            amount: +(qty * unitPrice).toFixed(2),
+            amount: lineAmount,
             unit: unit,
-            primaryQty: primaryQty
+            primaryQty: primaryQty,
+            gstRate: itemGstRate, baseAmount: lineBase, taxAmount: lineTax,
+            hsn: itemObj.hsn || ''
         });
     });
 
