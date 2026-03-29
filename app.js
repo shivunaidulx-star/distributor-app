@@ -4182,35 +4182,34 @@ function deleteItemBatch(idx) {
 }
 
 function openAddBatchForm() {
+    let el = $('inline-batch-form');
+    if (el) return; // already open
     const today = new Date().toISOString().substring(0, 10);
-    // Snapshot current batches so Cancel can restore them (prevents openItemModal reset)
-    window._batchFormSnapshot = currentItemBatches.slice();
-    openModal('Add MRP Batch', `
-        <div style="background:rgba(249,115,22,0.08);border:1px solid rgba(249,115,22,0.3);border-radius:8px;padding:10px;margin-bottom:14px;font-size:0.83rem">
-             When a new MRP is received, add it as a new batch. Purchase Price and Sale Price are mandatory.
+    const formHtml = `
+        <div id="inline-batch-form" style="background:var(--bg-body);border:1px dashed var(--primary);border-radius:8px;padding:12px;margin-bottom:14px;">
+            <div style="font-weight:600;margin-bottom:8px;color:var(--primary);font-size:0.9rem">Add New MRP Batch</div>
+            <div class="form-row">
+                <div class="form-group"><label>MRP  *</label><input type="number" id="f-batch-mrp" placeholder="Max Retail Price" autofocus></div>
+                <div class="form-group"><label>Date Received</label><input type="date" id="f-batch-date" value="${today}"></div>
+            </div>
+            <div class="form-row">
+                <div class="form-group"><label>Purchase Price  *</label><input type="number" id="f-batch-pp" placeholder="Your cost price" step="1" min="0"></div>
+                <div class="form-group"><label>Sale Price  *</label><input type="number" id="f-batch-sp" placeholder="Price to customer" step="1" min="0"></div>
+            </div>
+            <div class="form-group"><label>Opening Qty (this batch)</label><input type="number" id="f-batch-qty" value="0" min="0"></div>
+            <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:10px">
+                <button class="btn btn-outline btn-sm" onclick="cancelAddBatchForm()">Cancel</button>
+                <button class="btn btn-primary btn-sm" onclick="saveItemBatch()">Add Batch</button>
+            </div>
         </div>
-        <div class="form-row">
-            <div class="form-group"><label>MRP  *</label><input type="number" id="f-batch-mrp" placeholder="Max Retail Price" oninput="onBatchMrpChange()"></div>
-            <div class="form-group"><label>Date Received</label><input type="date" id="f-batch-date" value="${today}"></div>
-        </div>
-        <div class="form-row">
-            <div class="form-group"><label>Purchase Price  *</label><input type="number" id="f-batch-pp" placeholder="Your cost price" step="1" min="0"></div>
-            <div class="form-group"><label>Sale Price  *</label><input type="number" id="f-batch-sp" placeholder="Price to customer" step="1" min="0"></div>
-        </div>
-        <div class="form-group"><label>Opening Qty (this batch)</label><input type="number" id="f-batch-qty" value="0" min="0"></div>
-        <div class="modal-actions">
-            <button class="btn btn-outline" onclick="cancelAddBatchForm()">Cancel</button>
-            <button class="btn btn-primary" onclick="saveItemBatch()">Add Batch</button>
-        </div>`);
+    `;
+    const container = $('item-batches-container');
+    if (container) container.insertAdjacentHTML('afterbegin', formHtml);
 }
 
 function cancelAddBatchForm() {
-    // Restore batches snapshot so in-progress (unsaved) batches are not lost
-    const snapshot = window._batchFormSnapshot || [];
-    closeModal();
-    openItemModal(window._editItemId || '');
-    currentItemBatches = snapshot;
-    renderItemBatches();
+    const el = $('inline-batch-form');
+    if (el) el.remove();
 }
 
 function onBatchMrpChange() {
@@ -4226,20 +4225,16 @@ function saveItemBatch() {
     if (!mrp) return alert('MRP is required');
     if (!pp) return alert('Purchase Price is mandatory for a new MRP batch');
     if (!sp) return alert('Sale Price is mandatory for a new MRP batch');
+    
     currentItemBatches.push({ id: 'b_' + Date.now().toString(36), mrp: Math.round(mrp), purchasePrice: Math.round(pp), salePrice: Math.round(sp), qty, receivedDate: date, isActive: true });
-    // Preserve batches before re-opening item modal (openItemModal resets currentItemBatches from DB)
-    const savedBatches = currentItemBatches.slice();
-    closeModal();
-    // Re-open item modal to restore full item form
-    openItemModal(window._editItemId || '');
-    // Restore the in-memory batches (including the new one just added, not yet saved to DB)
-    currentItemBatches = savedBatches;
-    renderItemBatches();
+    
     // Sync main form fields to reflect the new batch prices
     const sync = syncItemPricesFromBatches(currentItemBatches);
     if (sync.mrp) { const el = $('f-item-mrp'); if (el) el.value = sync.mrp; }
     if (sync.salePrice) { const el = $('f-item-sp'); if (el) el.value = sync.salePrice; }
     if (sync.purchasePrice) { const el = $('f-item-pp'); if (el) el.value = sync.purchasePrice; }
+    
+    renderItemBatches();
 }
 
 async function saveItem(id) {
