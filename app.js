@@ -600,8 +600,9 @@ const ColumnManager = {
             { key: 'type', label: 'Type', visible: true },
             { key: 'invoiceNo', label: 'Invoice', visible: true },
             { key: 'mode', label: 'Mode', visible: true },
+            { key: 'collectedBy', label: 'User', visible: true },
             { key: 'amount', label: 'Amount', visible: true },
-            { key: 'status', label: 'Status', visible: true }, // ✅ ADD THIS
+            { key: 'status', label: 'Status', visible: true },
             { key: 'actions', label: 'Actions', required: true },
         ],
         expenses: [
@@ -908,9 +909,9 @@ async function addPartyLedgerEntry(partyId, partyName, type, amount, docNo, note
     const party = parties.find(x => x.id === partyId);
     await DB.insert('party_ledger', {
         date: today(), partyId, partyName,
-        type, amount, balance: party ? party.balance : 0,
-        docNo: (docNo && typeof docNo === 'object') ? JSON.stringify(docNo) : (docNo || ''),
-        notes: notes || '',
+        type, amount, runningBalance: party ? party.balance : 0,
+        documentNo: (docNo && typeof docNo === 'object') ? JSON.stringify(docNo) : (docNo || ''),
+        reason: notes || '',
         createdBy: currentUser ? currentUser.userId : 'System'
     });
 }
@@ -2304,10 +2305,12 @@ async function renderDashboard() {
     updateNavBadges(inventory);
     const pendingCheques = payments.filter(p => p.mode === 'Cheque' && (!p.chequeStatus || p.chequeStatus === 'Pending')).length;
 
-    const recParties = parties.filter(p => (p.balance || 0) < 0);
-    const payParties = parties.filter(p => (p.balance || 0) > 0);
-    const totalReceivable = recParties.reduce((s, p) => s + Math.abs(p.balance), 0);
-    const totalPayable = payParties.reduce((s, p) => s + p.balance, 0);
+    // balance > 0 (Dr) means customer owes us → Receivable
+    // balance < 0 (Cr) means we owe them → Payable
+    const recParties = parties.filter(p => (p.balance || 0) > 0);
+    const payParties = parties.filter(p => (p.balance || 0) < 0);
+    const totalReceivable = recParties.reduce((s, p) => s + p.balance, 0);
+    const totalPayable = payParties.reduce((s, p) => s + Math.abs(p.balance), 0);
     const drParties = recParties;
     const crParties = payParties;
 
@@ -2578,8 +2581,8 @@ async function renderParties() {
 
     // Apply balance filter if coming from dashboard receivable/payable card
     const balFilter = window._partyBalanceFilter;
-    if (balFilter === 'receivable') shown = shown.filter(p => (p.balance || 0) < 0);
-    else if (balFilter === 'payable') shown = shown.filter(p => (p.balance || 0) > 0);
+    if (balFilter === 'receivable') shown = shown.filter(p => (p.balance || 0) > 0);
+    else if (balFilter === 'payable') shown = shown.filter(p => (p.balance || 0) < 0);
 
     const balFilterBadge = balFilter ? `
         <div style="display:flex;align-items:center;gap:8px;padding:8px 14px;background:${balFilter === 'receivable' ? '#d1fae5' : '#fee2e2'};border-radius:8px;margin-bottom:10px;font-size:0.85rem;font-weight:600;color:${balFilter === 'receivable' ? '#065f46' : '#991b1b'}">
@@ -2677,7 +2680,7 @@ function renderPartyRows(parties) {
             type: `<td style="min-width:90px"><span class="badge ${p.type === 'Customer' ? 'badge-success' : 'badge-info'}">${p.type}</span></td>`,
             phone: `<td style="min-width:120px">${p.phone || '-'}</td>`,
             gstin: `<td style="min-width:130px;font-size:0.82rem">${p.gstin || '-'}</td>`,
-            balance: `<td style="min-width:120px;text-align:right" class="${(p.balance || 0) < 0 ? 'amount-green' : 'amount-red'}">${currency(Math.abs(p.balance || 0))} ${(p.balance || 0) < 0 ? '(Cr)' : '(Dr)'}</td>`,
+            balance: `<td style="min-width:120px;text-align:right" class="${(p.balance || 0) > 0 ? 'amount-green' : 'amount-red'}">${currency(Math.abs(p.balance || 0))} ${(p.balance || 0) > 0 ? '(Dr)' : '(Cr)'}</td>`,
             actions: `<td style="min-width:150px"><div class="action-btns">
                 ${canViewLedger() ? `<button class="btn-icon" onclick="openDedicatedPartyLedger('${p.id}')" title="View Ledger"><span class="material-symbols-outlined" style="font-size:1.1rem">account_balance_wallet</span></button>` : ''}
                 ${p.phone ? `<a href="tel:${p.phone}" class="btn-icon" title="Call party" style="text-decoration:none"><span class="material-symbols-outlined" style="font-size:1.1rem">call</span></a>` : ''}
@@ -2729,8 +2732,8 @@ function togglePartyFilters() {
 function renderPartyCards(parties) {
     if (!parties.length) return `<div style="text-align:center;padding:40px 20px;color:var(--text-muted)"><div style="font-size:2rem;margin-bottom:8px">👥</div><div>No parties found</div></div>`;
     return parties.map(p => {
-        const balColor = (p.balance || 0) < 0 ? 'var(--success)' : ((p.balance || 0) > 0 ? 'var(--danger)' : 'var(--text-muted)');
-        const balLabel = (p.balance || 0) < 0 ? '(Cr)' : ((p.balance || 0) > 0 ? '(Dr)' : '');
+        const balColor = (p.balance || 0) > 0 ? 'var(--success)' : ((p.balance || 0) < 0 ? 'var(--danger)' : 'var(--text-muted)');
+        const balLabel = (p.balance || 0) > 0 ? '(Dr)' : ((p.balance || 0) < 0 ? '(Cr)' : '');
         return `<div data-party-id="${p.id}" style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:10px;box-shadow:0 1px 4px rgba(0,0,0,0.05);position:relative" onclick="${canEdit() ? `openPartyModal('${p.id}')` : ''}">
             <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
                 <div style="display:flex;flex-direction:column;gap:2px;flex:1;min-width:0;padding-right:8px">
@@ -3241,9 +3244,9 @@ async function confirmOpeningBalImport() {
                     partyName,
                     type: 'Opening Balance',
                     amount: r.amount,
-                    balance: runningBal,
-                    docNo: r.invoiceNo,
-                    notes: r.notes || 'Opening balance import',
+                    runningBalance: runningBal,
+                    documentNo: r.invoiceNo,
+                    reason: r.notes || 'Opening balance import',
                     createdBy: currentUser ? currentUser.name : 'Import'
                 });
                 // Invoice record so it appears in invoices list & payment allocation
@@ -8132,8 +8135,8 @@ async function saveInvoice(id) {
         ops.push(DB.rawInsert('party_ledger', {
             date: dateVal, partyId, partyName,
             type: invType === 'sale' ? 'Sale Invoice' : 'Purchase Invoice',
-            amount: balChange, balance: newBal, docNo: invNo,
-            notes: invType === 'sale' ? 'Sale' : 'Purchase', createdBy: currentUser.userId
+            amount: balChange, runningBalance: newBal, documentNo: invNo,
+            reason: invType === 'sale' ? 'Sale' : 'Purchase', createdBy: currentUser.userId
         }));
 
         const invData = {
@@ -8415,8 +8418,8 @@ async function saveEditedInvoice(id) {
                 ops.push(DB.rawInsert('party_ledger', {
                     date: inv.date, partyId: party.id, partyName: party.name,
                     type: 'Invoice Edit', amount: balDiff,
-                    balance: newBal, docNo: inv.invoiceNo,
-                    notes: `Invoice ${inv.invoiceNo} edited`, createdBy: currentUser.userId
+                    runningBalance: newBal, documentNo: inv.invoiceNo,
+                    reason: `Invoice ${inv.invoiceNo} edited`, createdBy: currentUser.userId
                 }));
             }
         }
@@ -10324,9 +10327,9 @@ async function savePayment(id) {
                 partyName: payPartyName,
                 type: payType === 'in' ? 'Payment In' : 'Payment Out',
                 amount: balChange,
-                balance: newBal,
-                docNo: payRefNo,
-                notes: `${payRows.map(r => r.mode).join('+')} | Disc: ${currency(disc)}`,
+                runningBalance: newBal,
+                documentNo: payRefNo,
+                reason: `${payRows.map(r => r.mode).join('+')} | Disc: ${currency(disc)}`,
                 createdBy: currentUser ? currentUser.userId : 'System'
             }));
         }
@@ -10642,7 +10645,7 @@ async function deletePayment(id) {
             // 2. Delete related party_ledger entries via admin RPC (bypasses RLS)
             const payRefNo = pay.payNo || pay.id.substring(0, 8);
             const ledger = await DB.getAll('party_ledger');
-            const ledgerEntries = ledger.filter(e => e.docNo === payRefNo && e.partyId === pay.partyId);
+            const ledgerEntries = ledger.filter(e => (e.documentNo || e.docNo) === payRefNo && e.partyId === pay.partyId);
             for (const entry of ledgerEntries) {
                 await DB.adminDelete('party_ledger', entry.id);
             }
@@ -10819,11 +10822,11 @@ window.saveEditedPayment = async function (id) {
             // Find the original ledger entry and update it
             const payRefNo = oldPay.payNo || oldPay.id.substring(0, 8);
             const ledger = await DB.getAll('party_ledger');
-            const ledgerEntry = ledger.find(e => e.docNo === payRefNo && e.partyId === party.id);
+            const ledgerEntry = ledger.find(e => (e.documentNo || e.docNo) === payRefNo && e.partyId === party.id);
             if (ledgerEntry) {
                 await DB.adminUpdate('party_ledger', ledgerEntry.id, {
                     amount: newBalChange,
-                    notes: `Mode: ${$('f-pay-mode').value} (Edited)`
+                    reason: `Mode: ${$('f-pay-mode').value} (Edited)`
                 });
             }
             
@@ -12746,7 +12749,7 @@ async function confirmBulkInvoices() {
             if (party) {
                 const newBal = (party.balance || 0) + total;
                 ops.push(DB.rawUpdate('parties', party.id, { balance: newBal }));
-                ops.push(DB.rawInsert('party_ledger', { date: today(), partyId: party.id, partyName: party.name, type: 'Sale Invoice', amount: total, balance: newBal, docNo: r.invNo, notes: 'Sale', createdBy: currentUser.name }));
+                ops.push(DB.rawInsert('party_ledger', { date: today(), partyId: party.id, partyName: party.name, type: 'Sale Invoice', amount: total, runningBalance: newBal, documentNo: r.invNo, reason: 'Sale', createdBy: currentUser.name }));
                 // Update local cache so next order in loop sees updated balance
                 party.balance = newBal;
             }
@@ -14836,11 +14839,11 @@ async function showReport(type) {
                 html += `<tr>
                     <td>${fmtDate(l.date)}</td>
                     <td><span class="badge ${l.type.includes('Payment') ? 'badge-success' : 'badge-info'}">${l.type}</span></td>
-                    <td>${l.docNo || '-'}</td>
-                    <td style="font-size:0.8rem">${escapeHtml(l.notes || '')}</td>
+                    <td>${l.documentNo || l.docNo || '-'}</td>
+                    <td style="font-size:0.8rem">${escapeHtml(l.reason || l.notes || '')}</td>
                     <td>${debit ? currency(debit) : '-'}</td>
                     <td class="amount-green">${credit ? currency(credit) : '-'}</td>
-                    <td style="font-weight:600;color:${l.balance > 0 ? 'var(--danger)' : 'var(--success)'}">${currency(Math.abs(l.balance))} ${l.balance > 0 ? 'Dr' : 'Cr'}</td>
+                    <td style="font-weight:600;color:${(l.runningBalance || l.balance || 0) > 0 ? 'var(--danger)' : 'var(--success)'}">${currency(Math.abs(l.runningBalance || l.balance || 0))} ${(l.runningBalance || l.balance || 0) > 0 ? 'Dr' : 'Cr'}</td>
                 </tr>`;
             });
             html += '</tbody></table></div></div></div>';
