@@ -1784,13 +1784,15 @@ const MORE_ITEMS = [
     { page: 'staffmaster', icon: 'person', label: 'Staff' },
     { page: 'attendance', icon: 'calendar_month', label: 'Attendance' },
     { page: 'hrpayroll', icon: 'payments', label: 'Payroll' },
+    { page: 'inventorysetup', icon: 'inventory', label: 'Inv. Setup' },
+    { page: 'noseries', icon: 'tag', label: 'No. Series' },
     { fn: 'forceHardRefresh()', icon: 'refresh', label: 'Hard Refresh' }
 ];
 
 const BOTTOM_NAV_TABS = {
-    Admin: [{ page: 'dashboard', icon: 'bar_chart', label: 'Home' }, { page: 'catalog', icon: 'local_mall', label: 'Catalog' }, { page: 'salesorders', icon: 'receipt_long', label: 'Orders' }, { page: 'invoices', icon: 'request_quote', label: 'Invoices' }, { fn: 'openPaymentModal()', icon: 'payments', label: 'Record' }],
-    Manager: [{ page: 'dashboard', icon: 'bar_chart', label: 'Home' }, { page: 'catalog', icon: 'local_mall', label: 'Catalog' }, { page: 'salesorders', icon: 'receipt_long', label: 'Orders' }, { page: 'invoices', icon: 'request_quote', label: 'Invoices' }, { fn: 'openPaymentModal()', icon: 'payments', label: 'Record' }],
-    Salesman: [{ page: 'dashboard', icon: 'bar_chart', label: 'Home' }, { page: 'catalog', icon: 'local_mall', label: 'Catalog' }, { page: 'salesorders', icon: 'receipt_long', label: 'Orders' }, { page: 'parties', icon: 'group', label: 'Parties' }, { fn: 'openPaymentModal()', icon: 'payments', label: 'Record' }],
+    Admin: [{ page: 'dashboard', icon: 'bar_chart', label: 'Home' }, { page: 'catalog', icon: 'local_mall', label: 'Catalog' }, { page: 'salesorders', icon: 'receipt_long', label: 'Orders' }, { page: 'invoices', icon: 'request_quote', label: 'Invoices' }, { page: 'payments', icon: 'payments', label: 'Record' }],
+    Manager: [{ page: 'dashboard', icon: 'bar_chart', label: 'Home' }, { page: 'catalog', icon: 'local_mall', label: 'Catalog' }, { page: 'salesorders', icon: 'receipt_long', label: 'Orders' }, { page: 'invoices', icon: 'request_quote', label: 'Invoices' }, { page: 'payments', icon: 'payments', label: 'Record' }],
+    Salesman: [{ page: 'dashboard', icon: 'bar_chart', label: 'Home' }, { page: 'catalog', icon: 'local_mall', label: 'Catalog' }, { page: 'salesorders', icon: 'receipt_long', label: 'Orders' }, { page: 'parties', icon: 'group', label: 'Parties' }, { page: 'payments', icon: 'payments', label: 'Record' }],
     Packing: [{ page: 'dashboard', icon: 'bar_chart', label: 'Home' }, { page: 'packing', icon: 'assignment', label: 'Packing' }],
     Delivery: [{ page: 'dashboard', icon: 'bar_chart', label: 'Home' }, { page: 'delivery', icon: 'local_shipping', label: 'Delivery' }],
 };
@@ -1984,8 +1986,22 @@ function fabAction() {
 
 // --- Helpers ---
 function compressImage(file, { maxWidth = 800, maxHeight = 800, quality = 0.70 } = {}) {
-    return new Promise((resolve, reject) => {
-        // Try createImageBitmap first (works on Android for large/HEIC files where new Image() fails)
+    return new Promise(async (resolve, reject) => {
+        // ── HEIC / HEIF detection & conversion ──
+        let processFile = file;
+        const isHeic = file.type === 'image/heic' || file.type === 'image/heif' ||
+                        /\.heic$/i.test(file.name) || /\.heif$/i.test(file.name);
+        if (isHeic && typeof heic2any !== 'undefined') {
+            try {
+                showToast('Converting HEIC photo...', 'info');
+                const blob = await heic2any({ blob: file, toType: 'image/jpeg', quality: 0.85 });
+                processFile = Array.isArray(blob) ? blob[0] : blob;
+            } catch (heicErr) {
+                console.warn('HEIC conversion failed, attempting fallback:', heicErr);
+                // Continue with original file — createImageBitmap may handle it
+            }
+        }
+
         const drawToCanvas = (bitmap, w, h) => {
             try {
                 const canvas = document.createElement('canvas');
@@ -2002,11 +2018,10 @@ function compressImage(file, { maxWidth = 800, maxHeight = 800, quality = 0.70 }
         };
 
         if (typeof createImageBitmap !== 'undefined') {
-            createImageBitmap(file).then(bitmap => {
+            createImageBitmap(processFile).then(bitmap => {
                 const result = drawToCanvas(bitmap, bitmap.width, bitmap.height);
                 bitmap.close && bitmap.close();
                 if (result) { resolve(result); return; }
-                // canvas failed — fall through to FileReader path
                 fallbackRead();
             }).catch(() => fallbackRead());
         } else {
@@ -2015,14 +2030,21 @@ function compressImage(file, { maxWidth = 800, maxHeight = 800, quality = 0.70 }
 
         function fallbackRead() {
             const reader = new FileReader();
-            reader.readAsDataURL(file);
+            reader.readAsDataURL(processFile);
             reader.onload = e => {
                 const img = new Image();
                 img.onload = () => {
                     const result = drawToCanvas(img, img.width, img.height);
                     resolve(result || e.target.result);
                 };
-                img.onerror = () => resolve(e.target.result);
+                // If image can't decode (e.g. HEIC without conversion), reject with helpful message
+                img.onerror = () => {
+                    if (isHeic) {
+                        reject(new Error('HEIC format not supported. Please take the photo in JPEG format (Settings > Camera > Formats > Most Compatible).'));
+                    } else {
+                        resolve(e.target.result);
+                    }
+                };
                 img.src = e.target.result;
             };
             reader.onerror = () => reject(new Error('Could not read the selected file'));
@@ -3031,7 +3053,7 @@ function renderItemPhotoList(items) {
 
     return items.map(i => {
         const hasPhoto = !!(i.photo || i.imageUrl);
-        const thumbSrc = i.photo || i.imageUrl || '';
+        const thumbSrc = getItemThumb(i);
         return `
         <div class="card" id="photo-row-${i.id}" style="margin-bottom:10px;padding:12px;display:flex;align-items:center;gap:10px;background:var(--bg-body);border:1px solid var(--border);">
             <div style="width:48px;height:48px;border-radius:8px;overflow:hidden;flex-shrink:0;border:2px ${hasPhoto ? 'solid var(--success)' : 'dashed var(--border)'};display:flex;align-items:center;justify-content:center;background:var(--surface)">
@@ -3820,6 +3842,42 @@ function updateNavBadges(inventory) {
     if (badge) { badge.textContent = lowCount; badge.style.display = lowCount > 0 ? '' : 'none'; }
 }
 
+// Helper: get displayable thumbnail for an inventory item.
+// Filters out stored HEIC data URLs (broken in browser) and triggers background conversion.
+function getItemThumb(i) {
+    const src = i.imageUrl || i.photo || '';
+    if (!src) return '';
+    // Detect HEIC data URLs stored from pre-fix uploads
+    if (src.startsWith('data:image/heic') || src.startsWith('data:image/heif')) {
+        // Trigger background conversion so next render shows the image properly
+        if (typeof heic2any !== 'undefined' && !i._heicConverting) {
+            i._heicConverting = true;
+            (async () => {
+                try {
+                    const resp = await fetch(src);
+                    const heicBlob = await resp.blob();
+                    const jpegBlob = await heic2any({ blob: heicBlob, toType: 'image/jpeg', quality: 0.80 });
+                    const finalBlob = Array.isArray(jpegBlob) ? jpegBlob[0] : jpegBlob;
+                    const reader = new FileReader();
+                    reader.onload = async (e) => {
+                        const jpegDataUrl = e.target.result;
+                        await DB.update('inventory', i.id, { photo: jpegDataUrl, imageUrl: jpegDataUrl });
+                        showToast(`Photo converted for ${i.name}`, 'success');
+                        // Update the displayed image element if it exists
+                        const imgEl = document.querySelector(`img[data-item-id="${i.id}"]`);
+                        if (imgEl) imgEl.src = jpegDataUrl;
+                    };
+                    reader.readAsDataURL(finalBlob);
+                } catch (err) {
+                    console.warn('Background HEIC conversion failed for', i.name, err);
+                }
+            })();
+        }
+        return ''; // Return empty so placeholder shows until conversion completes
+    }
+    return src;
+}
+
 function renderInvCards(items, reservedMap = {}) {
     if (!items.length) return '<div class="empty-state"><div class="empty-icon"></div><p>No items found</p></div>';
     return items.map(i => {
@@ -3829,7 +3887,7 @@ function renderInvCards(items, reservedMap = {}) {
         const fb = getFifoBatch(i);
         return `<div class="card" style="margin-bottom:8px;padding:0;border-radius:10px;overflow:hidden">
             <div style="display:flex;align-items:center;gap:10px;padding:11px 12px">
-                ${(i.imageUrl || i.photo) ? `<img src="${i.imageUrl || i.photo}" style="width:46px;height:46px;border-radius:8px;object-fit:cover;flex-shrink:0">` : `<div style="width:46px;height:46px;border-radius:8px;background:linear-gradient(135deg,var(--primary-light,#fef3c7),var(--bg-secondary));display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:1.5rem"></div>`}
+                ${(() => { const thumb = getItemThumb(i); return thumb ? `<img src="${thumb}" data-item-id="${i.id}" style="width:46px;height:46px;border-radius:8px;object-fit:cover;flex-shrink:0">` : `<div style="width:46px;height:46px;border-radius:8px;background:linear-gradient(135deg,var(--primary-light,#fef3c7),var(--bg-secondary));display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:1.5rem"></div>`; })()}
                 <div style="flex:1;min-width:0">
                     <div style="font-weight:700;font-size:0.95rem;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:-0.01em">${escapeHtml(i.name)}${i.active === false ? ' <span style="font-size:0.66rem;background:#fee2e2;color:#991b1b;padding:1px 5px;border-radius:4px">Inactive</span>' : ''}</div>
                     <div style="display:flex;align-items:center;gap:5px;margin-top:2px;flex-wrap:wrap">
@@ -9595,7 +9653,10 @@ function renderPayRows(pays) {
     if (!pays.length) return '<tr><td colspan="9" class="empty-state"><p>No payments found</p></td></tr>';
     const cols = ColumnManager.get('payments').filter(c => c.visible);
     return pays.map(p => {
-        const editBtn = canEdit() ? `<button class="btn-icon" onclick="openEditPaymentModal('${p.id}')" title="Edit"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button>` : '';
+        const viewBtn = `<button class="btn-icon" onclick="event.stopPropagation();viewPaymentDetails('${p.id}')" title="View Receipt"><span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--primary)">visibility</span></button>`;
+        const printBtn = `<button class="btn-icon" onclick="event.stopPropagation();printPaymentReceipt('${p.id}')" title="Print Receipt"><span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--accent)">print</span></button>`;
+        const editBtn = canEdit() ? `<button class="btn-icon" onclick="event.stopPropagation();openEditPaymentModal('${p.id}')" title="Edit"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button>` : '';
+        const deleteBtn = canEdit() ? `<button class="btn-icon" onclick="event.stopPropagation();deletePayment('${p.id}')" title="Delete Payment" style="color:var(--danger)"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>` : '';
         const cellMap = {
             date: `<td>${fmtDate(p.date)}</td>`,
             receiptNo: `<td style="font-weight:600;color:var(--accent)">${p.payNo || (p.id ? p.id.substring(0, 8) : '-')}</td>`,
@@ -9606,7 +9667,7 @@ function renderPayRows(pays) {
             collectedBy: `<td style="font-size:0.82rem;color:var(--text-secondary)">${escapeHtml(p.collectedBy || p.createdBy || '-')}</td>`,
             amount: `<td class="${p.type === 'in' ? 'amount-green' : 'amount-red'}">${currency(p.amount)}</td>`,
             status: `<td><span class="badge ${p.status === 'posted' ? 'badge-success' : p.status === 'cancelled' ? 'badge-danger' : 'badge-warning'}" style="font-size:0.72rem">${p.status || 'pending'}</span></td>`,
-            actions: `<td><div class="action-btns">${editBtn}${canEdit() ? `<button class="btn-icon" onclick="deletePayment('${p.id}')" title="Delete Payment" style="color:var(--danger)"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>` : ''}</div></td>`,
+            actions: `<td><div class="action-btns">${viewBtn}${printBtn}${editBtn}${deleteBtn}</div></td>`,
         };
         return `<tr>${cols.map(c => cellMap[c.key] || '').join('')}</tr>`;
     }).join('');
@@ -11295,9 +11356,9 @@ async function renderExpenses() {
         <!-- Mobile: compact stat tiles -->
         <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:10px 12px;margin-bottom:10px;text-align:center">
             <div style="display:flex;gap:5px;justify-content:space-around">
-                <div><div style="font-size:0.65rem;color:var(--text-muted);font-weight:700">SALES DISC</div><div style="font-size:1.1rem;font-weight:800;color:#f59e0b">${currency(salDisc)}</div></div>
-                <div><div style="font-size:0.65rem;color:var(--text-muted);font-weight:700">PAY DISC</div><div style="font-size:1.1rem;font-weight:800;color:#3b82f6">${currency(payDisc)}</div></div>
-                <div><div style="font-size:0.65rem;color:var(--text-muted);font-weight:700">TOTAL EXP</div><div style="font-size:1.1rem;font-weight:800;color:#ef4444">${currency(total)}</div></div>
+                <div><div style="font-size:0.65rem;color:var(--text-muted);font-weight:700">Sales Disc.</div><div style="font-size:1.1rem;font-weight:800;color:#f59e0b">${currency(salDisc)}</div></div>
+                <div><div style="font-size:0.65rem;color:var(--text-muted);font-weight:700">Pay Disc.</div><div style="font-size:1.1rem;font-weight:800;color:#3b82f6">${currency(payDisc)}</div></div>
+                <div><div style="font-size:0.65rem;color:var(--text-muted);font-weight:700">Total Exp.</div><div style="font-size:1.1rem;font-weight:800;color:#ef4444">${currency(total)}</div></div>
             </div>
         </div>
         
@@ -19873,7 +19934,7 @@ function cpItemListHTML(items) {
         const qty = cpCart[i.id] || 0;
         const price = i.salePrice || i.mrp || 0;
         return `<div class="cp-item-row">
-            ${(i.imageUrl || i.photo) ? `<img src="${i.imageUrl || i.photo}" class="cp-item-img">` : `<div class="cp-item-img" style="background:var(--bg-page);display:flex;align-items:center;justify-content:center;font-size:1.4rem"></div>`}
+            ${(() => { const thumb = getItemThumb(i); return thumb ? `<img src="${thumb}" data-item-id="${i.id}" class="cp-item-img">` : `<div class="cp-item-img" style="background:var(--bg-page);display:flex;align-items:center;justify-content:center;font-size:1.4rem"></div>`; })()}
             <div style="flex:1;min-width:0">
                 <div style="font-weight:600;font-size:0.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${i.name}</div>
                 <div style="font-size:0.78rem;color:var(--text-muted)">${i.category || ''} ${i.uom ? '| ' + i.uom : ''}</div>
