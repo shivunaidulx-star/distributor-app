@@ -1983,40 +1983,50 @@ function fabAction() {
 }
 
 // --- Helpers ---
-function compressImage(file, { maxWidth = 1024, maxHeight = 1024, quality = 0.75 } = {}) {
+function compressImage(file, { maxWidth = 800, maxHeight = 800, quality = 0.70 } = {}) {
     return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.readAsDataURL(file);
-        reader.onload = e => {
-            const rawDataUrl = e.target.result;
-            const img = new Image();
-            img.src = rawDataUrl;
-            img.onload = () => {
-                try {
-                    const canvas = document.createElement('canvas');
-                    let width = img.width;
-                    let height = img.height;
-                    if (width > height) {
-                        if (width > maxWidth) { height *= maxWidth / width; width = maxWidth; }
-                    } else {
-                        if (height > maxHeight) { width *= maxHeight / height; height = maxHeight; }
-                    }
-                    canvas.width = width;
-                    canvas.height = height;
-                    const ctx = canvas.getContext('2d');
-                    ctx.drawImage(img, 0, 0, width, height);
-                    resolve(canvas.toDataURL('image/jpeg', quality));
-                } catch (canvasErr) {
-                    // Canvas tainted or unsupported — fall back to raw data URL
-                    resolve(rawDataUrl);
+        // Try createImageBitmap first (works on Android for large/HEIC files where new Image() fails)
+        const drawToCanvas = (bitmap, w, h) => {
+            try {
+                const canvas = document.createElement('canvas');
+                let width = w, height = h;
+                if (width > height) {
+                    if (width > maxWidth) { height = Math.round(height * maxWidth / width); width = maxWidth; }
+                } else {
+                    if (height > maxHeight) { width = Math.round(width * maxHeight / height); height = maxHeight; }
                 }
-            };
-            img.onerror = () => {
-                // Image format not renderable (e.g. HEIC) — use raw data URL directly
-                resolve(rawDataUrl);
-            };
+                canvas.width = width; canvas.height = height;
+                canvas.getContext('2d').drawImage(bitmap, 0, 0, width, height);
+                return canvas.toDataURL('image/jpeg', quality);
+            } catch (e) { return null; }
         };
-        reader.onerror = () => reject(new Error('Could not read the selected file'));
+
+        if (typeof createImageBitmap !== 'undefined') {
+            createImageBitmap(file).then(bitmap => {
+                const result = drawToCanvas(bitmap, bitmap.width, bitmap.height);
+                bitmap.close && bitmap.close();
+                if (result) { resolve(result); return; }
+                // canvas failed — fall through to FileReader path
+                fallbackRead();
+            }).catch(() => fallbackRead());
+        } else {
+            fallbackRead();
+        }
+
+        function fallbackRead() {
+            const reader = new FileReader();
+            reader.readAsDataURL(file);
+            reader.onload = e => {
+                const img = new Image();
+                img.onload = () => {
+                    const result = drawToCanvas(img, img.width, img.height);
+                    resolve(result || e.target.result);
+                };
+                img.onerror = () => resolve(e.target.result);
+                img.src = e.target.result;
+            };
+            reader.onerror = () => reject(new Error('Could not read the selected file'));
+        }
     });
 }
 
@@ -3032,8 +3042,10 @@ function renderItemPhotoList(items) {
                 <div style="font-size:0.78rem;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${i.itemCode ? '[' + i.itemCode + '] ' : ''}${i.category || ''}</div>
             </div>
             <div style="display:flex;gap:4px;flex-shrink:0">
-                <input type="file" id="photo-pick-${i.id}" accept="image/*" style="display:none" onchange="uploadItemPhotoQuick('${i.id}', this)">
-                <label for="photo-pick-${i.id}" class="btn btn-primary btn-sm" style="padding:6px 14px;font-size:0.82rem;cursor:pointer;margin:0" title="Add Photo">📷 Photo</label>
+                <input type="file" id="photo-cam-${i.id}" accept="image/*" capture="environment" style="display:none" onchange="uploadItemPhotoQuick('${i.id}', this)">
+                <input type="file" id="photo-gal-${i.id}" accept="image/*" style="display:none" onchange="uploadItemPhotoQuick('${i.id}', this)">
+                <label for="photo-cam-${i.id}" class="btn btn-outline btn-sm" style="padding:6px 10px;font-size:0.82rem;cursor:pointer;margin:0" title="Camera">📷</label>
+                <label for="photo-gal-${i.id}" class="btn btn-primary btn-sm" style="padding:6px 10px;font-size:0.82rem;cursor:pointer;margin:0" title="Gallery">🖼️</label>
             </div>
         </div>
     `;
@@ -3060,8 +3072,8 @@ async function uploadItemPhotoQuick(itemId, inputEl) {
 
     showToast('Processing photo...', 'info');
     try {
-        const dataUrl = await compressImage(file, { maxWidth: 1024, quality: 0.75 });
-        await DB.update('inventory', itemId, { photo: dataUrl });
+        const dataUrl = await compressImage(file, { maxWidth: 800, quality: 0.70 });
+        await DB.update('inventory', itemId, { photo: dataUrl, imageUrl: dataUrl });
         showToast('Photo saved! ✅', 'success');
 
         // If on 'missing' tab, remove from list and update count
@@ -18979,7 +18991,7 @@ async function viewCatalogItem(itemId) {
     const stockData = await getAvailableStock(i);
     openModal(i.name, `
         <div style="text-align:center;margin-bottom:16px">
-            ${i.photo ? `<img src="${i.photo}" style="max-height:150px;max-width:100%;border-radius:12px;object-fit:cover">` : `<div style="width:100px;height:100px;background:linear-gradient(135deg,var(--primary),var(--accent));border-radius:16px;display:flex;align-items:center;justify-content:center;font-size:2.5rem;color:#fff;margin:0 auto">${i.name.charAt(0)}</div>`}
+            ${(i.photo || i.imageUrl) ? `<img src="${i.photo || i.imageUrl}" style="max-height:150px;max-width:100%;border-radius:12px;object-fit:cover">` : `<div style="width:100px;height:100px;background:linear-gradient(135deg,var(--primary),var(--accent));border-radius:16px;display:flex;align-items:center;justify-content:center;font-size:2.5rem;color:#fff;margin:0 auto">${i.name.charAt(0)}</div>`}
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
             <div style="padding:10px;background:var(--bg-body);border-radius:8px"><div style="font-size:0.75rem;color:var(--text-muted)">Category</div><div style="font-weight:600">${i.category || '-'}${i.subCategory ? ' / ' + i.subCategory : ''}</div></div>
