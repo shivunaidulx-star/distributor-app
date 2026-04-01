@@ -1328,6 +1328,7 @@ function setupPullToRefresh() {
 }
 async function initApp() {
     const loadingEl = $('app-loading');
+    const sidebar = $('sidebar');
 
     try {
         // Check for saved customer portal session first
