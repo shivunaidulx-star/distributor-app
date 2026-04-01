@@ -1811,11 +1811,12 @@ const ALL_QUICK_ACTIONS = [
     { key: 'purchaseorders', icon: 'shopping_cart', label: 'Purchase', fn: "navigateTo('purchaseorders')" },
     { key: 'new-party', icon: 'group_add', label: 'New Party', fn: "openPartyModal()" },
     { key: 'update-party-gps', icon: 'location_on', label: 'Update GPS', fn: "openPartyGpsModal()" },
+    { key: 'update-item-photo', icon: 'add_a_photo', label: 'Update Photo', fn: "openItemPhotoModal()" },
 ];
 const DEFAULT_QUICK_ACTIONS = {
-    Admin: ['new-sale', 'payment-in', 'catalog', 'salesorders', 'parties', 'inventory', 'delivery', 'reports', 'update-party-gps'],
-    Manager: ['new-sale', 'payment-in', 'catalog', 'salesorders', 'parties', 'payments', 'update-party-gps'],
-    Salesman: ['catalog', 'payment-in', 'salesorders', 'parties'],
+    Admin: ['new-sale', 'payment-in', 'catalog', 'salesorders', 'parties', 'inventory', 'delivery', 'reports', 'update-party-gps', 'update-item-photo'],
+    Manager: ['new-sale', 'payment-in', 'catalog', 'salesorders', 'parties', 'payments', 'update-party-gps', 'update-item-photo'],
+    Salesman: ['catalog', 'payment-in', 'salesorders', 'parties', 'update-item-photo'],
     Packing: ['packing', 'salesorders'],
     Delivery: ['delivery', 'salesorders'],
 };
@@ -2120,6 +2121,7 @@ function filterNavWidget(q) {
 async function renderDashboard() {
     DB.showSkeleton(pageContent, 3);
     const role = currentUser.role;
+    const isMobile = window.innerWidth < 768;
     // Batch fetch data from Supabase
     const [invoices, payments, expenses, inventory, salesOrders, dels, parties] = await Promise.all([
         DB.getAll('invoices'),
@@ -2213,22 +2215,27 @@ async function renderDashboard() {
                 <button class="quick-action-btn" onclick="navigateTo('parties')"><span class="qa-icon material-symbols-outlined">group</span><span class="qa-label">Parties</span></button>
                 <button class="quick-action-btn" onclick="navigateTo('catalog')"><span class="qa-icon material-symbols-outlined">local_mall</span><span class="qa-label">Catalog</span></button>
                 <button class="quick-action-btn" onclick="openPartyGpsModal()"><span class="qa-icon material-symbols-outlined">location_on</span><span class="qa-label">Update GPS</span></button>
+                <button class="quick-action-btn" onclick="openItemPhotoModal()"><span class="qa-icon material-symbols-outlined">add_a_photo</span><span class="qa-label">Update Photo</span></button>
             </div>
 
             <div class="card">
                 <div class="card-header"><h3>My Recent Orders</h3></div>
-                <div class="card-body">
-                    <div class="table-wrapper">
-                        <table class="data-table">
-                            <thead><tr><th>Date</th><th>Order #</th><th>Party</th><th>Status</th><th>Total</th></tr></thead>
-                            <tbody>${mySO.slice(-5).reverse().map(o => {
+                <div class="card-body" style="${isMobile ? 'padding:8px' : ''}">
+                    ${isMobile ? (mySO.slice(-5).reverse().map(o => {
+            const stMap = { pending: 'badge-warning', approved: 'badge-success', rejected: 'badge-danger' };
+            const stText = o.status || 'pending';
+            return `<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 6px;border-bottom:1px solid var(--border)" onclick="navigateTo('salesorders')">
+                <div><div style="font-weight:600;font-size:0.88rem">${o.orderNo} · ${escapeHtml(o.partyName)}</div><div style="font-size:0.72rem;color:var(--text-muted)">${fmtDate(o.date)}</div></div>
+                <div style="text-align:right"><span class="badge ${stMap[stText] || 'badge-warning'}" style="text-transform:capitalize;font-size:0.65rem">${stText}</span><div style="font-weight:700;color:var(--success);font-size:0.88rem">${currency(o.total)}</div></div>
+            </div>`;
+        }).join('') || '<div class="empty-state"><p>No orders yet</p></div>') : `<div class="table-wrapper"><table class="data-table">
+                        <thead><tr><th>Date</th><th>Order #</th><th>Party</th><th>Status</th><th>Total</th></tr></thead>
+                        <tbody>${mySO.slice(-5).reverse().map(o => {
             const stMap = { pending: 'badge-warning', approved: 'badge-success', rejected: 'badge-danger' };
             const stText = o.status || 'pending';
             return `<tr><td>${fmtDate(o.date)}</td><td>${o.orderNo}</td><td>${o.partyName}</td><td><span class="badge ${stMap[stText] || 'badge-warning'}" style="text-transform:capitalize">${stText}</span></td><td class="amount-green">${currency(o.total)}</td></tr>`;
         }).join('') || '<tr><td colspan="5" class="empty-state"><p>No orders yet</p><p class="empty-subtitle">Create your first sales order to get started</p></div></td></tr>'}
-                            </tbody>
-                        </table>
-                    </div>
+                        </tbody></table></div>`}
                 </div>
             </div>
             ${renderPartyNavWidget(parties)}
@@ -2253,12 +2260,17 @@ async function renderDashboard() {
             <div class="quick-actions">
                 <button class="quick-action-btn" onclick="navigateTo('delivery')"><span class="qa-icon material-symbols-outlined">local_shipping</span><span class="qa-label">My Deliveries</span></button>
                 <button class="quick-action-btn" onclick="openPartyGpsModal()"><span class="qa-icon">📍</span><span class="qa-label">Update GPS</span></button>
+                <button class="quick-action-btn" onclick="openItemPhotoModal()"><span class="qa-icon material-symbols-outlined">add_a_photo</span><span class="qa-label">Update Photo</span></button>
             </div>
-            <div class="card"><div class="card-header"><h3>My Active Dispatches</h3></div><div class="card-body">
-                <div class="table-wrapper">
+            <div class="card"><div class="card-header"><h3>My Active Dispatches</h3></div><div class="card-body" style="${isMobile ? 'padding:8px' : ''}">
+                ${isMobile ? (dispatched.slice(-5).reverse().map(d => `
+                <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 6px;border-bottom:1px solid var(--border)">
+                    <div><div style="font-weight:600;font-size:0.88rem">${d.orderNo} · ${escapeHtml(d.partyName)}</div><div style="font-size:0.72rem;color:var(--text-muted)">${d.invoiceNo || '-'}</div></div>
+                    <span class="badge badge-info" style="font-size:0.65rem">${d.status}</span>
+                </div>`).join('') || '<div class="empty-state"><p>No active dispatches</p></div>') : `<div class="table-wrapper">
                     <table class="data-table"><thead><tr><th>Order #</th><th>Party</th><th>Invoice</th><th>Status</th></tr></thead>
                     <tbody>${dispatched.slice(-5).reverse().map(d => `<tr><td style="font-weight:600">${d.orderNo}</td><td>${d.partyName}</td><td><span class="badge badge-info">${d.invoiceNo || '-'}</span></td><td><span class="badge badge-info">${d.status}</span></td></tr>`).join('') || '<tr><td colspan="4"><div class="empty-state"><p>No active dispatches</p><p class="empty-subtitle">All deliveries are complete</p></div></td></tr>'}</tbody></table>
-                </div>
+                </div>`}
             </div></div>
             ${renderPartyNavWidget(parties)}`;
         return;
@@ -2279,18 +2291,13 @@ async function renderDashboard() {
             <div class="section-toolbar" style="margin-top:8px"><h3>Quick Actions</h3></div>
             <div class="quick-actions">
                 <button class="quick-action-btn" onclick="navigateTo('packing')"><span class="qa-icon material-symbols-outlined">inventory_2</span><span class="qa-label">Packing Queue</span></button>
+                <button class="quick-action-btn" onclick="openItemPhotoModal()"><span class="qa-icon material-symbols-outlined">add_a_photo</span><span class="qa-label">Update Photo</span></button>
             </div>
-            ${myAssigned.length ? `<div class="card" style="margin-bottom:12px"><div class="card-header"><h3>Assigned to Me</h3></div><div class="card-body">
-                <div class="table-wrapper">
-                    <table class="data-table"><thead><tr><th>Order #</th><th>Party</th><th>Items</th><th>Total</th></tr></thead>
-                    <tbody>${myAssigned.slice(0, 5).map(o => `<tr><td style="font-weight:600">${o.orderNo}</td><td>${o.partyName}</td><td>${o.items.length}</td><td class="amount-green">${currency(o.total)}</td></tr>`).join('')}</tbody></table>
-                </div>
+            ${myAssigned.length ? `<div class="card" style="margin-bottom:12px"><div class="card-header"><h3>Assigned to Me</h3></div><div class="card-body" style="${isMobile ? 'padding:8px' : ''}">
+                ${isMobile ? myAssigned.slice(0, 5).map(o => `<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 6px;border-bottom:1px solid var(--border)"><div><div style="font-weight:600;font-size:0.88rem">${o.orderNo} · ${escapeHtml(o.partyName)}</div><div style="font-size:0.72rem;color:var(--text-muted)">${o.items.length} items</div></div><div style="font-weight:700;color:var(--success)">${currency(o.total)}</div></div>`).join('') : `<div class="table-wrapper"><table class="data-table"><thead><tr><th>Order #</th><th>Party</th><th>Items</th><th>Total</th></tr></thead><tbody>${myAssigned.slice(0, 5).map(o => `<tr><td style="font-weight:600">${o.orderNo}</td><td>${o.partyName}</td><td>${o.items.length}</td><td class="amount-green">${currency(o.total)}</td></tr>`).join('')}</tbody></table></div>`}
             </div></div>` : ''}
-            ${unassigned.length ? `<div class="card"><div class="card-header"><h3>Unassigned Orders</h3></div><div class="card-body">
-                <div class="table-wrapper">
-                    <table class="data-table"><thead><tr><th>Order #</th><th>Party</th><th>Items</th><th>Total</th></tr></thead>
-                    <tbody>${unassigned.slice(0, 5).map(o => `<tr><td style="font-weight:600">${o.orderNo}</td><td>${o.partyName}</td><td>${o.items.length}</td><td class="amount-green">${currency(o.total)}</td></tr>`).join('')}</tbody></table>
-                </div>
+            ${unassigned.length ? `<div class="card"><div class="card-header"><h3>Unassigned Orders</h3></div><div class="card-body" style="${isMobile ? 'padding:8px' : ''}">
+                ${isMobile ? unassigned.slice(0, 5).map(o => `<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 6px;border-bottom:1px solid var(--border)"><div><div style="font-weight:600;font-size:0.88rem">${o.orderNo} · ${escapeHtml(o.partyName)}</div><div style="font-size:0.72rem;color:var(--text-muted)">${o.items.length} items</div></div><div style="font-weight:700;color:var(--success)">${currency(o.total)}</div></div>`).join('') : `<div class="table-wrapper"><table class="data-table"><thead><tr><th>Order #</th><th>Party</th><th>Items</th><th>Total</th></tr></thead><tbody>${unassigned.slice(0, 5).map(o => `<tr><td style="font-weight:600">${o.orderNo}</td><td>${o.partyName}</td><td>${o.items.length}</td><td class="amount-green">${currency(o.total)}</td></tr>`).join('')}</tbody></table></div>`}
             </div></div>` : (!myAssigned.length ? '<div class="card"><div class="card-body"><div class="empty-state"><span class="empty-icon">✅</span><p>All caught up!</p><p class="empty-subtitle">No orders waiting to be packed.</p></div></div></div>' : '')}
             ${renderPartyNavWidget(parties)}`;
         return;
@@ -2961,6 +2968,150 @@ async function updatePartyLiveLocation(partyId) {
         btn.innerHTML = origHtml;
         btn.disabled = false;
     }, { enableHighAccuracy: true });
+}
+
+// =============================================
+//  UPDATE ITEM PHOTO MODAL (mirrors Update GPS pattern)
+// =============================================
+async function openItemPhotoModal() {
+    const inventory = await DB.getAll('inventory');
+    // Show ALL items — those without photos first, then those with photos (for modifying)
+    const noPhotoItems = inventory.filter(i => i.active !== false && !i.photo && !i.imageUrl);
+    const hasPhotoItems = inventory.filter(i => i.active !== false && (i.photo || i.imageUrl));
+
+    openModal(' Update Item Photos', `
+        <div style="margin-bottom:10px">
+            <div style="display:flex;gap:8px;margin-bottom:10px">
+                <button id="photo-tab-missing" class="btn btn-primary btn-sm" onclick="switchPhotoTab('missing')" style="flex:1">📷 Missing (${noPhotoItems.length})</button>
+                <button id="photo-tab-all" class="btn btn-outline btn-sm" onclick="switchPhotoTab('all')" style="flex:1">🖼️ All Items (${hasPhotoItems.length})</button>
+            </div>
+            <input type="text" id="f-photo-search" placeholder="🔍 Search items..." 
+                   style="width:100%;padding:10px;border-radius:var(--radius-md);border:1px solid var(--border);"
+                   onkeyup="filterItemPhotoList(this.value)">
+        </div>
+        <div id="photo-item-list" style="max-height:60vh;overflow-y:auto;">
+            ${renderItemPhotoList(noPhotoItems)}
+        </div>
+    `, `<button class="btn btn-outline" onclick="closeModal()">Close</button>`);
+
+    // Store data for filtering/tab switching
+    window._photoItemsNoPhoto = noPhotoItems;
+    window._photoItemsHasPhoto = hasPhotoItems;
+    window._photoTab = 'missing';
+}
+
+function switchPhotoTab(tab) {
+    window._photoTab = tab;
+    const missingBtn = $('photo-tab-missing');
+    const allBtn = $('photo-tab-all');
+    if (missingBtn && allBtn) {
+        missingBtn.className = tab === 'missing' ? 'btn btn-primary btn-sm' : 'btn btn-outline btn-sm';
+        allBtn.className = tab === 'all' ? 'btn btn-primary btn-sm' : 'btn btn-outline btn-sm';
+    }
+    const list = tab === 'missing' ? (window._photoItemsNoPhoto || []) : (window._photoItemsHasPhoto || []);
+    $('photo-item-list').innerHTML = renderItemPhotoList(list);
+    const search = $('f-photo-search');
+    if (search) search.value = '';
+}
+
+function renderItemPhotoList(items) {
+    if (!items.length) return `<div class="empty-state"><span class="empty-icon">🎉</span><p>All Caught Up!</p><p class="empty-subtitle">${window._photoTab === 'all' ? 'No items with photos.' : 'All items have photos!'}</p></div>`;
+
+    return items.map(i => {
+        const hasPhoto = !!(i.photo || i.imageUrl);
+        const thumbSrc = i.photo || i.imageUrl || '';
+        return `
+        <div class="card" id="photo-row-${i.id}" style="margin-bottom:10px;padding:12px;display:flex;align-items:center;gap:10px;background:var(--bg-body);border:1px solid var(--border);">
+            <div style="width:48px;height:48px;border-radius:8px;overflow:hidden;flex-shrink:0;border:2px ${hasPhoto ? 'solid var(--success)' : 'dashed var(--border)'};display:flex;align-items:center;justify-content:center;background:var(--surface)">
+                ${hasPhoto ? `<img src="${thumbSrc}" style="width:100%;height:100%;object-fit:cover">` : '<span style="font-size:1.3rem;opacity:0.3">📷</span>'}
+            </div>
+            <div style="flex:1;min-width:0;">
+                <div style="font-weight:600;font-size:0.92rem;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(i.name)}</div>
+                <div style="font-size:0.78rem;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${i.itemCode ? '[' + i.itemCode + '] ' : ''}${i.category || ''}</div>
+            </div>
+            <div style="display:flex;gap:4px;flex-shrink:0">
+                <input type="file" id="photo-cam-${i.id}" accept="image/*" capture="environment" style="display:none" onchange="uploadItemPhotoQuick('${i.id}', this)">
+                <input type="file" id="photo-gal-${i.id}" accept="image/*" style="display:none" onchange="uploadItemPhotoQuick('${i.id}', this)">
+                <button class="btn btn-outline btn-sm" onclick="document.getElementById('photo-cam-${i.id}').click()" style="padding:6px 8px;font-size:0.78rem" title="Camera">📷</button>
+                <button class="btn btn-primary btn-sm" onclick="document.getElementById('photo-gal-${i.id}').click()" style="padding:6px 8px;font-size:0.78rem" title="Gallery">🖼️</button>
+            </div>
+        </div>
+    `;
+    }).join('');
+}
+
+function filterItemPhotoList(q) {
+    const s = q.toLowerCase();
+    const source = window._photoTab === 'missing' ? (window._photoItemsNoPhoto || []) : (window._photoItemsHasPhoto || []);
+    const filtered = source.filter(i => 
+        (i.name || '').toLowerCase().includes(s) || 
+        (i.itemCode || '').toLowerCase().includes(s) ||
+        (i.category || '').toLowerCase().includes(s)
+    );
+    $('photo-item-list').innerHTML = renderItemPhotoList(filtered);
+}
+
+async function uploadItemPhotoQuick(itemId, inputEl) {
+    const file = inputEl.files[0];
+    if (!file) return;
+
+    const row = document.getElementById('photo-row-' + itemId);
+    if (row) row.style.opacity = '0.5';
+
+    showToast('Processing photo...', 'info');
+    try {
+        const dataUrl = await compressImage(file, { maxWidth: 1024, quality: 0.75 });
+        await DB.update('inventory', itemId, { photo: dataUrl });
+        showToast('Photo saved! ✅', 'success');
+
+        // If on 'missing' tab, remove from list and update count
+        if (window._photoTab === 'missing') {
+            if (row) {
+                row.style.transition = 'opacity 0.3s, transform 0.3s';
+                row.style.opacity = '0';
+                row.style.transform = 'translateX(20px)';
+                setTimeout(() => {
+                    row.remove();
+                    if (window._photoItemsNoPhoto) {
+                        window._photoItemsNoPhoto = window._photoItemsNoPhoto.filter(i => i.id !== itemId);
+                        // Update missing count in tab button
+                        const missingBtn = $('photo-tab-missing');
+                        if (missingBtn) missingBtn.textContent = `📷 Missing (${window._photoItemsNoPhoto.length})`;
+                        if (window._photoItemsNoPhoto.length === 0) {
+                            $('photo-item-list').innerHTML = renderItemPhotoList([]);
+                        }
+                    }
+                    // Move item to "has photo" list
+                    const inv = DB.get('db_inventory') || [];
+                    const updatedItem = inv.find(x => x.id === itemId);
+                    if (updatedItem && window._photoItemsHasPhoto) {
+                        window._photoItemsHasPhoto.unshift(updatedItem);
+                        const allBtn = $('photo-tab-all');
+                        if (allBtn) allBtn.textContent = `🖼️ All Items (${window._photoItemsHasPhoto.length})`;
+                    }
+                }, 300);
+            }
+        } else {
+            // On 'all' tab, update the thumbnail in-place
+            if (row) {
+                row.style.opacity = '1';
+                const thumb = row.querySelector('img');
+                if (thumb) {
+                    thumb.src = dataUrl;
+                } else {
+                    const thumbContainer = row.querySelector('div > div:first-child');
+                    if (thumbContainer) {
+                        thumbContainer.style.border = '2px solid var(--success)';
+                        thumbContainer.innerHTML = `<img src="${dataUrl}" style="width:100%;height:100%;object-fit:cover">`;
+                    }
+                }
+            }
+        }
+    } catch (err) {
+        console.error('Photo upload error:', err);
+        showToast('Failed to save photo: ' + err.message, 'error');
+        if (row) row.style.opacity = '1';
+    }
 }
 function capturePartyLiveGPS() {
     if (!navigator.geolocation) return alert('Geolocation is not supported by this browser/device.');
@@ -17655,6 +17806,12 @@ function addPaymentTermRow() {
     if (inp) inp.focus();
 }
 // deletePayment is defined earlier (near renderPayments) with proper cascade logic
+function deletePaymentTerm(i) {
+    const tbody = document.getElementById('pt-list-body');
+    if (!tbody) return;
+    const row = tbody.rows[i];
+    if (row) row.remove();
+}
 async function healStockLedger() {
     if (!confirm('This will scan all items and create correction ledger entries for any discrepancies. Continue?')) return;
     const [items, ledger] = await Promise.all([DB.getAll('inventory'), DB.getAll('stock_ledger')]);
@@ -17894,6 +18051,52 @@ function openDedicatedPartyLedger(partyId) {
     navigateTo('partyledger');
 }
 
+function _buildLedgerMobileCards(ledger, partyId) {
+    if (!ledger.length) return '<div class="empty-state" style="padding:40px"><div class="empty-icon"></div><p>No transactions recorded yet.</p></div>';
+    const cards = ledger.slice().reverse().map(function(e) {
+        const et = e.type || e.entryType || '-';
+        const dn = e.docNo || e.documentNo || '';
+        const rs = e.notes || e.reason || '';
+        const bl = e._runningBalance !== undefined ? e._runningBalance : '';
+        const amtColor = e.amount > 0 ? 'var(--success)' : (e.amount < 0 ? 'var(--danger)' : 'inherit');
+        const amtSign = e.amount > 0 ? '+' : '';
+        const dnHtml = dn ? '<div style="font-weight:700;font-size:0.88rem;color:var(--accent)">' + escapeHtml(dn) + '</div>' : '';
+        const rsShort = rs ? escapeHtml(rs.substring(0, 50)) + (rs.length > 50 ? '\u2026' : '') : '';
+        const balHtml = bl !== '' ? currency(bl) : '-';
+        let actHtml = '';
+        if (canEdit() || et.includes('Invoice')) {
+            let btns = '';
+            if (et.includes('Invoice') && dn) {
+                btns += '<button class="btn-icon" onclick="showPaymentHistory(\'' + partyId + '\',\'' + dn + '\')" title="History"><span class="material-symbols-outlined" style="font-size:1.1rem">history</span></button>';
+                btns += '<button class="btn-icon" onclick="printInvoiceByNo(\'' + dn + '\')" title="Print"><span class="material-symbols-outlined" style="font-size:1.1rem">print</span></button>';
+                btns += '<button class="btn-icon" onclick="shareInvoiceByNo(\'' + dn + '\')" title="Share"><span class="material-symbols-outlined" style="font-size:1.1rem">share</span></button>';
+            }
+            if (canEdit()) {
+                btns += '<button class="btn-icon" onclick="editPartyLedgerEntry(\'' + partyId + '\',\'' + e.id + '\')" title="Edit"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button>';
+                btns += '<button class="btn-icon" onclick="deletePartyLedgerEntry(\'' + partyId + '\',\'' + e.id + '\')" title="Delete" style="color:var(--danger)"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>';
+            }
+            actHtml = '<div style="display:flex;gap:4px;margin-top:8px;justify-content:flex-end">' + btns + '</div>';
+        }
+        return '<div class="ledger-row ' + (e.amount >= 0 ? 'ledger-row-positive' : 'ledger-row-negative') + '" data-date="' + (e.date || '') + '" data-type="' + et + '" style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:8px">'
+            + '<span class="ledg-ref" style="display:none">' + (dn || '-') + '</span>'
+            + '<span class="ledg-reason" style="display:none">' + (rs || '-') + '</span>'
+            + '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px">'
+            +   '<div style="flex:1;min-width:0;padding-right:8px">'
+            +     '<div style="font-size:0.72rem;color:var(--text-muted)">' + fmtDate(e.date) + ' &middot; <span style="font-weight:600;color:var(--text-primary)">' + et + '</span></div>'
+            +     dnHtml
+            +   '</div>'
+            +   '<div style="font-weight:800;font-size:1rem;color:' + amtColor + '">' + amtSign + currency(Math.abs(e.amount)) + '</div>'
+            + '</div>'
+            + '<div style="display:flex;justify-content:space-between;align-items:center;font-size:0.78rem">'
+            +   '<span style="color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60%">' + rsShort + '</span>'
+            +   '<span style="color:var(--text-secondary);font-weight:600">Bal: ' + balHtml + '</span>'
+            + '</div>'
+            + actHtml
+            + '</div>';
+    });
+    return '<div id="party-ledger-tbody">' + cards.join('') + '</div>';
+}
+
 async function renderPartyLedgerLayout() {
     if (!currentLedgerPartyId) {
         navigateTo('parties');
@@ -17914,6 +18117,8 @@ async function renderPartyLedgerLayout() {
     let _rb = 0;
     ledger.forEach(e => { _rb += (e.amount || 0); e._runningBalance = _rb; });
 
+    const isMobile = window.innerWidth < 768;
+    const _lbHtml = isMobile ? _buildLedgerMobileCards(ledger, partyId) : null;
     pageContent.innerHTML = `
         <div class="section-toolbar">
             <h3 style="font-size:1rem;display:flex;align-items:center;gap:10px">
@@ -17952,6 +18157,7 @@ async function renderPartyLedgerLayout() {
             </div>
         </div>
         
+        ${_lbHtml !== null ? _lbHtml : `
         <div class="card">
             <div class="card-body" style="padding:0">
                 ${ledger.length ? `
@@ -18028,7 +18234,7 @@ async function renderPartyLedgerLayout() {
                     </table>
                 </div>` : '<div class="empty-state" style="padding:40px"><div class="empty-icon"></div><p>No transactions recorded yet.</p></div>'}
             </div>
-        </div>
+        </div>`}
     `;
 }
 
@@ -18276,6 +18482,27 @@ function recalculatePartyLedger(partyId) {
 async function renderUOM() {
     const uoms = await DB.getAll('uom');
     const container = $('inv-setup-content') || pageContent;
+    const isMobile = window.innerWidth < 768;
+    if (isMobile) {
+        container.innerHTML = `
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:10px">
+            <button class="btn btn-outline btn-sm" onclick="triggerUomExcelImport()"><span class="material-symbols-outlined" style="font-size:1rem">upload</span> Import</button>
+            <input type="file" id="f-uom-import" accept=".xlsx, .xls" style="display:none" onchange="importUomExcel(event)">
+            <button class="btn btn-primary btn-sm" onclick="openUOMModal()">+ Add UOM</button>
+        </div>
+        ${uoms.length ? uoms.map(u => `
+        <div class="card" style="margin-bottom:8px;padding:12px 14px;display:flex;align-items:center;gap:10px">
+            <div style="flex:1;min-width:0">
+                <div style="font-weight:700">${escapeHtml(u.name)} <span class="badge badge-info" style="font-size:0.72rem">${escapeHtml(u.code || u.name)}</span></div>
+                ${u.description ? `<div style="font-size:0.78rem;color:var(--text-muted);margin-top:3px">${escapeHtml(u.description)}</div>` : ''}
+            </div>
+            <div style="display:flex;gap:4px;flex-shrink:0">
+                <button class="btn-icon" onclick="openUOMModal('${u.id}')"><span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--warning)">edit</span></button>
+                <button class="btn-icon" onclick="deleteUOM('${u.id}')"><span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--danger)">delete</span></button>
+            </div>
+        </div>`).join('') : '<div class="empty-state"><p>No UOM entries yet. Add units like Pcs, Kg, Box, Ltr, Pack etc.</p></div>'}`;
+        return;
+    }
     container.innerHTML = `
         <div class="section-toolbar">
             <h3 style="font-size:1rem"> Unit of Measurement Master</h3>
@@ -18978,6 +19205,27 @@ async function renderInventorySetup() {
 async function renderBrands() {
     const brands = await DB.getAll('brands');
     const el = $('inv-setup-content') || pageContent;
+    const isMobile = window.innerWidth < 768;
+    if (isMobile) {
+        el.innerHTML = `
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:10px">
+            <button class="btn btn-outline btn-sm" onclick="triggerBrandExcelImport()"><span class="material-symbols-outlined" style="font-size:1rem">upload</span> Import</button>
+            <input type="file" id="f-brand-import" accept=".xlsx, .xls" style="display:none" onchange="importBrandsExcel(event)">
+            <button class="btn btn-primary btn-sm" onclick="openBrandModal()">+ Add Brand</button>
+        </div>
+        ${brands.length ? brands.map(b => `
+        <div class="card" style="margin-bottom:8px;padding:12px 14px;display:flex;align-items:center;gap:10px">
+            <div style="flex:1;min-width:0">
+                <div style="font-weight:700">${escapeHtml(b.name)}</div>
+                ${b.description ? `<div style="font-size:0.78rem;color:var(--text-muted);margin-top:3px">${escapeHtml(b.description)}</div>` : ''}
+            </div>
+            <div style="display:flex;gap:4px;flex-shrink:0">
+                <button class="btn-icon" onclick="openBrandModal('${b.id}')"><span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--warning)">edit</span></button>
+                <button class="btn-icon" onclick="deleteBrand('${b.id}')"><span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--danger)">delete</span></button>
+            </div>
+        </div>`).join('') : '<div class="empty-state"><p>No brands yet. Add brands to categorize products by manufacturer.</p></div>'}`;
+        return;
+    }
     el.innerHTML = `
         <div class="section-toolbar">
             <h3 style="font-size:1rem"> Brand Master</h3>
@@ -20032,6 +20280,32 @@ async function renderAttendance() {
         </div>
     </div>` : ''}
 
+    ${window.innerWidth < 768 ? `
+    <div style="margin-bottom:20px">
+        ${staff.map(s => {
+        const cur = attMap[s.id];
+        const mo = monthMap[s.id] || { P: 0, A: 0, HD: 0, PL: 0, H: 0 };
+        let actionBtns;
+        if (rangeMode) {
+            actionBtns = STATUS_BTNS.map(b => `<button onclick="markStaffRange('${s.id}','${escapeHtml(s.name)}','${b.s}')" style="padding:6px 12px;border-radius:20px;font-size:0.78rem;font-weight:700;cursor:pointer;border:2px solid ${b.color};color:${b.color};background:${b.bg};transition:all 0.15s">${b.label}</button>`).join('');
+        } else {
+            actionBtns = STATUS_BTNS.map(b => {
+                const active = cur && cur.status === b.s;
+                return `<button onclick="markAttendance('${s.id}','${escapeHtml(s.name)}','${selDate}','${b.s}')" style="padding:6px 12px;border-radius:20px;font-size:0.78rem;font-weight:700;cursor:pointer;border:2px solid ${b.color};color:${active ? '#fff' : b.color};background:${active ? b.color : b.bg};transition:all 0.15s">${b.label}</button>`;
+            }).join('');
+        }
+        return `<div class="card" style="margin-bottom:8px;padding:12px 14px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                <div>
+                    <div style="font-weight:700;font-size:0.95rem">${escapeHtml(s.name)}</div>
+                    <div style="font-size:0.72rem;color:var(--text-muted)">${s.role || 'Staff'}</div>
+                </div>
+                <span style="font-size:0.78rem;color:var(--text-muted)">P:<b style="color:#22c55e">${mo.P}</b> A:<b style="color:#ef4444">${mo.A}</b> ½:<b style="color:#f59e0b">${mo.HD}</b> PL:<b style="color:#6366f1">${mo.PL}</b></span>
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:6px">${actionBtns}</div>
+        </div>`;
+    }).join('')}
+    </div>` : `
     <div class="card" style="margin-bottom:20px"><div class="card-body">
     <div class="table-wrapper"><table class="data-table">
         <thead><tr><th>Staff</th><th>${rangeMode ? 'Bulk Range Action' : 'Mark Attendance'}</th><th style="text-align:center">This Month (${selMonth})</th></tr></thead>
@@ -20063,7 +20337,7 @@ async function renderAttendance() {
     }).join('')}
         </tbody>
     </table></div>
-    </div></div>
+    </div></div>`}
 
     <h4 style="margin-bottom:12px;font-size:0.95rem">Monthly Attendance  ${selMonth}</h4>
     <div class="card"><div class="card-body" style="overflow-x:auto">
@@ -20310,6 +20584,63 @@ async function renderHRPayroll() {
         <div class="stat-card red"><div class="stat-icon"></div><div class="stat-value">${currency(totalNet)}</div><div class="stat-label">Net Payable</div></div>
     </div>
 
+    ${window.innerWidth < 768 ? `
+    <div style="margin-bottom:8px;font-weight:700;font-size:0.95rem">Salary Sheet — ${selMonth}</div>
+    <div style="margin-bottom:20px">
+        ${rows.length ? rows.map(r => `
+        <div class="card" style="margin-bottom:8px;padding:12px 14px;${r.paid ? 'border-left:3px solid #22c55e' : ''}">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
+                <div>
+                    <div style="font-weight:700;font-size:0.95rem">${escapeHtml(r.s.name)}</div>
+                    <div style="font-size:0.72rem;color:var(--text-muted)">${r.s.role || 'Staff'} · ${currency(r.s.monthly_salary || 0)}/mo</div>
+                </div>
+                <span class="badge ${r.paid ? 'badge-success' : 'badge-warning'}">${r.paid ? 'Paid' : 'Pending'}</span>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;font-size:0.78rem;margin-bottom:8px">
+                <div style="background:var(--bg-body);border-radius:6px;padding:6px;text-align:center">
+                    <div style="color:var(--text-muted)">Att.</div>
+                    <div style="font-weight:700">P:<span style="color:#22c55e">${r.p}</span> ½:<span style="color:#f59e0b">${r.hd}</span></div>
+                    <div style="color:var(--text-muted);font-size:0.7rem">${r.daysEff.toFixed(1)} eff days</div>
+                </div>
+                <div style="background:var(--bg-body);border-radius:6px;padding:6px;text-align:center">
+                    <div style="color:var(--text-muted)">Earned</div>
+                    <div style="font-weight:700;color:var(--success)">${currency(r.earned)}</div>
+                    ${r.advPending > 0 ? `<div style="font-size:0.7rem;color:#ef4444">Adv: ${currency(r.advPending)}</div>` : ''}
+                </div>
+                <div style="background:var(--bg-body);border-radius:6px;padding:6px;text-align:center">
+                    <div style="color:var(--text-muted)">Net Pay</div>
+                    <div id="net-${r.s.id}" style="font-weight:800;color:var(--accent);font-size:0.95rem">${currency(r.net)}</div>
+                    ${!r.paid && r.advPending > 0 ? `<input type="number" id="deduct-${r.s.id}" value="${r.toDeduct}" min="0" max="${r.advPending}" step="1" style="width:70px;font-size:0.75rem;padding:2px 4px;border:1px solid var(--border);border-radius:4px;text-align:center;color:#ef4444;margin-top:2px" oninput="updateNetPayable('${r.s.id}',${r.earned})" placeholder="Deduct">` : (r.toDeduct > 0 ? `<div style="font-size:0.7rem;color:#ef4444">-${currency(r.toDeduct)}</div>` : '')}
+                </div>
+            </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+                ${!r.paid
+                ? `<button class="btn btn-primary btn-sm" onclick="markSalaryPaid('${r.s.id}','${escapeHtml(r.s.name)}','${selMonth}',${r.s.monthly_salary || 0},${workingDays},${r.daysEff},${r.earned})">Mark Paid</button>`
+                : `<button class="btn btn-outline btn-sm" onclick="viewPaySlip('${r.s.id}','${selMonth}')">Pay Slip</button><button class="btn btn-warning btn-sm" onclick="resetSalaryPaid('${r.s.id}','${escapeHtml(r.s.name)}','${selMonth}')">Recalc</button>`}
+                <button class="btn btn-outline btn-sm" onclick="openStaffAdvance('${r.s.id}','${escapeHtml(r.s.name)}')">+Advance</button>
+            </div>
+        </div>`).join('') : '<div class="empty-state"><p>No active staff</p></div>'}
+    </div>
+
+    <h4 style="margin-bottom:10px;font-size:0.9rem">Advance Records</h4>
+    <div style="margin-bottom:20px">
+        ${allAdvRecs.length ? allAdvRecs.map(a => {
+            const bal = Math.max(0, (a.amount || 0) - (a.deducted || 0));
+            const statusColor = bal === 0 ? '#22c55e' : bal < (a.amount || 0) ? '#f59e0b' : '#ef4444';
+            return `<div class="card" style="margin-bottom:8px;padding:12px 14px;display:flex;align-items:center;gap:10px">
+                <div style="flex:1;min-width:0">
+                    <div style="font-weight:700;font-size:0.88rem">${escapeHtml(a.staff_name || '')}</div>
+                    <div style="font-size:0.72rem;color:var(--text-muted)">${fmtDate(a.date)} · ${a.month || ''}</div>
+                    ${a.notes ? `<div style="font-size:0.75rem;color:var(--text-muted);margin-top:2px">${escapeHtml(a.notes)}</div>` : ''}
+                </div>
+                <div style="text-align:right;flex-shrink:0">
+                    <div style="font-size:0.75rem;color:var(--text-muted)">Given: <span style="color:#ef4444;font-weight:700">${currency(a.amount || 0)}</span></div>
+                    <div style="font-weight:700;color:${statusColor}">${bal > 0 ? currency(bal) : 'Cleared'}</div>
+                    ${bal > 0 ? `<button class="btn-icon" onclick="deleteAdvance('${a.id}')" style="color:var(--danger)"><span class="material-symbols-outlined" style="font-size:1rem">delete</span></button>` : ''}
+                </div>
+            </div>`;
+        }).join('') : '<div style="text-align:center;color:var(--text-muted);padding:16px">No advance records</div>'}
+    </div>` : `
     <div class="card" style="margin-bottom:20px"><div class="card-body">
     <div style="font-weight:700;margin-bottom:12px">Salary Sheet  ${selMonth}</div>
     <div class="table-wrapper"><table class="data-table">
@@ -20365,9 +20696,54 @@ async function renderHRPayroll() {
         }).join('') : '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:20px">No advance records</td></tr>'}
         </tbody>
     </table></div>
-    </div></div>`;
+    </div></div>`}`;
+
 }
 
+async function viewPaySlip(staffId, month) {
+    const { data: rec } = await supabaseClient.from('salary_records')
+        .select('*').eq('staff_id', staffId).eq('month', month).maybeSingle();
+    if (!rec) { showToast('Pay slip not found', 'error'); return; }
+    const co = DB.get('company') || {};
+    openModal('Pay Slip — ' + month, `
+    <div style="font-family:'Inter',sans-serif;max-width:420px;margin:0 auto">
+        <div style="text-align:center;margin-bottom:16px;border-bottom:2px solid var(--border);padding-bottom:12px">
+            <div style="font-weight:800;font-size:1.1rem;color:var(--accent)">${escapeHtml(co.name || 'Prakash Traders')}</div>
+            <div style="font-size:0.78rem;color:var(--text-muted)">Pay Slip for <b>${escapeHtml(rec.staff_name)}</b> — ${month}</div>
+        </div>
+        <table style="width:100%;border-collapse:collapse;font-size:0.88rem">
+            <tr style="background:var(--bg-body)">
+                <td style="padding:8px 10px;color:var(--text-muted)">Monthly Salary</td>
+                <td style="padding:8px 10px;text-align:right;font-weight:600">${currency(rec.monthly_salary || 0)}</td>
+            </tr>
+            <tr>
+                <td style="padding:8px 10px;color:var(--text-muted)">Working Days</td>
+                <td style="padding:8px 10px;text-align:right">${rec.working_days || '-'}</td>
+            </tr>
+            <tr style="background:var(--bg-body)">
+                <td style="padding:8px 10px;color:var(--text-muted)">Days Present (eff.)</td>
+                <td style="padding:8px 10px;text-align:right">${(+rec.days_present || 0).toFixed(1)}</td>
+            </tr>
+            <tr>
+                <td style="padding:8px 10px;color:var(--text-muted)">Earned Salary</td>
+                <td style="padding:8px 10px;text-align:right;font-weight:600;color:var(--success)">${currency(rec.earned_salary || 0)}</td>
+            </tr>
+            ${rec.advances > 0 ? `<tr style="background:var(--bg-body)">
+                <td style="padding:8px 10px;color:var(--text-muted)">Advance Deducted</td>
+                <td style="padding:8px 10px;text-align:right;color:#ef4444;font-weight:600">- ${currency(rec.advances)}</td>
+            </tr>` : ''}
+            <tr style="border-top:2px solid var(--border)">
+                <td style="padding:10px 10px;font-weight:800;font-size:1rem">Net Payable</td>
+                <td style="padding:10px 10px;text-align:right;font-weight:800;font-size:1.1rem;color:var(--accent)">${currency(rec.net_payable || 0)}</td>
+            </tr>
+        </table>
+        <div style="margin-top:12px;font-size:0.75rem;color:var(--text-muted);border-top:1px solid var(--border);padding-top:10px">
+            Paid on: <b>${fmtDate(rec.paid_date)}</b> &nbsp;|&nbsp; By: <b>${escapeHtml(rec.paid_by || '-')}</b>
+        </div>
+    </div>`,
+    `<button class="btn btn-outline" onclick="window.print()"> Print</button>
+     <button class="btn btn-primary" onclick="closeModal()">Close</button>`);
+}
 async function openStaffAdvance(staffId, staffName) {
     const { data: staff } = await supabaseClient.from('staff').select('id,name').eq('status', 'active').order('name');
     const selMonth = window._payMonth || today().substring(0, 7);
