@@ -1988,34 +1988,35 @@ function compressImage(file, { maxWidth = 1024, maxHeight = 1024, quality = 0.75
         const reader = new FileReader();
         reader.readAsDataURL(file);
         reader.onload = e => {
+            const rawDataUrl = e.target.result;
             const img = new Image();
-            img.src = e.target.result;
+            img.src = rawDataUrl;
             img.onload = () => {
-                const canvas = document.createElement('canvas');
-                let width = img.width;
-                let height = img.height;
-
-                if (width > height) {
-                    if (width > maxWidth) {
-                        height *= maxWidth / width;
-                        width = maxWidth;
+                try {
+                    const canvas = document.createElement('canvas');
+                    let width = img.width;
+                    let height = img.height;
+                    if (width > height) {
+                        if (width > maxWidth) { height *= maxWidth / width; width = maxWidth; }
+                    } else {
+                        if (height > maxHeight) { width *= maxHeight / height; height = maxHeight; }
                     }
-                } else {
-                    if (height > maxHeight) {
-                        width *= maxHeight / height;
-                        height = maxHeight;
-                    }
+                    canvas.width = width;
+                    canvas.height = height;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0, width, height);
+                    resolve(canvas.toDataURL('image/jpeg', quality));
+                } catch (canvasErr) {
+                    // Canvas tainted or unsupported — fall back to raw data URL
+                    resolve(rawDataUrl);
                 }
-
-                canvas.width = width;
-                canvas.height = height;
-                const ctx = canvas.getContext('2d');
-                ctx.drawImage(img, 0, 0, width, height);
-                resolve(canvas.toDataURL('image/jpeg', quality));
             };
-            img.onerror = reject;
+            img.onerror = () => {
+                // Image format not renderable (e.g. HEIC) — use raw data URL directly
+                resolve(rawDataUrl);
+            };
         };
-        reader.onerror = reject;
+        reader.onerror = () => reject(new Error('Could not read the selected file'));
     });
 }
 
@@ -3031,10 +3032,8 @@ function renderItemPhotoList(items) {
                 <div style="font-size:0.78rem;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${i.itemCode ? '[' + i.itemCode + '] ' : ''}${i.category || ''}</div>
             </div>
             <div style="display:flex;gap:4px;flex-shrink:0">
-                <input type="file" id="photo-cam-${i.id}" accept="image/*" capture="environment" style="display:none" onchange="uploadItemPhotoQuick('${i.id}', this)">
-                <input type="file" id="photo-gal-${i.id}" accept="image/*" style="display:none" onchange="uploadItemPhotoQuick('${i.id}', this)">
-                <button class="btn btn-outline btn-sm" onclick="document.getElementById('photo-cam-${i.id}').click()" style="padding:6px 8px;font-size:0.78rem" title="Camera">📷</button>
-                <button class="btn btn-primary btn-sm" onclick="document.getElementById('photo-gal-${i.id}').click()" style="padding:6px 8px;font-size:0.78rem" title="Gallery">🖼️</button>
+                <input type="file" id="photo-pick-${i.id}" accept="image/*" style="display:none" onchange="uploadItemPhotoQuick('${i.id}', this)">
+                <label for="photo-pick-${i.id}" class="btn btn-primary btn-sm" style="padding:6px 14px;font-size:0.82rem;cursor:pointer;margin:0" title="Add Photo">📷 Photo</label>
             </div>
         </div>
     `;
@@ -3110,7 +3109,7 @@ async function uploadItemPhotoQuick(itemId, inputEl) {
         }
     } catch (err) {
         console.error('Photo upload error:', err);
-        showToast('Failed to save photo: ' + err.message, 'error');
+        showToast('Failed to save photo: ' + (err && err.message ? err.message : String(err || 'Unknown error')), 'error');
         if (row) row.style.opacity = '1';
     }
 }
