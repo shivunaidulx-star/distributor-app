@@ -1956,9 +1956,9 @@ const MORE_ITEMS = [
 ];
 
 const BOTTOM_NAV_TABS = {
-    Admin: [{ page: 'dashboard', icon: 'bar_chart', label: 'Home' }, { page: 'catalog', icon: 'local_mall', label: 'Catalog' }, { page: 'salesorders', icon: 'receipt_long', label: 'Orders' }, { page: 'invoices', icon: 'request_quote', label: 'Invoices' }, { page: 'payments', icon: 'payments', label: 'Record' }],
-    Manager: [{ page: 'dashboard', icon: 'bar_chart', label: 'Home' }, { page: 'catalog', icon: 'local_mall', label: 'Catalog' }, { page: 'salesorders', icon: 'receipt_long', label: 'Orders' }, { page: 'invoices', icon: 'request_quote', label: 'Invoices' }, { page: 'payments', icon: 'payments', label: 'Record' }],
-    Salesman: [{ page: 'dashboard', icon: 'bar_chart', label: 'Home' }, { page: 'catalog', icon: 'local_mall', label: 'Catalog' }, { page: 'salesorders', icon: 'receipt_long', label: 'Orders' }, { page: 'parties', icon: 'group', label: 'Parties' }, { page: 'payments', icon: 'payments', label: 'Record' }],
+    Admin: [{ page: 'dashboard', icon: 'bar_chart', label: 'Home' }, { fn: "openPaymentModal()", icon: 'payments', label: 'Record Payment' }, { page: 'salesorders', icon: 'receipt_long', label: 'Orders' }, { page: 'invoices', icon: 'request_quote', label: 'Invoices' }, { page: 'catalog', icon: 'local_mall', label: 'Catalog' }],
+    Manager: [{ page: 'dashboard', icon: 'bar_chart', label: 'Home' }, { fn: "openPaymentModal()", icon: 'payments', label: 'Record Payment' }, { page: 'salesorders', icon: 'receipt_long', label: 'Orders' }, { page: 'invoices', icon: 'request_quote', label: 'Invoices' }, { page: 'catalog', icon: 'local_mall', label: 'Catalog' }],
+    Salesman: [{ page: 'dashboard', icon: 'bar_chart', label: 'Home' }, { fn: "openPaymentModal()", icon: 'payments', label: 'Record Payment' }, { page: 'salesorders', icon: 'receipt_long', label: 'Orders' }, { page: 'parties', icon: 'group', label: 'Parties' }, { page: 'catalog', icon: 'local_mall', label: 'Catalog' }],
     Packing: [{ page: 'dashboard', icon: 'bar_chart', label: 'Home' }, { page: 'packing', icon: 'assignment', label: 'Packing' }],
     Delivery: [{ page: 'dashboard', icon: 'bar_chart', label: 'Home' }, { page: 'delivery', icon: 'local_shipping', label: 'Delivery' }],
 };
@@ -1983,11 +1983,68 @@ const ALL_QUICK_ACTIONS = [
     { key: 'update-item-photo', icon: 'add_a_photo', label: 'Update Photo', fn: "openItemPhotoModal()" },
 ];
 const DEFAULT_QUICK_ACTIONS = {
-    Admin: ['new-sale', 'payment-in', 'catalog', 'salesorders', 'parties', 'inventory', 'delivery', 'reports', 'update-party-gps', 'update-item-photo'],
-    Manager: ['new-sale', 'payment-in', 'catalog', 'salesorders', 'parties', 'payments', 'update-party-gps', 'update-item-photo'],
-    Salesman: ['catalog', 'payment-in', 'salesorders', 'parties', 'update-item-photo'],
+    Admin: ['payment-in', 'salesorders', 'new-sale', 'parties', 'catalog', 'inventory', 'delivery', 'reports', 'update-party-gps', 'update-item-photo'],
+    Manager: ['payment-in', 'salesorders', 'new-sale', 'parties', 'payments', 'catalog', 'update-party-gps', 'update-item-photo'],
+    Salesman: ['payment-in', 'salesorders', 'parties', 'catalog', 'update-item-photo'],
     Packing: ['packing', 'salesorders'],
     Delivery: ['delivery', 'salesorders'],
+};
+const ADMIN_HOME_TILE_GROUPS = {
+    signals: {
+        title: 'Hero Signals',
+        description: 'Small chips under the hero message for urgent daily focus.',
+        hiddenKey: 'hiddenSignals',
+        items: [
+            { key: 'pending-approvals', label: 'Pending approvals', note: 'Sales orders waiting for approval' },
+            { key: 'ready-for-packing', label: 'Ready for packing', note: 'Approved orders waiting for warehouse action' },
+            { key: 'delivery-exceptions', label: 'Delivery exceptions', note: 'Undelivered or returned dispatches' },
+            { key: 'pending-cheques', label: 'Pending cheques', note: 'Cheque receipts still pending clearance' },
+            { key: 'low-stock', label: 'Low stock SKUs', note: 'Items already below stock threshold' }
+        ]
+    },
+    radar: {
+        title: 'Operational Radar',
+        description: 'Priority cards for queues and bottlenecks in the main work area.',
+        hiddenKey: 'hiddenRadar',
+        items: [
+            { key: 'pending-approvals', label: 'Pending approvals', note: 'Sales orders waiting for a decision' },
+            { key: 'ready-for-packing', label: 'Ready for packing', note: 'Approved orders waiting for warehouse action' },
+            { key: 'delivery-exceptions', label: 'Delivery exceptions', note: 'Undelivered or returned dispatches' },
+            { key: 'pending-cheques', label: 'Pending cheques', note: 'Cheque receipts still pending clearance' },
+            { key: 'low-stock', label: 'Low stock SKUs', note: 'Items already below replenishment threshold' }
+        ]
+    },
+    glances: {
+        title: 'KPI Cards',
+        description: 'Large hero KPI cards for balance and collection view.',
+        hiddenKey: 'hiddenGlances',
+        items: [
+            { key: 'receivable', label: 'Receivable', note: 'Customer dues still to collect' },
+            { key: 'payable', label: 'Payable', note: 'Supplier settlements still due' },
+            { key: 'collection-efficiency', label: 'Collection efficiency', note: 'Collected against current month billing' }
+        ]
+    },
+    metrics: {
+        title: 'Metric Strip',
+        description: 'Fast-tap tiles below the chart for day-to-day entry work.',
+        hiddenKey: 'hiddenMetrics',
+        items: [
+            { key: 'collected', label: 'Collected', note: 'Current month payment inflow' },
+            { key: 'expenses', label: 'Expenses', note: 'Current month outflow' },
+            { key: 'low-stock', label: 'Low stock', note: 'Items below reorder level' },
+            { key: 'cheques', label: 'Cheques', note: 'Pending cheque clearance count' }
+        ]
+    }
+};
+const ADMIN_HOME_DEFAULT_PREFS = {
+    signals: ['pending-approvals', 'ready-for-packing', 'delivery-exceptions', 'pending-cheques', 'low-stock'],
+    hiddenSignals: ['low-stock'],
+    radar: ['pending-approvals', 'ready-for-packing', 'delivery-exceptions', 'pending-cheques', 'low-stock'],
+    hiddenRadar: ['low-stock'],
+    glances: ['receivable', 'payable', 'collection-efficiency'],
+    hiddenGlances: [],
+    metrics: ['collected', 'expenses', 'cheques', 'low-stock'],
+    hiddenMetrics: ['low-stock']
 };
 function getBottomNavTabs(user = currentUser) {
     const primaryRole = getPrimaryUserRole(user);
@@ -2028,6 +2085,113 @@ function openEditQuickActions() {
             if(!keys.length){showToast('Select at least one action','error');return;}
             saveQuickActionPrefs('${role}',keys)
          ">Save</button>`);
+}
+function getAdminHomePrefsKey(user = currentUser) {
+    const raw = normalizeIdentityValue(user?.userId || user?.name || getPrimaryUserRole(user) || 'admin');
+    return 'admin_home_prefs_' + (raw || 'admin');
+}
+function getAdminHomePrefs(user = currentUser) {
+    let raw = {};
+    try { raw = JSON.parse(localStorage.getItem(getAdminHomePrefsKey(user)) || '{}') || {}; } catch (e) { raw = {}; }
+    const prefs = {};
+    Object.entries(ADMIN_HOME_TILE_GROUPS).forEach(([groupKey, group]) => {
+        const optionKeys = group.items.map(item => item.key);
+        const defaultOrder = ADMIN_HOME_DEFAULT_PREFS[groupKey] || optionKeys;
+        const rawOrder = Array.isArray(raw[groupKey]) ? raw[groupKey].map(String) : defaultOrder;
+        const normalizedOrder = [...new Set([...rawOrder.filter(key => optionKeys.includes(key)), ...optionKeys.filter(key => !rawOrder.includes(key))])];
+        const hiddenKey = group.hiddenKey;
+        const rawHidden = Array.isArray(raw[hiddenKey]) ? raw[hiddenKey].map(String) : (ADMIN_HOME_DEFAULT_PREFS[hiddenKey] || []);
+        prefs[groupKey] = normalizedOrder;
+        prefs[hiddenKey] = [...new Set(rawHidden.filter(key => optionKeys.includes(key)))];
+    });
+    return prefs;
+}
+function saveAdminHomePrefs(prefs, user = currentUser) {
+    localStorage.setItem(getAdminHomePrefsKey(user), JSON.stringify(prefs));
+}
+function renderAdminHomePrefRows(groupKey) {
+    const group = ADMIN_HOME_TILE_GROUPS[groupKey];
+    const prefs = window._adminHomePrefsDraft || getAdminHomePrefs();
+    const hiddenSet = new Set(prefs[group.hiddenKey] || []);
+    return prefs[groupKey].map((key, idx) => {
+        const item = group.items.find(entry => entry.key === key);
+        if (!item) return '';
+        const visible = !hiddenSet.has(key);
+        return `<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border)">
+            <div style="flex:1;min-width:0">
+                <div style="font-weight:700;font-size:0.9rem;color:var(--text-primary)">${item.label}</div>
+                <div style="font-size:0.78rem;color:var(--text-muted);margin-top:2px">${item.note}</div>
+            </div>
+            <label style="display:flex;align-items:center;gap:6px;font-size:0.78rem;color:var(--text-secondary);font-weight:600;white-space:nowrap">
+                <input type="checkbox" ${visible ? 'checked' : ''} onchange="toggleAdminHomeTile('${groupKey}','${key}',this.checked)" style="width:16px;height:16px;accent-color:var(--primary)">
+                Show
+            </label>
+            <div style="display:flex;gap:6px">
+                <button class="btn btn-outline btn-sm" ${idx === 0 ? 'disabled' : ''} onclick="moveAdminHomeTile('${groupKey}','${key}',-1)" style="padding:4px 8px">Up</button>
+                <button class="btn btn-outline btn-sm" ${idx === prefs[groupKey].length - 1 ? 'disabled' : ''} onclick="moveAdminHomeTile('${groupKey}','${key}',1)" style="padding:4px 8px">Down</button>
+            </div>
+        </div>`;
+    }).join('');
+}
+function renderAdminHomePersonalizationBody() {
+    const body = $('admin-home-pref-body');
+    if (!body) return;
+    body.innerHTML = Object.entries(ADMIN_HOME_TILE_GROUPS).map(([groupKey, group]) => `
+        <div class="card" style="margin-bottom:12px;border:1px solid var(--border);box-shadow:none">
+            <div class="card-body" style="padding:14px 16px">
+                <div style="margin-bottom:10px">
+                    <div style="font-weight:800;font-size:0.96rem;color:var(--text-primary)">${group.title}</div>
+                    <div style="font-size:0.8rem;color:var(--text-muted);margin-top:3px">${group.description}</div>
+                </div>
+                ${renderAdminHomePrefRows(groupKey)}
+            </div>
+        </div>`).join('');
+}
+function openAdminHomePersonalization() {
+    window._adminHomePrefsDraft = getAdminHomePrefs();
+    openModal('Personalize Home', `
+        <div style="margin-bottom:12px;padding:12px 14px;border-radius:14px;background:rgba(249,115,22,0.08);border:1px solid rgba(249,115,22,0.18)">
+            <div style="font-weight:800;color:var(--text-primary);margin-bottom:4px">Admin Home Layout</div>
+            <div style="font-size:0.82rem;color:var(--text-muted)">Choose which tiles to show and move them up or down to control where they appear. Quick actions are already saved separately.</div>
+        </div>
+        <div style="display:flex;justify-content:flex-end;margin-bottom:10px">
+            <button class="btn btn-outline btn-sm" onclick="openEditQuickActions()">Edit Quick Actions</button>
+        </div>
+        <div id="admin-home-pref-body"></div>
+    `, `
+        <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveAdminHomePersonalization()">Save Layout</button>
+    `);
+    renderAdminHomePersonalizationBody();
+}
+function moveAdminHomeTile(groupKey, key, direction) {
+    const prefs = window._adminHomePrefsDraft || getAdminHomePrefs();
+    const order = [...(prefs[groupKey] || [])];
+    const idx = order.indexOf(key);
+    if (idx < 0) return;
+    const nextIdx = idx + direction;
+    if (nextIdx < 0 || nextIdx >= order.length) return;
+    [order[idx], order[nextIdx]] = [order[nextIdx], order[idx]];
+    prefs[groupKey] = order;
+    window._adminHomePrefsDraft = prefs;
+    renderAdminHomePersonalizationBody();
+}
+function toggleAdminHomeTile(groupKey, key, visible) {
+    const prefs = window._adminHomePrefsDraft || getAdminHomePrefs();
+    const hiddenKey = ADMIN_HOME_TILE_GROUPS[groupKey].hiddenKey;
+    const hidden = new Set(prefs[hiddenKey] || []);
+    if (visible) hidden.delete(key);
+    else hidden.add(key);
+    prefs[hiddenKey] = [...hidden];
+    window._adminHomePrefsDraft = prefs;
+    renderAdminHomePersonalizationBody();
+}
+function saveAdminHomePersonalization() {
+    const prefs = window._adminHomePrefsDraft || getAdminHomePrefs();
+    saveAdminHomePrefs(prefs);
+    closeModal();
+    renderDashboard();
+    showToast('Home layout saved!', 'success');
 }
 function showBottomNav() {
     const bn = $('bottom-nav');
@@ -2836,7 +3000,7 @@ async function buildAdminCommandCenter(model) {
     const monthlyCollectionPct = tmSales > 0 ? Math.min(100, Math.round((tmPayIn / tmSales) * 100)) : (tmPayIn > 0 ? 100 : 0);
     const workingCapital = totalReceivable - totalPayable;
     const stockExposure = inventory.length ? Math.round((lowStock / inventory.length) * 100) : 0;
-    const pressureIndex = pendingSO + approvedUnpacked + undeliveredCount + lowStock + pendingCheques;
+    const pressureIndex = pendingSO + approvedUnpacked + undeliveredCount + pendingCheques;
     const pressureTone = pressureIndex >= 24 ? 'high' : pressureIndex >= 10 ? 'busy' : pressureIndex > 0 ? 'steady' : 'calm';
     const pressureLabel = pressureTone === 'high' ? 'High pressure' : pressureTone === 'busy' ? 'Busy pulse' : pressureTone === 'steady' ? 'Stable flow' : 'Calm control';
     const focusNote = pendingSO
@@ -2845,12 +3009,13 @@ async function buildAdminCommandCenter(model) {
             ? `${approvedUnpacked} approved orders are ready for packing.`
             : undeliveredCount
                 ? `${undeliveredCount} delivery exceptions need follow-up.`
-                : lowStock
-                    ? `${lowStock} SKUs are already below stock threshold.`
+                : pendingCheques
+                    ? `${pendingCheques} cheque receipts still need clearance tracking.`
                     : 'Everything is quiet right now. This is a good window to push collections and tighten follow-ups.';
     const salesCompareHtml = salesDiff !== null
         ? `<span class="admin-dash-trend ${salesDiff >= 0 ? 'up' : 'down'}">${salesDiff >= 0 ? '+' : '-'}${Math.abs(salesDiff)}% vs last month</span>`
         : `<span class="admin-dash-trend neutral">Last month: ${currency(lmSales)}</span>`;
+    const homePrefs = getAdminHomePrefs(currentUser);
 
     const quickActionMeta = {
         'new-sale': { desc: 'Launch a fresh sale and move stock fast.', accent: '#22c55e' },
@@ -2870,15 +3035,78 @@ async function buildAdminCommandCenter(model) {
         'update-item-photo': { desc: 'Refresh visuals for catalog and selling.', accent: '#ec4899' }
     };
 
-    const radarItems = [
-        { label: 'Pending approvals', count: pendingSO, note: 'Sales orders waiting for a decision', color: '#f59e0b', fn: "navigateTo('salesorders')", icon: 'hourglass_top' },
-        { label: 'Ready for packing', count: approvedUnpacked, note: 'Approved orders waiting for warehouse action', color: '#60a5fa', fn: "navigateTo('packing')", icon: 'inventory_2' },
-        { label: 'Delivery exceptions', count: undeliveredCount, note: 'Undelivered or returned dispatches', color: '#f87171', fn: "navigateTo('delivery')", icon: 'local_shipping' },
-        { label: 'Low stock SKUs', count: lowStock, note: 'Items already below replenishment threshold', color: '#fb7185', fn: "navigateTo('inventory')", icon: 'warning' },
-        { label: 'Pending cheques', count: pendingCheques, note: 'Cheque receipts still pending clearance', color: '#fbbf24', fn: "navigateTo('reports');setTimeout(()=>showReport('chequeregister'),200)", icon: 'account_balance' }
-    ];
-    const radarMax = Math.max(...radarItems.map(item => item.count), 1);
-    const visibleSignals = radarItems.filter(item => item.count > 0).sort((a, b) => b.count - a.count).slice(0, 4);
+    const workflowCards = {
+        'pending-approvals': { key: 'pending-approvals', label: 'Pending approvals', count: pendingSO, note: 'Sales orders waiting for a decision', color: '#f59e0b', fn: "navigateTo('salesorders')", icon: 'hourglass_top' },
+        'ready-for-packing': { key: 'ready-for-packing', label: 'Ready for packing', count: approvedUnpacked, note: 'Approved orders waiting for warehouse action', color: '#60a5fa', fn: "navigateTo('packing')", icon: 'inventory_2' },
+        'delivery-exceptions': { key: 'delivery-exceptions', label: 'Delivery exceptions', count: undeliveredCount, note: 'Undelivered or returned dispatches', color: '#f87171', fn: "navigateTo('delivery')", icon: 'local_shipping' },
+        'pending-cheques': { key: 'pending-cheques', label: 'Pending cheques', count: pendingCheques, note: 'Cheque receipts still pending clearance', color: '#fbbf24', fn: "navigateTo('reports');setTimeout(()=>showReport('chequeregister'),200)", icon: 'account_balance' },
+        'low-stock': { key: 'low-stock', label: 'Low stock SKUs', count: lowStock, note: 'Items already below replenishment threshold', color: '#fb7185', fn: "navigateTo('inventory')", icon: 'warning' }
+    };
+    const glanceCards = {
+        'receivable': `
+            <button class="admin-dash-glance-card positive" onclick="window._partyBalanceFilter='receivable';navigateTo('parties')">
+                <span class="admin-dash-glance-label">Receivable</span>
+                <strong class="admin-dash-glance-value dash-count" data-kind="amount" data-val="${totalReceivable}">${currency(totalReceivable)}</strong>
+                <span class="admin-dash-glance-meta">${drParties.length} parties carrying dues</span>
+            </button>`,
+        'payable': `
+            <button class="admin-dash-glance-card negative" onclick="window._partyBalanceFilter='payable';navigateTo('parties')">
+                <span class="admin-dash-glance-label">Payable</span>
+                <strong class="admin-dash-glance-value dash-count" data-kind="amount" data-val="${totalPayable}">${currency(totalPayable)}</strong>
+                <span class="admin-dash-glance-meta">${crParties.length} parties to settle</span>
+            </button>`,
+        'collection-efficiency': `
+            <div class="admin-dash-glance-card accent">
+                <span class="admin-dash-glance-label">Collection efficiency</span>
+                <strong class="admin-dash-glance-value">${monthlyCollectionPct}%</strong>
+                <div class="admin-dash-meter compact"><span style="width:${monthlyCollectionPct}%"></span></div>
+                <span class="admin-dash-glance-meta">${currency(tmPayIn)} collected against ${currency(tmSales)}</span>
+            </div>`
+    };
+    const metricTiles = {
+        'collected': `
+            <button class="dash-pulse-tile" onclick="navigateTo('payments')" style="--tile-color:#10b981;animation-delay:0.05s">
+                <div class="dash-pulse-icon material-symbols-outlined">payments</div>
+                <div class="dash-pulse-val dash-count" data-kind="amount" data-val="${tmPayIn}" style="color:#10b981">${currency(tmPayIn)}</div>
+                <div class="dash-pulse-lbl">Collected</div>
+            </button>`,
+        'expenses': `
+            <button class="dash-pulse-tile" onclick="navigateTo('expenses')" style="--tile-color:#ef4444;animation-delay:0.1s">
+                <div class="dash-pulse-icon material-symbols-outlined">account_balance_wallet</div>
+                <div class="dash-pulse-val dash-count" data-kind="amount" data-val="${tmExp}" style="color:#ef4444">${currency(tmExp)}</div>
+                <div class="dash-pulse-lbl">Expenses</div>
+            </button>`,
+        'cheques': `
+            <button class="dash-pulse-tile${pendingCheques ? ' dash-pulse-alert' : ''}" onclick="navigateTo('reports');setTimeout(()=>showReport('chequeregister'),200)" style="--tile-color:${pendingCheques ? '#f59e0b' : 'var(--text-primary)'};animation-delay:0.15s">
+                <div class="dash-pulse-icon material-symbols-outlined">account_balance</div>
+                <div class="dash-pulse-val" style="color:${pendingCheques ? '#f59e0b' : 'var(--text-primary)'}">${pendingCheques}</div>
+                <div class="dash-pulse-lbl">Cheques</div>
+            </button>`,
+        'low-stock': `
+            <button class="dash-pulse-tile${lowStock ? ' dash-pulse-alert' : ''}" onclick="navigateTo('inventory')" style="--tile-color:${lowStock ? '#ef4444' : 'var(--text-primary)'};animation-delay:0.2s">
+                <div class="dash-pulse-icon material-symbols-outlined">inventory_2</div>
+                <div class="dash-pulse-val">${lowStock}</div>
+                <div class="dash-pulse-lbl">Low Stock</div>
+            </button>`
+    };
+    const hiddenSignals = new Set(homePrefs.hiddenSignals || []);
+    const hiddenRadar = new Set(homePrefs.hiddenRadar || []);
+    const hiddenGlances = new Set(homePrefs.hiddenGlances || []);
+    const hiddenMetrics = new Set(homePrefs.hiddenMetrics || []);
+    const visibleSignals = (homePrefs.signals || [])
+        .map(key => workflowCards[key])
+        .filter(item => item && !hiddenSignals.has(item.key) && item.count > 0)
+        .slice(0, 4);
+    const visibleRadarItems = (homePrefs.radar || [])
+        .map(key => workflowCards[key])
+        .filter(item => item && !hiddenRadar.has(item.key));
+    const visibleGlances = (homePrefs.glances || [])
+        .filter(key => glanceCards[key] && !hiddenGlances.has(key))
+        .map(key => glanceCards[key]);
+    const visibleMetrics = (homePrefs.metrics || [])
+        .filter(key => metricTiles[key] && !hiddenMetrics.has(key))
+        .map(key => metricTiles[key]);
+    const radarMax = Math.max(...visibleRadarItems.map(item => item.count), 1);
     const recentInvoices = (invoices || []).filter(i => i.status !== 'cancelled').slice(-6).reverse();
     const watchSections = [];
 
@@ -2953,22 +3181,12 @@ async function buildAdminCommandCenter(model) {
                     </div>
 
                     <div class="admin-dash-glance-grid">
-                        <button class="admin-dash-glance-card positive" onclick="window._partyBalanceFilter='receivable';navigateTo('parties')">
-                            <span class="admin-dash-glance-label">Receivable</span>
-                            <strong class="admin-dash-glance-value dash-count" data-kind="amount" data-val="${totalReceivable}">${currency(totalReceivable)}</strong>
-                            <span class="admin-dash-glance-meta">${drParties.length} parties carrying dues</span>
-                        </button>
-                        <button class="admin-dash-glance-card negative" onclick="window._partyBalanceFilter='payable';navigateTo('parties')">
-                            <span class="admin-dash-glance-label">Payable</span>
-                            <strong class="admin-dash-glance-value dash-count" data-kind="amount" data-val="${totalPayable}">${currency(totalPayable)}</strong>
-                            <span class="admin-dash-glance-meta">${crParties.length} parties to settle</span>
-                        </button>
-                        <div class="admin-dash-glance-card accent">
-                            <span class="admin-dash-glance-label">Collection efficiency</span>
-                            <strong class="admin-dash-glance-value">${monthlyCollectionPct}%</strong>
-                            <div class="admin-dash-meter compact"><span style="width:${monthlyCollectionPct}%"></span></div>
-                            <span class="admin-dash-glance-meta">${currency(tmPayIn)} collected against ${currency(tmSales)}</span>
-                        </div>
+                        ${visibleGlances.length ? visibleGlances.join('') : `
+                            <div class="admin-dash-glance-card accent">
+                                <span class="admin-dash-glance-label">Home layout</span>
+                                <strong class="admin-dash-glance-value">Customized</strong>
+                                <span class="admin-dash-glance-meta">All KPI cards are hidden. Use Customize to add them back.</span>
+                            </div>`}
                     </div>
                 </div>
 
@@ -3033,26 +3251,12 @@ async function buildAdminCommandCenter(model) {
                 <div id="dash-chart-wrap" class="admin-dash-chart-wrap"></div>
 
                 <div class="admin-dash-metric-band">
-                    <button class="dash-pulse-tile" onclick="navigateTo('payments')" style="--tile-color:#10b981;animation-delay:0.05s">
-                        <div class="dash-pulse-icon material-symbols-outlined">payments</div>
-                        <div class="dash-pulse-val dash-count" data-kind="amount" data-val="${tmPayIn}" style="color:#10b981">${currency(tmPayIn)}</div>
-                        <div class="dash-pulse-lbl">Collected</div>
-                    </button>
-                    <button class="dash-pulse-tile" onclick="navigateTo('expenses')" style="--tile-color:#ef4444;animation-delay:0.1s">
-                        <div class="dash-pulse-icon material-symbols-outlined">account_balance_wallet</div>
-                        <div class="dash-pulse-val dash-count" data-kind="amount" data-val="${tmExp}" style="color:#ef4444">${currency(tmExp)}</div>
-                        <div class="dash-pulse-lbl">Expenses</div>
-                    </button>
-                    <button class="dash-pulse-tile${lowStock ? ' dash-pulse-alert' : ''}" onclick="navigateTo('inventory')" style="--tile-color:${lowStock ? '#ef4444' : 'var(--text-primary)'};animation-delay:0.15s">
-                        <div class="dash-pulse-icon material-symbols-outlined">inventory_2</div>
-                        <div class="dash-pulse-val">${lowStock}</div>
-                        <div class="dash-pulse-lbl">Low Stock</div>
-                    </button>
-                    <button class="dash-pulse-tile${pendingCheques ? ' dash-pulse-alert' : ''}" onclick="navigateTo('reports');setTimeout(()=>showReport('chequeregister'),200)" style="--tile-color:${pendingCheques ? '#f59e0b' : 'var(--text-primary)'};animation-delay:0.2s">
-                        <div class="dash-pulse-icon material-symbols-outlined">account_balance</div>
-                        <div class="dash-pulse-val" style="color:${pendingCheques ? '#f59e0b' : 'var(--text-primary)'}">${pendingCheques}</div>
-                        <div class="dash-pulse-lbl">Cheques</div>
-                    </button>
+                    ${visibleMetrics.length ? visibleMetrics.join('') : `
+                        <div class="admin-dash-glance-card accent" style="margin:0">
+                            <span class="admin-dash-glance-label">Metric strip hidden</span>
+                            <strong class="admin-dash-glance-value">Customize</strong>
+                            <span class="admin-dash-glance-meta">Add back the tiles you want under the chart.</span>
+                        </div>`}
                 </div>
             </div>
 
@@ -3064,7 +3268,7 @@ async function buildAdminCommandCenter(model) {
                     </div>
                 </div>
                 <div class="admin-dash-radar-list">
-                    ${radarItems.map(item => `
+                    ${visibleRadarItems.length ? visibleRadarItems.map(item => `
                         <button class="admin-dash-radar-item" onclick="${item.fn}">
                             <div class="admin-dash-radar-top">
                                 <div class="admin-dash-radar-title">
@@ -3079,7 +3283,12 @@ async function buildAdminCommandCenter(model) {
                             <div class="admin-dash-radar-meter">
                                 <span style="width:${Math.max(8, Math.round((item.count / radarMax) * 100))}%;background:${item.color}"></span>
                             </div>
-                        </button>`).join('')}
+                        </button>`).join('') : `
+                        <div class="empty-state" style="padding:24px">
+                            <div class="empty-icon"></div>
+                            <p>No radar cards selected</p>
+                            <p class="empty-subtitle">Use Customize to show the operational queues you want on home.</p>
+                        </div>`}
                 </div>
             </div>
         </section>
@@ -3090,9 +3299,9 @@ async function buildAdminCommandCenter(model) {
                     <span class="admin-dash-panel-eyebrow">Launchpad</span>
                     <h3>Move the business from here</h3>
                 </div>
-                <button class="admin-dash-edit-btn" onclick="openEditQuickActions()" title="Edit Quick Actions">
+                <button class="admin-dash-edit-btn" onclick="openAdminHomePersonalization()" title="Customize Home">
                     <span class="material-symbols-outlined">tune</span>
-                    <span>Edit</span>
+                    <span>Customize</span>
                 </button>
             </div>
             <div class="admin-dash-actions-grid">
