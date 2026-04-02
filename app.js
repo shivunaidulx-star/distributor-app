@@ -554,6 +554,8 @@ const ColumnManager = {
             { key: 'partyCode', label: 'Party Code', visible: true },
             { key: 'type', label: 'Type', visible: true },
             { key: 'phone', label: 'Phone', visible: true },
+            { key: 'area', label: 'Area / Route', visible: false },
+            { key: 'routeCode', label: 'Route Code', visible: false },
             { key: 'city', label: 'City', visible: true },
             { key: 'postCode', label: 'Post Code', visible: true },
             { key: 'paymentTerms', label: 'Payment Terms', visible: true },
@@ -1664,7 +1666,7 @@ function buildPartySearchList(parties) {
         code: p.partyCode || '',
         stockText: p.phone || '',
         // Enhanced search text to include the Code/ID
-        searchText: `${p.name} ${p.phone || ''} ${p.partyCode || ''}`.toLowerCase(),
+        searchText: `${p.name} ${p.phone || ''} ${p.partyCode || ''} ${p.routeCode || ''} ${p.area || ''}`.toLowerCase(),
         paymentTerms: p.paymentTerms || '',
         creditLimit: p.creditLimit || 0,
         balance: p.balance || 0
@@ -2066,6 +2068,17 @@ function currentMonthStart(baseDate = null) {
     const offset = d.getTimezoneOffset() * 60000;
     return new Date(d.getTime() - offset).toISOString().split('T')[0];
 }
+function getMonthDateRange(monthValue = '') {
+    const normalized = /^\d{4}-\d{2}$/.test(monthValue)
+        ? monthValue
+        : currentMonthStart().substring(0, 7);
+    const [year, month] = normalized.split('-').map(Number);
+    const lastDay = String(new Date(year, month, 0).getDate()).padStart(2, '0');
+    return {
+        start: `${normalized}-01`,
+        end: `${normalized}-${lastDay}`
+    };
+}
 function normalizeIdentityValue(value) {
     return String(value ?? '').trim().toLowerCase();
 }
@@ -2106,15 +2119,33 @@ function getPaymentReferenceNo(payment) {
     if (!payment) return '';
     return String(payment.payNo || payment.receiptNo || payment.id || '').trim();
 }
+function findInvoiceByAnyNo(invoiceRef, invoices = DB.cache['invoices'] || []) {
+    const key = normalizeIdentityValue(invoiceRef);
+    if (!key) return null;
+    return (invoices || []).find(inv =>
+        normalizeIdentityValue(inv?.invoiceNo) === key ||
+        normalizeIdentityValue(inv?.vyaparInvoiceNo) === key
+    ) || null;
+}
+function getInvoiceDisplayNo(invoiceLike, invoices = DB.cache['invoices'] || []) {
+    if (!invoiceLike) return '';
+    const inv = typeof invoiceLike === 'string' ? findInvoiceByAnyNo(invoiceLike, invoices) : invoiceLike;
+    if (!inv) return String(invoiceLike || '');
+    return String(inv.vyaparInvoiceNo || inv.invoiceNo || '').trim();
+}
+function buildOpeningBalanceInvoiceNo(type = 'sale') {
+    const prefix = type === 'purchase' ? 'OBP-' : 'OBS-';
+    return `${prefix}${DB.id().replace(/[^a-z0-9]/gi, '').slice(0, 10).toUpperCase()}`;
+}
 function getPaymentInvoiceSummary(payment) {
     if (!payment) return '';
     if (payment.allocations && Object.keys(payment.allocations).length > 0) {
         return Object.entries(payment.allocations)
-            .map(([invoiceNo, amount]) => `${invoiceNo} (${currency(amount)})`)
+            .map(([invoiceNo, amount]) => `${getInvoiceDisplayNo(invoiceNo)} (${currency(amount)})`)
             .join(', ');
     }
     if (!payment.invoiceNo || payment.invoiceNo === 'Advance') return 'Advance / Unallocated';
-    return payment.invoiceNo;
+    return getInvoiceDisplayNo(payment.invoiceNo);
 }
 function isSalesman() {
     const r = (currentUser?.role || '').toLowerCase();
@@ -2776,6 +2807,8 @@ function renderPartyRows(parties) {
             partyCode: `<td style="min-width:100px;font-family:monospace;font-size:0.82rem;color:var(--accent)">${p.partyCode || '-'}</td>`,
             type: `<td style="min-width:90px"><span class="badge ${p.type === 'Customer' ? 'badge-success' : 'badge-info'}">${p.type}</span></td>`,
             phone: `<td style="min-width:120px">${p.phone || '-'}</td>`,
+            area: `<td style="min-width:120px;font-size:0.82rem">${escapeHtml(p.area || '-')}</td>`,
+            routeCode: `<td style="min-width:100px;font-family:monospace;font-size:0.82rem;color:var(--info)">${escapeHtml(p.routeCode || '-')}</td>`,
             gstin: `<td style="min-width:130px;font-size:0.82rem">${p.gstin || '-'}</td>`,
             balance: `<td style="min-width:120px;text-align:right" class="${(p.balance || 0) > 0 ? 'amount-green' : 'amount-red'}">${currency(Math.abs(p.balance || 0))} ${(p.balance || 0) > 0 ? '(Dr)' : '(Cr)'}</td>`,
             actions: `<td style="min-width:150px"><div class="action-btns">
@@ -2801,6 +2834,9 @@ async function filterPartyTable() {
     if (search) parties = parties.filter(p =>
         (p.name || '').toLowerCase().includes(search) ||
         (p.partyCode || '').toLowerCase().includes(search) ||
+        (p.routeCode || '').toLowerCase().includes(search) ||
+        (p.area || '').toLowerCase().includes(search) ||
+        (p.group || '').toLowerCase().includes(search) ||
         (p.phone || '').includes(search) ||
         (p.city || '').toLowerCase().includes(search) ||
         (p.postCode || '').includes(search) ||
@@ -2895,13 +2931,14 @@ async function openPartyModal(id) {
         <div class="form-row"><div class="form-group"><label>Type</label><select id="f-party-type" data-is-new="${!p}" onchange="onPartyTypeChange(this)"><option ${p && p.type === 'Customer' ? 'selected' : ''}>Customer</option><option ${p && p.type === 'Supplier' ? 'selected' : ''}>Supplier</option></select></div>
         <div class="form-group"><label>Phone</label><input id="f-party-phone" value="${p ? p.phone || '' : ''}"></div></div>
         <div class="form-row"><div class="form-group"><label>Party Group / Category</label><input id="f-party-group" value="${p ? p.group || '' : ''}" placeholder="e.g. Retailer, Wholesaler, Chain..."></div>
-        <div class="form-group"><label>Area / Route</label><input id="f-party-area" value="${p ? p.area || '' : ''}" placeholder="e.g. Town, Route-1" onchange="onPartyAreaChange(this)" onblur="onPartyAreaChange(this)"></div></div>
+        <div class="form-group"><label>Area / Route</label><input id="f-party-area" value="${p ? p.area || '' : ''}" placeholder="e.g. Town, Route-1" onchange="onPartyAreaChange(this)" onblur="onPartyAreaChange(this)"></div>
+        <div class="form-group"><label>Route Code</label><input id="f-party-route-code" value="${p ? p.routeCode || '' : ''}" placeholder="e.g. R001" style="text-transform:uppercase;font-family:monospace" oninput="this.value=this.value.toUpperCase().replace(/[^A-Z0-9-]/g,'')"></div></div>
         <div class="form-row"><div class="form-group"><label>City</label><input id="f-party-city" value="${p ? p.city || '' : ''}"></div>
         <div class="form-group"><label>Post Code</label><input id="f-party-postcode" value="${p ? p.postCode || '' : ''}" placeholder="PIN / ZIP"></div></div>
         <div class="form-row"><div class="form-group"><label>GSTIN</label><input id="f-party-gstin" value="${p ? p.gstin || '' : ''}"></div>
         <div class="form-group"><label>Payment Terms</label><select id="f-party-terms">
             <option value="">-- None / Default --</option>
-            ${getPaymentTermsList().map(t => `<option value="${escapeHtml(t.name)}" ${p && p.paymentTerms === t.name ? 'selected' : ''}>${escapeHtml(t.name)} (${t.days}d)</option>`).join('')}
+            ${getPaymentTermsList().map(t => `<option value="${escapeHtml(t.name)}" ${p && p.paymentTerms && p.paymentTerms.toUpperCase().replace(/\s+/g,'') === t.name.toUpperCase().replace(/\s+/g,'') ? 'selected' : ''}>${escapeHtml(t.name)} (${t.days}d)</option>`).join('')}
         </select></div></div>
         <div class="form-group"><label>Address</label><input id="f-party-addr" value="${p ? p.address || '' : ''}" placeholder="Street, Area..."></div>
         <div class="form-group">
@@ -2951,6 +2988,7 @@ async function saveParty(id) {
         postCode: $('f-party-postcode') ? $('f-party-postcode').value.trim() : '',
         group: $('f-party-group') ? $('f-party-group').value.trim() : '',
         area: $('f-party-area') ? $('f-party-area').value.trim() : '',
+        routeCode: $('f-party-route-code') ? $('f-party-route-code').value.trim().toUpperCase() : '',
         paymentTerms: $('f-party-terms') ? $('f-party-terms').value : '',
         lat: latVal ? parseFloat(latVal) : null,
         lng: lngVal ? parseFloat(lngVal) : null,
@@ -3334,20 +3372,76 @@ async function deleteParty(id) {
 
 // --- Party Excel Import ---
 function downloadPartyTemplate() {
-    let csv = 'Party Code *,Name *,Type (Customer/Supplier) *,Phone,GSTIN,Address,City,Post Code,Location Lat,Location Lng,Opening Balance,Credit Limit,Payment Terms (COD/Net7/Net15/Net30/Net60),Blocked (true/false)\n';
-    csv += 'ACME,Acme Corp,Customer,9988776655,27AADCA2230M1Z2,123 Main St,Mumbai,400001,19.0760,72.8777,1000,50000,Net30,false\n';
-    csv += 'GLOB,Global Supplies,Supplier,9876543210,,45 Park Ave,Delhi,110001,,0,0,COD,false\n';
-    csv += 'RAJE,Raj Traders,Customer,9876500001,29ABCDE1234F1Z5,MG Road,Bangalore,560001,12.9716,77.5946,500,20000,Net15,false\n';
+    const sampleRows = [
+        {
+            partyCode: 'ACME',
+            name: 'Acme Corp',
+            type: 'Customer',
+            phone: '9988776655',
+            gstin: '27AADCA2230M1Z2',
+            address: '123 Main St',
+            city: 'Mumbai',
+            postCode: '400001',
+            lat: '19.0760',
+            lng: '72.8777',
+            group: 'Retailer',
+            area: 'Town',
+            routeCode: 'R001',
+            balance: 1000,
+            creditLimit: 50000,
+            paymentTerms: 'Net30',
+            blocked: false
+        },
+        {
+            partyCode: 'GLOB',
+            name: 'Global Supplies',
+            type: 'Supplier',
+            phone: '9876543210',
+            gstin: '',
+            address: '45 Park Ave',
+            city: 'Delhi',
+            postCode: '110001',
+            lat: '',
+            lng: '',
+            group: 'Distributor',
+            area: 'North Route',
+            routeCode: 'NR01',
+            balance: 0,
+            creditLimit: 0,
+            paymentTerms: 'COD',
+            blocked: false
+        },
+        {
+            partyCode: 'RAJE',
+            name: 'Raj Traders',
+            type: 'Customer',
+            phone: '9876500001',
+            gstin: '29ABCDE1234F1Z5',
+            address: 'MG Road',
+            city: 'Bangalore',
+            postCode: '560001',
+            lat: '12.9716',
+            lng: '77.5946',
+            group: 'Wholesaler',
+            area: 'Route-1',
+            routeCode: 'BLR01',
+            balance: 500,
+            creditLimit: 20000,
+            paymentTerms: 'Net15',
+            blocked: false
+        }
+    ];
+    const csv = [PARTY_TEMPLATE_HEADERS.join(','), ...sampleRows.map(buildPartyTemplateCsvRow)].join('\n') + '\n';
     downloadCSV(csv, 'party_import_template.csv');
     showToast('Party template downloaded!', 'success');
 }
 
 function downloadOpeningBalTemplate() {
-    let csv = 'Party Code *,Party Name *,Party Type (Customer/Supplier),Invoice No *,Invoice Date (YYYY-MM-DD) *,Invoice Amount *,Due Date (YYYY-MM-DD),Notes\n';
-    csv += 'ACME,Acme Corp,Customer,INV-001,2024-01-15,15000,2024-02-14,Outstanding from Jan\n';
-    csv += 'ACME,Acme Corp,Customer,INV-002,2024-02-10,8500,2024-03-11,\n';
-    csv += 'RAJE,Raj Enterprises,Customer,INV-101,2024-03-01,22000,2024-03-31,\n';
-    csv += 'GLOB,Global Supplies,Supplier,PINV-55,2024-02-20,45000,2024-03-20,Purchase outstanding\n';
+    let csv = 'Party Code,Party Name *,Party Type (Customer/Supplier),Vyapar Invoice No *,Invoice Date (YYYY-MM-DD) *,Invoice Amount *,Due Date (YYYY-MM-DD),Assigned User / Collector,Notes\n';
+    csv += 'ACME,Acme Corp,Customer,INV-001,2024-01-15,15000,2024-02-14,Ram,Outstanding from Jan\n';
+    csv += 'ACME,Acme Corp,Customer,INV-002,2024-02-10,8500,2024-03-11,Ram,\n';
+    csv += 'RAJE,Raj Enterprises,Customer,INV-101,2024-03-01,22000,2024-03-31,Sita,\n';
+    csv += 'GLOB,Global Supplies,Supplier,PINV-55,2024-02-20,45000,2024-03-20,,Purchase outstanding\n';
     downloadCSV(csv, 'opening_balance_import_template.csv');
     showToast('Opening balance template downloaded!', 'success');
 }
@@ -3383,31 +3477,107 @@ async function processOpeningBalImport(event) {
     if (lines.length < 2) return alert('File is empty or has no data rows');
 
     const parties = DB.get('db_parties') || [];
+    const users = getCachedUsers().filter(u => ['Admin', 'Manager', 'Salesman'].includes(u.role));
+    const invoices = await DB.getAll('invoices');
     const errors = [];
     const preview = [];
+    const headerCols = parseCSVLine(lines[0]).map(c => String(c || '').trim());
+    const headerMap = {};
+    headerCols.forEach((header, index) => {
+        const key = String(header || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+        if (key) headerMap[key] = index;
+    });
+    const existingInvoiceKeys = new Set();
+    invoices.forEach(inv => {
+        [inv.invoiceNo, inv.vyaparInvoiceNo].forEach(value => {
+            const key = normalizeIdentityValue(value);
+            if (key) existingInvoiceKeys.add(key);
+        });
+    });
+    const importInvoiceKeys = new Set();
+
+    const getCell = (cols, ...keys) => {
+        for (const key of keys) {
+            const idx = headerMap[key];
+            if (idx !== undefined) return (cols[idx] || '').trim();
+        }
+        return '';
+    };
+    const parseImportDate = (rawValue) => {
+        const value = String(rawValue || '').trim();
+        if (!value) return '';
+        if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+        if (/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4}$/.test(value)) {
+            const [dd, mm, yyyy] = value.split(/[\/\-]/);
+            return `${yyyy}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`;
+        }
+        const parsed = new Date(value);
+        return Number.isNaN(parsed.getTime()) ? '' : new Date(parsed.getTime() - parsed.getTimezoneOffset() * 60000).toISOString().split('T')[0];
+    };
+    const parseImportAmount = (rawValue) => {
+        const cleaned = String(rawValue || '').replace(/,/g, '').replace(/[^\d.-]/g, '');
+        return parseFloat(cleaned);
+    };
 
     for (let i = 1; i < lines.length; i++) {
         const cols = parseCSVLine(lines[i]);
-        const [partyCode, partyName, partyType, invoiceNo, invoiceDate, amountStr, dueDate, notes] = cols;
-        if (!partyName || !invoiceNo || !invoiceDate || !amountStr) {
-            errors.push(`Row ${i + 1}: Missing required fields (Party Name, Invoice No, Invoice Date, Amount)`);
+        const colsMapped = cols.map(c => (c || '').trim());
+        if (!colsMapped.length || colsMapped.every(c => !c)) continue;
+
+        const partyCode = getCell(colsMapped, 'party_code', 'partycode', 'customer_id', 'customerid', 'code');
+        const partyName = getCell(colsMapped, 'party_name', 'partyname', 'customer_name', 'customername', 'party', 'customer', 'name');
+        const partyType = getCell(colsMapped, 'party_type', 'partytype', 'party_type_customer_supplier', 'type') || 'Customer';
+        const invoiceNo = getCell(colsMapped, 'vyapar_invoice_no', 'vyapar_invoice', 'invoice_no', 'invoiceno', 'bill_no', 'billno', 'voucher_no', 'ref_no');
+        const invoiceDate = parseImportDate(getCell(colsMapped, 'invoice_date', 'invoice_date_yyyy_mm_dd', 'invoicedate', 'bill_date', 'billdate', 'invoice_dt', 'date'));
+        const amount = parseImportAmount(getCell(colsMapped, 'invoice_amount', 'invoiceamount', 'amount', 'balance', 'outstanding', 'outstanding_amount', 'due_amount'));
+        const dueDate = parseImportDate(getCell(colsMapped, 'due_date', 'due_date_yyyy_mm_dd', 'duedate', 'due_dt'));
+        const assignedRaw = getCell(colsMapped, 'assigned_user_collector', 'assigned_user', 'assigned_to', 'collector', 'collected_by', 'user_name', 'username', 'salesman', 'user');
+        const notes = getCell(colsMapped, 'notes', 'note', 'remark', 'remarks', 'description');
+
+        if (!partyName || !invoiceNo || !invoiceDate || !Number.isFinite(amount)) {
+            errors.push(`Row ${i + 1}: Missing required fields (Party Name, Vyapar Invoice No, Invoice Date, Amount)`);
             continue;
         }
-        const amount = parseFloat(amountStr);
-        if (isNaN(amount) || amount <= 0) { errors.push(`Row ${i + 1}: Invalid amount "${amountStr}"`); continue; }
+        if (amount <= 0) { errors.push(`Row ${i + 1}: Invalid amount "${colsMapped.join(' | ')}"`); continue; }
+
+        const invoiceKey = normalizeIdentityValue(invoiceNo);
+        if (existingInvoiceKeys.has(invoiceKey)) {
+            errors.push(`Row ${i + 1}: Invoice "${invoiceNo}" already exists in the system.`);
+            continue;
+        }
+        if (importInvoiceKeys.has(invoiceKey)) {
+            errors.push(`Row ${i + 1}: Duplicate invoice "${invoiceNo}" in the import file.`);
+            continue;
+        }
+        importInvoiceKeys.add(invoiceKey);
+
         // Find existing party by partyCode first, then by name
         const existing = parties.find(p => p.partyCode && (p.partyCode || '').toUpperCase() === (partyCode || '').trim().toUpperCase())
             || parties.find(p => (p.name || '').toLowerCase() === (partyName || '').trim().toLowerCase());
+        const partyKey = existing ? `existing:${existing.id}` : (partyCode ? `code:${partyCode.toUpperCase()}` : `name:${partyName.trim().toLowerCase()}`);
+        const invType = (partyType || 'Customer').toLowerCase().includes('supp') ? 'purchase' : 'sale';
+        let assignedTo = '';
+        if (assignedRaw && invType === 'sale') {
+            const matchedUser = findUserByIdentity(assignedRaw, users);
+            if (!matchedUser) {
+                errors.push(`Row ${i + 1}: Assigned user "${assignedRaw}" was not found.`);
+                continue;
+            }
+            assignedTo = matchedUser.name;
+        }
+
         preview.push({
             partyCode: (partyCode || '').trim().toUpperCase(),
             partyName: (partyName || '').trim(),
             partyType: (partyType || 'Customer').trim() || 'Customer',
             invoiceNo: (invoiceNo || '').trim(),
-            invoiceDate: (invoiceDate || '').trim(),
+            invoiceDate,
             amount,
-            dueDate: (dueDate || '').trim(),
-            notes: (notes || '').trim(),
-            existingParty: existing || null,
+            dueDate,
+            assignedTo,
+            notes,
+            existingPartyId: existing ? existing.id : '',
+            partyKey,
             action: existing ? 'update' : 'create'
         });
     }
@@ -3423,12 +3593,14 @@ async function processOpeningBalImport(event) {
         <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:12px">${preview.length} invoice rows ready to import. Parties marked <span style="color:#22c55e;font-weight:600">CREATE</span> will be created, <span style="color:#3b82f6;font-weight:600">UPDATE</span> will have balance added.</p>
         <div class="table-wrapper" style="max-height:300px;overflow-y:auto">
         <table class="data-table" style="font-size:0.8rem">
-            <thead><tr><th>Party Code</th><th>Party Name</th><th>Invoice No</th><th>Date</th><th>Amount</th><th>Action</th></tr></thead>
+            <thead><tr><th>Party Code</th><th>Party Name</th><th>Vyapar Invoice No</th><th>Date</th><th>Due</th><th>Assigned</th><th>Amount</th><th>Action</th></tr></thead>
             <tbody>${preview.map(r => `<tr>
                 <td style="font-family:monospace;font-weight:600">${r.partyCode}</td>
                 <td>${r.partyName}</td>
                 <td style="font-family:monospace">${r.invoiceNo}</td>
                 <td>${r.invoiceDate}</td>
+                <td>${r.dueDate || '-'}</td>
+                <td>${escapeHtml(r.assignedTo || '-')}</td>
                 <td style="font-weight:600;color:var(--accent)">${currency(r.amount)}</td>
                 <td><span class="badge ${r.action === 'create' ? 'badge-success' : 'badge-info'}">${r.action.toUpperCase()}</span></td>
             </tr>`).join('')}</tbody>
@@ -3443,31 +3615,33 @@ async function confirmOpeningBalImport() {
     if (!el) return;
     const rows = JSON.parse(el.value.replace(/&apos;/g, "'"));
     let created = 0, updated = 0, docCount = 0;
+    const parties = await DB.getAll('parties');
 
     // Group by partyCode
     const byParty = {};
     for (const r of rows) {
-        if (!byParty[r.partyCode]) byParty[r.partyCode] = { info: r, docs: [] };
-        byParty[r.partyCode].docs.push(r);
+        if (!byParty[r.partyKey]) byParty[r.partyKey] = { info: r, docs: [] };
+        byParty[r.partyKey].docs.push(r);
     }
 
     try {
-        for (const [code, group] of Object.entries(byParty)) {
+        for (const [, group] of Object.entries(byParty)) {
             const { info } = group;
             const totalAmount = group.docs.reduce((s, r) => s + r.amount, 0);
             let partyId, partyName;
+            const existingParty = info.existingPartyId ? parties.find(p => p.id === info.existingPartyId) : null;
 
-            if (info.existingParty) {
-                partyId = info.existingParty.id;
-                partyName = info.existingParty.name;
-                const newBal = (info.existingParty.balance || 0) + totalAmount;
-                await DB.rawUpdate('parties', partyId, { balance: newBal, party_code: code });
+            if (existingParty) {
+                partyId = existingParty.id;
+                partyName = existingParty.name;
+                const newBal = (existingParty.balance || 0) + totalAmount;
+                await DB.rawUpdate('parties', partyId, { balance: newBal, party_code: info.partyCode || existingParty.partyCode || null });
                 updated++;
             } else {
                 // Let Supabase generate the UUID — don't pass custom id
                 const newParty = await DB.rawInsert('parties', {
                     name: info.partyName,
-                    party_code: code,
+                    party_code: info.partyCode || null,
                     type: info.partyType || 'Customer',
                     balance: totalAmount,
                     credit_limit: 0,
@@ -3480,7 +3654,7 @@ async function confirmOpeningBalImport() {
             }
 
             // Create party_ledger + invoices entries per document
-            let runningBal = info.existingParty ? (info.existingParty.balance || 0) : 0;
+            let runningBal = existingParty ? (existingParty.balance || 0) : 0;
             for (const r of group.docs) {
                 runningBal += r.amount;
                 // Party ledger entry
@@ -3493,12 +3667,14 @@ async function confirmOpeningBalImport() {
                     runningBalance: runningBal,
                     documentNo: r.invoiceNo,
                     reason: r.notes || 'Opening balance import',
-                    createdBy: currentUser ? currentUser.name : 'Import'
+                    createdBy: currentUser ? (currentUser.userId || currentUser.name) : 'Import'
                 });
                 // Invoice record so it appears in invoices list & payment allocation
                 const invType = (r.partyType || 'Customer').toLowerCase().includes('supp') ? 'purchase' : 'sale';
+                const systemInvoiceNo = buildOpeningBalanceInvoiceNo(invType);
                 await DB.rawInsert('invoices', {
-                    invoice_no: r.invoiceNo,
+                    invoice_no: systemInvoiceNo,
+                    vyapar_invoice_no: r.invoiceNo,
                     date: r.invoiceDate,
                     due_date: r.dueDate || null,
                     type: invType,
@@ -3512,7 +3688,9 @@ async function confirmOpeningBalImport() {
                     discount_pct: 0,
                     discount_amt: 0,
                     status: 'posted',
-                    created_by: currentUser ? currentUser.name : 'Import'
+                    created_by: currentUser ? (currentUser.userId || currentUser.name) : 'Import',
+                    assigned_to: invType === 'sale' ? (r.assignedTo || null) : null,
+                    handover_date: invType === 'sale' && r.assignedTo ? today() : null
                 });
                 docCount++;
             }
@@ -3550,15 +3728,42 @@ function processPartyImport(event) {
         const errors = [];
         pendingPartyImports = [];
         const parties = DB.get('db_parties') || [];
+        const headerCols = parseCSVLine(lines[0]).map(c => String(c || '').trim());
+        const headerMap = {};
+        headerCols.forEach((header, index) => {
+            const key = String(header || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+            if (key) headerMap[key] = index;
+        });
+        const getCell = (cols, ...keys) => {
+            for (const key of keys) {
+                const idx = headerMap[key];
+                if (idx !== undefined) return (cols[idx] || '').trim();
+            }
+            return '';
+        };
         for (let i = 1; i < lines.length; i++) {
             const cols = parseCSVLine(lines[i]);
             const colsMapped = cols.map(c => (c || '').trim());
             // Silently skip phantom rows and structural group headers
             if (colsMapped.length < 2 || colsMapped.filter(c => c).length < 2) continue;
-            
-            // Expected Order (matching template):
-            // 0:PartyCode, 1:Name, 2:Type, 3:Phone, 4:GSTIN, 5:Address, 6:City, 7:PostCode, 8:Lat, 9:Lng, 10:OpeningBal, 11:CreditLimit, 12:PayTerms, 13:Blocked
-            const [rawPartyCode, name, typeStr, phone, gstin, address, city, postCode, lat, lng, balStr, creditLimitStr, paymentTerms, blockedStr] = colsMapped;
+
+            const rawPartyCode = getCell(colsMapped, 'party_code', 'partycode', 'code', 'customer_id', 'customerid') || colsMapped[0] || '';
+            const name = getCell(colsMapped, 'name', 'party_name', 'partyname', 'customer_name', 'customername') || colsMapped[1] || '';
+            const typeStr = getCell(colsMapped, 'type_customer_supplier', 'type', 'party_type', 'partytype') || colsMapped[2] || '';
+            const phone = getCell(colsMapped, 'phone', 'mobile', 'contact_no', 'contact_number') || colsMapped[3] || '';
+            const gstin = getCell(colsMapped, 'gstin', 'gst_no', 'gst_number') || colsMapped[4] || '';
+            const address = getCell(colsMapped, 'address', 'addr', 'full_address') || colsMapped[5] || '';
+            const city = getCell(colsMapped, 'city', 'town') || colsMapped[6] || '';
+            const postCode = getCell(colsMapped, 'post_code', 'postcode', 'pin', 'pincode', 'zip') || colsMapped[7] || '';
+            const lat = getCell(colsMapped, 'location_lat', 'lat', 'latitude') || colsMapped[8] || '';
+            const lng = getCell(colsMapped, 'location_lng', 'lng', 'longitude') || colsMapped[9] || '';
+            const group = getCell(colsMapped, 'party_group_category', 'party_group', 'group', 'category');
+            const area = getCell(colsMapped, 'area_route', 'area', 'route');
+            const routeCode = getCell(colsMapped, 'route_code', 'routecode');
+            const balStr = getCell(colsMapped, 'opening_balance', 'balance') || colsMapped[10] || '';
+            const creditLimitStr = getCell(colsMapped, 'credit_limit', 'creditlimit') || colsMapped[11] || '';
+            const paymentTerms = getCell(colsMapped, 'payment_terms_cod_net7_net15_net30_net60', 'payment_terms', 'paymentterms', 'terms') || colsMapped[12] || '';
+            const blockedStr = getCell(colsMapped, 'blocked_true_false', 'blocked') || colsMapped[13] || '';
             const partyCode = rawPartyCode ? rawPartyCode.toUpperCase() : null;
 
             if (!name) { errors.push(`Row ${i + 1}: Name is empty`); continue; }
@@ -3582,6 +3787,9 @@ function processPartyImport(event) {
                 name, partyCode: partyCode, type: partyType,
                 phone: phone || '', city: city || '', gstin: gstin || '', address: address || '',
                 postCode: postCode || '',
+                group: group || (existingParty ? (existingParty.group || '') : ''),
+                area: area || (existingParty ? (existingParty.area || '') : ''),
+                routeCode: (routeCode || (existingParty ? (existingParty.routeCode || '') : '')).toUpperCase(),
                 lat: (lat && !isNaN(lat)) ? +lat : null,
                 lng: (lng && !isNaN(lng)) ? +lng : null,
                 balance: existingParty ? (existingParty.balance || 0) : balance,
@@ -3635,7 +3843,7 @@ function showPartyImportPreview(errors) {
 
     if (pendingPartyImports.length) {
         html += `<div style="max-height:350px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius-sm)">
-            <table class="data-table" style="font-size:0.85rem"><thead><tr><th>Code</th><th>Name</th><th>Type</th><th>Phone</th><th>City</th><th>GSTIN</th><th>Address</th><th>Status</th><th></th></tr></thead>
+            <table class="data-table" style="font-size:0.85rem"><thead><tr><th>Code</th><th>Name</th><th>Type</th><th>Phone</th><th>Area / Route</th><th>Route Code</th><th>City</th><th>Status</th><th></th></tr></thead>
             <tbody>${pendingPartyImports.map((p, idx) => `<tr id="pi-row-${idx}">
                 <td><input value="${p.partyCode || ''}" onchange="pendingPartyImports[${idx}].partyCode=this.value.toUpperCase()" style="width:70px;background:var(--bg-input);border:1px solid var(--border);border-radius:4px;padding:4px 6px;color:var(--text-primary);font-size:0.82rem;font-family:monospace"></td>
                 <td><input value="${p.name}" onchange="pendingPartyImports[${idx}].name=this.value" style="width:100%;background:var(--bg-input);border:1px solid var(--border);border-radius:4px;padding:4px 6px;color:var(--text-primary);font-size:0.85rem"></td>
@@ -3644,9 +3852,9 @@ function showPartyImportPreview(errors) {
                     <option value="Supplier" ${p.type === 'Supplier' ? 'selected' : ''}>Supplier</option>
                 </select></td>
                 <td><input value="${p.phone}" onchange="pendingPartyImports[${idx}].phone=this.value" style="width:80px;background:var(--bg-input);border:1px solid var(--border);border-radius:4px;padding:4px 6px;color:var(--text-primary);font-size:0.85rem"></td>
+                <td><input value="${p.area || ''}" onchange="pendingPartyImports[${idx}].area=this.value" style="width:110px;background:var(--bg-input);border:1px solid var(--border);border-radius:4px;padding:4px 6px;color:var(--text-primary);font-size:0.85rem"></td>
+                <td><input value="${p.routeCode || ''}" onchange="pendingPartyImports[${idx}].routeCode=this.value.toUpperCase()" style="width:90px;background:var(--bg-input);border:1px solid var(--border);border-radius:4px;padding:4px 6px;color:var(--text-primary);font-size:0.82rem;font-family:monospace"></td>
                 <td><input value="${p.city}" onchange="pendingPartyImports[${idx}].city=this.value" style="width:70px;background:var(--bg-input);border:1px solid var(--border);border-radius:4px;padding:4px 6px;color:var(--text-primary);font-size:0.85rem"></td>
-                <td><input value="${p.gstin}" onchange="pendingPartyImports[${idx}].gstin=this.value" style="width:100px;background:var(--bg-input);border:1px solid var(--border);border-radius:4px;padding:4px 6px;color:var(--text-primary);font-size:0.85rem"></td>
-                <td><input value="${p.address}" onchange="pendingPartyImports[${idx}].address=this.value" style="width:100px;background:var(--bg-input);border:1px solid var(--border);border-radius:4px;padding:4px 6px;color:var(--text-primary);font-size:0.85rem"></td>
                 <td><span class="badge ${p.isUpdate ? 'badge-warning' : 'badge-success'}">${p.isUpdate ? 'Update' : 'New'}</span></td>
                 <td><button class="btn-icon" onclick="pendingPartyImports.splice(${idx},1);showPartyImportPreview()" title="Remove" style="color:var(--danger)"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button></td>
             </tr>`).join('')}</tbody></table>
@@ -5527,6 +5735,49 @@ function toCsvCell(value) {
     return /[",\r\n]/.test(normalized) ? `"${normalized.replace(/"/g, '""')}"` : normalized;
 }
 
+const PARTY_TEMPLATE_HEADERS = [
+    'Party Code',
+    'Name *',
+    'Type (Customer/Supplier) *',
+    'Phone',
+    'GSTIN',
+    'Address',
+    'City',
+    'Post Code',
+    'Location Lat',
+    'Location Lng',
+    'Party Group / Category',
+    'Area / Route',
+    'Route Code',
+    'Opening Balance',
+    'Credit Limit',
+    'Payment Terms (COD/Net7/Net15/Net30/Net60)',
+    'Blocked (true/false)'
+];
+
+function buildPartyTemplateCsvRow(party) {
+    const safeParty = party || {};
+    return [
+        safeParty.partyCode || '',
+        safeParty.name || '',
+        safeParty.type || 'Customer',
+        safeParty.phone || '',
+        safeParty.gstin || '',
+        safeParty.address || '',
+        safeParty.city || '',
+        safeParty.postCode || '',
+        safeParty.lat ?? '',
+        safeParty.lng ?? '',
+        safeParty.group || '',
+        safeParty.area || '',
+        safeParty.routeCode || '',
+        safeParty.balance ?? 0,
+        safeParty.creditLimit ?? 0,
+        safeParty.paymentTerms || '',
+        safeParty.blocked ? 'true' : 'false'
+    ].map(toCsvCell).join(',');
+}
+
 function buildItemTemplateCsvRow(item) {
     const safeItem = item || {};
     const tiers = Array.isArray(safeItem.priceTiers)
@@ -5570,11 +5821,9 @@ async function exportInventoryExcel() {
 async function exportPartiesExcel() {
     const parties = await DB.getAll('parties');
     if (!parties.length) return alert('No parties to export');
-    let csv = 'Party Code,Name,Type,Phone,GSTIN,Address,City,Post Code,Location Lat,Location Lng,Balance,Credit Limit,Payment Terms,Blocked\n';
-    parties.forEach(p => {
-        csv += `"${p.partyCode || ''}","${p.name}","${p.type}","${p.phone || ''}","${p.gstin || ''}","${p.address || ''}","${p.city || ''}","${p.postCode || ''}",${p.lat || ''},${p.lng || ''},${p.balance || 0},${p.creditLimit || 0},"${p.paymentTerms || ''}",${p.blocked || false}\n`;
-    });
+    const csv = [PARTY_TEMPLATE_HEADERS.join(','), ...parties.map(buildPartyTemplateCsvRow)].join('\n') + '\n';
     downloadCSV(csv, 'parties_' + today() + '.csv');
+    showToast('Parties exported in import template format!', 'success');
 }
 
 // --- Excel Template Download ---
@@ -7544,7 +7793,7 @@ function filterPInvTable() {
     const from = ($('pinv-from') || {}).value;
     const to = ($('pinv-to') || {}).value;
     let invs = (window._pinvsAll || []).slice();
-    if (s) invs = invs.filter(i => (i.invoiceNo || '').toLowerCase().includes(s) || (i.partyName || '').toLowerCase().includes(s));
+    if (s) invs = invs.filter(i => (i.invoiceNo || '').toLowerCase().includes(s) || (i.vyaparInvoiceNo || '').toLowerCase().includes(s) || (i.partyName || '').toLowerCase().includes(s));
     if (sup) invs = invs.filter(i => i.partyName === sup);
     if (from) invs = invs.filter(i => i.date >= from);
     if (to) invs = invs.filter(i => i.date <= to);
@@ -8056,9 +8305,11 @@ function renderInvoiceRows(invs) {
     const canPay = canEdit() || currentUser.role === 'Salesman';
     const cols = ColumnManager.get('invoices').filter(c => c.visible);
     return invs.map(i => {
+        const displayNo = getInvoiceDisplayNo(i);
+        const showInternalNo = i.vyaparInvoiceNo && normalizeIdentityValue(i.vyaparInvoiceNo) !== normalizeIdentityValue(i.invoiceNo);
         const cellMap = {
             date: `<td style="min-width:90px">${fmtDate(i.date)}</td>`,
-            invoiceNo: `<td style="min-width:140px;white-space:nowrap;font-weight:600;text-decoration:${i.status === 'cancelled' ? 'line-through' : 'none'}">${i.invoiceNo}${i.vyaparInvoiceNo ? `<br><span style="font-size:0.7rem;font-weight:500;color:var(--primary)">V: ${escapeHtml(i.vyaparInvoiceNo)}</span>` : ''}${i.assignedTo ? `<br><span style="font-size:0.68rem;color:var(--info);font-weight:600"> ${escapeHtml(i.assignedTo)}${i.handoverDate ? '  ' + fmtDate(i.handoverDate) : ''}</span>` : ''}</td>`,
+            invoiceNo: `<td style="min-width:140px;white-space:nowrap;font-weight:600;text-decoration:${i.status === 'cancelled' ? 'line-through' : 'none'}">${escapeHtml(displayNo || i.invoiceNo || '')}${showInternalNo ? `<br><span style="font-size:0.7rem;font-weight:500;color:var(--text-muted)">Sys: ${escapeHtml(i.invoiceNo)}</span>` : ''}${i.assignedTo ? `<br><span style="font-size:0.68rem;color:var(--info);font-weight:600"> ${escapeHtml(i.assignedTo)}${i.handoverDate ? '  ' + fmtDate(i.handoverDate) : ''}</span>` : ''}</td>`,
             party: `<td style="min-width:150px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(i.partyName)}</td>`,
             type: `<td style="min-width:80px"><span class="badge ${i.type === 'sale' ? 'badge-success' : 'badge-info'}">${i.type}</span></td>`,
             status: `<td style="min-width:90px">${i.status === 'cancelled' ? '<span class="badge badge-danger">Cancelled</span>' : i.status === 'draft' ? '<span class="badge badge-warning">Draft</span>' : '<span class="badge badge-success">Posted</span>'}</td>`,
@@ -8092,6 +8343,7 @@ function renderInvoiceCards(invs) {
     const pm = window._invPaymentsMap || {};
     const canPay = canEdit() || currentUser.role === 'Salesman';
     return invs.map(i => {
+        const displayNo = getInvoiceDisplayNo(i);
         const paid = pm[i.invoiceNo] || 0;
         const balance = Math.max(0, i.total - paid);
         const isPaid = balance <= 0 || i.status === 'cancelled';
@@ -8111,7 +8363,7 @@ function renderInvoiceCards(invs) {
                     <span style="font-weight:700;font-size:0.95rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(i.partyName)}</span>
                     <span style="font-size:0.68rem;font-weight:700;padding:2px 7px;border-radius:20px;white-space:nowrap;${badgeStyle}">${badgeLabel}</span>
                 </div>
-                <span style="font-size:0.75rem;color:var(--text-muted);white-space:nowrap;margin-left:8px">${i.type === 'sale' ? 'Sale' : 'Purchase'} #${escapeHtml(i.invoiceNo)}</span>
+                <span style="font-size:0.75rem;color:var(--text-muted);white-space:nowrap;margin-left:8px">${i.type === 'sale' ? 'Sale' : 'Purchase'} #${escapeHtml(displayNo || i.invoiceNo)}</span>
             </div>
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
                 <span style="font-size:1.2rem;font-weight:800;color:${i.type === 'sale' ? 'var(--text-primary)' : '#1d4ed8'}">${currency(i.total)}</span>
@@ -8207,6 +8459,7 @@ async function filterInvTable2() {
 async function viewInvoicePaymentHistory(invoiceNo) {
     const payments = await DB.getAll('payments');
     const history = payments.filter(p => p.invoiceNo === invoiceNo || (p.allocations && p.allocations[invoiceNo]));
+    const titleInvoiceNo = getInvoiceDisplayNo(invoiceNo);
     
     let html = '';
     if (history.length === 0) {
@@ -8233,7 +8486,7 @@ async function viewInvoicePaymentHistory(invoiceNo) {
         </div>`;
     }
     
-    openModal(`Payment History: ${invoiceNo}`, html, `<button class="btn btn-outline" onclick="closeModal()">Close</button>`);
+    openModal(`Payment History: ${titleInvoiceNo || invoiceNo}`, html, `<button class="btn btn-outline" onclick="closeModal()">Close</button>`);
 }
 
 // Payout numbering helper
@@ -9153,11 +9406,12 @@ async function viewInvoice(id) {
         DB.getAll('payments')
     ]);
     const i = invoices.find(x => x.id === id); if (!i) return;
+    const displayNo = getInvoiceDisplayNo(i) || i.invoiceNo;
 
     const paid = await getInvoicePaidAmount(i.invoiceNo);
     const relatedPayments = payments.filter(p => p.invoiceNo === i.invoiceNo || (p.allocations && p.allocations[i.invoiceNo]));
 
-    openModal(`Invoice ${i.invoiceNo}`, `
+    openModal(`Invoice ${displayNo}`, `
         <div id="invoice-print-area">
         ${co.logo ? `<div style="text-align:center;margin-bottom:12px"><img src="${co.logo}" style="max-height:60px;max-width:200px;object-fit:contain" alt="Logo"></div>` : ''}
         ${co.name ? `<div style="text-align:center;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border)"><h3>${escapeHtml(co.name)}</h3><div style="font-size:0.8rem;color:var(--text-muted)">${escapeHtml(co.address || '')} ${co.city ? ', ' + escapeHtml(co.city) : ''} ${co.gstin ? ' | GSTIN: ' + escapeHtml(co.gstin) : ''}</div></div>` : ''}
@@ -10044,12 +10298,12 @@ async function shareInvoice(id) {
 }
 async function printInvoiceByNo(invoiceNo) {
     const invs = await DB.getAll('invoices');
-    const inv = invs.find(i => i.invoiceNo === invoiceNo);
+    const inv = findInvoiceByAnyNo(invoiceNo, invs);
     if (inv) printInvoice(inv.id); else alert('Invoice not found: ' + invoiceNo);
 }
 async function shareInvoiceByNo(invoiceNo) {
     const invs = await DB.getAll('invoices');
-    const inv = invs.find(i => i.invoiceNo === invoiceNo);
+    const inv = findInvoiceByAnyNo(invoiceNo, invs);
     if (inv) shareInvoice(inv.id);
 }
 async function bulkPrintInvoices() {
@@ -10367,12 +10621,10 @@ function renderPayCards(pays) {
         const typeLabel = isIn ? 'IN' : 'OUT';
         const typeBg = isIn ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)';
         const typeColor = isIn ? 'var(--success)' : 'var(--danger)';
-        const invCell = p.allocations && Object.keys(p.allocations).length > 0
-            ? Object.keys(p.allocations).join(', ')
-            : (p.invoiceNo && p.invoiceNo !== 'Advance' ? p.invoiceNo : '');
+        const invCell = getPaymentInvoiceSummary(p);
         const collectorLabel = getUserDisplayName(getPaymentCollectorValue(p));
         const detailParts = [fmtDate(p.date)];
-        if (invCell) detailParts.push(escapeHtml(invCell));
+        if (invCell && invCell !== 'Advance / Unallocated') detailParts.push(escapeHtml(invCell));
         if (collectorLabel) detailParts.push(escapeHtml(collectorLabel));
         return `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:8px;display:flex;align-items:center;gap:12px" onclick="viewPaymentDetails('${p.id}')">
             <div style="flex:1;min-width:0">
@@ -10394,9 +10646,10 @@ function renderPayCards(pays) {
 
 function buildPayInvoiceCell(p) {
     if (p.allocations && Object.keys(p.allocations).length > 0) {
-        return Object.entries(p.allocations).map(([inv, amt]) => `${inv} - ${AMT(amt)}`).join(', ');
+        return Object.entries(p.allocations).map(([inv, amt]) => `${getInvoiceDisplayNo(inv)} - ${AMT(amt)}`).join(', ');
     }
-    return p.invoiceNo || '-';
+    if (!p.invoiceNo || p.invoiceNo === 'Advance') return p.invoiceNo || '-';
+    return getInvoiceDisplayNo(p.invoiceNo) || p.invoiceNo;
 }
 function AMT(v) { return (+v).toFixed(0); }
 
@@ -10440,6 +10693,7 @@ async function filterPayTable() {
         (p.partyName || '').toLowerCase().includes(s) ||
         (p.note || '').toLowerCase().includes(s) ||
         (p.invoiceNo || '').toLowerCase().includes(s) ||
+        getPaymentInvoiceSummary(p).toLowerCase().includes(s) ||
         (p.payNo || p.receiptNo || p.id || '').toLowerCase().includes(s)
     );
     if (t) pays = pays.filter(p => p.type === t);
@@ -10479,7 +10733,7 @@ async function filterPayTable() {
 }
 
 function viewInvoiceByNo(invoiceNo) {
-    const inv = DB.get('db_invoices').find(i => i.invoiceNo === invoiceNo);
+    const inv = findInvoiceByAnyNo(invoiceNo, DB.get('db_invoices'));
     if (inv) viewInvoice(inv.id);
 }
 
@@ -10506,13 +10760,13 @@ async function viewPaymentDetails(id) {
             ? `<table style="width:100%;font-size:0.82rem;border-collapse:collapse">
                             ${Object.entries(p.allocations).map(([inv, amt]) => `
                             <tr>
-                                <td style="padding:2px 0"><a href="#" onclick="viewInvoiceByNo('${inv}');return false" style="color:var(--primary);font-weight:600">${escapeHtml(inv)}</a></td>
+                                <td style="padding:2px 0"><a href="#" onclick="viewInvoiceByNo('${inv}');return false" style="color:var(--primary);font-weight:600">${escapeHtml(getInvoiceDisplayNo(inv) || inv)}</a></td>
                                 <td style="text-align:right;font-weight:700;color:var(--success)">${(+amt).toFixed(2)}</td>
                             </tr>`).join('')}
                             ${(() => { const used = Object.values(p.allocations).reduce((s, v) => s + (+v), 0); const rem = p.amount - used; return rem > 0.01 ? `<tr><td style="padding:2px 0;color:var(--text-muted)">Unallocated</td><td style="text-align:right;color:var(--accent);font-weight:700">${rem.toFixed(2)}</td></tr>` : ''; })()}
                           </table>`
             : (p.invoiceNo && p.invoiceNo !== 'Advance'
-                ? `<a href="#" onclick="viewInvoiceByNo('${p.invoiceNo}');return false" style="color:var(--accent);text-decoration:underline">${escapeHtml(p.invoiceNo)}</a>`
+                ? `<a href="#" onclick="viewInvoiceByNo('${p.invoiceNo}');return false" style="color:var(--accent);text-decoration:underline">${escapeHtml(getInvoiceDisplayNo(p.invoiceNo) || p.invoiceNo)}</a>`
                 : `<span style="color:var(--text-muted)">${p.invoiceNo === 'Advance' ? 'Advance' : 'Unlinked'}</span>`)}
                 </td></tr>
                 <tr><td style="padding:8px 0;color:var(--text-secondary)">Note</td><td style="padding:8px 0;text-align:right">${p.note || '-'}</td></tr>
@@ -10562,10 +10816,10 @@ function _buildPaymentPageHtml(p, co) {
     
     if (p.allocations && Object.keys(p.allocations).length > 0) {
         allocationsHtml = Object.entries(p.allocations).map(([inv, amt]) => 
-            `<tr><td colspan="2" style="font-size:0.8rem;color:#555">Against Invoice: <b>${escapeHtml(inv)}</b></td><td style="text-align:right">₹ ${(+amt).toFixed(2)}</td></tr>`
+            `<tr><td colspan="2" style="font-size:0.8rem;color:#555">Against Invoice: <b>${escapeHtml(getInvoiceDisplayNo(inv) || inv)}</b></td><td style="text-align:right">₹ ${(+amt).toFixed(2)}</td></tr>`
         ).join('');
     } else if (p.invoiceNo && p.invoiceNo !== 'Advance') {
-        allocationsHtml = `<tr><td colspan="2" style="font-size:0.8rem;color:#555">Against Invoice: <b>${escapeHtml(p.invoiceNo)}</b></td><td style="text-align:right">₹ ${(+p.amount).toFixed(2)}</td></tr>`;
+        allocationsHtml = `<tr><td colspan="2" style="font-size:0.8rem;color:#555">Against Invoice: <b>${escapeHtml(getInvoiceDisplayNo(p.invoiceNo) || p.invoiceNo)}</b></td><td style="text-align:right">₹ ${(+p.amount).toFixed(2)}</td></tr>`;
     } else {
         allocationsHtml = `<tr><td colspan="2" style="font-size:0.8rem;color:#555">Advance / Unallocated</td><td style="text-align:right">₹ ${(+p.amount).toFixed(2)}</td></tr>`;
     }
@@ -11048,7 +11302,7 @@ async function onPayPartyChange() {
         const paid = await getInvoicePaidAmount(i.invoiceNo);
         const remaining = +(i.total - paid).toFixed(2);
         if (remaining <= 0.01) continue;
-        pending.push({ invoiceNo: i.invoiceNo, date: i.date, total: i.total, remaining });
+        pending.push({ invoiceNo: i.invoiceNo, displayNo: getInvoiceDisplayNo(i), date: i.date, total: i.total, remaining });
     }
 
     if (!pending.length) {
@@ -11066,7 +11320,7 @@ async function onPayPartyChange() {
                 onchange="togglePayAllocInv()">
             <div style="flex:1;min-width:0">
                 <div style="display:flex;justify-content:space-between;margin-bottom:6px">
-                    <span style="font-weight:700;font-size:0.92rem;color:var(--text-primary)">${inv.invoiceNo}</span>
+                    <span style="font-weight:700;font-size:0.92rem;color:var(--text-primary)">${escapeHtml(inv.displayNo || inv.invoiceNo)}</span>
                     <span style="font-size:0.8rem;color:var(--text-muted)">${fmtDate(inv.date)}</span>
                 </div>
                 <div style="display:flex;justify-content:space-between;align-items:flex-end">
@@ -11426,7 +11680,7 @@ async function openLinkInvoiceModal(payId) {
         const paid = await getInvoicePaidAmount(i.invoiceNo);
         const adjPaid = pay.invoiceNo === i.invoiceNo ? paid - pay.amount : paid;
         const remaining = i.total - adjPaid;
-        if (remaining > 0.01) options += `<option value="${i.invoiceNo}">${i.invoiceNo}  Due: ${currency(remaining)}</option>`;
+        if (remaining > 0.01) options += `<option value="${i.invoiceNo}">${escapeHtml(getInvoiceDisplayNo(i) || i.invoiceNo)}  Due: ${currency(remaining)}</option>`;
     }
 
     openModal('Link Payment to Invoice', `
@@ -11442,6 +11696,7 @@ async function openReceivePaymentForInvoice(invoiceId) {
     const invoices = await DB.getAll('invoices');
     const inv = invoices.find(i => i.id === invoiceId);
     if (!inv) return;
+    const displayNo = getInvoiceDisplayNo(inv) || inv.invoiceNo;
     const paid = await getInvoicePaidAmount(inv.invoiceNo);
     const due = inv.total - paid;
     if (due <= 0) return alert('Invoice is fully paid.');
@@ -11456,7 +11711,7 @@ async function openReceivePaymentForInvoice(invoiceId) {
             </div>
             <div style="display:flex;justify-content:space-between;margin-bottom:4px">
                 <span style="color:var(--text-muted)">Invoice #</span>
-                <span class="badge badge-info">${inv.invoiceNo}</span>
+                <span class="badge badge-info">${escapeHtml(displayNo)}</span>
             </div>
             <div style="display:flex;justify-content:space-between;border-top:1px dashed var(--border);margin-top:8px;padding-top:8px">
                 <span style="font-weight:700">Due Amount</span>
@@ -12848,13 +13103,16 @@ function openAssignPackerModal(orderId) {
     const o = orders.find(x => x.id === orderId);
     if (!o) return;
 
-    // Show all users  Admin can assign to anyone
     const allUsers = DB.cache['users'] || DB.cache['db_users'] || [];
-    const packingUsers = allUsers.map(u => u.name).filter(Boolean);
+    let packingUsers = allUsers
+        .filter(u => ['Packer', 'Helper', 'Manager', 'Admin'].includes(u.role))
+        .map(u => u.name)
+        .filter(Boolean);
+    if (!packingUsers.length) packingUsers = allUsers.map(u => u.name).filter(Boolean);
 
     openModal(`Assign Packer for Order ${o.orderNo}`, `
         <div style="margin-bottom:14px"><strong>Customer:</strong> ${o.partyName} | <strong>Order Total:</strong> ${currency(o.total)}</div>
-        <div class="form-group"><label>Select Packer (Uses from Users list) *</label>
+        <div class="form-group"><label>Select Packer *</label>
             <select id="f-assign-packer"><option value="">Select Packer</option>${packingUsers.map(p => `<option value="${p}">${p}</option>`).join('')}</select>
         </div>
         ${!packingUsers.length ? '<div style="font-size:0.8rem;color:var(--warning);margin-bottom:10px"> No packing users found.</div>' : ''}
@@ -13323,10 +13581,9 @@ async function confirmCannotComplete(orderId, lineStatus) {
 }
 
 function completePacking(orderId) {
-    const packerEl = $('f-pack-packer');
-    const packer = packerEl ? packerEl.value : (currentUser.name || 'Staff');
     const orders = DB.get('db_salesorders');
     const o = orders.find(x => x.id === orderId); if (!o) return;
+    const packer = o.assignedPacker || currentUser.name || 'Staff';
 
     let mrpPending = false;
     const packedItems = o.items.map((li, idx) => {
@@ -13536,6 +13793,8 @@ async function finalizePacking() {
             packedItems,
             packedTotal,
             packageNumbers: allPkgNumbers,
+            boxNumbers,
+            crateNumbers,
             boxCount: totalBoxes,
             crateCount: totalCrates
         });
@@ -13991,6 +14250,7 @@ function renderDelCards(dels, allParties) {
     return dels.map(d => {
         const bdgClass = d.status === 'Delivered' ? 'badge-success' : (d.status === 'Dispatched' ? 'badge-info' : (d.status === 'Cancelled' ? 'badge-danger' : 'badge-warning'));
         const isSalesman = currentUser && currentUser.role === 'Salesman';
+        const displayDate = d.dispatchedAt || d.deliveredAt || d.returnedAt || d.undeliveredAt || d.date;
         return `
         <div data-del-id="${d.id}" style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:10px;box-shadow:0 1px 4px rgba(0,0,0,0.05);position:relative" onclick="viewDelivery('${d.id}')">
             <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
@@ -13999,7 +14259,7 @@ function renderDelCards(dels, allParties) {
             </div>
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
                 <div style="font-size:0.75rem;color:var(--text-muted);display:flex;flex-direction:column;gap:2px">
-                    <span>Date: ${fmtDate(d.date)}</span>
+                    <span>Date: ${fmtDate(displayDate)}</span>
                     <span style="color:#3b82f6;font-weight:600">By: ${d.deliveryPerson || '-'}</span>
                     ${d.dispatchedAt ? `<span style="color:var(--text-muted);font-size:0.7rem">Dispatched: ${fmtDate(d.dispatchedAt)}</span>` : ''}
                 </div>
@@ -15061,7 +15321,7 @@ function updateDelStatus(id) {
         </div>
         <div style="font-size:0.85rem;color:var(--text-muted);margin-bottom:12px">Choose the delivery outcome:</div>
         <div style="display:flex;flex-direction:column;gap:10px">
-            <button class="btn btn-primary" style="padding:12px;font-size:0.95rem" onclick="confirmDelivered('${id}')"> Mark as Delivered</button>
+            <button class="btn btn-primary" style="padding:12px;font-size:0.95rem" onclick="closeModal();markDelivered('${id}')">Mark as Delivered</button>
             <button class="btn btn-outline" style="padding:12px;font-size:0.95rem;border-color:var(--danger);color:var(--danger)" onclick="closeModal();openUndeliveredModal('${id}')">Cannot Deliver / Return</button>
         </div>
         <div class="modal-actions" style="margin-top:12px">
@@ -15070,19 +15330,13 @@ function updateDelStatus(id) {
 }
 
 async function confirmDelivered(id) {
-    try {
-        await DB.update('delivery', id, { status: 'Delivered', deliveredAt: today() });
-        closeModal();
-        await renderDelivery();
-        showToast('Marked as Delivered', 'success');
-    } catch (e) {
-        alert('Error: ' + e.message);
-    }
+    closeModal();
+    return markDelivered(id);
 }
 
 async function updateDeliveryStatus(id, status) {
+    if (status === 'Delivered') return markDelivered(id);
     const update = { status };
-    if (status === 'Delivered') update.deliveredAt = today();
     await DB.update('delivery', id, update);
     await renderDelivery();
 }
@@ -15225,7 +15479,11 @@ async function confirmBulkDispatch() {
                 delData = { orderId: o.id, orderNo: o.orderNo, partyName: o.partyName, partyId: o.partyId,
                     invoiceNo: o.invoiceNo || '', deliveryPerson: person, status: 'Dispatched',
                     dispatchedAt: today(), total: o.total, items: o.packedItems || o.items,
-                    packageNumbers: o.packageNumbers || [] };
+                    packageNumbers: o.packageNumbers || [],
+                    boxNumbers: o.boxNumbers || [],
+                    crateNumbers: o.crateNumbers || [],
+                    boxCount: o.boxCount || 0,
+                    crateCount: o.crateCount || 0 };
             } else {
                 const inv = invoices.find(x => x.id === r.id);
                 if (!inv) continue;
@@ -15234,7 +15492,12 @@ async function confirmBulkDispatch() {
                 if (alreadyExists) continue;
                 delData = { orderId: inv.id, orderNo: inv.invoiceNo, partyName: inv.partyName,
                     partyId: inv.partyId, invoiceNo: inv.invoiceNo, deliveryPerson: person,
-                    status: 'Dispatched', dispatchedAt: today(), total: inv.total, items: inv.items };
+                    status: 'Dispatched', dispatchedAt: today(), total: inv.total, items: inv.items,
+                    packageNumbers: inv.packageNumbers || [],
+                    boxNumbers: inv.boxNumbers || [],
+                    crateNumbers: inv.crateNumbers || [],
+                    boxCount: inv.boxCount || 0,
+                    crateCount: inv.crateCount || 0 };
             }
             await DB.rawInsert('delivery', delData);
             dispatched++;
@@ -16600,11 +16863,11 @@ function renderPaymentRpt() {
                 const isMulti = allocKeys.length > 1;
                 const refCell = allocKeys.length > 0
                     ? allocKeys.map(inv => {
-                        const link = `<a href="#" onclick="viewInvoiceByNo('${inv}');return false" style="color:var(--primary);text-decoration:underline">${inv}</a>`;
+                        const link = `<a href="#" onclick="viewInvoiceByNo('${inv}');return false" style="color:var(--primary);text-decoration:underline">${escapeHtml(getInvoiceDisplayNo(inv) || inv)}</a>`;
                         return isMulti ? `${link} <span style="color:var(--text-muted);font-size:0.8rem">${currency(p.allocations[inv])}</span>` : link;
                       }).join('<br>')
                     : (p.invoiceNo && p.invoiceNo !== 'Multi/Disc' && p.invoiceNo !== 'Advance'
-                        ? `<a href="#" onclick="viewInvoiceByNo('${p.invoiceNo}');return false" style="color:var(--primary);text-decoration:underline">${p.invoiceNo}</a>`
+                        ? `<a href="#" onclick="viewInvoiceByNo('${p.invoiceNo}');return false" style="color:var(--primary);text-decoration:underline">${escapeHtml(getInvoiceDisplayNo(p.invoiceNo) || p.invoiceNo)}</a>`
                         : `<span style="color:var(--text-muted)">${p.invoiceNo || p.note || '-'}</span>`);
                 return `<tr>
                 <td>${fmtDate(p.date)}</td>
@@ -17740,11 +18003,11 @@ async function generateUserPaymentReport() {
                         const isMulti = allocKeys.length > 1;
                         const refCell = allocKeys.length > 0
                             ? allocKeys.map(inv => {
-                                const link = `<a href="#" onclick="viewInvoiceByNo('${inv}');return false" style="color:var(--primary);text-decoration:underline">${inv}</a>`;
+                                const link = `<a href="#" onclick="viewInvoiceByNo('${inv}');return false" style="color:var(--primary);text-decoration:underline">${escapeHtml(getInvoiceDisplayNo(inv) || inv)}</a>`;
                                 return isMulti ? `${link} <span style="color:var(--text-muted);font-size:0.8rem">${currency(p.allocations[inv])}</span>` : link;
                               }).join('<br>')
                             : (p.invoiceNo && p.invoiceNo !== 'Multi/Disc' && p.invoiceNo !== 'Advance'
-                                ? `<a href="#" onclick="viewInvoiceByNo('${p.invoiceNo}');return false" style="color:var(--primary);text-decoration:underline">${p.invoiceNo}</a>`
+                                ? `<a href="#" onclick="viewInvoiceByNo('${p.invoiceNo}');return false" style="color:var(--primary);text-decoration:underline">${escapeHtml(getInvoiceDisplayNo(p.invoiceNo) || p.invoiceNo)}</a>`
                                 : `<span style="color:var(--text-muted)">${p.invoiceNo || p.note || '-'}</span>`);
                         return `
                         <tr>
@@ -19292,7 +19555,7 @@ async function showPaymentHistory(partyId, invoiceNo) {
 
     partyPayments.sort((a, b) => new Date(a.date || a.created_at) - new Date(b.date || b.created_at));
 
-    const modalTitle = invoiceNo ? `Payment History for ${invoiceNo}` : 'Payment History';
+    const modalTitle = invoiceNo ? `Payment History for ${getInvoiceDisplayNo(invoiceNo) || invoiceNo}` : 'Payment History';
 
     if (!partyPayments.length) {
         openModal(modalTitle, '<div class="empty-state"><span class="empty-icon"></span><p>No payment records found for this invoice.</p></div>');
@@ -19310,16 +19573,16 @@ async function showPaymentHistory(partyId, invoiceNo) {
         let linkedInfo = '';
         if (p.allocations && invoiceNo && p.allocations[invoiceNo]) {
             linkedAmt = Number(p.allocations[invoiceNo]);
-            linkedInfo = invoiceNo;
+            linkedInfo = getInvoiceDisplayNo(invoiceNo) || invoiceNo;
         } else if (p.invoiceNo === invoiceNo) {
             linkedAmt = Number(p.amount || 0);
-            linkedInfo = invoiceNo;
+            linkedInfo = getInvoiceDisplayNo(invoiceNo) || invoiceNo;
         } else {
             linkedAmt = Number(p.amount || 0); // fallback if no invoice specified
             if (p.invoiceNo && p.invoiceNo !== 'Advance' && p.invoiceNo !== 'Multi') {
-                linkedInfo = p.invoiceNo;
+                linkedInfo = getInvoiceDisplayNo(p.invoiceNo) || p.invoiceNo;
             } else if (p.allocations) {
-                linkedInfo = Object.keys(p.allocations).join(', ');
+                linkedInfo = Object.keys(p.allocations).map(inv => getInvoiceDisplayNo(inv) || inv).join(', ');
             } else {
                 linkedInfo = 'Advance';
             }
@@ -21250,7 +21513,7 @@ async function openStaffModal(id) {
     </div>
     <div class="form-row">
         <div class="form-group"><label>Phone</label><input id="f-st-phone" class="form-control" value="${s ? (s.phone || '') : ''}" type="tel"></div>
-        <div class="form-group"><label>Monthly Salary ()</label><input id="f-st-salary" class="form-control" type="number" min="0" value="${s ? (s.monthly_salary || 0) : ''}"></div>
+        <div class="form-group"><label>Monthly Salary (INR)</label><input id="f-st-salary" class="form-control" type="number" min="0" value="${s ? (s.monthly_salary || 0) : ''}"></div>
     </div>
     <div class="form-row">
         <div class="form-group"><label>Join Date</label><input id="f-st-join" class="form-control" type="date" value="${s ? (s.join_date || '') : today()}"></div>
@@ -21268,13 +21531,13 @@ async function saveStaff(id) {
         name, role: $('f-st-role').value,
         phone: ($('f-st-phone').value || '').trim(),
         monthly_salary: +$('f-st-salary').value || 0,
-        join_date: $('f-st-join').value || null,
-        status: 'active'
+        join_date: $('f-st-join').value || null
     };
     if (id) {
         const { error } = await supabaseClient.from('staff').update(data).eq('id', id);
         if (error) return alert('Error: ' + error.message);
     } else {
+        data.status = 'active';
         data.id = 'st_' + Date.now();
         const { error } = await supabaseClient.from('staff').insert(data);
         if (error) return alert('Error: ' + error.message);
@@ -21289,6 +21552,49 @@ async function toggleStaffStatus(id, currentStatus) {
     renderStaffMaster();
 }
 
+function dedupeAttendanceRecords(records) {
+    const map = new Map();
+    for (const rec of (records || [])) {
+        if (!rec || !rec.staff_id || !rec.date) continue;
+        const key = `${rec.staff_id}__${rec.date}`;
+        const prev = map.get(key);
+        const prevKey = prev ? String(prev.updated_at || prev.created_at || prev.id || '') : '';
+        const curKey = String(rec.updated_at || rec.created_at || rec.id || '');
+        if (!prev || curKey >= prevKey) map.set(key, rec);
+    }
+    return [...map.values()];
+}
+
+async function saveAttendanceEntry(staffId, staffName, date, status) {
+    const { data: existingRows, error: fetchErr } = await supabaseClient
+        .from('attendance')
+        .select('id')
+        .eq('staff_id', staffId)
+        .eq('date', date);
+    if (fetchErr) throw new Error(fetchErr.message);
+
+    const rowIds = (existingRows || []).map(r => r.id).filter(Boolean);
+    if (rowIds.length) {
+        const { error: updateErr } = await supabaseClient
+            .from('attendance')
+            .update({ status, marked_by: currentUser.name, staff_name: staffName })
+            .in('id', rowIds);
+        if (updateErr) throw new Error(updateErr.message);
+        return { updated: rowIds.length, inserted: 0 };
+    }
+
+    const { error: insertErr } = await supabaseClient.from('attendance').insert({
+        id: 'att_' + Date.now() + '_' + String(staffId).slice(-4) + Math.random().toString(36).slice(2, 5),
+        staff_id: staffId,
+        staff_name: staffName,
+        date,
+        status,
+        marked_by: currentUser.name
+    });
+    if (insertErr) throw new Error(insertErr.message);
+    return { updated: 0, inserted: 1 };
+}
+
 // ---- ATTENDANCE ----
 async function renderAttendance() {
     const selDate = window._attDate || today();
@@ -21296,17 +21602,23 @@ async function renderAttendance() {
     const selTo = window._attTo || today();
     const rangeMode = window._attRangeMode || false;
     const selMonth = selDate.substring(0, 7);
+    const monthRange = getMonthDateRange(selMonth);
 
     const { data: staff } = await supabaseClient.from('staff').select('*').eq('status', 'active').order('name');
 
     // Single-day data
     const { data: attRecs } = await supabaseClient.from('attendance').select('*').eq('date', selDate);
-    const attMap = {}; (attRecs || []).forEach(r => attMap[r.staff_id] = r);
+    const dayRecords = dedupeAttendanceRecords(attRecs || []);
+    const attMap = {}; dayRecords.forEach(r => attMap[r.staff_id] = r);
 
     // Monthly summary
-    const { data: monthRecs } = await supabaseClient.from('attendance').select('*').gte('date', selMonth + '-01').lte('date', selMonth + '-31');
+    const { data: monthRecs } = await supabaseClient.from('attendance')
+        .select('*')
+        .gte('date', monthRange.start)
+        .lte('date', monthRange.end);
+    const monthRecords = dedupeAttendanceRecords(monthRecs || []);
     const monthMap = {};
-    (monthRecs || []).forEach(r => {
+    monthRecords.forEach(r => {
         if (!monthMap[r.staff_id]) monthMap[r.staff_id] = { P: 0, A: 0, HD: 0, PL: 0, H: 0 };
         const k = r.status === 'Present' ? 'P' : r.status === 'Absent' ? 'A' : r.status === 'Half Day' ? 'HD' : r.status === 'Paid Leave' ? 'PL' : 'H';
         monthMap[r.staff_id][k] = (monthMap[r.staff_id][k] || 0) + 1;
@@ -21415,7 +21727,7 @@ async function renderAttendance() {
 
     <h4 style="margin-bottom:12px;font-size:0.95rem">Monthly Attendance  ${selMonth}</h4>
     <div class="card"><div class="card-body" style="overflow-x:auto">
-        ${renderMonthCalendar(staff, monthRecs || [], selMonth)}
+        ${renderMonthCalendar(staff, monthRecords, selMonth)}
     </div></div>`}`;
 }
 
@@ -21489,23 +21801,10 @@ async function _applyRangeAttendance(staffId, staffName, dates, status) {
         targets = allStaff || [];
     }
 
-    // Load existing records for the range to detect upsert vs insert
-    const from = dates[0], to = dates[dates.length - 1];
-    const staffIds = targets.map(s => s.id);
-    const { data: existing } = await supabaseClient.from('attendance').select('id,staff_id,date')
-        .in('staff_id', staffIds).gte('date', from).lte('date', to);
-    const exMap = {};
-    (existing || []).forEach(r => { exMap[r.staff_id + '_' + r.date] = r.id; });
-
     const ops = [];
     for (const s of targets) {
         for (const date of dates) {
-            const key = s.id + '_' + date;
-            if (exMap[key]) {
-                ops.push(supabaseClient.from('attendance').update({ status, marked_by: currentUser.name }).eq('id', exMap[key]));
-            } else {
-                ops.push(supabaseClient.from('attendance').insert({ id: 'att_' + Date.now() + '_' + s.id.slice(-4) + Math.random().toString(36).slice(2, 5), staff_id: s.id, staff_name: s.name, date, status, marked_by: currentUser.name }));
-            }
+            ops.push(saveAttendanceEntry(s.id, s.name, date, status));
         }
     }
     await Promise.all(ops);
@@ -21558,25 +21857,25 @@ function renderMonthCalendar(staff, records, month) {
 }
 
 async function markAttendance(staffId, staffName, date, status) {
-    const { data: existing } = await supabaseClient.from('attendance').select('id').eq('staff_id', staffId).eq('date', date).single();
-    if (existing) {
-        await supabaseClient.from('attendance').update({ status, marked_by: currentUser.name }).eq('id', existing.id);
-    } else {
-        await supabaseClient.from('attendance').insert({ id: 'att_' + Date.now() + '_' + staffId.slice(-4), staff_id: staffId, staff_name: staffName, date, status, marked_by: currentUser.name });
+    try {
+        await saveAttendanceEntry(staffId, staffName, date, status);
+        await renderAttendance();
+    } catch (err) {
+        alert('Error saving attendance: ' + err.message);
     }
-    renderAttendance();
 }
 
 async function markAllAttendance(status, date) {
-    const { data: staff } = await supabaseClient.from('staff').select('id,name').eq('status', 'active');
+    const { data: staff, error: staffErr } = await supabaseClient.from('staff').select('id,name').eq('status', 'active');
+    if (staffErr) return alert('Error loading staff: ' + staffErr.message);
     if (!staff || !staff.length) return;
-    await Promise.all(staff.map(async s => {
-        const { data: ex } = await supabaseClient.from('attendance').select('id').eq('staff_id', s.id).eq('date', date).single();
-        if (ex) return supabaseClient.from('attendance').update({ status, marked_by: currentUser.name }).eq('id', ex.id);
-        return supabaseClient.from('attendance').insert({ id: 'att_' + Date.now() + '_' + s.id.slice(-4) + Math.random().toString(36).slice(2, 5), staff_id: s.id, staff_name: s.name, date, status, marked_by: currentUser.name });
-    }));
-    showToast(`All marked as ${status}!`, 'success');
-    renderAttendance();
+    try {
+        await Promise.all(staff.map(s => saveAttendanceEntry(s.id, s.name, date, status)));
+        showToast(`All marked as ${status}!`, 'success');
+        await renderAttendance();
+    } catch (err) {
+        alert('Error saving attendance: ' + err.message);
+    }
 }
 
 // ---- PAYROLL ----
@@ -21585,10 +21884,11 @@ async function renderHRPayroll() {
     const [y, m] = selMonth.split('-').map(Number);
     const daysInMonth = new Date(y, m, 0).getDate();
     const workingDays = Array.from({ length: daysInMonth }, (_, i) => i + 1).filter(d => new Date(y, m - 1, d).getDay() !== 0).length;
+    const monthRange = getMonthDateRange(selMonth);
 
     const [staffRes, attRes, advRes, salRes] = await Promise.all([
         supabaseClient.from('staff').select('*').eq('status', 'active').order('name'),
-        supabaseClient.from('attendance').select('*').gte('date', selMonth + '-01').lte('date', selMonth + '-31'),
+        supabaseClient.from('attendance').select('*').gte('date', monthRange.start).lte('date', monthRange.end),
         supabaseClient.from('salary_advances').select('*').order('date', { ascending: true }), // ALL advances (all months)
         supabaseClient.from('salary_records').select('*').eq('month', selMonth)
     ]);
@@ -21710,7 +22010,7 @@ async function renderHRPayroll() {
                 <div style="text-align:right;flex-shrink:0">
                     <div style="font-size:0.75rem;color:var(--text-muted)">Given: <span style="color:#ef4444;font-weight:700">${currency(a.amount || 0)}</span></div>
                     <div style="font-weight:700;color:${statusColor}">${bal > 0 ? currency(bal) : 'Cleared'}</div>
-                    ${bal > 0 ? `<button class="btn-icon" onclick="deleteAdvance('${a.id}')" style="color:var(--danger)"><span class="material-symbols-outlined" style="font-size:1rem">delete</span></button>` : ''}
+                    ${(a.deducted || 0) <= 0 ? `<button class="btn-icon" onclick="deleteAdvance('${a.id}')" style="color:var(--danger)"><span class="material-symbols-outlined" style="font-size:1rem">delete</span></button>` : ''}
                 </div>
             </div>`;
         }).join('') : '<div style="text-align:center;color:var(--text-muted);padding:16px">No advance records</div>'}
@@ -21765,7 +22065,7 @@ async function renderHRPayroll() {
                 <td style="text-align:right;color:#22c55e">${(a.deducted || 0) > 0 ? currency(a.deducted) : '-'}</td>
                 <td style="text-align:right;font-weight:700;color:${statusColor}">${bal > 0 ? currency(bal) : 'Cleared'}</td>
                 <td style="color:var(--text-muted);font-size:0.85rem">${escapeHtml(a.notes || '-')}</td>
-                <td>${bal > 0 ? `<button class="btn-icon" onclick="deleteAdvance('${a.id}')" title="Delete" style="color:var(--danger)"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>` : ''}</td>
+                <td>${(a.deducted || 0) <= 0 ? `<button class="btn-icon" onclick="deleteAdvance('${a.id}')" title="Delete" style="color:var(--danger)"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>` : ''}</td>
             </tr>`;
         }).join('') : '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:20px">No advance records</td></tr>'}
         </tbody>
@@ -21831,7 +22131,7 @@ async function openStaffAdvance(staffId, staffName) {
     </div>
     <div class="form-row">
         <div class="form-group"><label>Date</label><input id="f-adv-date" type="date" class="form-control" value="${today()}"></div>
-        <div class="form-group"><label>Amount () *</label><input id="f-adv-amount" type="number" min="1" class="form-control" placeholder="0"></div>
+        <div class="form-group"><label>Amount (INR) *</label><input id="f-adv-amount" type="number" min="1" class="form-control" placeholder="0"></div>
     </div>
     <div class="form-group"><label>For Month</label><input id="f-adv-month" type="month" class="form-control" value="${selMonth}"></div>
     <div class="form-group"><label>Notes</label><input id="f-adv-notes" class="form-control" placeholder="Reason / notes..."></div>
@@ -21865,7 +22165,17 @@ async function saveAdvance() {
 
 async function deleteAdvance(id) {
     if (!confirm('Delete this advance record?')) return;
-    await supabaseClient.from('salary_advances').delete().eq('id', id);
+    const { data: rec, error: fetchErr } = await supabaseClient.from('salary_advances')
+        .select('id,deducted')
+        .eq('id', id)
+        .maybeSingle();
+    if (fetchErr) return alert('Error: ' + fetchErr.message);
+    if (!rec) return alert('Advance record not found.');
+    if ((rec.deducted || 0) > 0) {
+        return alert('This advance is already used in payroll. Reset the related salary before deleting it.');
+    }
+    const { error } = await supabaseClient.from('salary_advances').delete().eq('id', id);
+    if (error) return alert('Error: ' + error.message);
     showToast('Advance deleted', 'info');
     renderHRPayroll();
 }
@@ -22359,6 +22669,7 @@ async function postVyaparImportPayments() {
             const payRefNo = await nextNumber('PTR-26-');
             const freshParty = freshParties.find(p => p.id === r.partyId) || r.party;
             const newBal = +((freshParty.balance || 0) - r.amount).toFixed(2);
+            const linkedInvoiceNo = r.invoiceNo || '';
 
             await Promise.all([
                 DB.rawInsert('payments', {
@@ -22372,8 +22683,8 @@ async function postVyaparImportPayments() {
                     total_reduction: r.amount,
                     mode: r.mode,
                     note: 'Imported from Vyapar',
-                    invoice_no: r.invoiceNo || 'Advance',
-                    allocations: r.invoiceNo ? { [r.invoiceNo]: r.amount } : {},
+                    invoice_no: linkedInvoiceNo || 'Advance',
+                    allocations: linkedInvoiceNo ? { [linkedInvoiceNo]: r.amount } : {},
                     collected_by: r.userName,
                     created_by: currentUser ? currentUser.userId : 'System',
                     status: 'posted'
