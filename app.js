@@ -2060,6 +2060,62 @@ function today() {
     const offset = d.getTimezoneOffset() * 60000;
     return new Date(d.getTime() - offset).toISOString().split('T')[0];
 }
+function currentMonthStart(baseDate = null) {
+    const d = baseDate ? new Date(baseDate) : new Date();
+    d.setDate(1);
+    const offset = d.getTimezoneOffset() * 60000;
+    return new Date(d.getTime() - offset).toISOString().split('T')[0];
+}
+function normalizeIdentityValue(value) {
+    return String(value ?? '').trim().toLowerCase();
+}
+function getCachedUsers() {
+    return DB.get('db_users') || DB.cache['users'] || [];
+}
+function findUserByIdentity(identity, users = getCachedUsers()) {
+    const key = normalizeIdentityValue(identity);
+    if (!key) return null;
+    return (users || []).find(u =>
+        [u?.name, u?.userId, u?.id].some(v => normalizeIdentityValue(v) === key)
+    ) || null;
+}
+function getUserIdentityAliases(userLike, users = getCachedUsers()) {
+    if (!userLike) return [];
+    const matched = typeof userLike === 'string' ? findUserByIdentity(userLike, users) : userLike;
+    const values = typeof userLike === 'string'
+        ? [userLike, matched?.name, matched?.userId, matched?.id]
+        : [userLike?.name, userLike?.userId, userLike?.id];
+    return [...new Set(values.map(normalizeIdentityValue).filter(Boolean))];
+}
+function matchesUserIdentity(value, userLike, users = getCachedUsers()) {
+    const recordValue = normalizeIdentityValue(value);
+    if (!recordValue || !userLike) return false;
+    return getUserIdentityAliases(userLike, users).includes(recordValue);
+}
+function matchesAnyUserIdentity(values, userLike, users = getCachedUsers()) {
+    return (values || []).some(v => matchesUserIdentity(v, userLike, users));
+}
+function getUserDisplayName(value, users = getCachedUsers()) {
+    const matched = findUserByIdentity(value, users);
+    return matched?.name || String(value || '');
+}
+function getPaymentCollectorValue(payment) {
+    return payment ? (payment.collectedBy || payment.createdBy || '') : '';
+}
+function getPaymentReferenceNo(payment) {
+    if (!payment) return '';
+    return String(payment.payNo || payment.receiptNo || payment.id || '').trim();
+}
+function getPaymentInvoiceSummary(payment) {
+    if (!payment) return '';
+    if (payment.allocations && Object.keys(payment.allocations).length > 0) {
+        return Object.entries(payment.allocations)
+            .map(([invoiceNo, amount]) => `${invoiceNo} (${currency(amount)})`)
+            .join(', ');
+    }
+    if (!payment.invoiceNo || payment.invoiceNo === 'Advance') return 'Advance / Unallocated';
+    return payment.invoiceNo;
+}
 function isSalesman() {
     const r = (currentUser?.role || '').toLowerCase();
     return r === 'salesman';
@@ -4179,14 +4235,20 @@ function makeBatchId() {
 }
 function getLinePrimaryQty(li) {
     if (!li) return 0;
-    const raw = li.primaryQty !== undefined ? li.primaryQty : (li.packedQty !== undefined ? li.packedQty : li.qty);
+    const raw = li.primaryQty !== undefined
+        ? li.primaryQty
+        : (li.packedQty !== undefined ? li.packedQty : (li.packed_qty !== undefined ? li.packed_qty : li.qty));
     return +raw || 0;
+}
+function getLineItemId(li) {
+    return li ? (li.itemId ?? li.item_id ?? '') : '';
 }
 function sumPrimaryQtyByItem(lines = []) {
     const qtyMap = new Map();
     lines.forEach(li => {
-        if (!li || li.itemId === undefined || li.itemId === null) return;
-        const key = String(li.itemId);
+        const itemId = getLineItemId(li);
+        if (!itemId) return;
+        const key = String(itemId);
         qtyMap.set(key, +((qtyMap.get(key) || 0) + getLinePrimaryQty(li)).toFixed(4));
     });
     return qtyMap;
@@ -10183,7 +10245,7 @@ async function renderPayments() {
     const isSalesman = currentUser.role === 'Salesman';
     // Salesman sees only their own payments
     const visiblePayments = isSalesman
-        ? payments.filter(p => p.collectedBy === currentUser.name || p.createdBy === currentUser.name)
+        ? payments.filter(p => matchesAnyUserIdentity([p.collectedBy, p.createdBy], currentUser))
         : payments;
     const totalIn = visiblePayments.filter(p => p.type === 'in').reduce((s, p) => s + p.amount, 0);
     const totalOut = visiblePayments.filter(p => p.type === 'out').reduce((s, p) => s + p.amount, 0);
@@ -10201,19 +10263,19 @@ async function renderPayments() {
     const monthStart = today1; // User requested today as default
 
     const isMobile = window.innerWidth < 768;
-    const collectorOptions = !isSalesman ? `<option value="">All</option>${[...new Set(visiblePayments.map(p => p.collectedBy || p.createdBy).filter(Boolean))].map(n => `<option>${escapeHtml(n)}</option>`).join('')}` : '';
+    const collectorNames = [...new Set(visiblePayments.map(p => getUserDisplayName(getPaymentCollectorValue(p))).filter(Boolean))].sort();
+    const collectorOptions = !isSalesman ? `<option value="">All</option>${collectorNames.map(n => `<option>${escapeHtml(n)}</option>`).join('')}` : '';
 
     if (isMobile) {
         pageContent.innerHTML = `
-        <!-- Mobile: compact stat + mode strip -->
         <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:10px 12px;margin-bottom:10px">
             <div style="display:flex;gap:0;margin-bottom:${modeChips ? '8px' : '0'}">
                 <div style="flex:1;text-align:center;border-right:1px solid var(--border);padding-right:8px">
-                    <div style="font-size:0.65rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">↗ Pay In</div>
+                    <div style="font-size:0.65rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">Pay In</div>
                     <div id="pay-stat-in" style="font-size:1.2rem;font-weight:800;color:var(--success)">${currency(totalIn)}</div>
                 </div>
                 ${!isSalesman ? `<div style="flex:1;text-align:center;padding-left:8px">
-                    <div style="font-size:0.65rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">↙ Pay Out</div>
+                    <div style="font-size:0.65rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">Pay Out</div>
                     <div id="pay-stat-out" style="font-size:1.2rem;font-weight:800;color:var(--danger)">${currency(totalOut)}</div>
                 </div>` : `<div id="pay-stat-out" style="display:none"></div>`}
             </div>
@@ -10223,11 +10285,10 @@ async function renderPayments() {
             </div>` : `<div id="pay-mode-bar-wrap" style="display:none"><div id="pay-mode-chips"></div></div>`}
         </div>
 
-        <!-- Mobile: compact filter strip -->
         <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:10px">
             <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
                 <input type="date" id="pay-f-from" value="${monthStart}" onchange="filterPayTable()" style="flex:1;font-size:0.78rem;padding:7px 8px;border:1px solid var(--border);border-radius:7px;background:var(--bg-input)">
-                <span style="color:var(--text-muted);font-size:0.8rem">–</span>
+                <span style="color:var(--text-muted);font-size:0.8rem">to</span>
                 <input type="date" id="pay-f-to" value="${today1}" onchange="filterPayTable()" style="flex:1;font-size:0.78rem;padding:7px 8px;border:1px solid var(--border);border-radius:7px;background:var(--bg-input)">
                 <button onclick="togglePayFilters()" id="pay-filter-toggle" style="border:1px solid var(--border);background:var(--bg-input);border-radius:7px;padding:7px 10px;font-size:0.85rem;cursor:pointer;flex-shrink:0"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-3px">tune</span></button>
                 <button onclick="openVyaparPaymentImport()" style="border:1px solid #7c3aed;background:transparent;color:#7c3aed;border-radius:7px;padding:7px 10px;font-size:0.85rem;cursor:pointer;flex-shrink:0" title="Import from Vyapar"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-3px">upload_file</span></button>
@@ -10243,7 +10304,6 @@ async function renderPayments() {
             </div>
         </div>
 
-        <!-- Mobile: payment entry cards -->
         <div id="pay-list">${renderPayCards(visiblePayments)}</div>
         <div id="pay-tbody" style="display:none"></div>
         <table id="tbl-payments" style="display:none"><tbody></tbody></table>`;
@@ -10309,16 +10369,20 @@ function renderPayCards(pays) {
         const typeColor = isIn ? 'var(--success)' : 'var(--danger)';
         const invCell = p.allocations && Object.keys(p.allocations).length > 0
             ? Object.keys(p.allocations).join(', ')
-            : (p.invoiceNo || '');
+            : (p.invoiceNo && p.invoiceNo !== 'Advance' ? p.invoiceNo : '');
+        const collectorLabel = getUserDisplayName(getPaymentCollectorValue(p));
+        const detailParts = [fmtDate(p.date)];
+        if (invCell) detailParts.push(escapeHtml(invCell));
+        if (collectorLabel) detailParts.push(escapeHtml(collectorLabel));
         return `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:8px;display:flex;align-items:center;gap:12px" onclick="viewPaymentDetails('${p.id}')">
             <div style="flex:1;min-width:0">
                 <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
-                    <span style="font-weight:700;font-size:0.9rem;color:var(--accent)">${escapeHtml(p.payNo || '')}</span>
+                    <span style="font-weight:700;font-size:0.9rem;color:var(--accent)">${escapeHtml(getPaymentReferenceNo(p) || '-')}</span>
                     <span style="font-size:0.68rem;font-weight:700;background:${typeBg};color:${typeColor};padding:2px 7px;border-radius:20px">${typeLabel}</span>
                     ${p.mode && p.mode !== 'Cash' ? `<span style="font-size:0.68rem;color:var(--text-muted);background:var(--bg-secondary);padding:2px 6px;border-radius:10px">${escapeHtml(p.mode)}</span>` : ''}
                 </div>
                 <div style="font-weight:600;font-size:0.88rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(p.partyName || '')}</div>
-                <div style="font-size:0.75rem;color:var(--text-muted);margin-top:2px">${fmtDate(p.date)}${invCell ? ' · ' + escapeHtml(invCell) : ''}${p.collectedBy ? ' · ' + escapeHtml(p.collectedBy) : ''}</div>
+                <div style="font-size:0.75rem;color:var(--text-muted);margin-top:2px">${detailParts.join(' | ')}</div>
             </div>
             <div style="text-align:right;flex-shrink:0">
                 <div style="font-size:1.1rem;font-weight:800;color:${amtColor}">${amtSign}${currency(p.amount)}</div>
@@ -10351,7 +10415,7 @@ function renderPayRows(pays) {
             type: `<td style="min-width:120px"><span class="badge ${p.type === 'in' ? 'badge-success' : 'badge-danger'}">${p.type === 'in' ? 'Payment In' : 'Payment Out'}</span></td>`,
             invoiceNo: `<td>${buildPayInvoiceCell(p)}</td>`,
             mode: `<td>${p.mode || 'Cash'}${p.mode === 'Cheque' && p.chequeNo ? `<br><span style="font-size:0.75rem;color:var(--text-muted)">#${p.chequeNo} | ${p.chequeBank || ''}</span><br><span class="badge ${p.chequeStatus === 'Cleared' ? 'badge-success' : p.chequeStatus === 'Deposited' ? 'badge-warning' : 'badge-danger'}" style="font-size:0.65rem">${p.chequeStatus || 'Pending'}</span>` : ''}</td>`,
-            collectedBy: `<td style="font-size:0.82rem;color:var(--text-secondary)">${escapeHtml(p.collectedBy || p.createdBy || '-')}</td>`,
+            collectedBy: `<td style="font-size:0.82rem;color:var(--text-secondary)">${escapeHtml(getUserDisplayName(getPaymentCollectorValue(p)) || '-')}</td>`,
             amount: `<td class="${p.type === 'in' ? 'amount-green' : 'amount-red'}">${currency(p.amount)}</td>`,
             status: `<td><span class="badge ${p.status === 'posted' ? 'badge-success' : p.status === 'cancelled' ? 'badge-danger' : 'badge-warning'}" style="font-size:0.72rem">${p.status || 'pending'}</span></td>`,
             actions: `<td><div class="action-btns">${viewBtn}${printBtn}${editBtn}${deleteBtn}</div></td>`,
@@ -10368,14 +10432,19 @@ async function filterPayTable() {
     const to = ($('pay-f-to') || {}).value || '';
     let pays = await DB.getAll('payments');
     if (currentUser && currentUser.role === 'Salesman') {
-        pays = pays.filter(p => (p.collectedBy === currentUser.name || p.createdBy === currentUser.name) && p.type !== 'out');
+        pays = pays.filter(p => matchesAnyUserIdentity([p.collectedBy, p.createdBy], currentUser) && p.type !== 'out');
     }
     if (from) pays = pays.filter(p => p.date >= from);
     if (to) pays = pays.filter(p => p.date <= to);
-    if (s) pays = pays.filter(p => (p.partyName || '').toLowerCase().includes(s) || (p.note || '').toLowerCase().includes(s) || (p.invoiceNo || '').toLowerCase().includes(s));
+    if (s) pays = pays.filter(p =>
+        (p.partyName || '').toLowerCase().includes(s) ||
+        (p.note || '').toLowerCase().includes(s) ||
+        (p.invoiceNo || '').toLowerCase().includes(s) ||
+        (p.payNo || p.receiptNo || p.id || '').toLowerCase().includes(s)
+    );
     if (t) pays = pays.filter(p => p.type === t);
     if (modeF) pays = pays.filter(p => (p.mode || 'Cash') === modeF);
-    if (collF) pays = pays.filter(p => (p.collectedBy || p.createdBy) === collF);
+    if (collF) pays = pays.filter(p => matchesAnyUserIdentity([p.collectedBy, p.createdBy], collF));
     // Update table or cards depending on view
     const listEl = $('pay-list');
     const tbodyEl = $('pay-tbody');
@@ -11796,9 +11865,16 @@ window.saveEditedPayment = async function (id) {
             const ledger = await DB.getAll('party_ledger');
             const ledgerEntry = ledger.find(e => (e.documentNo || e.docNo) === payRefNo && e.partyId === party.id);
             if (ledgerEntry) {
+                const editedMode = $('f-pay-mode').value;
+                const editedDate = $('f-pay-date').value;
+                const editedCollector = $('f-pay-collected-by')?.value?.trim() || oldPay.collectedBy || oldPay.createdBy || '';
                 await DB.adminUpdate('party_ledger', ledgerEntry.id, {
+                    date: editedDate,
+                    type: oldPay.type === 'in' ? 'Payment In' : 'Payment Out',
                     amount: newBalChange,
-                    reason: `Mode: ${$('f-pay-mode').value} (Edited)`
+                    documentNo: payRefNo,
+                    reason: `Mode: ${editedMode}${editedCollector ? ` | Collected By: ${editedCollector}` : ''} (Edited)`,
+                    createdBy: editedCollector || ledgerEntry.createdBy || ledgerEntry.created_by || oldPay.createdBy || currentUser?.userId || currentUser?.name || 'System'
                 });
             }
             
@@ -15381,15 +15457,15 @@ function renderReports() {
         </div>
         <p style="font-size:0.82rem;color:var(--text-muted);margin-bottom:14px">Line-wise detailed reports for re-entry into Vyapar accounting software.</p>
         <div class="report-grid">
-            <div class="report-card" onclick="showReport('vyapar-sales')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(22,163,74,0.12),rgba(16,185,129,0.08))"><div class="report-icon"><span class="material-symbols-outlined" style="color:#16a34a">upload_file</span></div></div><div class="report-text"><h4>Vyapar Sales Import</h4><p>Sales invoices  line-wise for Vyapar entry</p></div></div>
-            <div class="report-card" onclick="showReport('vyapar-payments')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(37,99,235,0.12),rgba(99,102,241,0.08))"><div class="report-icon"><span class="material-symbols-outlined" style="color:#2563eb">upload_file</span></div></div><div class="report-text"><h4>Vyapar Payment In Import</h4><p>Payment receipts  line-wise for Vyapar entry</p></div></div>
+            <div class="report-card" onclick="showReport('vyapar-sales')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(22,163,74,0.12),rgba(16,185,129,0.08))"><div class="report-icon"><span class="material-symbols-outlined" style="color:#16a34a">upload_file</span></div></div><div class="report-text"><h4>Vyapar Sales Import</h4><p>Sales invoices line-wise for Vyapar entry</p></div></div>
+            <div class="report-card" onclick="showReport('vyapar-payments')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(37,99,235,0.12),rgba(99,102,241,0.08))"><div class="report-icon"><span class="material-symbols-outlined" style="color:#2563eb">upload_file</span></div></div><div class="report-text"><h4>Vyapar Payment In Import</h4><p>Payment receipts line-wise for Vyapar entry</p></div></div>
             <div class="report-card" onclick="showReport('payment-trend')">
                 <div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(124,45,18,0.12),rgba(249,115,22,0.08))">
                     <div class="report-icon"><span class="material-symbols-outlined">bar_chart</span></div>
                 </div>
                 <div class="report-text">
                     <h4>Customer Payment Trend</h4>
-                    <p>Customer  Date pivot  collection summary</p>
+                    <p>Customer date-wise collection summary</p>
                 </div>
             </div>
         </div>
@@ -15417,13 +15493,13 @@ async function showReport(type) {
 
     if (type === 'sales') {
         window._rSalesAll = invoices.filter(i => i.type === 'sale' && i.status !== 'cancelled');
-        const monthStart = today();
+        const monthStart = currentMonthStart();
         const salesUsers = users.filter(u => ['Admin', 'Manager', 'Salesman'].includes(u.role));
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
             <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
                 <div class="form-group"><label>From Date</label><input type="date" id="r-s-from" value="${monthStart}" onchange="renderSalesRpt()"></div>
-                <button class="btn btn-outline" onclick="DB.exportToExcel('tbl-sales-rpt', 'sales_report')" style="border-color:#16a34a;color:#16a34a;margin-top:24px"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button>
+                <button class="btn btn-outline" onclick="DB.exportToExcel('tbl-sales', 'sales_report')" style="border-color:#16a34a;color:#16a34a;margin-top:24px"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button>
                 <div class="form-group"><label>To Date</label><input type="date" id="r-s-to" value="${today()}" onchange="renderSalesRpt()"></div>
                 <div class="form-group"><label>Party</label><input id="r-s-party" placeholder="All parties..." oninput="renderSalesRpt()" style="width:160px"></div>
                 <div class="form-group"><label>Salesman</label><select id="r-s-user" onchange="renderSalesRpt()"><option value="">All</option>${salesUsers.map(u => `<option>${u.name}</option>`).join('')}</select></div>
@@ -15471,8 +15547,13 @@ async function showReport(type) {
             let count = 0;
             // The entries are already sorted by date descending (newest first)
             for (const entry of window._rItemLedger) {
-                if (itemFlt && !(entry.item_name || '').toLowerCase().includes(itemFlt)) continue;
-                if (typeFlt && entry.entry_type !== typeFlt) continue;
+                const entryType = entry.entryType || entry.entry_type || '';
+                const itemName = entry.itemName || entry.item_name || '';
+                const documentNo = entry.documentNo || entry.document_no || '';
+                const runningStock = entry.runningStock ?? entry.running_stock;
+                const createdBy = entry.createdBy || entry.created_by || '';
+                if (itemFlt && !itemName.toLowerCase().includes(itemFlt)) continue;
+                if (typeFlt && entryType !== typeFlt) continue;
 
                 count++;
                 if (count > 500 && !itemFlt) {
@@ -15487,13 +15568,13 @@ async function showReport(type) {
 
                 html += `<tr>
                     <td style="white-space:nowrap">${fmtDate(entry.date) || '-'}</td>
-                    <td><span class="badge ${entry.entry_type === 'Sale' ? 'badge-danger' : 'badge-success'}">${escapeHtml(entry.entry_type || '-')}</span></td>
-                    <td style="font-family:monospace;font-size:0.85rem">${escapeHtml(entry.document_no || '-')}</td>
-                    <td style="font-weight:600">${escapeHtml(entry.item_name || '-')}</td>
+                    <td><span class="badge ${entryType === 'Sale' ? 'badge-danger' : 'badge-success'}">${escapeHtml(entryType || '-')}</span></td>
+                    <td style="font-family:monospace;font-size:0.85rem">${escapeHtml(documentNo || '-')}</td>
+                    <td style="font-weight:600">${escapeHtml(itemName || '-')}</td>
                     <td style="text-align:center">${qtySpan}</td>
-                    <td style="text-align:center;font-weight:600">${entry.running_stock !== undefined ? entry.running_stock : '-'}</td>
+                    <td style="text-align:center;font-weight:600">${runningStock !== undefined ? runningStock : '-'}</td>
                     <td style="font-size:0.85rem">${escapeHtml(entry.reason || '-')}</td>
-                    <td style="font-size:0.8rem;color:var(--text-muted)">${escapeHtml(entry.created_by || '-')}</td>
+                    <td style="font-size:0.8rem;color:var(--text-muted)">${escapeHtml(createdBy || '-')}</td>
                 </tr>`;
             }
             if (count === 0) html += `<tr><td colspan="8" style="text-align:center">No ledger entries found.</td></tr>`;
@@ -15694,13 +15775,13 @@ async function showReport(type) {
 
     if (type === 'purchases') {
         window._rPurchAll = invoices.filter(i => i.type === 'purchase' && i.status !== 'cancelled');
-        const monthStart = today();
+        const monthStart = currentMonthStart();
         const poUsers = users.filter(u => ['Admin', 'Manager'].includes(u.role));
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
             <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
                 <div class="form-group"><label>From Date</label><input type="date" id="r-p-from" value="${monthStart}" onchange="renderPurchaseRpt()"></div>
-                <button class="btn btn-outline" onclick="DB.exportToExcel('tbl-purchase-rpt', 'purchase_report')" style="border-color:#16a34a;color:#16a34a;margin-top:24px"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button>
+                <button class="btn btn-outline" onclick="DB.exportToExcel('tbl-purchases', 'purchase_report')" style="border-color:#16a34a;color:#16a34a;margin-top:24px"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button>
                 <div class="form-group"><label>To Date</label><input type="date" id="r-p-to" value="${today()}" onchange="renderPurchaseRpt()"></div>
                 <div class="form-group"><label>Supplier</label><input id="r-p-party" placeholder="All suppliers..." oninput="renderPurchaseRpt()" style="width:160px"></div>
                 <div class="form-group"><label>Created By</label><select id="r-p-user" onchange="renderPurchaseRpt()"><option value="">All</option>${poUsers.map(u => `<option>${u.name}</option>`).join('')}</select></div>
@@ -15711,7 +15792,7 @@ async function showReport(type) {
         renderPurchaseRpt();
     }
     if (type === 'salesman-ach') {
-        const monthStart = today();
+        const monthStart = currentMonthStart();
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
             <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
@@ -15733,8 +15814,8 @@ async function showReport(type) {
             let html = '<div class="table-wrapper"><table class="data-table" id="tbl-salesman-ach"><thead><tr><th>Salesman</th><th>Target</th><th>Achievement</th><th>Achievement %</th><th>Collections</th></tr></thead><tbody>';
 
             for (const u of salesmanUsers) {
-                const sales = filteredInvoices.filter(i => i.createdBy === u.name).reduce((s, i) => s + i.total, 0);
-                const colls = filteredPayments.filter(p => p.createdBy === u.name).reduce((s, p) => s + p.amount, 0);
+                const sales = filteredInvoices.filter(i => matchesUserIdentity(i.createdBy, u, users)).reduce((s, i) => s + i.total, 0);
+                const colls = filteredPayments.filter(p => matchesAnyUserIdentity([p.collectedBy, p.createdBy], u, users)).reduce((s, p) => s + p.amount, 0);
                 const target = u.monthlyTarget || 0;
                 const pct = target > 0 ? (sales / target * 100) : 0;
                 const progressClass = pct >= 100 ? 'bg-success' : pct >= 75 ? 'bg-info' : pct >= 50 ? 'bg-warning' : 'bg-danger';
@@ -15761,13 +15842,13 @@ async function showReport(type) {
     }
 
     if (type === 'party-soa') {
-        const monthStart = today();
+        const monthStart = currentMonthStart();
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
             <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
                 <div class="form-group"><label>Select Party</label><input id="r-soa-party-input" placeholder="Type party name..." style="width:200px"></div>
                 <div class="form-group"><label>From Date</label><input type="date" id="r-soa-from" value="${monthStart}" onchange="renderPartySOARpt()"></div>
-                <button class="btn btn-outline" onclick="DB.exportToExcel('tbl-soa-rpt', 'party_soa')" style="border-color:#16a34a;color:#16a34a;margin-top:24px"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button>
+                <button class="btn btn-outline" onclick="DB.exportToExcel('tbl-soa', 'party_soa')" style="border-color:#16a34a;color:#16a34a;margin-top:24px"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button>
                 <div class="form-group"><label>To Date</label><input type="date" id="r-soa-to" value="${today()}" onchange="renderPartySOARpt()"></div>
                 <div class="form-group" style="align-self:flex-end">
                     <button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-soa','Statement_${today()}')"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button>
@@ -15830,7 +15911,11 @@ async function showReport(type) {
             const itemRevenue = {};
             invoices.filter(i => i.type === 'sale' && i.status !== 'cancelled').forEach(inv => {
                 inv.items.forEach(li => {
-                    itemRevenue[li.itemId] = (itemRevenue[li.itemId] || 0) + (li.qty * li.price);
+                    const itemId = getLineItemId(li);
+                    if (!itemId) return;
+                    const qty = getLinePrimaryQty(li);
+                    const revenue = li.amount !== undefined ? (+li.amount || 0) : (qty * (+li.price || 0));
+                    itemRevenue[itemId] = (itemRevenue[itemId] || 0) + revenue;
                 });
             });
 
@@ -15842,7 +15927,7 @@ async function showReport(type) {
             })).sort((a, b) => b.revenue - a.revenue);
 
             let cumulativePct = 0;
-            let html = '<div class="table-wrapper"><table class="data-table" id="tbl-abc"><thead><tr><th>Rank</th><th>Item Name</th><th>Revenue ()</th><th>% Share</th><th>Cumul %</th><th>Class</th></tr></thead><tbody>';
+            let html = '<div class="table-wrapper"><table class="data-table" id="tbl-abc"><thead><tr><th>Rank</th><th>Item Name</th><th>Revenue</th><th>% Share</th><th>Cumul %</th><th>Class</th></tr></thead><tbody>';
 
             sorted.forEach((item, idx) => {
                 cumulativePct += item.pct;
@@ -15874,12 +15959,12 @@ async function showReport(type) {
         window._rPnlInv = invoices.filter(i => i.status !== 'cancelled');
         window._rPnlExp = expenses;
         window._rPnlInvt = inventory;
-        const monthStart = today();
+        const monthStart = currentMonthStart();
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
             <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
                 <div class="form-group"><label>From Date</label><input type="date" id="r-pnl-from" value="${monthStart}" onchange="renderPnlRpt()"></div>
-                <button class="btn btn-outline" onclick="DB.exportToExcel('tbl-pnl-rpt', 'pnl_report')" style="border-color:#16a34a;color:#16a34a;margin-top:24px"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button>
+                <button class="btn btn-outline" onclick="exportPnLSummaryReport()" style="border-color:#16a34a;color:#16a34a;margin-top:24px"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button>
                 <div class="form-group"><label>To Date</label><input type="date" id="r-pnl-to" value="${today()}" onchange="renderPnlRpt()"></div>
             </div>
         </div></div>
@@ -15889,7 +15974,7 @@ async function showReport(type) {
     if (type === 'invoice-pnl') {
         window._rInvPnlAll = invoices.filter(i => i.type === 'sale' && i.status !== 'cancelled');
         window._rInvPnlInvt = inventory;
-        const monthStart = today();
+        const monthStart = currentMonthStart();
         const salesUsers = users.filter(u => ['Admin', 'Manager', 'Salesman'].includes(u.role));
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
@@ -15933,7 +16018,7 @@ async function showReport(type) {
                 <div class="form-group"><label>Area / Route</label><select id="r-out-area" onchange="renderOutstandingRpt()"><option value="">All Areas</option>${outAreas.map(a => `<option>${escapeHtml(a)}</option>`).join('')}</select></div>
                 <div class="form-group"><label>Search</label><input id="r-out-search" placeholder="Party name..." oninput="renderOutstandingRpt()" style="width:160px"></div>
                 <div class="form-group"><label>Balance</label><select id="r-out-bal" onchange="renderOutstandingRpt()"><option value="">All</option><option value="dr">Receivable (Customer owes us)</option><option value="cr">Payable (We owe them)</option></select></div>
-                <div class="form-group"><label>Age</label><select id="r-out-age" onchange="renderOutstandingRpt()"><option value="">All</option><option value="0-30">030 days</option><option value="31-60">3160 days</option><option value="61-90">6190 days</option><option value="90+">90+ days</option></select></div>
+                <div class="form-group"><label>Age</label><select id="r-out-age" onchange="renderOutstandingRpt()"><option value="">All</option><option value="0-30">0-30 days</option><option value="31-60">31-60 days</option><option value="61-90">61-90 days</option><option value="90+">90+ days</option></select></div>
                 <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-outstanding','Outstanding_${today()}')"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button></div>
             </div>
         </div></div>
@@ -15942,14 +16027,14 @@ async function showReport(type) {
     }
     if (type === 'expenses') {
         window._rExpAll = expenses;
-        const monthStart = today();
+        const monthStart = currentMonthStart();
         const expCats = [...new Set(expenses.map(e => e.category || 'General'))].sort();
-        const expUsers = [...new Set(expenses.map(e => e.createdBy).filter(Boolean))].sort();
+        const expUsers = [...new Set(expenses.map(e => getUserDisplayName(e.createdBy, users)).filter(Boolean))].sort();
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
             <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
                 <div class="form-group"><label>From Date</label><input type="date" id="r-exp-from" value="${monthStart}" onchange="renderExpenseRpt()"></div>
-                <button class="btn btn-outline" onclick="DB.exportToExcel('tbl-exp-rpt', 'expense_report')" style="border-color:#16a34a;color:#16a34a;margin-top:24px"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button>
+                <button class="btn btn-outline" onclick="DB.exportToExcel('tbl-expenses', 'expense_report')" style="border-color:#16a34a;color:#16a34a;margin-top:24px"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button>
                 <div class="form-group"><label>To Date</label><input type="date" id="r-exp-to" value="${today()}" onchange="renderExpenseRpt()"></div>
                 <div class="form-group"><label>Category</label><select id="r-exp-cat" onchange="renderExpenseRpt()"><option value="">All Categories</option>${expCats.map(c => `<option>${c}</option>`).join('')}</select></div>
                 <div class="form-group"><label>Added By</label><select id="r-exp-user" onchange="renderExpenseRpt()"><option value="">All</option>${expUsers.map(u => `<option>${u}</option>`).join('')}</select></div>
@@ -15968,7 +16053,7 @@ async function showReport(type) {
     }
     if (type === 'chequeregister') {
         window._rChqAll = payments.filter(p => p.mode === 'Cheque');
-        const monthStart = today();
+        const monthStart = currentMonthStart();
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
             <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
@@ -15986,7 +16071,7 @@ async function showReport(type) {
     //  VYAPAR SALES IMPORT REPORT 
     if (type === 'vyapar-sales') {
         window._vySalesAll = invoices.filter(i => i.type === 'sale' && i.status !== 'cancelled');
-        const monthStart = today();
+        const monthStart = currentMonthStart();
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
             <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
@@ -16009,8 +16094,8 @@ async function showReport(type) {
     //  VYAPAR PAYMENT IN IMPORT REPORT 
     if (type === 'vyapar-payments') {
         window._vyPayAll = payments.filter(p => p.type === 'in');
-        const monthStart = today();
-        const collectors = [...new Set(window._vyPayAll.map(p => p.collectedBy || p.createdBy).filter(Boolean))].sort();
+        const monthStart = currentMonthStart();
+        const collectors = [...new Set(window._vyPayAll.map(p => getUserDisplayName(getPaymentCollectorValue(p), users)).filter(Boolean))].sort();
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
             <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
@@ -16034,12 +16119,12 @@ async function showReport(type) {
         window._rSlsInv = invoices.filter(i => i.type === 'sale' && i.status !== 'cancelled');
         window._rSlsPay = payments.filter(p => p.type === 'in');
         const salesUsers = users.filter(u => ['Admin', 'Manager', 'Salesman'].includes(u.role));
-        const monthStart = today();
+        const monthStart = currentMonthStart();
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
             <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
                 <div class="form-group"><label>From Date</label><input type="date" id="r-sl-from" value="${monthStart}" onchange="renderSalesmanRpt()"></div>
-                <button class="btn btn-outline" onclick="DB.exportToExcel('tbl-salesman-rpt', 'salesman_report')" style="border-color:#16a34a;color:#16a34a;margin-top:24px"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button>
+                <button class="btn btn-outline" onclick="DB.exportToExcel('tbl-salesman', 'salesman_report')" style="border-color:#16a34a;color:#16a34a;margin-top:24px"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button>
                 <div class="form-group"><label>To Date</label><input type="date" id="r-sl-to" value="${today()}" onchange="renderSalesmanRpt()"></div>
                 <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-salesman','SalesmanPerformance_${today()}')"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button></div>
             </div>
@@ -16073,7 +16158,7 @@ async function showReport(type) {
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
             <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
                 <div class="form-group"><label>Salesman</label><select id="r-uo-user" onchange="renderUserOutstandingRpt()"><option value="">All Salesmen</option>${users.filter(u => ['Admin', 'Manager', 'Salesman'].includes(u.role)).map(u => `<option>${escapeHtml(u.name)}</option>`).join('')}</select></div>
-                <div class="form-group"><label>Age</label><select id="r-uo-age" onchange="renderUserOutstandingRpt()"><option value="">All</option><option value="0-30">030 days</option><option value="31-60">3160 days</option><option value="61-90">6190 days</option><option value="90+">90+ days</option></select></div>
+                <div class="form-group"><label>Age</label><select id="r-uo-age" onchange="renderUserOutstandingRpt()"><option value="">All</option><option value="0-30">0-30 days</option><option value="31-60">31-60 days</option><option value="61-90">61-90 days</option><option value="90+">90+ days</option></select></div>
                 <div class="form-group"><label>Search Party</label><input id="r-uo-party" placeholder="Party name..." oninput="renderUserOutstandingRpt()" style="width:160px"></div>
                 <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-user-outstanding','OutstandingByUser_${today()}')"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button></div>
             </div>
@@ -16115,7 +16200,7 @@ async function showReport(type) {
     }
 
     if (type === 'payment-report') {
-        const monthStart = today();
+        const monthStart = currentMonthStart();
         const collectors = users.filter(u => ['Admin', 'Manager', 'Salesman'].includes(u.role));
         window._rPayAll = payments;
         el.innerHTML = `
@@ -16402,6 +16487,7 @@ function renderPaymentRpt() {
     const user = ($('r-pay-user') || {}).value || '';
     const out = $('r-pay-out'); if (!out) return;
     const sumEl = $('r-pay-summary');
+    const users = getCachedUsers();
 
     let rows = (window._rPayAll || []).slice();
     if (from) rows = rows.filter(p => p.date >= from);
@@ -16409,7 +16495,7 @@ function renderPaymentRpt() {
     if (type) rows = rows.filter(p => p.type === type);
     if (mode) rows = rows.filter(p => (p.mode || '') === mode);
     if (party) rows = rows.filter(p => (p.partyName || '').toLowerCase().includes(party));
-    if (user) rows = rows.filter(p => (p.collectedBy || p.createdBy || '') === user);
+    if (user) rows = rows.filter(p => matchesAnyUserIdentity([p.collectedBy, p.createdBy], user, users));
     rows.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
 
     const totalIn = rows.filter(p => p.type === 'in').reduce((s, p) => s + p.amount, 0);
@@ -16434,6 +16520,70 @@ function renderPaymentRpt() {
         </div>`;
 
     if (!rows.length) { out.innerHTML = '<div class="empty-state"><p>No payments found for selected filters</p></div>'; return; }
+
+    if (window.innerWidth < 768) {
+        const exportRows = rows.map(p => {
+            const allocKeys = p.allocations ? Object.keys(p.allocations) : [];
+            const isMulti = allocKeys.length > 1;
+            const refCell = allocKeys.length > 0
+                ? allocKeys.map(inv => `${inv}${isMulti ? ` ${currency(p.allocations[inv])}` : ''}`).join(', ')
+                : (p.invoiceNo || p.note || '-');
+            return `<tr>
+                <td>${fmtDate(p.date)}</td>
+                <td>${escapeHtml(getPaymentReferenceNo(p) || '-')}</td>
+                <td>${escapeHtml(p.partyName || '-')}</td>
+                <td>${p.type === 'in' ? 'Pay In' : 'Pay Out'}</td>
+                <td>${escapeHtml(p.mode || '-')}</td>
+                <td>${escapeHtml(refCell)}</td>
+                <td>${currency(p.amount)}</td>
+                <td>${p.discount > 0 ? currency(p.discount) : '-'}</td>
+                <td>${currency(p.totalReduction || p.amount)}</td>
+                <td>${escapeHtml(getUserDisplayName(getPaymentCollectorValue(p), users) || '-')}</td>
+                <td>${escapeHtml(p.notes || p.note || '-')}</td>
+            </tr>`;
+        }).join('');
+
+        out.innerHTML = rows.map(p => {
+            const allocKeys = p.allocations ? Object.keys(p.allocations) : [];
+            const invoiceText = allocKeys.length
+                ? allocKeys.map(inv => `${inv} (${currency(p.allocations[inv])})`).join(', ')
+                : getPaymentInvoiceSummary(p);
+            const noteText = p.notes || p.note || '';
+            return `
+            <div class="card" style="margin-bottom:10px">
+                <div class="card-body" style="padding:14px">
+                    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:8px">
+                        <div style="min-width:0">
+                            <div style="font-size:0.78rem;color:var(--text-muted)">${fmtDate(p.date)}</div>
+                            <div style="font-weight:700;color:var(--primary);margin-top:2px">${escapeHtml(getPaymentReferenceNo(p) || '-')}</div>
+                            <div style="font-size:0.92rem;font-weight:600;margin-top:4px">${escapeHtml(p.partyName || '-')}</div>
+                        </div>
+                        <div style="text-align:right;flex-shrink:0">
+                            <div class="${p.type === 'in' ? 'amount-green' : 'amount-red'}" style="font-size:1rem;font-weight:800">${currency(p.totalReduction || p.amount)}</div>
+                            <div style="font-size:0.72rem;color:var(--text-muted)">${p.discount > 0 ? `Amt ${currency(p.amount)} | Disc ${currency(p.discount)}` : `Amt ${currency(p.amount)}`}</div>
+                        </div>
+                    </div>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+                        <span class="badge ${p.type === 'in' ? 'badge-success' : 'badge-danger'}">${p.type === 'in' ? 'Pay In' : 'Pay Out'}</span>
+                        <span class="badge badge-info">${escapeHtml(p.mode || '-')}</span>
+                    </div>
+                    <div style="font-size:0.8rem;color:var(--text-muted);line-height:1.5">
+                        <div><strong style="color:var(--text-primary)">Invoices:</strong> ${escapeHtml(invoiceText)}</div>
+                        <div><strong style="color:var(--text-primary)">Collected By:</strong> ${escapeHtml(getUserDisplayName(getPaymentCollectorValue(p), users) || '-')}</div>
+                        ${noteText ? `<div><strong style="color:var(--text-primary)">Note:</strong> ${escapeHtml(noteText)}</div>` : ''}
+                    </div>
+                </div>
+            </div>`;
+        }).join('') + `
+        <table id="tbl-pay-rpt" style="display:none">
+            <thead><tr>
+                <th>Date</th><th>Voucher No</th><th>Party</th><th>Type</th><th>Mode</th><th>Allocated Invoices</th>
+                <th>Amt Received</th><th>Discount</th><th>Total Payment</th><th>Collected By</th><th>Note</th>
+            </tr></thead>
+            <tbody>${exportRows}</tbody>
+        </table>`;
+        return;
+    }
 
     out.innerHTML = `<div class="card"><div class="card-body">
         <div class="table-wrapper">
@@ -16466,14 +16616,14 @@ function renderPaymentRpt() {
                 <td class="${p.type === 'in' ? 'amount-green' : 'amount-red'}" style="text-align:right">${currency(p.amount)}</td>
                 <td style="text-align:right;color:var(--danger)">${p.discount > 0 ? currency(p.discount) : '-'}</td>
                 <td class="${p.type === 'in' ? 'amount-green' : 'amount-red'}" style="text-align:right;font-weight:700">${currency(p.totalReduction || p.amount)}</td>
-                <td style="font-size:0.82rem">${escapeHtml(p.collectedBy || p.createdBy || '-')}</td>
+                <td style="font-size:0.82rem">${escapeHtml(getUserDisplayName(getPaymentCollectorValue(p), users) || '-')}</td>
                 <td style="font-size:0.8rem;color:var(--text-muted)">${escapeHtml(p.notes || p.note || '-')}</td>
             </tr>`;}).join('')}
             <tr style="font-weight:800;background:rgba(249,115,22,0.04);border-top:2px solid var(--border)">
                 <td colspan="6" style="text-align:right;font-size:0.85rem;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted)">Grand Total</td>
-                <td class="amount-green" style="text-align:right">${currency(rows.filter(p=>p.type==='in').reduce((s,p)=>s+(p.amount||0),0))}</td>
+                <td style="text-align:right">${currency(rows.reduce((s,p)=>s+(p.amount||0),0))}</td>
                 <td style="text-align:right;color:var(--danger)">${currency(rows.reduce((s,p)=>s+(p.discount||0),0))}</td>
-                <td class="amount-green" style="text-align:right;font-size:1rem">${currency(rows.filter(p=>p.type==='in').reduce((s,p)=>s+(p.totalReduction||p.amount||0),0))}</td>
+                <td style="text-align:right;font-size:1rem">${currency(rows.reduce((s,p)=>s+(p.totalReduction||p.amount||0),0))}</td>
                 <td colspan="2"></td>
             </tr>
             </tbody>
@@ -16487,11 +16637,12 @@ function renderSalesRpt() {
     const party = (($('r-s-party') || {}).value || '').toLowerCase();
     const user = ($('r-s-user') || {}).value || '';
     const out = $('r-s-out'); if (!out) return;
+    const users = getCachedUsers();
     let inv = (window._rSalesAll || []).slice();
     if (from) inv = inv.filter(i => i.date >= from);
     if (to) inv = inv.filter(i => i.date <= to);
     if (party) inv = inv.filter(i => (i.partyName || '').toLowerCase().includes(party));
-    if (user) inv = inv.filter(i => i.createdBy === user);
+    if (user) inv = inv.filter(i => matchesUserIdentity(i.createdBy, user, users));
     const total = inv.reduce((s, i) => s + i.total, 0);
     const count = inv.length;
     out.innerHTML = `
@@ -16502,7 +16653,7 @@ function renderSalesRpt() {
     </div>
     <div class="card"><div class="card-body"><table class="data-table" id="tbl-sales">
         <thead><tr><th>Date</th><th>Invoice</th><th>Party</th><th>Salesman</th><th style="text-align:right">Amount</th></tr></thead>
-        <tbody>${inv.map(i => `<tr><td>${fmtDate(i.date)}</td><td style="font-weight:600">${i.invoiceNo}</td><td>${escapeHtml(i.partyName)}</td><td>${i.createdBy || '-'}</td><td class="amount-green" style="text-align:right">${currency(i.total)}</td></tr>`).join('') || '<tr><td colspan="5" class="empty-state"><p>No sales found</p></td></tr>'}
+        <tbody>${inv.map(i => `<tr><td>${fmtDate(i.date)}</td><td style="font-weight:600">${i.invoiceNo}</td><td>${escapeHtml(i.partyName)}</td><td>${escapeHtml(getUserDisplayName(i.createdBy, users) || '-')}</td><td class="amount-green" style="text-align:right">${currency(i.total)}</td></tr>`).join('') || '<tr><td colspan="5" class="empty-state"><p>No sales found</p></td></tr>'}
         <tr style="font-weight:700;background:rgba(0,212,170,0.1)"><td colspan="4" style="text-align:right">Total (${count} invoices)</td><td class="amount-green" style="text-align:right">${currency(total)}</td></tr>
         </tbody></table></div></div>`;
 }
@@ -16513,11 +16664,12 @@ function renderPurchaseRpt() {
     const party = (($('r-p-party') || {}).value || '').toLowerCase();
     const user = ($('r-p-user') || {}).value || '';
     const out = $('r-p-out'); if (!out) return;
+    const users = getCachedUsers();
     let inv = (window._rPurchAll || []).slice();
     if (from) inv = inv.filter(i => i.date >= from);
     if (to) inv = inv.filter(i => i.date <= to);
     if (party) inv = inv.filter(i => (i.partyName || '').toLowerCase().includes(party));
-    if (user) inv = inv.filter(i => i.createdBy === user);
+    if (user) inv = inv.filter(i => matchesUserIdentity(i.createdBy, user, users));
     const total = inv.reduce((s, i) => s + i.total, 0);
     out.innerHTML = `
     <div class="stats-grid-sm">
@@ -16528,7 +16680,7 @@ function renderPurchaseRpt() {
         <div class="table-wrapper">
             <table class="data-table" id="tbl-purchases">
             <thead><tr><th>Date</th><th>Invoice</th><th>Supplier</th><th>Created By</th><th style="text-align:right">Amount</th></tr></thead>
-            <tbody>${inv.map(i => `<tr><td>${fmtDate(i.date)}</td><td style="font-weight:600">${i.invoiceNo}</td><td>${escapeHtml(i.partyName)}</td><td>${i.createdBy || '-'}</td><td class="amount-red" style="text-align:right">${currency(i.total)}</td></tr>`).join('') || '<tr><td colspan="5" class="empty-state"><p>No purchases found</p></td></tr>'}
+            <tbody>${inv.map(i => `<tr><td>${fmtDate(i.date)}</td><td style="font-weight:600">${i.invoiceNo}</td><td>${escapeHtml(i.partyName)}</td><td>${escapeHtml(getUserDisplayName(i.createdBy, users) || '-')}</td><td class="amount-red" style="text-align:right">${currency(i.total)}</td></tr>`).join('') || '<tr><td colspan="5" class="empty-state"><p>No purchases found</p></td></tr>'}
             <tr style="font-weight:700;background:rgba(0,180,216,0.1)"><td colspan="4" style="text-align:right">Total</td><td class="amount-red" style="text-align:right">${currency(total)}</td></tr>
             </tbody></table>
         </div>
@@ -16568,6 +16720,53 @@ function renderPnlRpt() {
     </div></div>`;
 }
 
+function exportPnLSummaryReport() {
+    const from = ($('r-pnl-from') || {}).value || '';
+    const to = ($('r-pnl-to') || {}).value || '';
+    const invt = window._rPnlInvt || [];
+    let saleInvs = (window._rPnlInv || []).filter(i => i.type === 'sale');
+    let expList = (window._rPnlExp || []).slice();
+    if (from) {
+        saleInvs = saleInvs.filter(i => i.date >= from);
+        expList = expList.filter(e => e.date >= from);
+    }
+    if (to) {
+        saleInvs = saleInvs.filter(i => i.date <= to);
+        expList = expList.filter(e => e.date <= to);
+    }
+
+    const salesRevenue = saleInvs.reduce((sum, inv) => sum + (inv.total || 0), 0);
+    let estimatedCost = 0;
+    saleInvs.forEach(inv => {
+        (inv.items || []).forEach(li => {
+            const item = invt.find(x => String(x.id) === String(getLineItemId(li)));
+            estimatedCost += getLinePrimaryQty(li) * (item ? (+item.purchasePrice || 0) : 0);
+        });
+    });
+    const expenses = expList.reduce((sum, exp) => sum + (+exp.amount || 0), 0);
+    const grossProfit = salesRevenue - estimatedCost;
+    const netProfit = grossProfit - expenses;
+    const grossMargin = salesRevenue > 0 ? +(((grossProfit / salesRevenue) * 100).toFixed(1)) : 0;
+
+    const rows = [
+        ['Metric', 'Value'],
+        ['From Date', from || 'All'],
+        ['To Date', to || 'All'],
+        ['Sales Revenue', salesRevenue],
+        ['Cost of Goods Sold', estimatedCost],
+        ['Gross Profit', grossProfit],
+        ['Gross Margin %', grossMargin],
+        ['Expenses', expenses],
+        ['Net Profit', netProfit]
+    ];
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols'] = [{ wch: 24 }, { wch: 18 }];
+    XLSX.utils.book_append_sheet(wb, ws, 'P&L Summary');
+    XLSX.writeFile(wb, `PnL_Summary_${today()}.xlsx`);
+}
+
 function renderInvPnlRpt() {
     const from = ($('r-ip-from') || {}).value || '';
     const to = ($('r-ip-to') || {}).value || '';
@@ -16575,11 +16774,12 @@ function renderInvPnlRpt() {
     const user = ($('r-ip-user') || {}).value || '';
     const out = $('r-ip-out'); if (!out) return;
     const invt = window._rInvPnlInvt || [];
+    const users = getCachedUsers();
     let invs = (window._rInvPnlAll || []).slice();
     if (from) invs = invs.filter(i => i.date >= from);
     if (to) invs = invs.filter(i => i.date <= to);
     if (party) invs = invs.filter(i => (i.partyName || '').toLowerCase().includes(party));
-    if (user) invs = invs.filter(i => i.createdBy === user);
+    if (user) invs = invs.filter(i => matchesUserIdentity(i.createdBy, user, users));
 
     let totalRev = 0, totalCost = 0;
     const lossItems = []; // Track items sold below cost
@@ -16590,8 +16790,9 @@ function renderInvPnlRpt() {
         const revenue = inv.total;
         let cost = 0;
         const itemRows = (inv.items || []).map(li => {
-            const item = invt.find(x => x.id === li.itemId);
-            const qty = li.packedQty !== undefined ? li.packedQty : li.qty;
+            const itemId = getLineItemId(li);
+            const item = invt.find(x => x.id === itemId);
+            const qty = getLinePrimaryQty(li);
             const saleRate = li.price || 0;
             const costRate = item ? (item.purchasePrice || 0) : 0;
             const discount = li.discountAmt || 0;
@@ -16638,7 +16839,7 @@ function renderInvPnlRpt() {
             <td style="white-space:nowrap"><span class="ipnl-arrow" id="ipnl-arrow-${idx}" style="display:inline-block;transition:transform 0.2s;margin-right:4px;font-size:0.7rem"></span>${fmtDate(inv.date)}</td>
             <td style="font-weight:600">${inv.invoiceNo}</td>
             <td>${escapeHtml(inv.partyName)}</td>
-            <td>${inv.createdBy || '-'}</td>
+            <td>${escapeHtml(getUserDisplayName(inv.createdBy, users) || '-')}</td>
             <td class="amount-green" style="text-align:right">${currency(revenue)}</td>
             <td class="amount-red" style="text-align:right">${currency(cost)}</td>
             <td style="text-align:right;font-weight:700;color:${profit >= 0 ? 'var(--success)' : 'var(--danger)'}">${currency(profit)}</td>
@@ -17015,6 +17216,7 @@ function renderUserOutstandingRpt() {
     const invAll = window._rUOutInv || [];
     const payAll = window._rUOutPay || [];
     const todayMs = new Date().setHours(0, 0, 0, 0);
+    const users = getCachedUsers();
 
     // Build paid-per-invoice map from allocations + direct links
     const paidMap = {};
@@ -17035,7 +17237,7 @@ function renderUserOutstandingRpt() {
     // Group by salesman (createdBy)
     const byUser = {};
     pendingInvs.forEach(i => {
-        const user = i.createdBy || '(Unassigned)';
+        const user = getUserDisplayName(i.createdBy, users) || '(Unassigned)';
         if (!byUser[user]) byUser[user] = [];
         byUser[user].push(i);
     });
@@ -17147,16 +17349,17 @@ function renderExpenseRpt() {
     const cat = ($('r-exp-cat') || {}).value || '';
     const user = ($('r-exp-user') || {}).value || '';
     const out = $('r-exp-out'); if (!out) return;
+    const users = getCachedUsers();
     let exps = (window._rExpAll || []).slice();
     if (from) exps = exps.filter(e => e.date >= from);
     if (to) exps = exps.filter(e => e.date <= to);
     if (cat) exps = exps.filter(e => (e.category || 'General') === cat);
-    if (user) exps = exps.filter(e => e.createdBy === user);
+    if (user) exps = exps.filter(e => matchesUserIdentity(e.createdBy, user, users));
     const total = exps.reduce((s, e) => s + e.amount, 0);
     const catMap = {};
     exps.forEach(e => { const c = e.category || 'General'; catMap[c] = (catMap[c] || 0) + e.amount; });
     const catRows = Object.entries(catMap).sort((a, b) => b[1] - a[1]).map(([c, a]) => `<tr><td style="font-weight:600">${c}</td><td class="amount-red" style="text-align:right">${currency(a)}</td><td style="text-align:right;color:var(--text-muted)">${total > 0 ? ((a / total) * 100).toFixed(1) : 0}%</td></tr>`).join('');
-    const detailRows = exps.map(e => `<tr><td>${fmtDate(e.date)}</td><td>${e.category || 'General'}</td><td>${escapeHtml(e.note || '-')}</td><td>${e.createdBy || '-'}</td><td class="amount-red" style="text-align:right">${currency(e.amount)}</td></tr>`).join('');
+    const detailRows = exps.map(e => `<tr><td>${fmtDate(e.date)}</td><td>${e.category || 'General'}</td><td>${escapeHtml(e.note || '-')}</td><td>${escapeHtml(getUserDisplayName(e.createdBy, users) || '-')}</td><td class="amount-red" style="text-align:right">${currency(e.amount)}</td></tr>`).join('');
     out.innerHTML = `
     <div class="stats-grid-sm">
         <div class="stat-card red"><div class="stat-icon"></div><div class="stat-value">${currency(total)}</div><div class="stat-label">Total Expenses</div></div>
@@ -17235,6 +17438,7 @@ function renderSalesmanRpt() {
     const from = ($('r-sl-from') || {}).value || '';
     const to = ($('r-sl-to') || {}).value || '';
     const out = $('r-sl-out'); if (!out) return;
+    const users = getCachedUsers();
     let invs = (window._rSlsInv || []).slice();
     let pays = (window._rSlsPay || []).slice();
     if (from) { invs = invs.filter(i => i.date >= from); pays = pays.filter(p => p.date >= from); }
@@ -17242,13 +17446,13 @@ function renderSalesmanRpt() {
     // Group by salesman
     const slsMap = {};
     invs.forEach(i => {
-        const name = i.createdBy || 'Unassigned';
+        const name = getUserDisplayName(i.createdBy, users) || 'Unassigned';
         if (!slsMap[name]) slsMap[name] = { invoices: 0, sales: 0, collections: 0, payCount: 0 };
         slsMap[name].invoices++;
         slsMap[name].sales += i.total;
     });
     pays.forEach(p => {
-        const name = p.collectedBy || p.createdBy || 'Unassigned';
+        const name = getUserDisplayName(getPaymentCollectorValue(p), users) || 'Unassigned';
         if (!slsMap[name]) slsMap[name] = { invoices: 0, sales: 0, collections: 0, payCount: 0 };
         slsMap[name].collections += p.amount;
         slsMap[name].payCount++;
@@ -17338,12 +17542,13 @@ function renderUserSalesReportUI(el, users, categories) {
     // If it's a salesman, they should only see themselves initially.
     const isSalesAdmin = canEdit();
     const userOptions = isSalesAdmin ? `<option value="">All Users</option>` + users.map(u => `<option value="${u.name}">${u.name}</option>`).join('') : `<option value="${currentUser.name}">${currentUser.name}</option>`;
+    const monthStart = currentMonthStart();
 
     el.innerHTML = `
         <div class="card" style="margin-bottom:15px">
             <div class="card-body" style="padding:15px">
                 <div class="filter-group" style="display:flex;gap:15px;align-items:flex-end;flex-wrap:wrap">
-                    <div><label style="font-size:0.8rem;color:var(--text-muted);display:block;margin-bottom:4px">From Date</label><input type="date" id="rep-us-from" class="search-box" style="width:140px" value="${today()}"></div>
+                    <div><label style="font-size:0.8rem;color:var(--text-muted);display:block;margin-bottom:4px">From Date</label><input type="date" id="rep-us-from" class="search-box" style="width:140px" value="${monthStart}"></div>
                     <div><label style="font-size:0.8rem;color:var(--text-muted);display:block;margin-bottom:4px">To Date</label><input type="date" id="rep-us-to" class="search-box" style="width:140px" value="${today()}"></div>
                     <div><label style="font-size:0.8rem;color:var(--text-muted);display:block;margin-bottom:4px">User</label><select id="rep-us-user" class="search-box" style="width:160px">${userOptions}</select></div>
                     <div><label style="font-size:0.8rem;color:var(--text-muted);display:block;margin-bottom:4px">Category</label><select id="rep-us-cat" class="search-box" style="width:160px"><option value="">All Categories</option>${categories.map(c => `<option value="${c.name}">${c.name}</option>`).join('')}</select></div>
@@ -17361,6 +17566,7 @@ async function generateUserSalesReport() {
     const to = $('rep-us-to').value;
     const user = $('rep-us-user').value;
     const catSearch = $('rep-us-cat').value;
+    const users = getCachedUsers();
 
     const [orders, invoices, payments, inventory] = await Promise.all([
         DB.getAll('salesorders'),
@@ -17369,15 +17575,26 @@ async function generateUserSalesReport() {
         DB.getAll('inventory')
     ]);
 
-    const filteredOrders = orders.filter(o => o.status !== 'cancelled' && (from ? o.date >= from : true) && (to ? o.date <= to : true) && (user ? o.createdBy === user : true));
-    const filteredInvoices = invoices.filter(i => i.type === 'sale' && i.status !== 'cancelled' && (from ? i.date >= from : true) && (to ? i.date <= to : true) && (user ? i.createdBy === user : true));
-    const filteredPayments = payments.filter(p => p.type === 'in' && (from ? p.date >= from : true) && (to ? p.date <= to : true) && (user ? p.createdBy === user : true));
+    const filteredOrders = orders.filter(o => o.status !== 'cancelled' && (from ? o.date >= from : true) && (to ? o.date <= to : true) && (user ? matchesUserIdentity(o.createdBy, user, users) : true));
+    const filteredInvoices = invoices.filter(i => i.type === 'sale' && i.status !== 'cancelled' && (from ? i.date >= from : true) && (to ? i.date <= to : true) && (user ? matchesUserIdentity(i.createdBy, user, users) : true));
+    const filteredPayments = payments.filter(p => p.type === 'in' && (from ? p.date >= from : true) && (to ? p.date <= to : true) && (user ? matchesAnyUserIdentity([p.collectedBy, p.createdBy], user, users) : true));
+
+    const paidMap = {};
+    payments.filter(p => p.type === 'in').forEach(p => {
+        if (p.allocations) {
+            Object.entries(p.allocations).forEach(([invNo, amt]) => {
+                paidMap[invNo] = (paidMap[invNo] || 0) + (+amt || 0);
+            });
+        } else if (p.invoiceNo && p.invoiceNo !== 'Advance' && p.invoiceNo !== 'Multi' && p.invoiceNo !== 'Multi/Disc') {
+            paidMap[p.invoiceNo] = (paidMap[p.invoiceNo] || 0) + ((+p.amount || 0) + (+p.discount || 0));
+        }
+    });
 
     // 1. Totals
     const totalOrderValue = filteredOrders.reduce((sum, o) => sum + o.total, 0);
     const totalInvoiceValue = filteredInvoices.reduce((sum, i) => sum + i.total, 0);
     const totalPayments = filteredPayments.reduce((sum, p) => sum + p.amount, 0);
-    const outstanding = totalInvoiceValue - totalPayments;
+    const outstanding = filteredInvoices.reduce((sum, inv) => sum + Math.max(0, (inv.total || 0) - (paidMap[inv.invoiceNo] || 0)), 0);
 
     // 2. Category & Item calculations
     const catTotals = {};
@@ -17385,27 +17602,32 @@ async function generateUserSalesReport() {
 
     filteredOrders.forEach(o => {
         o.items.forEach(li => {
-            const item = inventory.find(x => x.id === li.itemId);
+            const itemId = getLineItemId(li);
+            const item = inventory.find(x => x.id === itemId);
+            const mapKey = itemId || li.name || 'Unknown Item';
             const cName = item ? item.category : 'Uncategorized';
             if (catSearch && cName !== catSearch) return;
 
-            catTotals[cName] = (catTotals[cName] || 0) + (li.qty * li.price);
-            if (!itemMap[li.itemId]) itemMap[li.itemId] = { name: (item ? item.name : li.itemId), ordQty: 0, ordVal: 0, invQty: 0, invVal: 0 };
-            itemMap[li.itemId].ordQty += li.qty;
-            itemMap[li.itemId].ordVal += (li.qty * li.price);
+            const qty = getLinePrimaryQty(li);
+            catTotals[cName] = (catTotals[cName] || 0) + (qty * (+li.price || 0));
+            if (!itemMap[mapKey]) itemMap[mapKey] = { name: (item ? item.name : mapKey), ordQty: 0, ordVal: 0, invQty: 0, invVal: 0 };
+            itemMap[mapKey].ordQty += qty;
+            itemMap[mapKey].ordVal += (qty * (+li.price || 0));
         });
     });
 
     filteredInvoices.forEach(inv => {
         inv.items.forEach(li => {
-            const item = inventory.find(x => x.id === li.itemId);
+            const itemId = getLineItemId(li);
+            const item = inventory.find(x => x.id === itemId);
+            const mapKey = itemId || li.name || 'Unknown Item';
             const cName = item ? item.category : 'Uncategorized';
             if (catSearch && cName !== catSearch) return;
 
-            const qty = li.packedQty !== undefined ? li.packedQty : li.qty;
-            if (!itemMap[li.itemId]) itemMap[li.itemId] = { name: (item ? item.name : li.itemId), ordQty: 0, ordVal: 0, invQty: 0, invVal: 0 };
-            itemMap[li.itemId].invQty += qty;
-            itemMap[li.itemId].invVal += (qty * li.price);
+            const qty = getLinePrimaryQty(li);
+            if (!itemMap[mapKey]) itemMap[mapKey] = { name: (item ? item.name : mapKey), ordQty: 0, ordVal: 0, invQty: 0, invVal: 0 };
+            itemMap[mapKey].invQty += qty;
+            itemMap[mapKey].invVal += (qty * (+li.price || 0));
         });
     });
 
@@ -17446,6 +17668,7 @@ async function generateUserSalesReport() {
 function renderUserPaymentReportUI(el, users, payments) {
     const isSalesAdmin = canEdit();
     const userOptions = isSalesAdmin ? `<option value="">All Users</option>` + users.map(u => `<option value="${u.name}">${u.name}</option>`).join('') : `<option value="${currentUser.name}">${currentUser.name}</option>`;
+    const monthStart = currentMonthStart();
 
     // Get unique modes used across all payments
     const modes = [...new Set(payments.map(p => p.mode || 'Cash'))];
@@ -17454,7 +17677,7 @@ function renderUserPaymentReportUI(el, users, payments) {
         <div class="card" style="margin-bottom:15px">
             <div class="card-body" style="padding:15px">
                 <div class="filter-group" style="display:flex;gap:15px;align-items:flex-end;flex-wrap:wrap">
-                    <div><label style="font-size:0.8rem;color:var(--text-muted);display:block;margin-bottom:4px">From Date</label><input type="date" id="rep-up-from" class="search-box" style="width:140px" value="${today()}"></div>
+                    <div><label style="font-size:0.8rem;color:var(--text-muted);display:block;margin-bottom:4px">From Date</label><input type="date" id="rep-up-from" class="search-box" style="width:140px" value="${monthStart}"></div>
                     <div><label style="font-size:0.8rem;color:var(--text-muted);display:block;margin-bottom:4px">To Date</label><input type="date" id="rep-up-to" class="search-box" style="width:140px" value="${today()}"></div>
                     <div><label style="font-size:0.8rem;color:var(--text-muted);display:block;margin-bottom:4px">User</label><select id="rep-up-user" class="search-box" style="width:160px">${userOptions}</select></div>
                     <div><label style="font-size:0.8rem;color:var(--text-muted);display:block;margin-bottom:4px">Mode</label><select id="rep-up-mode" class="search-box" style="width:160px"><option value="">All Modes</option>${modes.map(m => `<option value="${m}">${m}</option>`).join('')}</select></div>
@@ -17472,8 +17695,9 @@ async function generateUserPaymentReport() {
     const to = $('rep-up-to').value;
     const user = $('rep-up-user').value;
     const mode = $('rep-up-mode').value;
+    const users = getCachedUsers();
 
-    let payments = (await DB.getAll('payments')).filter(p => p.type === 'in' && (from ? p.date >= from : true) && (to ? p.date <= to : true) && (user ? p.createdBy === user : true));
+    let payments = (await DB.getAll('payments')).filter(p => p.type === 'in' && (from ? p.date >= from : true) && (to ? p.date <= to : true) && (user ? matchesAnyUserIdentity([p.collectedBy, p.createdBy], user, users) : true));
 
     if (mode) {
         payments = payments.filter(p => (p.mode || 'Cash') === mode);
@@ -17529,7 +17753,7 @@ async function generateUserPaymentReport() {
                             <td><span class="badge badge-info">${p.mode || 'Cash'}</span></td>
                             <td>${refCell}</td>
                             <td style="font-weight:600">${escapeHtml(p.partyName)}</td>
-                            <td>${escapeHtml(p.collectedBy || p.createdBy || 'System')}</td>
+                            <td>${escapeHtml(getUserDisplayName(getPaymentCollectorValue(p), users) || 'System')}</td>
                             <td class="amount-green" style="text-align:right">${currency(p.amount)}</td>
                             <td style="text-align:right;color:var(--danger)">${p.discount > 0 ? currency(p.discount) : '-'}</td>
                             <td class="amount-green" style="text-align:right;font-weight:700">${currency(p.totalReduction || p.amount)}</td>
@@ -17878,21 +18102,23 @@ function renderVyaparSalesTable() {
     const party = (($('vy-s-party') || {}).value || '').toLowerCase();
     const user = ($('vy-s-user') || {}).value || '';
     const tbody = $('vy-sales-tbody'); if (!tbody) return;
+    const users = getCachedUsers();
     let invs = (window._vySalesAll || []).slice();
     if (from) invs = invs.filter(i => i.date >= from);
     if (to) invs = invs.filter(i => i.date <= to);
     if (party) invs = invs.filter(i => (i.partyName || '').toLowerCase().includes(party));
-    if (user) invs = invs.filter(i => i.createdBy === user);
+    if (user) invs = invs.filter(i => matchesUserIdentity(i.createdBy, user, users));
     const rows = [];
     invs.forEach(inv => {
         inv.items.forEach((li, idx) => {
+            const qty = getLinePrimaryQty(li);
             rows.push(`<tr>
                 <td style="white-space:nowrap">${fmtDate(inv.date)}</td>
                 <td style="font-weight:700;white-space:nowrap">${escapeHtml(inv.vyaparInvoiceNo || inv.invoiceNo)}</td>
                 <td>${escapeHtml(inv.partyName)}</td>
                 <td>${escapeHtml(li.name)}</td>
-                <td style="text-align:right">${li.packedQty !== undefined ? li.packedQty : li.qty}</td>
-                <td>${escapeHtml(li.unit || 'Pcs')}</td>
+                <td style="text-align:right">${qty}</td>
+                <td>${escapeHtml(li.unit || li.uom || 'Pcs')}</td>
                 <td style="text-align:right">${currency(li.price)}</td>
                 <td style="text-align:right;font-weight:600" class="amount-green">${currency(li.amount)}</td>
                 <td style="text-align:right">${inv.gst || 0}%</td>
@@ -17910,23 +18136,30 @@ function renderVyaparPayTable() {
     const mode = ($('vy-p-mode') || {}).value || '';
     const collector = ($('vy-p-collector') || {}).value || '';
     const tbody = $('vy-pay-tbody'); if (!tbody) return;
+    const users = getCachedUsers();
     let pays = (window._vyPayAll || []).slice();
     if (from) pays = pays.filter(p => p.date >= from);
     if (to) pays = pays.filter(p => p.date <= to);
     if (party) pays = pays.filter(p => (p.partyName || '').toLowerCase().includes(party));
     if (mode) pays = pays.filter(p => (p.mode || 'Cash') === mode);
-    if (collector) pays = pays.filter(p => (p.collectedBy || p.createdBy) === collector);
+    if (collector) pays = pays.filter(p => matchesAnyUserIdentity([p.collectedBy, p.createdBy], collector, users));
     const total = pays.reduce((s, p) => s + p.amount, 0);
-    tbody.innerHTML = pays.map((p, i) => `<tr>
+    tbody.innerHTML = pays.map((p) => {
+        const invoiceSummary = getPaymentInvoiceSummary(p);
+        const referenceNo = getPaymentReferenceNo(p) || '-';
+        const collectorName = getUserDisplayName(getPaymentCollectorValue(p), users) || 'System';
+        const refText = p.chequeNo || p.upiRef || p.note || '-';
+        return `<tr>
         <td style="white-space:nowrap">${fmtDate(p.date)}</td>
-        <td style="font-weight:700">RCP-${String(i + 1).padStart(4, '0')}</td>
+        <td style="font-weight:700">${escapeHtml(referenceNo)}</td>
         <td>${escapeHtml(p.partyName)}</td>
-        <td>${p.invoiceNo ? `<span style="color:var(--primary);font-weight:600">${escapeHtml(p.invoiceNo)}</span>` : '-'}</td>
+        <td><span style="color:var(--primary);font-weight:600">${escapeHtml(invoiceSummary)}</span></td>
         <td><span class="badge badge-info">${p.mode || 'Cash'}</span></td>
-        <td style="color:var(--text-muted);font-size:0.8rem">${escapeHtml(p.chequeNo || p.upiRef || p.note || '-')}</td>
-        <td>${escapeHtml(p.collectedBy || p.createdBy || 'System')}</td>
+        <td style="color:var(--text-muted);font-size:0.8rem">${escapeHtml(refText)}</td>
+        <td>${escapeHtml(collectorName)}</td>
         <td class="amount-green" style="text-align:right;font-weight:700">${currency(p.amount)}</td>
-    </tr>`).join('') +
+    </tr>`;
+    }).join('') +
         (pays.length ? `<tr style="font-weight:800;border-top:2px solid var(--border)"><td colspan="7" style="text-align:right;text-transform:uppercase;font-size:0.82rem;color:var(--text-muted)">Total (${pays.length} records)</td><td class="amount-green" style="text-align:right;font-size:1rem">${currency(total)}</td></tr>` : '<tr><td colspan="8"><div class="empty-state"><span class="empty-icon"></span><p>No payments for selected filters</p></div></td></tr>');
 }
 
@@ -17935,12 +18168,13 @@ function renderPayTrend() {
     const to = ($('f-trend-to') || {}).value || '';
     const custFilter = (($('f-trend-cust') || {}).value || '').toLowerCase();
     const userFilter = ($('f-trend-user') || {}).value || '';
+    const users = getCachedUsers();
 
     let pays = (window['_trendPayments'] || []);
     if (from) pays = pays.filter(p => p.date >= from);
     if (to) pays = pays.filter(p => p.date <= to);
     if (custFilter) pays = pays.filter(p => (p.partyName || '').toLowerCase().includes(custFilter));
-    if (userFilter) pays = pays.filter(p => p.createdBy === userFilter);
+    if (userFilter) pays = pays.filter(p => matchesAnyUserIdentity([p.collectedBy, p.createdBy], userFilter, users));
 
     if (!pays.length) {
         $('pay-trend-output').innerHTML = '<div class="empty-state"><span class="empty-icon"></span><p>No payments in selected range</p></div>';
@@ -17963,6 +18197,54 @@ function renderPayTrend() {
     const grandTotal = Object.values(rowTotals).reduce((s, v) => s + v, 0);
 
     const fmtAmt = v => v > 0 ? `<span style="color:var(--success);font-weight:600">${v.toLocaleString('en-IN')}</span>` : `<span style="color:var(--text-muted)">-</span>`;
+
+    if (window.innerWidth < 768) {
+        const exportRows = customers.map(c => `<tr>
+            <td>${escapeHtml(c)}</td>
+            ${dates.map(d => `<td>${pivot[c][d] > 0 ? currency(pivot[c][d]) : '-'}</td>`).join('')}
+            <td>${currency(rowTotals[c])}</td>
+        </tr>`).join('') + `
+        <tr>
+            <td>Grand Total</td>
+            ${dates.map(d => `<td>${colTotals[d] > 0 ? currency(colTotals[d]) : '-'}</td>`).join('')}
+            <td>${currency(grandTotal)}</td>
+        </tr>`;
+
+        $('pay-trend-output').innerHTML = customers
+            .sort((a, b) => rowTotals[b] - rowTotals[a])
+            .map(c => `
+                <div class="card" style="margin-bottom:10px">
+                    <div class="card-body" style="padding:14px">
+                        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px">
+                            <div style="font-weight:700;font-size:0.95rem">${escapeHtml(c)}</div>
+                            <div class="amount-green" style="font-size:1rem;font-weight:800">${currency(rowTotals[c])}</div>
+                        </div>
+                        <div style="display:grid;gap:6px">
+                            ${dates.filter(d => pivot[c][d] > 0).map(d => `
+                                <div style="display:flex;justify-content:space-between;gap:10px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-page)">
+                                    <span style="font-size:0.8rem;color:var(--text-muted)">${fmtDate(d)}</span>
+                                    <span class="amount-green" style="font-weight:700">${currency(pivot[c][d])}</span>
+                                </div>`).join('') || `<div style="font-size:0.8rem;color:var(--text-muted)">No collections in range.</div>`}
+                        </div>
+                    </div>
+                </div>`)
+            .join('') + `
+            <div class="card">
+                <div class="card-body" style="padding:14px;display:flex;justify-content:space-between;align-items:center">
+                    <span style="font-weight:700">Grand Total</span>
+                    <span class="amount-green" style="font-size:1.05rem;font-weight:800">${currency(grandTotal)}</span>
+                </div>
+            </div>
+            <table id="tbl-pay-trend" style="display:none">
+                <thead><tr>
+                    <th>Customer</th>
+                    ${dates.map(d => `<th>${fmtDate(d)}</th>`).join('')}
+                    <th>Total</th>
+                </tr></thead>
+                <tbody>${exportRows}</tbody>
+            </table>`;
+        return;
+    }
 
     $('pay-trend-output').innerHTML = `
         <div class="card"><div class="card-body">
@@ -20794,35 +21076,36 @@ async function openApproveCustModal(regId) {
     if (!regs) return;
     const parties = DB.get('db_parties') || [];
     const cats = DB.get('db_categories') || [];
-    const matching = parties.filter(p => p.name && regs.business_name && p.name.toLowerCase().includes(regs.business_name.toLowerCase().split(' ')[0]));
+    const customerParties = parties.filter(p => {
+        const type = String(p.type || '').trim().toLowerCase();
+        return !type || type === 'customer' || type === 'both';
+    });
+    const matching = customerParties.filter(p => p.name && regs.business_name && p.name.toLowerCase().includes(regs.business_name.toLowerCase().split(' ')[0]));
+    const paymentTerms = getPaymentTermsList();
     openModal('Approve Customer', `
     <div>
-        <p style="font-size:0.88rem;margin-bottom:16px"><strong>${regs.business_name}</strong>  ${regs.phone}</p>
+        <p style="font-size:0.88rem;margin-bottom:16px"><strong>${regs.business_name}</strong> | ${regs.phone}</p>
         <div class="form-group">
             <label>Link to Existing Party (optional)</label>
             <select id="ap-party" class="form-control">
-                <option value=""> Create New Party </option>
-                ${parties.filter(p => p.type === 'customer' || !p.type).map(p => `<option value="${p.id}" ${matching.find(m => m.id === p.id) ? 'selected' : ''}>${p.name}</option>`).join('')}
+                <option value="">Create New Party</option>
+                ${customerParties.map(p => `<option value="${p.id}" ${matching.find(m => m.id === p.id) ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('')}
             </select>
         </div>
         <div class="form-group">
             <label>Payment Terms</label>
             <select id="ap-terms" class="form-control">
-                <option value="COD">Cash on Delivery (COD)</option>
-                <option value="Net7">Net 7 Days</option>
-                <option value="Net15">Net 15 Days</option>
-                <option value="Net30">Net 30 Days</option>
-                <option value="Net60">Net 60 Days</option>
+                ${paymentTerms.map(t => `<option value="${escapeHtml(t.name)}" ${t.name === 'COD' ? 'selected' : ''}>${escapeHtml(t.name)}${t.days ? ` (${t.days}d)` : ''}</option>`).join('')}
             </select>
         </div>
         <div class="form-group">
-            <label>Credit Limit ()</label>
+            <label>Credit Limit</label>
             <input id="ap-credit" type="number" class="form-control" value="0" min="0">
         </div>
         <div class="form-group">
             <label>Allowed Categories (leave empty for all)</label>
             <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px" id="ap-cats">
-                ${cats.map(c => `<label style="display:flex;align-items:center;gap:4px;font-size:0.85rem"><input type="checkbox" value="${c.name || c}"> ${c.name || c}</label>`).join('')}
+                ${cats.map(c => `<label style="display:flex;align-items:center;gap:4px;font-size:0.85rem"><input type="checkbox" value="${escapeHtml(c.name || c)}"> ${escapeHtml(c.name || c)}</label>`).join('')}
             </div>
         </div>
     </div>`,
@@ -20838,30 +21121,33 @@ async function confirmApproveCust(regId, existingPartyId) {
     const checkedCats = [...document.querySelectorAll('#ap-cats input:checked')].map(el => el.value);
     let partyId = existingPartyId;
     if (!partyId) {
-        // Create new party
         const newParty = {
             id: crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
                 var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
                 return v.toString(16);
             }),
-            name: reg.business_name, type: 'customer',
+            name: reg.business_name, type: 'Customer',
             phone: reg.phone, address: reg.address || '', city: reg.city || '',
             gstin: reg.gstin || '', balance: 0,
-            portal_phone: reg.phone, portal_enabled: true,
-            allowed_categories: checkedCats, payment_terms: paymentTerms, credit_limit: creditLimit
+            portalPhone: reg.phone, portalEnabled: true,
+            allowedCategories: checkedCats, paymentTerms, creditLimit
         };
-        const { error: pe } = await supabaseClient.from('parties').insert(newParty);
-        if (pe) { alert('Error creating party: ' + pe.message); return; }
-        partyId = newParty.id;
+        const createdParty = await DB.insert('parties', newParty);
+        partyId = createdParty.id;
     } else {
-        // Update existing party
-        const { error: pe } = await supabaseClient.from('parties').update({
-            portal_phone: reg.phone, portal_enabled: true,
-            allowed_categories: checkedCats, payment_terms: paymentTerms, credit_limit: creditLimit
-        }).eq('id', partyId);
-        if (pe) { alert('Error updating party: ' + pe.message); return; }
+        const parties = DB.get('db_parties') || [];
+        const existingParty = parties.find(p => p.id === partyId) || {};
+        const normalizedType = String(existingParty.type || '').trim().toLowerCase() === 'both' ? 'Both' : 'Customer';
+        await DB.update('parties', partyId, {
+            type: normalizedType,
+            phone: existingParty.phone || reg.phone,
+            portalPhone: reg.phone,
+            portalEnabled: true,
+            allowedCategories: checkedCats,
+            paymentTerms,
+            creditLimit
+        });
     }
-    // Update registration status
     await supabaseClient.from('customer_registrations').update({ status: 'approved', party_id: partyId }).eq('id', regId);
     closeModal();
     showToast('Customer approved!', 'success');
