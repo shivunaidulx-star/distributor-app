@@ -940,6 +940,7 @@ table { border-collapse: collapse; width: 100%; }
     padding: 20px 20px 80px 20px; /* Extra bottom padding for dropdowns/actions */
     min-height: 0;
     box-sizing: border-box;
+    position: relative;
 }
 
 .sub-modal {
@@ -951,9 +952,15 @@ table { border-collapse: collapse; width: 100%; }
     transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
     display: flex;
     flex-direction: column;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
 }
 .sub-modal.active {
     transform: translateX(0);
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
 }
 .sub-modal-header {
     background: var(--bg-card);
@@ -1499,6 +1506,9 @@ table { border-collapse: collapse; width: 100%; }
     font-weight: 700;
 }
 @media (max-width: 768px) {
+    .search-dropdown-list {
+        max-height: min(32vh, 220px);
+    }
     .search-dropdown-list.search-dropdown-list-priority {
         max-height: min(36vh, 250px);
     }
@@ -1515,6 +1525,9 @@ table { border-collapse: collapse; width: 100%; }
     }
 }
 @media (max-width: 520px) {
+    .search-dropdown-list {
+        max-height: min(30vh, 200px);
+    }
     .so-item-sub-body {
         padding: 16px 16px 28px;
     }

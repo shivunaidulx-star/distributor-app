@@ -978,7 +978,7 @@ const ROLE_NAME_MAP = {
 };
 const CUSTOMER_PORTAL_ENABLED = false; // Feature kept in codebase for future relaunch, disabled for current live release.
 function getAppVersion() {
-    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v124';
+    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v125';
 }
 
 const PAGE_LABELS = {
@@ -1661,8 +1661,8 @@ function initSearchDropdown(inputId, items, onSelect) {
         dd.style.maxHeight = maxHeight + 'px';
         dd.classList.add('open');
         // Keep extra gap only on larger layouts; on mobile it creates dead space above the keyboard.
-        if (isPriorityMobileDropdown && isMobileView) {
-            wrapper.style.marginBottom = '24px';
+        if (isMobileView) {
+            wrapper.style.marginBottom = isPriorityMobileDropdown ? '24px' : '12px';
         } else {
             const h = Math.min(maxHeight, (dd._filtered || []).length * 56 + 20);
             wrapper.style.marginBottom = h + 'px';
@@ -1688,7 +1688,7 @@ function initSearchDropdown(inputId, items, onSelect) {
     inp.addEventListener('focus', () => {
         setTimeout(() => {
             inp.scrollIntoView({
-                block: isPriorityMobileDropdown && window.innerWidth <= 768 ? 'end' : 'nearest',
+                block: window.innerWidth <= 768 ? 'end' : 'nearest',
                 behavior: 'smooth'
             });
         }, 100);
@@ -1885,10 +1885,11 @@ async function getFreshLocationAndSort(items, buildType = 'party') {
 }
 
 //  UPDATED: Support Party ID [partyCode] in Search
-function buildPartySearchList(parties) {
+function buildPartySearchList(parties, options = {}) {
+    const { sortByGps = true } = options;
     let pts = parties.filter(p => p.active !== false && !p.blocked);
 
-    if (window._userCoords) {
+    if (sortByGps && window._userCoords) {
         pts.sort((a, b) => {
             const da = haversine(window._userCoords.lat, window._userCoords.lng, a.lat, a.lng);
             const db = haversine(window._userCoords.lat, window._userCoords.lng, b.lat, b.lng);
@@ -1908,6 +1909,63 @@ function buildPartySearchList(parties) {
         creditLimit: p.creditLimit || 0,
         balance: p.balance || 0
     }));
+}
+
+function initPartySearchField(inputId, parties, options = {}) {
+    const inp = $(inputId);
+    if (!inp) return null;
+
+    const {
+        onSelect = null,
+        hiddenIdInputId = '',
+        autofocus = false,
+        openDropdown = false,
+        focusDelay = 120,
+        sortByGps = true,
+        refreshGps = sortByGps
+    } = options;
+
+    const handleSelect = (party) => {
+        if (hiddenIdInputId && $(hiddenIdInputId)) $(hiddenIdInputId).value = party.id || '';
+        if (onSelect) onSelect(party);
+    };
+
+    const applySearch = () => {
+        initSearchDropdown(inputId, buildPartySearchList(parties, { sortByGps }), handleSelect);
+        return document.getElementById(inputId + '-dropdown');
+    };
+
+    const refreshIfOpen = () => {
+        const dd = applySearch();
+        if (dd && dd.classList.contains('open') && document.activeElement === inp) {
+            inp.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        return dd;
+    };
+
+    let dd = applySearch();
+
+    if (refreshGps) {
+        ensureGeolocation(0).then(coords => {
+            if (coords && !inp.dataset.selectedId && !inp.value) refreshIfOpen();
+        });
+    }
+
+    if (autofocus) {
+        setTimeout(() => {
+            const inputEl = $(inputId);
+            if (!inputEl) return;
+            inputEl.focus();
+            if (!inputEl.value && !inputEl.dataset.selectedId) {
+                inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+        }, focusDelay);
+    } else if (openDropdown && !inp.value && !inp.dataset.selectedId) {
+        if (!dd) dd = document.getElementById(inputId + '-dropdown');
+        if (dd) dd.classList.add('open');
+    }
+
+    return { refresh: refreshIfOpen };
 }
 
 
@@ -1995,8 +2053,11 @@ async function navigateTo(page, options = {}) {
     if (page === 'catalog') {
         syncCatalogData(true); // silent=true
     }
-    // Update user location on specific pages
-    if (['catalog', 'salesorders', 'payments', 'parties'].includes(page)) {
+    const topSearch = document.querySelector('.omnibox-container');
+    if (topSearch) topSearch.style.display = page === 'catalog' ? 'none' : '';
+
+    // Update user location only on pages that still use GPS-aware sorting/tools
+    if (['catalog', 'parties'].includes(page)) {
         updateUserLocation();
     }
 }
@@ -4116,14 +4177,14 @@ function renderItemPhotoList(items) {
                 <div style="font-weight:600;font-size:0.92rem;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(i.name)}</div>
                 <div style="font-size:0.78rem;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${i.itemCode ? '[' + i.itemCode + '] ' : ''}${i.category || ''}</div>
             </div>
-                <label class="btn btn-outline btn-sm file-picker-btn" style="padding:6px 10px;font-size:0.82rem;margin:0;cursor:pointer;" title="Camera">
+                <button type="button" class="btn btn-outline btn-sm" style="padding:6px 10px;font-size:0.82rem;margin:0" title="Camera" onclick="triggerHiddenFileInput('quick-photo-camera-${i.id}')">
                     ${msIcon('photo_camera', '', 'font-size:1rem')}
-                    <input type="file" accept="image/*" capture="environment" onchange="uploadItemPhotoQuick('${i.id}', this)" class="file-picker-input">
-                </label>
-                <label class="btn btn-primary btn-sm file-picker-btn" style="padding:6px 10px;font-size:0.82rem;margin:0;cursor:pointer;" title="Gallery">
+                </button>
+                <input id="quick-photo-camera-${i.id}" type="file" accept="image/*" capture="environment" onchange="uploadItemPhotoQuick('${i.id}', this)" style="display:none">
+                <button type="button" class="btn btn-primary btn-sm" style="padding:6px 10px;font-size:0.82rem;margin:0" title="Gallery" onclick="triggerHiddenFileInput('quick-photo-gallery-${i.id}')">
                     ${msIcon('imagesmode', '', 'font-size:1rem')}
-                    <input type="file" accept="image/*" onchange="uploadItemPhotoQuick('${i.id}', this)" class="file-picker-input">
-                </label>
+                </button>
+                <input id="quick-photo-gallery-${i.id}" type="file" accept="image/*" onchange="uploadItemPhotoQuick('${i.id}', this)" style="display:none">
             </div>
         </div>
     `;
@@ -4141,7 +4202,13 @@ function filterItemPhotoList(q) {
     $('photo-item-list').innerHTML = renderItemPhotoList(filtered);
 }
 
-// Removed JS dynamic creation functions — using CSS overlaid raw inputs instead
+// Hidden file-input trigger helper for reliable camera/gallery actions on mobile
+
+function triggerHiddenFileInput(inputId) {
+    const input = $(inputId);
+    if (!input) return;
+    input.click();
+}
 
 async function uploadItemPhotoQuick(itemId, inputEl) {
     const file = inputEl.files[0];
@@ -5663,24 +5730,23 @@ async function renderItemFormPage() {
     </div>
     <div class="modal-body" style="max-width:600px;margin:0 auto">
         <div style="margin-bottom:14px;display:flex;align-items:center;gap:14px">
-            <label id="item-photo-preview" class="file-picker-btn" style="display:flex;width:70px;height:70px;border-radius:10px;border:2px dashed var(--border);align-items:center;justify-content:center;overflow:hidden;cursor:pointer;flex-shrink:0;background:var(--bg-body);margin-bottom:0;position:relative;">
-                <input type="file" accept="image/*" onchange="previewItemPhoto(event)" class="file-picker-input">
+            <button type="button" id="item-photo-preview" class="btn btn-outline" onclick="triggerHiddenFileInput('item-photo-gallery-input')" style="display:flex;width:70px;height:70px;border-radius:10px;border:2px dashed var(--border);align-items:center;justify-content:center;overflow:hidden;cursor:pointer;flex-shrink:0;background:var(--bg-body);margin-bottom:0;padding:0;">
                 ${i && (i.imageUrl || i.photo) ? `<img src="${i.imageUrl || i.photo}" style="width:100%;height:100%;object-fit:cover;pointer-events:none;">` : `<span class="material-symbols-outlined" style="font-size:1.5rem;pointer-events:none;">photo_camera</span>`}
-            </label>
+            </button>
             <div style="flex:1">
                 <div style="font-size:0.82rem;color:var(--text-muted);margin-bottom:4px">Item Photo (optional)</div>
                 <div style="display:flex;gap:6px;flex-wrap:wrap">
-                    <label class="btn btn-outline btn-sm file-picker-btn" style="font-size:0.78rem;margin:0;cursor:pointer;">
+                    <button type="button" class="btn btn-outline btn-sm" style="font-size:0.78rem;margin:0" onclick="triggerHiddenFileInput('item-photo-camera-input')">
                         ${msIcon('photo_camera', '', 'font-size:1rem;vertical-align:-3px')} Camera
-                        <input type="file" accept="image/*" capture="environment" onchange="previewItemPhoto(event)" class="file-picker-input">
-                    </label>
-                    <label class="btn btn-outline btn-sm file-picker-btn" style="font-size:0.78rem;margin:0;cursor:pointer;">
+                    </button>
+                    <button type="button" class="btn btn-outline btn-sm" style="font-size:0.78rem;margin:0" onclick="triggerHiddenFileInput('item-photo-gallery-input')">
                         ${msIcon('imagesmode', '', 'font-size:1rem;vertical-align:-3px')} Gallery
-                        <input type="file" accept="image/*" onchange="previewItemPhoto(event)" class="file-picker-input">
-                    </label>
+                    </button>
                     ${i && (i.imageUrl || i.photo) ? '<button type="button" class="btn btn-outline btn-sm" onclick="removeItemPhoto()" style="font-size:0.78rem"> Remove</button>' : ''}
                 </div>
             </div>
+            <input id="item-photo-camera-input" type="file" accept="image/*" capture="environment" onchange="previewItemPhoto(event)" style="display:none">
+            <input id="item-photo-gallery-input" type="file" accept="image/*" onchange="previewItemPhoto(event)" style="display:none">
             <input type="hidden" id="f-item-existing-url" value="${i && i.imageUrl ? i.imageUrl : (i && i.photo ? i.photo : '')}">
         </div>
         <div class="form-row">
@@ -5769,7 +5835,7 @@ function previewItemPhoto(event) {
 function removeItemPhoto() {
     window._itemPhotoFile = null;
     const preview = $('item-photo-preview');
-    if (preview) preview.innerHTML = '<span style="font-size:1.5rem"></span>';
+    if (preview) preview.innerHTML = '<span class="material-symbols-outlined" style="font-size:1.5rem;pointer-events:none;">photo_camera</span>';
     const existing = $('f-item-existing-url');
     if (existing) existing.value = '__remove__';
 }
@@ -7588,7 +7654,7 @@ async function openSalesOrderModal() {
                 <div style="font-size:0.75rem;font-weight:700;text-transform:uppercase;color:var(--text-muted);margin-bottom:12px;letter-spacing:0.05em">Customer</div>
                 <div class="form-group" style="margin-bottom:0">
                     <label>Customer * <small style="color:var(--text-muted)">(new name = auto-created)</small></label>
-                    <input id="f-so-party" placeholder="Type customer name or mobile...">
+                    <input id="f-so-party" class="search-dropdown-mobile-priority" placeholder="Type customer name or mobile...">
                 </div>
             </div>
         </div>
@@ -7624,17 +7690,7 @@ async function openSalesOrderModal() {
 
     ${renderSOItemSubModal(categories)}`;
 
-    // Show party dropdown immediately with cached GPS; silently re-sort in background
-    initSearchDropdown('f-so-party', buildPartySearchList(customers));
-    // Auto-focus party field so user can start typing immediately
-    setTimeout(() => { const inp = $('f-so-party'); if (inp) inp.focus(); }, 100);
-    // Use maximumAge:0 for truly fresh location; only re-sort if user isn't actively on the field
-    ensureGeolocation(0).then(() => {
-        const inp = $('f-so-party');
-        if (inp && !inp.value && !inp.dataset.selectedId && document.activeElement !== inp) {
-            initSearchDropdown('f-so-party', buildPartySearchList(customers));
-        }
-    });
+    initPartySearchField('f-so-party', customers, { autofocus: true, sortByGps: false, refreshGps: false });
 
     initSOItemPickerDropdown(inv);
 }
@@ -8044,9 +8100,19 @@ window.toggleSOLine = function(i) {
     renderSOLines();
 };
 function openSoItemSubModal() { const el = $('so-item-sub-modal'); if (el) { el.classList.add('active'); setTimeout(() => { const inp = $('f-so-item-input'); if (inp) inp.focus(); }, 150); } }
-function closeSoItemSubModal() { const el = $('so-item-sub-modal'); if (el) el.classList.remove('active'); }
+function closeSoItemSubModal() {
+    const activeEl = document.activeElement;
+    if (activeEl && typeof activeEl.blur === 'function') activeEl.blur();
+    const el = $('so-item-sub-modal');
+    if (el) el.classList.remove('active');
+}
 function openInvItemSubModal() { const el = $('inv-item-sub-modal'); if (el) { el.classList.add('active'); setTimeout(() => { const inp = $('f-inv-item-input'); if (inp) inp.focus(); }, 150); } }
-function closeInvItemSubModal() { const el = $('inv-item-sub-modal'); if (el) el.classList.remove('active'); }
+function closeInvItemSubModal() {
+    const activeEl = document.activeElement;
+    if (activeEl && typeof activeEl.blur === 'function') activeEl.blur();
+    const el = $('inv-item-sub-modal');
+    if (el) el.classList.remove('active');
+}
 
 async function saveSalesOrder(id) {
     // 1. Edit Restriction: Only Admin or users with 'canEdit' permission can edit existing records
@@ -8297,7 +8363,7 @@ async function editSalesOrder(id) {
                 <div style="font-size:0.75rem;font-weight:700;text-transform:uppercase;color:var(--text-muted);margin-bottom:12px;letter-spacing:0.05em">Customer</div>
                 <div class="form-group" style="margin-bottom:0">
                     <label>Customer *</label>
-                    <input id="f-so-party" value="${escapeHtml(orig.partyName || '')}" data-selected-id="${orig.partyId || ''}" placeholder="Type customer name or mobile...">
+                    <input id="f-so-party" class="search-dropdown-mobile-priority" value="${escapeHtml(orig.partyName || '')}" data-selected-id="${orig.partyId || ''}" placeholder="Type customer name or mobile...">
                 </div>
             </div>
         </div>
@@ -8338,13 +8404,7 @@ async function editSalesOrder(id) {
 
     ${renderSOItemSubModal(categories)}`;
 
-    initSearchDropdown('f-so-party', buildPartySearchList(customers));
-    ensureGeolocation(0).then(() => {
-        const inp = $('f-so-party');
-        if (inp && !inp.value && !inp.dataset.selectedId && document.activeElement !== inp) {
-            initSearchDropdown('f-so-party', buildPartySearchList(customers));
-        }
-    });
+    initPartySearchField('f-so-party', customers, { sortByGps: false, refreshGps: false });
 
     initSOItemPickerDropdown(inv);
 
@@ -8427,7 +8487,7 @@ async function duplicateSalesOrder(id) {
         <div class="form-row" style="grid-template-columns:1fr 1fr"><div class="form-group"><label>Order #</label><input id="f-so-no" value="Auto" style="color:var(--text-muted)"></div><div class="form-group"><label>Date</label><input type="date" id="f-so-date" value="${today()}"></div></div>
         <div class="form-row" style="grid-template-columns:1fr 1fr"><div class="form-group"><label>Expected Delivery</label><input type="date" id="f-so-delivery" value="${orig.expectedDeliveryDate || ''}"></div><div class="form-group"><label>Priority</label><select id="f-so-priority"><option value="Normal" ${(orig.priority || 'Normal') === 'Normal' ? 'selected' : ''}>Normal</option><option value="Urgent" ${orig.priority === 'Urgent' ? 'selected' : ''}> Urgent</option></select></div></div>
         <div class="form-group"><label>Customer *</label>
-            <input id="f-so-party" value="${orig.partyName}" data-selected-id="${orig.partyId}" placeholder="Type customer name or mobile...">
+            <input id="f-so-party" class="search-dropdown-mobile-priority" value="${orig.partyName}" data-selected-id="${orig.partyId}" placeholder="Type customer name or mobile...">
         </div>
         
         <hr style="border-color:var(--border);margin:16px 0"><h4 style="margin-bottom:10px;font-size:0.9rem">Items <span style="font-size:0.75rem;color:var(--text-muted)">(copied from ${orig.orderNo}, prices updated)</span></h4>
@@ -8464,7 +8524,7 @@ async function duplicateSalesOrder(id) {
         
         <div class="form-group" style="margin-top:12px"><label>Notes</label><input id="f-so-notes" value="${orig.notes ? escapeHtml(orig.notes) : ''}"></div>
     `, `<button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveSalesOrder()"> Save & New</button><button class="btn btn-primary" onclick="saveSalesOrder()"> Submit Order</button>`);
-    initSearchDropdown('f-so-party', buildPartySearchList(customers));
+    initPartySearchField('f-so-party', customers, { sortByGps: false, refreshGps: false });
     renderSOLines();
 }
 
@@ -9511,7 +9571,6 @@ function openInvoiceModal(type = 'sale', preserveItems = false) {
 }
 async function renderInvoiceFormPage() {
     const type = window._invType || 'sale';
-    ensureGeolocation(0); // fire-and-forget — don't block page on GPS
     const ptype = type === 'sale' ? 'Customer' : 'Supplier';
     const [parties, inv, categories] = await Promise.all([
         DB.getAll('parties'),
@@ -9538,7 +9597,7 @@ async function renderInvoiceFormPage() {
             </div>
         </div>` : ''}
         <div class="form-group"><label>${ptype} *</label>
-            <input id="f-inv-party" placeholder="Type name or mobile...">
+            <input id="f-inv-party" class="search-dropdown-mobile-priority" placeholder="Type name or mobile...">
         </div>
         
         <hr style="border-color:var(--border);margin:16px 0"><h4 style="margin-bottom:10px;font-size:0.9rem">Items</h4>
@@ -9635,13 +9694,11 @@ async function renderInvoiceFormPage() {
         if (t === 'sale') loadAvailableAdvances(party.id);
         updateInvDueDate(party);
     };
-    initSearchDropdown('f-inv-party', buildPartySearchList(filteredParties), onInvPartySelect);
-    // Silently refresh GPS sort in background — only re-sort if user isn't actively on the field
-    ensureGeolocation(0).then(() => {
-        const inp = $('f-inv-party');
-        if (inp && !inp.value && !inp.dataset.selectedId && document.activeElement !== inp) {
-            initSearchDropdown('f-inv-party', buildPartySearchList(filteredParties), onInvPartySelect);
-        }
+    initPartySearchField('f-inv-party', filteredParties, {
+        onSelect: onInvPartySelect,
+        autofocus: !window._invPreFillPartyId,
+        sortByGps: false,
+        refreshGps: false
     });
 
     _invItemDropdown = initSearchDropdown('f-inv-item-input', buildItemSearchList(inv), function (item) {
@@ -12109,51 +12166,12 @@ async function openPaymentModal(prefillPartyId) {
     window.scrollTo({ top: 0, behavior: 'instant' });
     if (pageContent) pageContent.scrollTop = 0;
 
-    const partyInput = $('f-pay-party');
-
-    // Helper function to initialize the search
-    const initPartySearch = async () => {
-        if (!partyInput.dataset.initDone) {
-            const parties = await DB.getAll('parties');
-            const ptType = $('f-pay-party-type')?.value || 'Customer';
-            const customers = parties.filter(p => p.type === ptType);
-
-            const onPartySelect = (party) => {
-                if ($('f-pay-party-id')) $('f-pay-party-id').value = party.id || '';
-                onPayPartyChange();
-            };
-
-            // Show dropdown IMMEDIATELY using cached coords (no GPS wait)
-            initSearchDropdown('f-pay-party', buildPartySearchList(customers), onPartySelect);
-            partyInput.dataset.initDone = "true";
-
-            // Silently refresh GPS in background — if user hasn't typed anything, update the list seamlessly
-            ensureGeolocation(0).then(coords => {
-                if (coords && !partyInput.dataset.selectedId && !partyInput.value) {
-                    initSearchDropdown('f-pay-party', buildPartySearchList(customers), onPartySelect);
-                    
-                    // If the dropdown happens to be open right now, refresh its visual state
-                    const dd = document.getElementById('f-pay-party-dropdown');
-                    if (dd && dd.classList.contains('open') && document.activeElement === partyInput) {
-                        const inputEvt = new Event('input');
-                        partyInput.dispatchEvent(inputEvt);
-                    }
-                }
-            });
-        }
-    };
-
-    // Add the focus listener for manual clicks
-    partyInput.addEventListener('focus', initPartySearch, { once: true });
-
-    // Show dropdown immediately — no GPS wait on auto-open.
-    // Removed programmatic partyInput.focus(); to prevent mobile keyboard lock-ups
-    // where the user "cant enter the party name manually".
-    initPartySearch().then(() => {
-        if (!prefillPartyId && partyInput) {
-            const dd = document.getElementById('f-pay-party-dropdown');
-            if (dd) dd.classList.add('open');
-        }
+    initPartySearchField('f-pay-party', parties.filter(p => p.type === 'Customer'), {
+        hiddenIdInputId: 'f-pay-party-id',
+        onSelect: () => onPayPartyChange(),
+        autofocus: !prefillPartyId,
+        sortByGps: false,
+        refreshGps: false
     });
 
     // Pre-fill party if provided (e.g. from invoice "Receive Payment" button)
@@ -12263,10 +12281,13 @@ async function onPayPartyTypeChange() {
     if ($('f-pay-party-id')) $('f-pay-party-id').value = '';
 
     const customers = parties.filter(p => p.type === ptype);
-    const sortedParties = buildPartySearchList(customers);
 
-    initSearchDropdown('f-pay-party', sortedParties, async (party) => {
-        if ($('f-pay-party-id')) $('f-pay-party-id').value = party.id || '';
+    initPartySearchField('f-pay-party', customers, {
+        hiddenIdInputId: 'f-pay-party-id',
+        autofocus: true,
+        sortByGps: false,
+        refreshGps: false,
+        onSelect: async (party) => {
         try {
             await onPayPartyChange();
         } catch (e) { console.warn('onPayPartyChange error:', e); }
@@ -12281,6 +12302,7 @@ async function onPayPartyTypeChange() {
         requestAnimationFrame(focusAmount);
         // Fallback in case rAF doesn't work
         setTimeout(focusAmount, 500);
+        }
     });
 
     onPayPartyChange();
@@ -21130,8 +21152,6 @@ function scrollCatalogToTop() {
 }
 
 async function renderCatalog() {
-    // Ping GPS in background — don't block page render
-    getFreshLocationAndSort([], 'none').catch(() => {});
     ensureCatalogTopButtonBinding();
     // Setup background interval if not already running
     if (!_catalogAutoSyncInterval) {
@@ -21646,7 +21666,7 @@ async function createOrderFromCatalog() {
                     <div class="form-group"><label>Priority</label><select id="f-so-priority"><option value="Normal">Normal</option><option value="Urgent"> Urgent</option></select></div>
                 </div>
                 <div class="form-group"><label>Customer * <small style="color:var(--text-muted)">(new name = auto-created)</small></label>
-                    <input id="f-so-party" placeholder="Type customer name or mobile...">
+                    <input id="f-so-party" class="search-dropdown-mobile-priority" placeholder="Type customer name or mobile...">
                 </div>
             </div>
         </div>
@@ -21694,9 +21714,7 @@ async function createOrderFromCatalog() {
         </div>`;
 
     // Initialize party and item search dropdowns
-    initSearchDropdown('f-so-party', buildPartySearchList(customers));
-    // Auto-focus party field so user can start typing immediately
-    setTimeout(() => { const inp = $('f-so-party'); if (inp) inp.focus(); }, 100);
+    initPartySearchField('f-so-party', customers, { autofocus: true, sortByGps: false, refreshGps: false });
     _soItemDropdown = initSearchDropdown('f-so-item-input', buildItemSearchList(inv), function (item) {
         $('f-so-price').value = item.salePrice || '';
         populateUomSelect($('f-so-uom'), item);
