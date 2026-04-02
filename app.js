@@ -978,7 +978,7 @@ const ROLE_NAME_MAP = {
 };
 const CUSTOMER_PORTAL_ENABLED = false; // Feature kept in codebase for future relaunch, disabled for current live release.
 function getAppVersion() {
-    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v125';
+    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v126';
 }
 
 const PAGE_LABELS = {
@@ -4177,14 +4177,14 @@ function renderItemPhotoList(items) {
                 <div style="font-weight:600;font-size:0.92rem;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(i.name)}</div>
                 <div style="font-size:0.78rem;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${i.itemCode ? '[' + i.itemCode + '] ' : ''}${i.category || ''}</div>
             </div>
-                <button type="button" class="btn btn-outline btn-sm" style="padding:6px 10px;font-size:0.82rem;margin:0" title="Camera" onclick="triggerHiddenFileInput('quick-photo-camera-${i.id}')">
+                <label for="quick-photo-camera-${i.id}" class="btn btn-outline btn-sm" style="padding:6px 10px;font-size:0.82rem;margin:0;cursor:pointer;" title="Camera">
                     ${msIcon('photo_camera', '', 'font-size:1rem')}
-                </button>
-                <input id="quick-photo-camera-${i.id}" type="file" accept="image/*" capture="environment" onchange="uploadItemPhotoQuick('${i.id}', this)" style="display:none">
-                <button type="button" class="btn btn-primary btn-sm" style="padding:6px 10px;font-size:0.82rem;margin:0" title="Gallery" onclick="triggerHiddenFileInput('quick-photo-gallery-${i.id}')">
+                </label>
+                <input id="quick-photo-camera-${i.id}" type="file" accept="image/*" capture="environment" onchange="uploadItemPhotoQuick('${i.id}', this)" class="native-file-input">
+                <label for="quick-photo-gallery-${i.id}" class="btn btn-primary btn-sm" style="padding:6px 10px;font-size:0.82rem;margin:0;cursor:pointer;" title="Gallery">
                     ${msIcon('imagesmode', '', 'font-size:1rem')}
-                </button>
-                <input id="quick-photo-gallery-${i.id}" type="file" accept="image/*" onchange="uploadItemPhotoQuick('${i.id}', this)" style="display:none">
+                </label>
+                <input id="quick-photo-gallery-${i.id}" type="file" accept="image/*" onchange="uploadItemPhotoQuick('${i.id}', this)" class="native-file-input">
             </div>
         </div>
     `;
@@ -4200,14 +4200,6 @@ function filterItemPhotoList(q) {
         (i.category || '').toLowerCase().includes(s)
     );
     $('photo-item-list').innerHTML = renderItemPhotoList(filtered);
-}
-
-// Hidden file-input trigger helper for reliable camera/gallery actions on mobile
-
-function triggerHiddenFileInput(inputId) {
-    const input = $(inputId);
-    if (!input) return;
-    input.click();
 }
 
 async function uploadItemPhotoQuick(itemId, inputEl) {
@@ -5730,23 +5722,23 @@ async function renderItemFormPage() {
     </div>
     <div class="modal-body" style="max-width:600px;margin:0 auto">
         <div style="margin-bottom:14px;display:flex;align-items:center;gap:14px">
-            <button type="button" id="item-photo-preview" class="btn btn-outline" onclick="triggerHiddenFileInput('item-photo-gallery-input')" style="display:flex;width:70px;height:70px;border-radius:10px;border:2px dashed var(--border);align-items:center;justify-content:center;overflow:hidden;cursor:pointer;flex-shrink:0;background:var(--bg-body);margin-bottom:0;padding:0;">
+            <label for="item-photo-gallery-input" id="item-photo-preview" class="btn btn-outline" style="display:flex;width:70px;height:70px;border-radius:10px;border:2px dashed var(--border);align-items:center;justify-content:center;overflow:hidden;cursor:pointer;flex-shrink:0;background:var(--bg-body);margin-bottom:0;padding:0;">
                 ${i && (i.imageUrl || i.photo) ? `<img src="${i.imageUrl || i.photo}" style="width:100%;height:100%;object-fit:cover;pointer-events:none;">` : `<span class="material-symbols-outlined" style="font-size:1.5rem;pointer-events:none;">photo_camera</span>`}
-            </button>
+            </label>
             <div style="flex:1">
                 <div style="font-size:0.82rem;color:var(--text-muted);margin-bottom:4px">Item Photo (optional)</div>
                 <div style="display:flex;gap:6px;flex-wrap:wrap">
-                    <button type="button" class="btn btn-outline btn-sm" style="font-size:0.78rem;margin:0" onclick="triggerHiddenFileInput('item-photo-camera-input')">
+                    <label for="item-photo-camera-input" class="btn btn-outline btn-sm" style="font-size:0.78rem;margin:0;cursor:pointer;">
                         ${msIcon('photo_camera', '', 'font-size:1rem;vertical-align:-3px')} Camera
-                    </button>
-                    <button type="button" class="btn btn-outline btn-sm" style="font-size:0.78rem;margin:0" onclick="triggerHiddenFileInput('item-photo-gallery-input')">
+                    </label>
+                    <label for="item-photo-gallery-input" class="btn btn-outline btn-sm" style="font-size:0.78rem;margin:0;cursor:pointer;">
                         ${msIcon('imagesmode', '', 'font-size:1rem;vertical-align:-3px')} Gallery
-                    </button>
+                    </label>
                     ${i && (i.imageUrl || i.photo) ? '<button type="button" class="btn btn-outline btn-sm" onclick="removeItemPhoto()" style="font-size:0.78rem"> Remove</button>' : ''}
                 </div>
             </div>
-            <input id="item-photo-camera-input" type="file" accept="image/*" capture="environment" onchange="previewItemPhoto(event)" style="display:none">
-            <input id="item-photo-gallery-input" type="file" accept="image/*" onchange="previewItemPhoto(event)" style="display:none">
+            <input id="item-photo-camera-input" type="file" accept="image/*" capture="environment" onchange="previewItemPhoto(event)" class="native-file-input">
+            <input id="item-photo-gallery-input" type="file" accept="image/*" onchange="previewItemPhoto(event)" class="native-file-input">
             <input type="hidden" id="f-item-existing-url" value="${i && i.imageUrl ? i.imageUrl : (i && i.photo ? i.photo : '')}">
         </div>
         <div class="form-row">
@@ -7710,17 +7702,20 @@ function onSOSubcatFilterChange() {
 }
 var _soItemDropdown = null;
 
+function focusPickerQtyField(inputId) {
+    const qtyEl = $(inputId);
+    if (!qtyEl) return;
+    setTimeout(() => {
+        qtyEl.focus();
+        if (typeof qtyEl.select === 'function') qtyEl.select();
+    }, 60);
+}
+
 function initSOItemPickerDropdown(items) {
     _soItemDropdown = initSearchDropdown('f-so-item-input', buildItemSearchList(items), function (item) {
         $('f-so-price').value = item.salePrice || '';
         populateUomSelect($('f-so-uom'), item);
-        const qtyEl = $('f-so-qty');
-        if (qtyEl) {
-            setTimeout(() => {
-                qtyEl.focus();
-                if (typeof qtyEl.select === 'function') qtyEl.select();
-            }, 60);
-        }
+        focusPickerQtyField('f-so-qty');
     });
     return _soItemDropdown;
 }
@@ -8511,7 +8506,7 @@ async function duplicateSalesOrder(id) {
         <div class="form-row-3" style="margin-bottom:8px">
             <div class="form-group">
                 <label>Item</label>
-                <input id="f-so-item-input" placeholder="Type item name or code...">
+                <input id="f-so-item-input" class="search-dropdown-mobile-priority" placeholder="Type item name or code...">
             </div>
             <div class="form-group"><label>Qty</label><input type="number" id="f-so-qty" value="1" min="1"></div>
             <div class="form-group"><label>UOM</label><select id="f-so-uom"><option value="">--</option></select></div>
@@ -9659,7 +9654,7 @@ async function renderInvoiceFormPage() {
                     <div style="display:grid;grid-template-columns:2fr 1fr;gap:10px;margin-bottom:10px">
                         <div class="form-group" style="margin-bottom:0">
                             <label style="font-size:0.75rem">Item</label>
-                            <input id="f-inv-item-input" placeholder="Search..." style="background:#fff">
+                            <input id="f-inv-item-input" class="search-dropdown-mobile-priority" placeholder="Search..." style="background:#fff">
                         </div>
                         <div class="form-group" style="margin-bottom:0">
                             <label style="font-size:0.75rem">Qty</label>
@@ -9705,6 +9700,7 @@ async function renderInvoiceFormPage() {
         const type = $('f-inv-type') ? $('f-inv-type').value : 'sale';
         $('f-inv-price').value = type === 'sale' ? (item.salePrice || '') : (item.purchasePrice || '');
         populateUomSelect($('f-inv-uom'), item);
+        focusPickerQtyField('f-inv-qty');
     });
 
     // Keyboard shortcuts (Vyapar-style)
@@ -9852,6 +9848,7 @@ async function onInvSubcatFilterChange() {
         const type = $('f-inv-type') ? $('f-inv-type').value : 'sale';
         $('f-inv-price').value = type === 'sale' ? (item.salePrice || '') : (item.purchasePrice || '');
         populateUomSelect($('f-inv-uom'), item);
+        focusPickerQtyField('f-inv-qty');
     });
 }
 
@@ -9879,6 +9876,7 @@ async function onInvCatFilterChange() {
         const type = $('f-inv-type') ? $('f-inv-type').value : 'sale';
         $('f-inv-price').value = type === 'sale' ? (item.salePrice || '') : (item.purchasePrice || '');
         populateUomSelect($('f-inv-uom'), item);
+        focusPickerQtyField('f-inv-qty');
     });
 }
 
@@ -10613,7 +10611,7 @@ async function renderEditInvoiceFormPage() {
                     <div style="display:grid;grid-template-columns:2fr 1fr;gap:10px;margin-bottom:10px">
                         <div class="form-group" style="margin-bottom:0">
                             <label style="font-size:0.75rem">Item</label>
-                            <input id="f-inv-item-input" placeholder="Search..." style="background:#fff">
+                            <input id="f-inv-item-input" class="search-dropdown-mobile-priority" placeholder="Search..." style="background:#fff">
                         </div>
                         <div class="form-group" style="margin-bottom:0">
                             <label style="font-size:0.75rem">Qty</label>
@@ -10646,6 +10644,7 @@ async function renderEditInvoiceFormPage() {
     _invItemDropdown = initSearchDropdown('f-inv-item-input', buildItemSearchList(inventoryData), function (item) {
         $('f-inv-price').value = item.salePrice || '';
         populateUomSelect($('f-inv-uom'), item);
+        focusPickerQtyField('f-inv-qty');
     });
 
     renderInvoiceLines();
@@ -21170,20 +21169,25 @@ async function renderCatalog() {
     const items = allItems.filter(i => i.active !== false);
     const catNames = [...new Set(items.map(i => i.category).filter(Boolean))];
     const sortedItems = sortCatalogItems(items, 'mrp-asc');
+    const isMobile = window.innerWidth <= 768;
 
     pageContent.innerHTML = `
         <div id="catalog-page-top" class="catalog-shell">
             <section class="catalog-control-card catalog-control-card-sticky">
-                <div class="catalog-control-head">
-                    <div class="catalog-control-meta">
-                        <span class="catalog-control-chip">${items.length} active items</span>
-                        <span class="catalog-control-chip">${catNames.length} categories</span>
-                        <span class="catalog-control-chip">Default: MRP low-high</span>
+                <div class="catalog-toolbar ${isMobile ? 'catalog-toolbar-mobile' : ''}">
+                    <div class="catalog-toolbar-main">
+                        <input class="search-box catalog-search-box" id="catalog-search" placeholder="Search products..." oninput="filterCatalog()">
+                        <select id="catalog-sort" class="search-box catalog-sort-box" onchange="filterCatalog()">
+                            <option value="mrp-asc" selected>MRP: Low to High</option>
+                            <option value="mrp-desc">MRP: High to Low</option>
+                            <option value="name-asc">Name: A to Z</option>
+                            <option value="name-desc">Name: Z to A</option>
+                        </select>
                     </div>
-                    <div class="catalog-control-actions">
-                        <button class="btn btn-outline btn-sm catalog-sync-btn" onclick="syncCatalogData()">
+                    <div class="catalog-toolbar-actions">
+                        <button class="btn btn-outline btn-sm catalog-sync-btn" onclick="syncCatalogData()" title="Sync Data">
                             <span class="material-symbols-outlined" style="font-size:1rem">sync</span>
-                            <span>Sync Data</span>
+                            <span>${isMobile ? '' : 'Sync Data'}</span>
                         </button>
                         <button id="catalog-top-btn" class="catalog-inline-top-btn" onclick="scrollCatalogToTop()" title="Back to top">
                             <span class="material-symbols-outlined">vertical_align_top</span>
@@ -21191,14 +21195,10 @@ async function renderCatalog() {
                     </div>
                 </div>
 
-                <div class="catalog-control-grid">
-                    <input class="search-box catalog-search-box" id="catalog-search" placeholder="Search products..." oninput="filterCatalog()">
-                    <select id="catalog-sort" class="search-box catalog-sort-box" onchange="filterCatalog()">
-                        <option value="mrp-asc" selected>MRP: Low to High</option>
-                        <option value="mrp-desc">MRP: High to Low</option>
-                        <option value="name-asc">Name: A to Z</option>
-                        <option value="name-desc">Name: Z to A</option>
-                    </select>
+                <div class="catalog-summary-line">
+                    <span>${items.length} active items</span>
+                    <span>${catNames.length} categories</span>
+                    <span>Default sort: MRP low-high</span>
                 </div>
 
                 <div id="catalog-pills" class="catalog-pill-row">
@@ -21234,12 +21234,52 @@ async function syncCatalogData(silent = false) {
 
 async function renderCatalogCards(items) {
     if (!items.length) return '<div class="empty-state" style="padding:40px"><div class="empty-icon"></div><p>No products found</p></div>';
+    const isCompactMobile = window.innerWidth <= 520;
 
     // Process all cards in parallel
     const cards = await Promise.all(items.map(async i => {
         const stockData = await getAvailableStock(i);
         const cartEntries = catalogCart.filter(c => c.itemId === i.id);
         const isLow = i.stock <= (i.lowStockAlert || 5);
+        if (isCompactMobile) {
+            return `<div class="catalog-card catalog-card-mobile ${isLow ? 'is-low' : ''}">
+                <div class="catalog-card-mobile-media" onclick="viewCatalogItem('${i.id}')">
+                    ${(i.imageUrl || i.photo) ? `<img src="${i.imageUrl || i.photo}" alt="${i.name}">` : `<div class="catalog-card-placeholder">${i.name.charAt(0).toUpperCase()}</div>`}
+                </div>
+                <div class="catalog-card-mobile-body">
+                    <div class="catalog-card-mobile-top">
+                        <div class="catalog-card-name">${i.name}</div>
+                        ${i.itemCode ? `<span class="catalog-item-code">${i.itemCode}</span>` : ''}
+                    </div>
+                    <div class="catalog-card-mobile-meta">
+                        ${i.category ? `<span class="badge badge-info" style="font-size:0.64rem">${i.category}</span>` : ''}
+                        ${i.subCategory ? `<span class="catalog-card-mobile-subcat">${i.subCategory}</span>` : ''}
+                        ${i.mrp ? `<span class="catalog-card-mobile-mrp">MRP ${i.mrp}</span>` : ''}
+                    </div>
+                    <div style="display:flex;gap:4px;flex-wrap:wrap;margin:6px 0">
+                        <span class="catalog-uom-badge">${i.unit || 'Pcs'}</span>
+                        ${i.secUom ? `<span class="catalog-uom-badge">${i.secUom}${i.secUomRatio ? ' (' + i.secUomRatio + ')' : ''}</span>` : ''}
+                    </div>
+                    <div class="catalog-card-mobile-price">${i.salePrice} <span style="font-size:0.73rem;color:var(--text-muted)">/ ${i.unit || 'Pcs'}</span></div>
+                    <div class="catalog-card-mobile-stats">
+                        <span>Stock: <b>${stockData.stock}</b></span>
+                        <span onclick="showReservedDetails('${i.id}')" style="cursor:pointer;color:var(--warning)">Res: <b>${stockData.reserved}</b></span>
+                        <span class="${isLow ? 'catalog-stat-low' : 'catalog-stat-ok'}">Avail: <b>${stockData.available}</b></span>
+                    </div>
+                    <div class="catalog-card-mobile-action">
+                        ${cartEntries.length ? `<div style="width:100%">
+                            ${cartEntries.map(ce => `<div style="display:flex;align-items:center;justify-content:flex-start;gap:8px;${cartEntries.length > 1 ? 'margin-bottom:6px' : ''}">
+                                <button class="catalog-qty-btn" onclick="updateCartQty('${i.id}',-1,'${ce.unit}')">-</button>
+                                <span style="font-weight:700;min-width:24px;text-align:center">${ce.qty}</span>
+                                <button class="catalog-qty-btn" onclick="updateCartQty('${i.id}',1,'${ce.unit}')">+</button>
+                                <span style="font-size:0.72rem;color:var(--text-muted);min-width:28px">${ce.unit}</span>
+                            </div>`).join('')}
+                            ${i.secUom ? `<button class="catalog-add-btn catalog-add-btn-mobile" onclick="addToCatalogCart('${i.id}')">+ More</button>` : ''}
+                        </div>` : `<button class="catalog-add-btn catalog-add-btn-mobile" onclick="addToCatalogCart('${i.id}')">+ Add</button>`}
+                    </div>
+                </div>
+            </div>`;
+        }
         return `<div class="catalog-card ${isLow ? 'is-low' : ''}">
             <div class="catalog-card-img" onclick="viewCatalogItem('${i.id}')">
                 ${(i.imageUrl || i.photo) ? `<img src="${i.imageUrl || i.photo}" alt="${i.name}">` : `<div class="catalog-card-placeholder">${i.name.charAt(0).toUpperCase()}</div>`}
@@ -21691,7 +21731,7 @@ async function createOrderFromCatalog() {
                 </div>
                 <div class="form-group" style="margin-bottom:8px">
                     <label>Item</label>
-                    <input id="f-so-item-input" placeholder="Type item name or code...">
+                    <input id="f-so-item-input" class="search-dropdown-mobile-priority" placeholder="Type item name or code...">
                 </div>
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
                     <div class="form-group" style="margin-bottom:0"><label>Qty</label><input type="number" id="f-so-qty" value="1" min="1"></div>
@@ -21718,6 +21758,7 @@ async function createOrderFromCatalog() {
     _soItemDropdown = initSearchDropdown('f-so-item-input', buildItemSearchList(inv), function (item) {
         $('f-so-price').value = item.salePrice || '';
         populateUomSelect($('f-so-uom'), item);
+        focusPickerQtyField('f-so-qty');
     });
 
     // Render pre-filled lines from cart
