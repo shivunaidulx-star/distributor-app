@@ -3064,8 +3064,14 @@ function renderItemPhotoList(items) {
                 <div style="font-size:0.78rem;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${i.itemCode ? '[' + i.itemCode + '] ' : ''}${i.category || ''}</div>
             </div>
             <div style="display:flex;gap:4px;flex-shrink:0">
-                <button type="button" class="btn btn-outline btn-sm" style="padding:6px 10px;font-size:0.82rem;cursor:pointer;margin:0" title="Camera" onclick="triggerItemPhotoCapture('${i.id}', true)">📷</button>
-                <button type="button" class="btn btn-primary btn-sm" style="padding:6px 10px;font-size:0.82rem;cursor:pointer;margin:0" title="Gallery" onclick="triggerItemPhotoCapture('${i.id}', false)">🖼️</button>
+                <div style="position:relative;display:inline-block;overflow:hidden;border-radius:4px;">
+                    <button type="button" class="btn btn-outline btn-sm" style="padding:6px 10px;font-size:0.82rem;margin:0;pointer-events:none;" title="Camera">📷</button>
+                    <input type="file" accept="image/*" capture="environment" onchange="uploadItemPhotoQuick('${i.id}', this)" style="position:absolute;left:0;top:-10px;bottom:0;width:200%;height:200%;opacity:0;cursor:pointer;z-index:10;transform:translate(-25%, -25%);">
+                </div>
+                <div style="position:relative;display:inline-block;overflow:hidden;border-radius:4px;">
+                    <button type="button" class="btn btn-primary btn-sm" style="padding:6px 10px;font-size:0.82rem;margin:0;pointer-events:none;" title="Gallery">🖼️</button>
+                    <input type="file" accept="image/*" onchange="uploadItemPhotoQuick('${i.id}', this)" style="position:absolute;left:0;top:-10px;bottom:0;width:200%;height:200%;opacity:0;cursor:pointer;z-index:10;transform:translate(-25%, -25%);">
+                </div>
             </div>
         </div>
     `;
@@ -3083,26 +3089,7 @@ function filterItemPhotoList(q) {
     $('photo-item-list').innerHTML = renderItemPhotoList(filtered);
 }
 
-// Dynamically create and trigger file input inside the user gesture — most reliable on mobile
-function triggerItemPhotoCapture(itemId, useCamera) {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'image/*';
-    // Note: 'capture' attribute is intentionally omitted — on many Android devices
-    // setting capture='environment' blocks the OS from showing the camera/gallery chooser.
-    // Without it, the OS picker appears and the user can choose Camera or Gallery freely.
-    input.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0;';
-    document.body.appendChild(input);
-    input.addEventListener('change', function () {
-        uploadItemPhotoQuick(itemId, input);
-        // Clean up after a delay to avoid issues
-        setTimeout(() => { try { document.body.removeChild(input); } catch(e){} }, 5000);
-    });
-    input.addEventListener('cancel', function () {
-        setTimeout(() => { try { document.body.removeChild(input); } catch(e){} }, 500);
-    });
-    input.click();
-}
+// Removed JS dynamic creation functions — using CSS overlaid raw inputs instead
 
 async function uploadItemPhotoQuick(itemId, inputEl) {
     const file = inputEl.files[0];
@@ -4230,15 +4217,22 @@ async function openItemModal(id) {
 
     openModal(i ? 'Edit Item' : 'Add Item', `
         <div style="margin-bottom:14px;display:flex;align-items:center;gap:14px">
-            <div id="item-photo-preview" style="width:70px;height:70px;border-radius:10px;border:2px dashed var(--border);display:flex;align-items:center;justify-content:center;overflow:hidden;cursor:pointer;flex-shrink:0;background:var(--bg-body)" onclick="triggerEditItemPhoto(false)">
-                ${i && (i.imageUrl || i.photo) ? `<img src="${i.imageUrl || i.photo}" style="width:100%;height:100%;object-fit:cover">` : '<span style="font-size:1.5rem"></span>'}
+            <div id="item-photo-preview" style="position:relative;width:70px;height:70px;border-radius:10px;border:2px dashed var(--border);display:flex;align-items:center;justify-content:center;overflow:hidden;cursor:pointer;flex-shrink:0;background:var(--bg-body)">
+                <input type="file" accept="image/*" onchange="previewItemPhoto(event)" style="position:absolute;left:0;top:-10px;bottom:0;width:200%;height:200%;opacity:0;cursor:pointer;z-index:10;transform:translate(-25%, -25%);">
+                ${i && (i.imageUrl || i.photo) ? `<img src="${i.imageUrl || i.photo}" style="width:100%;height:100%;object-fit:cover;position:relative;z-index:1;pointer-events:none;">` : '<span style="font-size:1.5rem;position:relative;z-index:1;pointer-events:none;">📷</span>'}
             </div>
             <div style="flex:1">
                 <div style="font-size:0.82rem;color:var(--text-muted);margin-bottom:4px">Item Photo (optional)</div>
                 <div style="display:flex;gap:6px;flex-wrap:wrap">
-                    <button type="button" class="btn btn-outline btn-sm" onclick="triggerEditItemPhoto(true)" style="font-size:0.78rem">📷 Camera</button>
-                    <button type="button" class="btn btn-outline btn-sm" onclick="triggerEditItemPhoto(false)" style="font-size:0.78rem">🖼️ Gallery</button>
-                    ${i && (i.imageUrl || i.photo) ? '<button class="btn btn-outline btn-sm" onclick="removeItemPhoto()" style="font-size:0.78rem"> Remove</button>' : ''}
+                    <div style="position:relative;display:inline-block;overflow:hidden;border-radius:var(--radius-sm);">
+                        <button type="button" class="btn btn-outline btn-sm" style="font-size:0.78rem;margin:0;pointer-events:none;">📷 Camera</button>
+                        <input type="file" accept="image/*" capture="environment" onchange="previewItemPhoto(event)" style="position:absolute;left:0;top:-10px;bottom:0;width:200%;height:200%;opacity:0;cursor:pointer;z-index:10;transform:translate(-25%, -25%);">
+                    </div>
+                    <div style="position:relative;display:inline-block;overflow:hidden;border-radius:var(--radius-sm);">
+                        <button type="button" class="btn btn-outline btn-sm" style="font-size:0.78rem;margin:0;pointer-events:none;">🖼️ Gallery</button>
+                        <input type="file" accept="image/*" onchange="previewItemPhoto(event)" style="position:absolute;left:0;top:-10px;bottom:0;width:200%;height:200%;opacity:0;cursor:pointer;z-index:10;transform:translate(-25%, -25%);">
+                    </div>
+                    ${i && (i.imageUrl || i.photo) ? '<button type="button" class="btn btn-outline btn-sm" onclick="removeItemPhoto()" style="font-size:0.78rem"> Remove</button>' : ''}
                 </div>
             </div>
             <input type="hidden" id="f-item-existing-url" value="${i && i.imageUrl ? i.imageUrl : (i && i.photo ? i.photo : '')}">
@@ -4310,30 +4304,7 @@ async function openItemModal(id) {
     renderItemBatches();
 }
 
-// Edit Item modal: dynamically create file input for camera/gallery
-function triggerEditItemPhoto(useCamera) {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'image/*';
-    if (useCamera) input.setAttribute('capture', 'environment');
-    input.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0;';
-    document.body.appendChild(input);
-    input.addEventListener('change', function () {
-        // Simulate the same behavior as previewItemPhoto
-        const file = input.files[0];
-        if (!file) return;
-        window._itemPhotoFile = file;
-        const preview = $('item-photo-preview');
-        if (preview) preview.innerHTML = `<img src="${URL.createObjectURL(file)}" style="width:100%;height:100%;object-fit:cover">`;
-        const existing = $('f-item-existing-url');
-        if (existing) existing.value = '';
-        setTimeout(() => { try { document.body.removeChild(input); } catch(e){} }, 3000);
-    });
-    input.addEventListener('cancel', function () {
-        setTimeout(() => { try { document.body.removeChild(input); } catch(e){} }, 500);
-    });
-    input.click();
-}
+// Custom photo preview logic continues
 
 function previewItemPhoto(event) {
     const file = event.target.files[0];
@@ -12300,8 +12271,14 @@ function packViewPhoto(itemId, itemName, orderId) {
                 <div style="font-size:0.9rem;font-weight:600;margin-bottom:6px">No photo uploaded for this item.</div>
                 <div style="font-size:0.78rem;margin-bottom:20px;color:var(--text-muted)">Take a photo now to add it to the item catalogue.</div>
                 <div style="display:flex;gap:10px;justify-content:center;margin-bottom:8px">
-                    <button class="btn btn-primary" style="flex:1;padding:12px;font-size:1rem;border-radius:12px" onclick="triggerPackPhoto('${itemId}','${escapeHtml(itemName)}','${orderId}',true)">📷 Camera</button>
-                    <button class="btn btn-outline" style="flex:1;padding:12px;font-size:1rem;border-radius:12px" onclick="triggerPackPhoto('${itemId}','${escapeHtml(itemName)}','${orderId}',false)">🖼️ Gallery</button>
+                    <div style="position:relative;display:flex;flex:1;overflow:hidden;border-radius:12px;">
+                        <button class="btn btn-primary" style="flex:1;padding:12px;font-size:1rem;margin:0;pointer-events:none;">📷 Camera</button>
+                        <input type="file" accept="image/*" capture="environment" onchange="packAddPhotoFromModal('${itemId}','${escapeHtml(itemName)}','${orderId}',this)" style="position:absolute;left:0;top:-10px;bottom:0;width:200%;height:200%;opacity:0;cursor:pointer;z-index:10;transform:translate(-25%, -25%);">
+                    </div>
+                    <div style="position:relative;display:flex;flex:1;overflow:hidden;border-radius:12px;">
+                        <button class="btn btn-outline" style="flex:1;padding:12px;font-size:1rem;margin:0;pointer-events:none;">🖼️ Gallery</button>
+                        <input type="file" accept="image/*" onchange="packAddPhotoFromModal('${itemId}','${escapeHtml(itemName)}','${orderId}',this)" style="position:absolute;left:0;top:-10px;bottom:0;width:200%;height:200%;opacity:0;cursor:pointer;z-index:10;transform:translate(-25%, -25%);">
+                    </div>
                 </div>
             </div>
             <div class="modal-actions">${backBtn}</div>`);
@@ -12313,67 +12290,22 @@ function packViewPhoto(itemId, itemName, orderId) {
         </div>
         <div style="margin-top:8px;text-align:center">
             <div style="display:flex;gap:8px;justify-content:center">
-                <button class="btn btn-outline btn-sm" onclick="triggerPackPhoto('${itemId}','${escapeHtml(itemName)}','${orderId}',true)">📷 Retake</button>
-                <button class="btn btn-outline btn-sm" onclick="triggerPackPhoto('${itemId}','${escapeHtml(itemName)}','${orderId}',false)">🖼️ Gallery</button>
+                <div style="position:relative;display:inline-block;overflow:hidden;border-radius:var(--radius-sm);">
+                    <button type="button" class="btn btn-outline btn-sm" style="margin:0;pointer-events:none;">📷 Retake</button>
+                    <input type="file" accept="image/*" capture="environment" onchange="packAddPhotoFromModal('${itemId}','${escapeHtml(itemName)}','${orderId}',this)" style="position:absolute;left:0;top:-10px;bottom:0;width:200%;height:200%;opacity:0;cursor:pointer;z-index:10;transform:translate(-25%, -25%);">
+                </div>
+                <div style="position:relative;display:inline-block;overflow:hidden;border-radius:var(--radius-sm);">
+                    <button type="button" class="btn btn-outline btn-sm" style="margin:0;pointer-events:none;">🖼️ Gallery</button>
+                    <input type="file" accept="image/*" onchange="packAddPhotoFromModal('${itemId}','${escapeHtml(itemName)}','${orderId}',this)" style="position:absolute;left:0;top:-10px;bottom:0;width:200%;height:200%;opacity:0;cursor:pointer;z-index:10;transform:translate(-25%, -25%);">
+                </div>
             </div>
         </div>
         <div class="modal-actions">${backBtn}</div>`);
 }
 
-function packAddItemPhoto(itemId, rowIdx) {
-    // Create a temporary file input and trigger it
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'image/*';
-    // No forced capture — let OS picker show both Camera and Gallery options
-    input.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0;';
-    document.body.appendChild(input);
-    input.onchange = async function () {
-        const file = input.files[0];
-        document.body.removeChild(input);
-        if (!file) return;
+// Functions related to pack photo modal removed/replaced
 
-        showToast('Processing photo...', 'info');
-        try {
-            const dataUrl = await compressImage(file, { maxWidth: 1024, quality: 0.75 });
-            await DB.update('inventory', itemId, { photo: dataUrl });
-            // Replace placeholder cell in packing table in-place
-            const cell = document.getElementById('pack-photo-' + rowIdx);
-            if (cell) {
-                const inv2 = DB.get('db_inventory');
-                const item = inv2.find(x => x.id === itemId);
-                const name = item ? item.name : '';
-                cell.outerHTML = `<img src="${dataUrl}" id="pack-photo-${rowIdx}"
-                        style="width:52px;height:52px;object-fit:cover;border-radius:6px;cursor:pointer;border:2px solid var(--success)"
-                        onclick="packViewPhoto('${itemId}','${escapeHtml(name)}','')" title="Click to enlarge">`;
-            }
-            showToast('Photo saved!', 'success');
-        } catch (err) {
-            console.error('Image compression/save error:', err);
-            showToast('Failed to save photo: ' + err.message, 'error');
-        }
-    };
-    input.oncancel = () => { document.body.removeChild(input); };
-    input.click();
-}
-
-// Dynamically create file input for packer photo capture
-function triggerPackPhoto(itemId, itemName, orderId, useCamera) {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'image/*';
-    if (useCamera) input.setAttribute('capture', 'environment');
-    input.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0;';
-    document.body.appendChild(input);
-    input.addEventListener('change', function () {
-        packAddPhotoFromModal(itemId, itemName, orderId, input);
-        setTimeout(() => { try { document.body.removeChild(input); } catch(e){} }, 5000);
-    });
-    input.addEventListener('cancel', function () {
-        setTimeout(() => { try { document.body.removeChild(input); } catch(e){} }, 500);
-    });
-    input.click();
-}
+// Function replaced natively
 
 async function packAddPhotoFromModal(itemId, itemName, orderId, inputEl) {
     const file = inputEl.files[0];
