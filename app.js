@@ -5235,15 +5235,71 @@ async function downloadCSV(csvContent, fileName) {
     }
 }
 
+const ITEM_TEMPLATE_HEADERS = [
+    'Item Code',
+    'Item Name *',
+    'Category *',
+    'Sub-Category',
+    'HSN',
+    'GST Rate %',
+    'Primary Unit *',
+    'Secondary UOM',
+    'Conversion Ratio',
+    'Purchase Price *',
+    'Sale Price *',
+    'MRP',
+    'Opening Stock',
+    'Low Stock Alert',
+    'Warehouse',
+    'Price Tier 1 Qty',
+    'Price Tier 1 Price',
+    'Price Tier 2 Qty',
+    'Price Tier 2 Price'
+];
+
+function toCsvCell(value) {
+    const normalized = value === null || value === undefined ? '' : String(value);
+    return /[",\r\n]/.test(normalized) ? `"${normalized.replace(/"/g, '""')}"` : normalized;
+}
+
+function buildItemTemplateCsvRow(item) {
+    const safeItem = item || {};
+    const tiers = Array.isArray(safeItem.priceTiers)
+        ? [...safeItem.priceTiers].sort((a, b) => (+a.minQty || 0) - (+b.minQty || 0))
+        : [];
+    const tier1 = tiers[0] || {};
+    const tier2 = tiers[1] || {};
+
+    return [
+        safeItem.itemCode || '',
+        safeItem.name || '',
+        safeItem.category || '',
+        safeItem.subCategory || '',
+        safeItem.hsn || '',
+        safeItem.gstRate ?? '',
+        safeItem.unit || 'Pcs',
+        safeItem.secUom || '',
+        safeItem.secUomRatio || '',
+        safeItem.purchasePrice ?? '',
+        safeItem.salePrice ?? '',
+        safeItem.mrp ?? '',
+        safeItem.stock ?? '',
+        safeItem.lowStockAlert || 5,
+        safeItem.warehouse || 'Main Warehouse',
+        tier1.minQty ?? '',
+        tier1.price ?? '',
+        tier2.minQty ?? '',
+        tier2.price ?? ''
+    ].map(toCsvCell).join(',');
+}
+
 // --- Excel Export (CSV) ---
 async function exportInventoryExcel() {
     const items = await DB.getAll('inventory');
     if (!items.length) return alert('No items to export');
-    let csv = 'Item Name,HSN,Unit,Purchase Price,Sale Price,Current Stock,Stock Value,Low Stock Alert\n';
-    items.forEach(i => {
-        csv += `"${i.name}","${i.hsn || ''}","${i.unit || 'Pcs'}",${i.purchasePrice},${i.salePrice},${i.stock},${(i.stock * i.purchasePrice).toFixed(2)},${i.lowStockAlert || 5}\n`;
-    });
-    downloadCSV(csv, 'inventory_' + today() + '.csv');
+    const csv = [ITEM_TEMPLATE_HEADERS.join(','), ...items.map(buildItemTemplateCsvRow)].join('\n') + '\n';
+    downloadCSV(csv, 'item_master_export_' + today() + '.csv');
+    showToast('Items exported in import template format!', 'success');
 }
 
 async function exportPartiesExcel() {
@@ -5373,10 +5429,59 @@ function parseCSVLine(line) {
 
 // --- Excel Item Master Import ---
 function downloadItemTemplate() {
-    let csv = 'Item Code,Item Name *,Category *,Sub-Category,HSN,GST Rate %,Primary Unit *,Secondary UOM,Conversion Ratio,Purchase Price *,Sale Price *,MRP,Opening Stock,Low Stock Alert,Warehouse,Price Tier 1 Qty,Price Tier 1 Price,Price Tier 2 Qty,Price Tier 2 Price\n';
-    csv += 'SKU-001,Premium Soap,FMCG,Personal Care,3401,12,Pcs,Box,12,25.00,35.00,40.00,100,20,Main Warehouse,50,33.00,100,30.00\n';
-    csv += 'SKU-002,Rice 5Kg,Grocery,Staples,1006,5,Bag,,,160.00,200.00,220.00,50,10,Main Warehouse,,,\n';
-    csv += 'SKU-003,Parle-G Biscuit,Biscuits,Glucose,,5,Pcs,Box,24,5.00,6.00,7.00,200,50,Main Warehouse,100,5.50,,\n';
+    const sampleRows = [
+        {
+            itemCode: 'SKU-001',
+            name: 'Premium Soap',
+            category: 'FMCG',
+            subCategory: 'Personal Care',
+            hsn: '3401',
+            gstRate: 12,
+            unit: 'Pcs',
+            secUom: 'Box',
+            secUomRatio: 12,
+            purchasePrice: 25.00,
+            salePrice: 35.00,
+            mrp: 40.00,
+            stock: 100,
+            lowStockAlert: 20,
+            warehouse: 'Main Warehouse',
+            priceTiers: [{ minQty: 50, price: 33.00 }, { minQty: 100, price: 30.00 }]
+        },
+        {
+            itemCode: 'SKU-002',
+            name: 'Rice 5Kg',
+            category: 'Grocery',
+            subCategory: 'Staples',
+            hsn: '1006',
+            gstRate: 5,
+            unit: 'Bag',
+            purchasePrice: 160.00,
+            salePrice: 200.00,
+            mrp: 220.00,
+            stock: 50,
+            lowStockAlert: 10,
+            warehouse: 'Main Warehouse'
+        },
+        {
+            itemCode: 'SKU-003',
+            name: 'Parle-G Biscuit',
+            category: 'Biscuits',
+            subCategory: 'Glucose',
+            gstRate: 5,
+            unit: 'Pcs',
+            secUom: 'Box',
+            secUomRatio: 24,
+            purchasePrice: 5.00,
+            salePrice: 6.00,
+            mrp: 7.00,
+            stock: 200,
+            lowStockAlert: 50,
+            warehouse: 'Main Warehouse',
+            priceTiers: [{ minQty: 100, price: 5.50 }]
+        }
+    ];
+    const csv = [ITEM_TEMPLATE_HEADERS.join(','), ...sampleRows.map(buildItemTemplateCsvRow)].join('\n') + '\n';
     downloadCSV(csv, 'item_master_template.csv');
     showToast('Item template downloaded!', 'success');
 }
