@@ -3064,10 +3064,10 @@ function renderItemPhotoList(items) {
                 <div style="font-size:0.78rem;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${i.itemCode ? '[' + i.itemCode + '] ' : ''}${i.category || ''}</div>
             </div>
             <div style="display:flex;gap:4px;flex-shrink:0">
-                <input type="file" id="photo-cam-${i.id}" accept="image/*" capture="environment" style="display:none" onchange="uploadItemPhotoQuick('${i.id}', this)">
-                <input type="file" id="photo-gal-${i.id}" accept="image/*" style="display:none" onchange="uploadItemPhotoQuick('${i.id}', this)">
-                <label for="photo-cam-${i.id}" class="btn btn-outline btn-sm" style="padding:6px 10px;font-size:0.82rem;cursor:pointer;margin:0" title="Camera">📷</label>
-                <label for="photo-gal-${i.id}" class="btn btn-primary btn-sm" style="padding:6px 10px;font-size:0.82rem;cursor:pointer;margin:0" title="Gallery">🖼️</label>
+                <input type="file" id="photo-cam-${i.id}" accept="image/*" capture="environment" style="position:absolute;opacity:0;width:0;height:0;pointer-events:none" onchange="uploadItemPhotoQuick('${i.id}', this)">
+                <input type="file" id="photo-gal-${i.id}" accept="image/*" style="position:absolute;opacity:0;width:0;height:0;pointer-events:none" onchange="uploadItemPhotoQuick('${i.id}', this)">
+                <button type="button" class="btn btn-outline btn-sm" style="padding:6px 10px;font-size:0.82rem;cursor:pointer;margin:0" title="Camera" onclick="var el=document.getElementById('photo-cam-${i.id}');el.value='';el.click()">📷</button>
+                <button type="button" class="btn btn-primary btn-sm" style="padding:6px 10px;font-size:0.82rem;cursor:pointer;margin:0" title="Gallery" onclick="var el=document.getElementById('photo-gal-${i.id}');el.value='';el.click()">🖼️</button>
             </div>
         </div>
     `;
@@ -12262,8 +12262,8 @@ function packViewPhoto(itemId, itemName, orderId) {
             <img src="${item.photo}" style="max-width:100%;max-height:70vh;border-radius:10px;object-fit:contain">
         </div>
         <div style="margin-top:8px;text-align:center">
-            <input type="file" id="pack-modal-photo-replace-camera" accept="image/*" capture="environment" style="display:none" onchange="packAddPhotoFromModal('${itemId}','${escapeHtml(itemName)}','${orderId}',this)">
-            <input type="file" id="pack-modal-photo-replace-gallery" accept="image/*" style="display:none" onchange="packAddPhotoFromModal('${itemId}','${escapeHtml(itemName)}','${orderId}',this)">
+            <input type="file" id="pack-modal-photo-replace-camera" accept="image/*" capture="environment" style="position:absolute;opacity:0;width:0;height:0;pointer-events:none" onchange="packAddPhotoFromModal('${itemId}','${escapeHtml(itemName)}','${orderId}',this)">
+            <input type="file" id="pack-modal-photo-replace-gallery" accept="image/*" style="position:absolute;opacity:0;width:0;height:0;pointer-events:none" onchange="packAddPhotoFromModal('${itemId}','${escapeHtml(itemName)}','${orderId}',this)">
             <div style="display:flex;gap:8px;justify-content:center">
                 <button class="btn btn-outline btn-sm" onclick="document.getElementById('pack-modal-photo-replace-camera').click()">📷 Retake</button>
                 <button class="btn btn-outline btn-sm" onclick="document.getElementById('pack-modal-photo-replace-gallery').click()">🖼️ Gallery</button>
