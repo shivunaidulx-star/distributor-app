@@ -3088,7 +3088,9 @@ function triggerItemPhotoCapture(itemId, useCamera) {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = 'image/*';
-    if (useCamera) input.setAttribute('capture', 'environment');
+    // Note: 'capture' attribute is intentionally omitted — on many Android devices
+    // setting capture='environment' blocks the OS from showing the camera/gallery chooser.
+    // Without it, the OS picker appears and the user can choose Camera or Gallery freely.
     input.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0;';
     document.body.appendChild(input);
     input.addEventListener('change', function () {
@@ -4578,6 +4580,7 @@ async function saveItem(id) {
         }
     } else if (existingUrl === '__remove__') {
         data.imageUrl = null;
+        data.photo = null;
     } else if (existingUrl) {
         data.imageUrl = existingUrl;
     }
