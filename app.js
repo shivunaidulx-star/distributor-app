@@ -978,7 +978,7 @@ const ROLE_NAME_MAP = {
 };
 const CUSTOMER_PORTAL_ENABLED = false; // Feature kept in codebase for future relaunch, disabled for current live release.
 function getAppVersion() {
-    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v126';
+    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v127';
 }
 
 const PAGE_LABELS = {
@@ -2053,9 +2053,6 @@ async function navigateTo(page, options = {}) {
     if (page === 'catalog') {
         syncCatalogData(true); // silent=true
     }
-    const topSearch = document.querySelector('.omnibox-container');
-    if (topSearch) topSearch.style.display = page === 'catalog' ? 'none' : '';
-
     // Update user location only on pages that still use GPS-aware sorting/tools
     if (['catalog', 'parties'].includes(page)) {
         updateUserLocation();
@@ -4177,14 +4174,14 @@ function renderItemPhotoList(items) {
                 <div style="font-weight:600;font-size:0.92rem;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(i.name)}</div>
                 <div style="font-size:0.78rem;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${i.itemCode ? '[' + i.itemCode + '] ' : ''}${i.category || ''}</div>
             </div>
-                <label for="quick-photo-camera-${i.id}" class="btn btn-outline btn-sm" style="padding:6px 10px;font-size:0.82rem;margin:0;cursor:pointer;" title="Camera">
+                <label class="btn btn-outline btn-sm file-picker-btn" style="padding:6px 10px;font-size:0.82rem;margin:0;cursor:pointer;" title="Camera">
                     ${msIcon('photo_camera', '', 'font-size:1rem')}
+                    <input type="file" accept="image/*" capture="environment" onchange="uploadItemPhotoQuick('${i.id}', this)" class="file-picker-input">
                 </label>
-                <input id="quick-photo-camera-${i.id}" type="file" accept="image/*" capture="environment" onchange="uploadItemPhotoQuick('${i.id}', this)" class="native-file-input">
-                <label for="quick-photo-gallery-${i.id}" class="btn btn-primary btn-sm" style="padding:6px 10px;font-size:0.82rem;margin:0;cursor:pointer;" title="Gallery">
+                <label class="btn btn-primary btn-sm file-picker-btn" style="padding:6px 10px;font-size:0.82rem;margin:0;cursor:pointer;" title="Gallery">
                     ${msIcon('imagesmode', '', 'font-size:1rem')}
+                    <input type="file" accept="image/*" onchange="uploadItemPhotoQuick('${i.id}', this)" class="file-picker-input">
                 </label>
-                <input id="quick-photo-gallery-${i.id}" type="file" accept="image/*" onchange="uploadItemPhotoQuick('${i.id}', this)" class="native-file-input">
             </div>
         </div>
     `;
@@ -5722,23 +5719,23 @@ async function renderItemFormPage() {
     </div>
     <div class="modal-body" style="max-width:600px;margin:0 auto">
         <div style="margin-bottom:14px;display:flex;align-items:center;gap:14px">
-            <label for="item-photo-gallery-input" id="item-photo-preview" class="btn btn-outline" style="display:flex;width:70px;height:70px;border-radius:10px;border:2px dashed var(--border);align-items:center;justify-content:center;overflow:hidden;cursor:pointer;flex-shrink:0;background:var(--bg-body);margin-bottom:0;padding:0;">
+            <div id="item-photo-preview" class="btn btn-outline" style="display:flex;width:70px;height:70px;border-radius:10px;border:2px dashed var(--border);align-items:center;justify-content:center;overflow:hidden;cursor:pointer;flex-shrink:0;background:var(--bg-body);margin-bottom:0;padding:0;">
                 ${i && (i.imageUrl || i.photo) ? `<img src="${i.imageUrl || i.photo}" style="width:100%;height:100%;object-fit:cover;pointer-events:none;">` : `<span class="material-symbols-outlined" style="font-size:1.5rem;pointer-events:none;">photo_camera</span>`}
-            </label>
+            </div>
             <div style="flex:1">
                 <div style="font-size:0.82rem;color:var(--text-muted);margin-bottom:4px">Item Photo (optional)</div>
                 <div style="display:flex;gap:6px;flex-wrap:wrap">
-                    <label for="item-photo-camera-input" class="btn btn-outline btn-sm" style="font-size:0.78rem;margin:0;cursor:pointer;">
+                    <label class="btn btn-outline btn-sm file-picker-btn" style="font-size:0.78rem;margin:0;cursor:pointer;">
                         ${msIcon('photo_camera', '', 'font-size:1rem;vertical-align:-3px')} Camera
+                        <input type="file" accept="image/*" capture="environment" onchange="previewItemPhoto(event)" class="file-picker-input">
                     </label>
-                    <label for="item-photo-gallery-input" class="btn btn-outline btn-sm" style="font-size:0.78rem;margin:0;cursor:pointer;">
+                    <label class="btn btn-outline btn-sm file-picker-btn" style="font-size:0.78rem;margin:0;cursor:pointer;">
                         ${msIcon('imagesmode', '', 'font-size:1rem;vertical-align:-3px')} Gallery
+                        <input type="file" accept="image/*" onchange="previewItemPhoto(event)" class="file-picker-input">
                     </label>
                     ${i && (i.imageUrl || i.photo) ? '<button type="button" class="btn btn-outline btn-sm" onclick="removeItemPhoto()" style="font-size:0.78rem"> Remove</button>' : ''}
                 </div>
             </div>
-            <input id="item-photo-camera-input" type="file" accept="image/*" capture="environment" onchange="previewItemPhoto(event)" class="native-file-input">
-            <input id="item-photo-gallery-input" type="file" accept="image/*" onchange="previewItemPhoto(event)" class="native-file-input">
             <input type="hidden" id="f-item-existing-url" value="${i && i.imageUrl ? i.imageUrl : (i && i.photo ? i.photo : '')}">
         </div>
         <div class="form-row">
@@ -21122,36 +21119,9 @@ function getCatalogMrpValue(item) {
     return Number.isFinite(salePrice) ? salePrice : 0;
 }
 
-function sortCatalogItems(items, sortBy = 'mrp-asc') {
-    const sorted = [...(items || [])];
-    if (sortBy === 'name-asc') sorted.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-    else if (sortBy === 'name-desc') sorted.sort((a, b) => (b.name || '').localeCompare(a.name || ''));
-    else if (sortBy === 'mrp-desc') sorted.sort((a, b) => getCatalogMrpValue(b) - getCatalogMrpValue(a));
-    else sorted.sort((a, b) => getCatalogMrpValue(a) - getCatalogMrpValue(b) || (a.name || '').localeCompare(b.name || ''));
-    return sorted;
-}
-
-function ensureCatalogTopButtonBinding() {
-    if (_catalogTopButtonBound) return;
-    window.addEventListener('scroll', updateCatalogTopButtonVisibility, { passive: true });
-    _catalogTopButtonBound = true;
-}
-
-function updateCatalogTopButtonVisibility() {
-    const btn = $('catalog-top-btn');
-    if (!btn) return;
-    btn.classList.add('show');
-    btn.classList.toggle('with-cart', catalogCart.length > 0);
-}
-
-function scrollCatalogToTop() {
-    const anchor = $('catalog-page-top');
-    if (anchor) anchor.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    else window.scrollTo({ top: 0, behavior: 'smooth' });
-}
-
 async function renderCatalog() {
-    ensureCatalogTopButtonBinding();
+    // Ping GPS in background — don't block page render
+    getFreshLocationAndSort([], 'none').catch(() => {});
     // Setup background interval if not already running
     if (!_catalogAutoSyncInterval) {
         _catalogAutoSyncInterval = setInterval(() => {
@@ -21168,57 +21138,36 @@ async function renderCatalog() {
     // Only show active items in catalog
     const items = allItems.filter(i => i.active !== false);
     const catNames = [...new Set(items.map(i => i.category).filter(Boolean))];
-    const sortedItems = sortCatalogItems(items, 'mrp-asc');
-    const isMobile = window.innerWidth <= 768;
 
     pageContent.innerHTML = `
-        <div id="catalog-page-top" class="catalog-shell">
-            <section class="catalog-control-card catalog-control-card-sticky">
-                <div class="catalog-toolbar ${isMobile ? 'catalog-toolbar-mobile' : ''}">
-                    <div class="catalog-toolbar-main">
-                        <input class="search-box catalog-search-box" id="catalog-search" placeholder="Search products..." oninput="filterCatalog()">
-                        <select id="catalog-sort" class="search-box catalog-sort-box" onchange="filterCatalog()">
-                            <option value="mrp-asc" selected>MRP: Low to High</option>
-                            <option value="mrp-desc">MRP: High to Low</option>
-                            <option value="name-asc">Name: A to Z</option>
-                            <option value="name-desc">Name: Z to A</option>
-                        </select>
-                    </div>
-                    <div class="catalog-toolbar-actions">
-                        <button class="btn btn-outline btn-sm catalog-sync-btn" onclick="syncCatalogData()" title="Sync Data">
-                            <span class="material-symbols-outlined" style="font-size:1rem">sync</span>
-                            <span>${isMobile ? '' : 'Sync Data'}</span>
-                        </button>
-                        <button id="catalog-top-btn" class="catalog-inline-top-btn" onclick="scrollCatalogToTop()" title="Back to top">
-                            <span class="material-symbols-outlined">vertical_align_top</span>
-                        </button>
-                    </div>
-                </div>
-
-                <div class="catalog-summary-line">
-                    <span>${items.length} active items</span>
-                    <span>${catNames.length} categories</span>
-                    <span>Default sort: MRP low-high</span>
-                </div>
-
-                <div id="catalog-pills" class="catalog-pill-row">
-                    <button class="catalog-pill active" data-cat="" onclick="filterCatalogByCat('')">All</button>
-                    ${catNames.map(c => `<button class="catalog-pill" data-cat="${c}" onclick="filterCatalogByCat('${c}')">${c}</button>`).join('')}
-                </div>
-                <div id="catalog-subcat-pills" class="catalog-pill-row compact"></div>
-                <div id="catalog-movement-pills" class="catalog-pill-row movement">
-                    <button class="catalog-pill active" data-movement="" onclick="filterCatalogByMovement('')">All Items</button>
-                    <button class="catalog-pill warn" data-movement="slow" onclick="filterCatalogByMovement('slow')">Slow Moving</button>
-                    <button class="catalog-pill danger" data-movement="non" onclick="filterCatalogByMovement('non')">Non-Moving (10d)</button>
-                </div>
-            </section>
-
-            <div id="catalog-grid" class="catalog-grid">
-                ${await renderCatalogCards(sortedItems)}
-            </div>
+        <div style="margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;gap:10px">
+            <h2 style="font-size:1.2rem;margin:0"> Item Catalog</h2>
+            <button class="btn btn-outline btn-sm" onclick="syncCatalogData()"> Sync Data</button>
+        </div>
+        <div style="margin-bottom:16px;display:flex;gap:10px">
+            <input class="search-box" id="catalog-search" placeholder=" Search products..." oninput="filterCatalog()" style="flex:1;font-size:1rem;padding:12px 16px;border-radius:12px">
+            <select id="catalog-sort" class="search-box" style="width:auto;border-radius:12px" onchange="filterCatalog()">
+                <option value="">Sort: Default</option>
+                <option value="name-asc">Name: A to Z</option>
+                <option value="name-desc">Name: Z to A</option>
+                <option value="price-asc">Price: Low to High</option>
+                <option value="price-desc">Price: High to Low</option>
+            </select>
+        </div>
+        <div id="catalog-pills" style="display:flex;gap:8px;overflow-x:auto;padding-bottom:8px;margin-bottom:8px;-webkit-overflow-scrolling:touch">
+            <button class="catalog-pill active" data-cat="" onclick="filterCatalogByCat('')">All</button>
+            ${catNames.map(c => `<button class="catalog-pill" data-cat="${c}" onclick="filterCatalogByCat('${c}')">${c}</button>`).join('')}
+        </div>
+        <div id="catalog-subcat-pills" style="display:flex;gap:6px;overflow-x:auto;padding-bottom:8px;margin-bottom:8px;-webkit-overflow-scrolling:touch"></div>
+        <div id="catalog-movement-pills" style="display:flex;gap:8px;margin-bottom:14px">
+            <button class="catalog-pill active" data-movement="" onclick="filterCatalogByMovement('')" style="font-size:0.75rem;padding:5px 12px"> All Items</button>
+            <button class="catalog-pill" data-movement="slow" onclick="filterCatalogByMovement('slow')" style="font-size:0.75rem;padding:5px 12px;border-color:var(--warning)"> Slow Moving</button>
+            <button class="catalog-pill" data-movement="non" onclick="filterCatalogByMovement('non')" style="font-size:0.75rem;padding:5px 12px;border-color:var(--danger)"> Non-Moving (10d)</button>
+        </div>
+        <div id="catalog-grid" class="catalog-grid">
+            ${await renderCatalogCards(items)}
         </div>
         ${catalogCart.length ? renderCatalogCartBar() : ''}`;
-    updateCatalogTopButtonVisibility();
 }
 
 async function syncCatalogData(silent = false) {
@@ -21234,56 +21183,15 @@ async function syncCatalogData(silent = false) {
 
 async function renderCatalogCards(items) {
     if (!items.length) return '<div class="empty-state" style="padding:40px"><div class="empty-icon"></div><p>No products found</p></div>';
-    const isCompactMobile = window.innerWidth <= 520;
 
     // Process all cards in parallel
     const cards = await Promise.all(items.map(async i => {
         const stockData = await getAvailableStock(i);
         const cartEntries = catalogCart.filter(c => c.itemId === i.id);
         const isLow = i.stock <= (i.lowStockAlert || 5);
-        if (isCompactMobile) {
-            return `<div class="catalog-card catalog-card-mobile ${isLow ? 'is-low' : ''}">
-                <div class="catalog-card-mobile-media" onclick="viewCatalogItem('${i.id}')">
-                    ${(i.imageUrl || i.photo) ? `<img src="${i.imageUrl || i.photo}" alt="${i.name}">` : `<div class="catalog-card-placeholder">${i.name.charAt(0).toUpperCase()}</div>`}
-                </div>
-                <div class="catalog-card-mobile-body">
-                    <div class="catalog-card-mobile-top">
-                        <div class="catalog-card-name">${i.name}</div>
-                        ${i.itemCode ? `<span class="catalog-item-code">${i.itemCode}</span>` : ''}
-                    </div>
-                    <div class="catalog-card-mobile-meta">
-                        ${i.category ? `<span class="badge badge-info" style="font-size:0.64rem">${i.category}</span>` : ''}
-                        ${i.subCategory ? `<span class="catalog-card-mobile-subcat">${i.subCategory}</span>` : ''}
-                        ${i.mrp ? `<span class="catalog-card-mobile-mrp">MRP ${i.mrp}</span>` : ''}
-                    </div>
-                    <div style="display:flex;gap:4px;flex-wrap:wrap;margin:6px 0">
-                        <span class="catalog-uom-badge">${i.unit || 'Pcs'}</span>
-                        ${i.secUom ? `<span class="catalog-uom-badge">${i.secUom}${i.secUomRatio ? ' (' + i.secUomRatio + ')' : ''}</span>` : ''}
-                    </div>
-                    <div class="catalog-card-mobile-price">${i.salePrice} <span style="font-size:0.73rem;color:var(--text-muted)">/ ${i.unit || 'Pcs'}</span></div>
-                    <div class="catalog-card-mobile-stats">
-                        <span>Stock: <b>${stockData.stock}</b></span>
-                        <span onclick="showReservedDetails('${i.id}')" style="cursor:pointer;color:var(--warning)">Res: <b>${stockData.reserved}</b></span>
-                        <span class="${isLow ? 'catalog-stat-low' : 'catalog-stat-ok'}">Avail: <b>${stockData.available}</b></span>
-                    </div>
-                    <div class="catalog-card-mobile-action">
-                        ${cartEntries.length ? `<div style="width:100%">
-                            ${cartEntries.map(ce => `<div style="display:flex;align-items:center;justify-content:flex-start;gap:8px;${cartEntries.length > 1 ? 'margin-bottom:6px' : ''}">
-                                <button class="catalog-qty-btn" onclick="updateCartQty('${i.id}',-1,'${ce.unit}')">-</button>
-                                <span style="font-weight:700;min-width:24px;text-align:center">${ce.qty}</span>
-                                <button class="catalog-qty-btn" onclick="updateCartQty('${i.id}',1,'${ce.unit}')">+</button>
-                                <span style="font-size:0.72rem;color:var(--text-muted);min-width:28px">${ce.unit}</span>
-                            </div>`).join('')}
-                            ${i.secUom ? `<button class="catalog-add-btn catalog-add-btn-mobile" onclick="addToCatalogCart('${i.id}')">+ More</button>` : ''}
-                        </div>` : `<button class="catalog-add-btn catalog-add-btn-mobile" onclick="addToCatalogCart('${i.id}')">+ Add</button>`}
-                    </div>
-                </div>
-            </div>`;
-        }
-        return `<div class="catalog-card ${isLow ? 'is-low' : ''}">
+        return `<div class="catalog-card">
             <div class="catalog-card-img" onclick="viewCatalogItem('${i.id}')">
                 ${(i.imageUrl || i.photo) ? `<img src="${i.imageUrl || i.photo}" alt="${i.name}">` : `<div class="catalog-card-placeholder">${i.name.charAt(0).toUpperCase()}</div>`}
-                ${i.mrp ? `<div class="catalog-card-chip">MRP ${i.mrp}</div>` : ''}
             </div>
             <div class="catalog-card-body">
                 <div class="catalog-card-name">${i.name}</div>
@@ -21295,12 +21203,9 @@ async function renderCatalogCards(items) {
                     <span class="catalog-uom-badge">${i.unit || 'Pcs'}</span>
                     ${i.secUom ? `<span class="catalog-uom-badge">${i.secUom}${i.secUomRatio ? ' (' + i.secUomRatio + ')' : ''}</span>` : ''}
                 </div>
-                <div class="catalog-card-price-row">
-                    <div class="catalog-card-price">${i.salePrice} <span style="font-size:0.75rem;color:var(--text-muted)">/ ${i.unit || 'Pcs'}</span></div>
-                    ${i.itemCode ? `<span class="catalog-item-code">${i.itemCode}</span>` : ''}
-                </div>
-                ${i.mrp ? `<div class="catalog-card-mrp">MRP: <span>${i.mrp}</span></div>` : ''}
-                <div class="catalog-stock-box">
+                <div class="catalog-card-price">${i.salePrice} <span style="font-size:0.75rem;color:var(--text-muted)">/ ${i.unit || 'Pcs'}</span></div>
+                ${i.mrp ? `<div style="font-size:0.72rem;color:var(--text-muted)">MRP: <span style="text-decoration:none">${i.mrp}</span></div>` : ''}
+                <div style="background:var(--bg-body);padding:8px;border-radius:8px;margin-top:8px;border:1px solid var(--border)">
                     <div style="display:flex;justify-content:space-between;font-size:0.7rem;color:var(--text-secondary);margin-bottom:2px">
                         <span>Stock:</span>
                         <span>${stockData.stock} ${i.unit || 'Pcs'}</span>
@@ -21336,10 +21241,9 @@ function renderCatalogCartBar() {
     const totalAmt = catalogCart.reduce((s, c) => s + c.qty * c.price, 0);
     return `<div id="catalog-cart-bar" class="catalog-cart-bar">
         <div onclick="openCatalogCart()" style="cursor:pointer;display:flex;align-items:center;gap:10px;flex:1">
-            <span class="material-symbols-outlined" style="font-size:1.35rem">shopping_bag</span>
             <span><strong>${totalItems} item${totalItems > 1 ? 's' : ''}</strong>  ${currency(totalAmt)}</span>
         </div>
-        <button class="btn btn-primary btn-sm" onclick="createOrderFromCatalog()" style="border-radius:10px;font-weight:700">Create Order</button>
+        <button class="btn btn-primary btn-sm" onclick="createOrderFromCatalog()" style="border-radius:8px;font-weight:600">Create Order </button>
     </div>`;
 }
 
@@ -21361,12 +21265,14 @@ async function filterCatalog() {
         items = items.filter(i => movementMap[i.id] === movement);
     }
 
-    const sortBy = $('catalog-sort') ? ($('catalog-sort').value || 'mrp-asc') : 'mrp-asc';
-    items = sortCatalogItems(items, sortBy);
+    const sortBy = $('catalog-sort') ? $('catalog-sort').value : '';
+    if (sortBy === 'name-asc') items.sort((a, b) => a.name.localeCompare(b.name));
+    else if (sortBy === 'name-desc') items.sort((a, b) => b.name.localeCompare(a.name));
+    else if (sortBy === 'price-asc') items.sort((a, b) => a.salePrice - b.salePrice);
+    else if (sortBy === 'price-desc') items.sort((a, b) => b.salePrice - a.salePrice);
 
     const grid = $('catalog-grid');
     if (grid) grid.innerHTML = await renderCatalogCards(items);
-    updateCatalogTopButtonVisibility();
 }
 
 async function getItemMovementMap() {
@@ -21423,7 +21329,6 @@ async function refreshCatalogGrid() {
     } else if (existingBar) {
         existingBar.remove();
     }
-    updateCatalogTopButtonVisibility();
 }
 
 function filterCatalogByCat(cat) {
