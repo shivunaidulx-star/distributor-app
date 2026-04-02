@@ -3063,15 +3063,14 @@ function renderItemPhotoList(items) {
                 <div style="font-weight:600;font-size:0.92rem;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(i.name)}</div>
                 <div style="font-size:0.78rem;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${i.itemCode ? '[' + i.itemCode + '] ' : ''}${i.category || ''}</div>
             </div>
-            <div style="display:flex;gap:4px;flex-shrink:0">
-                <div style="position:relative;display:inline-block;overflow:hidden;border-radius:4px;">
-                    <button type="button" class="btn btn-outline btn-sm" style="padding:6px 10px;font-size:0.82rem;margin:0;pointer-events:none;" title="Camera">📷</button>
-                    <input type="file" accept="image/*" capture="environment" onchange="uploadItemPhotoQuick('${i.id}', this)" style="position:absolute;left:0;top:-10px;bottom:0;width:200%;height:200%;opacity:0;cursor:pointer;z-index:10;transform:translate(-25%, -25%);">
-                </div>
-                <div style="position:relative;display:inline-block;overflow:hidden;border-radius:4px;">
-                    <button type="button" class="btn btn-primary btn-sm" style="padding:6px 10px;font-size:0.82rem;margin:0;pointer-events:none;" title="Gallery">🖼️</button>
-                    <input type="file" accept="image/*" onchange="uploadItemPhotoQuick('${i.id}', this)" style="position:absolute;left:0;top:-10px;bottom:0;width:200%;height:200%;opacity:0;cursor:pointer;z-index:10;transform:translate(-25%, -25%);">
-                </div>
+                <label class="btn btn-outline btn-sm" style="padding:6px 10px;font-size:0.82rem;margin:0;cursor:pointer;" title="Camera">
+                    📷
+                    <input type="file" accept="image/*" capture="environment" onchange="uploadItemPhotoQuick('${i.id}', this)" style="display:none;">
+                </label>
+                <label class="btn btn-primary btn-sm" style="padding:6px 10px;font-size:0.82rem;margin:0;cursor:pointer;" title="Gallery">
+                    🖼️
+                    <input type="file" accept="image/*" onchange="uploadItemPhotoQuick('${i.id}', this)" style="display:none;">
+                </label>
             </div>
         </div>
     `;
@@ -4217,21 +4216,21 @@ async function openItemModal(id) {
 
     openModal(i ? 'Edit Item' : 'Add Item', `
         <div style="margin-bottom:14px;display:flex;align-items:center;gap:14px">
-            <div id="item-photo-preview" style="position:relative;width:70px;height:70px;border-radius:10px;border:2px dashed var(--border);display:flex;align-items:center;justify-content:center;overflow:hidden;cursor:pointer;flex-shrink:0;background:var(--bg-body)">
-                <input type="file" accept="image/*" onchange="previewItemPhoto(event)" style="position:absolute;left:0;top:-10px;bottom:0;width:200%;height:200%;opacity:0;cursor:pointer;z-index:10;transform:translate(-25%, -25%);">
-                ${i && (i.imageUrl || i.photo) ? `<img src="${i.imageUrl || i.photo}" style="width:100%;height:100%;object-fit:cover;position:relative;z-index:1;pointer-events:none;">` : '<span style="font-size:1.5rem;position:relative;z-index:1;pointer-events:none;">📷</span>'}
-            </div>
+            <label id="item-photo-preview" style="display:flex;width:70px;height:70px;border-radius:10px;border:2px dashed var(--border);align-items:center;justify-content:center;overflow:hidden;cursor:pointer;flex-shrink:0;background:var(--bg-body);margin-bottom:0;">
+                <input type="file" accept="image/*" onchange="previewItemPhoto(event)" style="display:none;">
+                ${i && (i.imageUrl || i.photo) ? `<img src="${i.imageUrl || i.photo}" style="width:100%;height:100%;object-fit:cover;pointer-events:none;">` : '<span style="font-size:1.5rem;pointer-events:none;">📷</span>'}
+            </label>
             <div style="flex:1">
                 <div style="font-size:0.82rem;color:var(--text-muted);margin-bottom:4px">Item Photo (optional)</div>
                 <div style="display:flex;gap:6px;flex-wrap:wrap">
-                    <div style="position:relative;display:inline-block;overflow:hidden;border-radius:var(--radius-sm);">
-                        <button type="button" class="btn btn-outline btn-sm" style="font-size:0.78rem;margin:0;pointer-events:none;">📷 Camera</button>
-                        <input type="file" accept="image/*" capture="environment" onchange="previewItemPhoto(event)" style="position:absolute;left:0;top:-10px;bottom:0;width:200%;height:200%;opacity:0;cursor:pointer;z-index:10;transform:translate(-25%, -25%);">
-                    </div>
-                    <div style="position:relative;display:inline-block;overflow:hidden;border-radius:var(--radius-sm);">
-                        <button type="button" class="btn btn-outline btn-sm" style="font-size:0.78rem;margin:0;pointer-events:none;">🖼️ Gallery</button>
-                        <input type="file" accept="image/*" onchange="previewItemPhoto(event)" style="position:absolute;left:0;top:-10px;bottom:0;width:200%;height:200%;opacity:0;cursor:pointer;z-index:10;transform:translate(-25%, -25%);">
-                    </div>
+                    <label class="btn btn-outline btn-sm" style="font-size:0.78rem;margin:0;cursor:pointer;">
+                        📷 Camera
+                        <input type="file" accept="image/*" capture="environment" onchange="previewItemPhoto(event)" style="display:none;">
+                    </label>
+                    <label class="btn btn-outline btn-sm" style="font-size:0.78rem;margin:0;cursor:pointer;">
+                        🖼️ Gallery
+                        <input type="file" accept="image/*" onchange="previewItemPhoto(event)" style="display:none;">
+                    </label>
                     ${i && (i.imageUrl || i.photo) ? '<button type="button" class="btn btn-outline btn-sm" onclick="removeItemPhoto()" style="font-size:0.78rem"> Remove</button>' : ''}
                 </div>
             </div>
@@ -8354,8 +8353,20 @@ async function saveInvoice(id) {
             if (!item) continue;
             const qtyChange = invType === 'sale' ? -li.qty : li.qty;
             const newStock = (item.stock || 0) + qtyChange;
-
-            ops.push(DB.rawUpdate('inventory', item.id, { stock: newStock }));
+            const itemUpdate = { stock: newStock };
+            if (item.batches && item.batches.length && li.mrp) {
+                const batches = JSON.parse(JSON.stringify(item.batches));
+                const b = batches.find(x => +x.mrp === +li.mrp);
+                if (b) {
+                    b.qty = (b.qty || 0) + qtyChange;
+                    if (b.qty < 0) b.qty = 0;
+                } else if (invType === 'purchase') {
+                    batches.push({ id: 'b_' + Date.now().toString(36), mrp: li.mrp, purchasePrice: li.price || item.purchasePrice || 0, salePrice: li.salePrice || item.salePrice || 0, qty: qtyChange > 0 ? qtyChange : 0, receivedDate: today(), isActive: true });
+                }
+                itemUpdate.batches = batches;
+                Object.assign(itemUpdate, syncItemPricesFromBatches(batches));
+            }
+            ops.push(DB.rawUpdate('inventory', item.id, itemUpdate));
             ops.push(DB.rawInsert('stock_ledger', {
                 date: dateVal, itemId: item.id, itemName: item.name,
                 entryType: invType === 'sale' ? 'Sale' : 'Purchase',
@@ -12271,14 +12282,14 @@ function packViewPhoto(itemId, itemName, orderId) {
                 <div style="font-size:0.9rem;font-weight:600;margin-bottom:6px">No photo uploaded for this item.</div>
                 <div style="font-size:0.78rem;margin-bottom:20px;color:var(--text-muted)">Take a photo now to add it to the item catalogue.</div>
                 <div style="display:flex;gap:10px;justify-content:center;margin-bottom:8px">
-                    <div style="position:relative;display:flex;flex:1;overflow:hidden;border-radius:12px;">
-                        <button class="btn btn-primary" style="flex:1;padding:12px;font-size:1rem;margin:0;pointer-events:none;">📷 Camera</button>
-                        <input type="file" accept="image/*" capture="environment" onchange="packAddPhotoFromModal('${itemId}','${escapeHtml(itemName)}','${orderId}',this)" style="position:absolute;left:0;top:-10px;bottom:0;width:200%;height:200%;opacity:0;cursor:pointer;z-index:10;transform:translate(-25%, -25%);">
-                    </div>
-                    <div style="position:relative;display:flex;flex:1;overflow:hidden;border-radius:12px;">
-                        <button class="btn btn-outline" style="flex:1;padding:12px;font-size:1rem;margin:0;pointer-events:none;">🖼️ Gallery</button>
-                        <input type="file" accept="image/*" onchange="packAddPhotoFromModal('${itemId}','${escapeHtml(itemName)}','${orderId}',this)" style="position:absolute;left:0;top:-10px;bottom:0;width:200%;height:200%;opacity:0;cursor:pointer;z-index:10;transform:translate(-25%, -25%);">
-                    </div>
+                    <label class="btn btn-primary" style="flex:1;padding:12px;font-size:1rem;margin:0;cursor:pointer;border-radius:12px;">
+                        📷 Camera
+                        <input type="file" accept="image/*" capture="environment" onchange="packAddPhotoFromModal('${itemId}','${escapeHtml(itemName)}','${orderId}',this)" style="display:none;">
+                    </label>
+                    <label class="btn btn-outline" style="flex:1;padding:12px;font-size:1rem;margin:0;cursor:pointer;border-radius:12px;">
+                        🖼️ Gallery
+                        <input type="file" accept="image/*" onchange="packAddPhotoFromModal('${itemId}','${escapeHtml(itemName)}','${orderId}',this)" style="display:none;">
+                    </label>
                 </div>
             </div>
             <div class="modal-actions">${backBtn}</div>`);
@@ -12290,14 +12301,14 @@ function packViewPhoto(itemId, itemName, orderId) {
         </div>
         <div style="margin-top:8px;text-align:center">
             <div style="display:flex;gap:8px;justify-content:center">
-                <div style="position:relative;display:inline-block;overflow:hidden;border-radius:var(--radius-sm);">
-                    <button type="button" class="btn btn-outline btn-sm" style="margin:0;pointer-events:none;">📷 Retake</button>
-                    <input type="file" accept="image/*" capture="environment" onchange="packAddPhotoFromModal('${itemId}','${escapeHtml(itemName)}','${orderId}',this)" style="position:absolute;left:0;top:-10px;bottom:0;width:200%;height:200%;opacity:0;cursor:pointer;z-index:10;transform:translate(-25%, -25%);">
-                </div>
-                <div style="position:relative;display:inline-block;overflow:hidden;border-radius:var(--radius-sm);">
-                    <button type="button" class="btn btn-outline btn-sm" style="margin:0;pointer-events:none;">🖼️ Gallery</button>
-                    <input type="file" accept="image/*" onchange="packAddPhotoFromModal('${itemId}','${escapeHtml(itemName)}','${orderId}',this)" style="position:absolute;left:0;top:-10px;bottom:0;width:200%;height:200%;opacity:0;cursor:pointer;z-index:10;transform:translate(-25%, -25%);">
-                </div>
+                <label class="btn btn-outline btn-sm" style="margin:0;cursor:pointer;">
+                    📷 Retake
+                    <input type="file" accept="image/*" capture="environment" onchange="packAddPhotoFromModal('${itemId}','${escapeHtml(itemName)}','${orderId}',this)" style="display:none;">
+                </label>
+                <label class="btn btn-outline btn-sm" style="margin:0;cursor:pointer;">
+                    🖼️ Gallery
+                    <input type="file" accept="image/*" onchange="packAddPhotoFromModal('${itemId}','${escapeHtml(itemName)}','${orderId}',this)" style="display:none;">
+                </label>
             </div>
         </div>
         <div class="modal-actions">${backBtn}</div>`);
@@ -19262,7 +19273,10 @@ async function renderInventorySetup() {
             <button class="catalog-pill ${invSetupTab === 'uom' ? 'active' : ''}" onclick="invSetupTab='uom';renderInventorySetup()"> UOM</button>
             <button class="catalog-pill ${invSetupTab === 'brands' ? 'active' : ''}" onclick="invSetupTab='brands';renderInventorySetup()"> Brands</button>
             <button class="catalog-pill ${invSetupTab === 'tax' ? 'active' : ''}" onclick="invSetupTab='tax';renderInventorySetup()"> Tax / GST</button>
-            <button class="btn btn-outline btn-sm" style="border-color:var(--primary);color:var(--primary);margin-left:auto" onclick="showReport('indent')"> Generate Indent</button>
+            <div style="margin-left:auto; display:flex; gap:6px;">
+                <button class="btn btn-outline btn-sm" style="border-color:var(--warning);color:var(--warning)" onclick="migrateBatches()"> Migrate MRPs</button>
+                <button class="btn btn-outline btn-sm" style="border-color:var(--primary);color:var(--primary)" onclick="showReport('indent')"> Generate Indent</button>
+            </div>
         </div>
         <div id="inv-setup-content"></div>`;
 
@@ -19270,6 +19284,34 @@ async function renderInventorySetup() {
     if (invSetupTab === 'uom') await renderUOM();
     if (invSetupTab === 'brands') await renderBrands();
     if (invSetupTab === 'tax') await renderTaxSetup();
+}
+
+async function migrateBatches() {
+    if (!confirm('Auto-generate MRP batches for items that only have a single MRP?')) return;
+    showToast('Migrating...', 'info');
+    try {
+        const inv = await DB.getAll('inventory');
+        let count = 0;
+        for (let item of inv) {
+            if ((!item.batches || item.batches.length === 0) && item.mrp) {
+                const batch = {
+                    id: 'b_' + Date.now().toString(36) + Math.random().toString(36).substr(2, 5),
+                    mrp: item.mrp,
+                    purchasePrice: item.purchasePrice || 0,
+                    salePrice: item.salePrice || 0,
+                    qty: item.stock || 0,
+                    receivedDate: today(),
+                    isActive: true
+                };
+                await DB.update('inventory', item.id, { batches: [batch] });
+                count++;
+            }
+        }
+        await DB.refreshTables(['inventory']);
+        showToast(`Migration complete! Updated ${count} items.`, 'success');
+    } catch(err) {
+        showToast("Error executing migration", 'error');
+    }
 }
 
 // --- Brands Master ---
