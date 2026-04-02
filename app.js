@@ -4478,7 +4478,12 @@ function openAddBatchForm(editIdx = -1) {
         </div>
     `;
     const container = $('item-batches-container');
-    if (container) container.insertAdjacentHTML('afterbegin', formHtml);
+    if (container) {
+        container.insertAdjacentHTML('afterbegin', formHtml);
+        // Scroll the new form into view so user can see and fill it
+        const newForm = document.getElementById('inline-batch-form');
+        if (newForm) setTimeout(() => newForm.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 50);
+    }
 }
 
 function cancelAddBatchForm() {
@@ -4522,12 +4527,12 @@ function saveItemBatch(editIdx = -1) {
 }
 
 async function saveItem(id) {
+    if (!beginSave()) return;
     const name = $('f-item-name').value.trim();
-    if (!name) return alert('Item name is required');
+    if (!name) { endSave(); return alert('Item name is required'); }
     const category = $('f-item-cat').value;
-    if (!category) return alert('Category is required');
+    if (!category) { endSave(); return alert('Category is required'); }
     const subCategory = $('f-item-subcat').value;
-    if (!subCategory) return alert('Sub-Category is required');
 
     const newStock = +$('f-item-stock').value;
 
@@ -4592,12 +4597,13 @@ async function saveItem(id) {
             await DB.update('inventory', id, data);
             if (newStock !== oldStock) {
                 const diff = newStock - oldStock;
-                await addLedgerEntry(id, name, diff > 0 ? 'Positive Adj' : 'Negative Adj', diff, 'EDIT-' + id.substr(0, 6).toUpperCase(), 'Manual edit');
+                // Ledger entry is non-critical — don't let it block the item save
+                addLedgerEntry(id, name, diff > 0 ? 'Positive Adj' : 'Negative Adj', diff, 'EDIT-' + id.substr(0, 6).toUpperCase(), 'Manual edit').catch(e => console.error('Stock ledger entry failed (item saved OK):', e));
             }
         } else {
             const inserted = await DB.insert('inventory', data);
             if (newStock > 0) {
-                await addLedgerEntry(inserted.id, name, 'Opening', newStock, 'OPEN-' + inserted.id.substr(0, 6).toUpperCase(), 'Opening stock');
+                addLedgerEntry(inserted.id, name, 'Opening', newStock, 'OPEN-' + inserted.id.substr(0, 6).toUpperCase(), 'Opening stock').catch(e => console.error('Stock ledger entry failed (item saved OK):', e));
             }
         }
         closeModal();
@@ -4605,6 +4611,7 @@ async function saveItem(id) {
         showToast('Item saved successfully', 'success');
         if (window._saveAndNew) { window._saveAndNew = false; openItemModal(); }
     } catch (err) {
+        endSave();
         window._saveAndNew = false;
         alert('Error saving item: ' + err.message);
     }
