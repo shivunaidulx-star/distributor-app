@@ -4126,7 +4126,13 @@ function filterInvTableMobile(preset) {
     let items = DB.get('db_inventory') || [];
     const s = searchEl ? searchEl.value.toLowerCase() : '';
     
-    if (s) items = items.filter(i => i.name.toLowerCase().includes(s) || (i.itemCode || '').toLowerCase().includes(s) || (i.category || '').toLowerCase().includes(s));
+    if (s) items = items.filter(i =>
+        i.name.toLowerCase().includes(s) ||
+        (i.itemCode || '').toLowerCase().includes(s) ||
+        (i.hsn || '').toLowerCase().includes(s) ||
+        (i.category || '').toLowerCase().includes(s) ||
+        (i.subCategory || '').toLowerCase().includes(s)
+    );
     if (preset === '__low__') items = items.filter(i => (i.stock - (window._inventoryReservedMap?.[i.id] || 0)) <= (i.lowStockAlert || 5));
     
     if (cat) items = items.filter(i => i.category === cat);
@@ -4156,6 +4162,7 @@ function getFifoBatch(item) {
 }
 // Sync item prices using FIFO logic: salePrice/mrp from oldest with stock, purchasePrice from newest
 function syncItemPricesFromBatches(batches) {
+    const update = {};
     const active = batches.filter(b => (b.isActive ?? b.is_active) !== false).sort((a, b) => (a.receivedDate || a.received_date || '') < (b.receivedDate || b.received_date || '') ? -1 : 1);
     const fifo = active.find(b => (b.qty || 0) > 0) || active[0];
     const newest = active[active.length - 1];
@@ -4167,19 +4174,215 @@ function syncItemPricesFromBatches(batches) {
     if (newest) { update.purchasePrice = newest.purchasePrice ?? newest.purchase_price; }
     return update;
 }
-// FIFO deduction: reduces batch qtys oldest-first, returns {updatedBatches, priceSync}
-function deductBatchQtyFifo(item, qtyToDeduct) {
-    if (!item.batches || !item.batches.length) return { updatedBatches: null, priceSync: {} };
+function makeBatchId() {
+    return 'b_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+}
+function getLinePrimaryQty(li) {
+    if (!li) return 0;
+    const raw = li.primaryQty !== undefined ? li.primaryQty : (li.packedQty !== undefined ? li.packedQty : li.qty);
+    return +raw || 0;
+}
+function sumPrimaryQtyByItem(lines = []) {
+    const qtyMap = new Map();
+    lines.forEach(li => {
+        if (!li || li.itemId === undefined || li.itemId === null) return;
+        const key = String(li.itemId);
+        qtyMap.set(key, +((qtyMap.get(key) || 0) + getLinePrimaryQty(li)).toFixed(4));
+    });
+    return qtyMap;
+}
+function getItemBatchPoolQty(item) {
+    return getActiveBatches(item).reduce((sum, b) => sum + (+b.qty || 0), 0);
+}
+function buildSaleBatchAllocation(item, qtyToDeduct) {
+    if (!item.batches || !item.batches.length) {
+        return { allocations: [], updatedBatches: null, priceSync: {}, remaining: +qtyToDeduct || 0 };
+    }
     const batches = JSON.parse(JSON.stringify(item.batches));
     const active = batches.filter(b => (b.isActive ?? b.is_active) !== false).sort((a, b) => (a.receivedDate || a.received_date || '') < (b.receivedDate || b.received_date || '') ? -1 : 1);
-    let remaining = qtyToDeduct;
+    let remaining = +qtyToDeduct || 0;
+    const allocations = [];
     for (const b of active) {
         if (remaining <= 0) break;
         const deduct = Math.min(remaining, b.qty || 0);
+        if (deduct <= 0) continue;
         b.qty = (b.qty || 0) - deduct;
         remaining -= deduct;
+        allocations.push({
+            batchId: b.id || '',
+            mrp: b.mrp ?? null,
+            qty: +deduct.toFixed(4),
+            purchasePrice: b.purchasePrice ?? b.purchase_price ?? 0,
+            salePrice: b.salePrice ?? b.sale_price ?? 0,
+            receivedDate: b.receivedDate || b.received_date || ''
+        });
     }
+    return {
+        allocations,
+        updatedBatches: batches,
+        priceSync: syncItemPricesFromBatches(batches),
+        remaining: +remaining.toFixed(4)
+    };
+}
+function findBatchForRestore(batches, allocation, line) {
+    if (allocation && allocation.batchId) {
+        const byId = batches.find(b => String(b.id || '') === String(allocation.batchId));
+        if (byId) return byId;
+    }
+    if (allocation && allocation.receivedDate) {
+        const byDateAndMrp = batches.find(b =>
+            String(b.receivedDate || b.received_date || '') === String(allocation.receivedDate || '') &&
+            String(b.mrp ?? '') === String(allocation.mrp ?? '')
+        );
+        if (byDateAndMrp) return byDateAndMrp;
+    }
+    if (allocation && allocation.mrp !== undefined && allocation.mrp !== null && allocation.mrp !== '') {
+        const byMrp = batches.find(b => +b.mrp === +allocation.mrp && (b.isActive ?? b.is_active) !== false);
+        if (byMrp) return byMrp;
+    }
+    if (line && line.mrp !== undefined && line.mrp !== null && line.mrp !== '') {
+        const lineMrpBatch = batches.find(b => +b.mrp === +line.mrp && (b.isActive ?? b.is_active) !== false);
+        if (lineMrpBatch) return lineMrpBatch;
+    }
+    return null;
+}
+function restoreSaleLineBatches(item, line) {
+    if (!item.batches || !item.batches.length) return { updatedBatches: null, priceSync: {} };
+    const batches = JSON.parse(JSON.stringify(item.batches));
+    const allocations = Array.isArray(line.batchAllocations) ? line.batchAllocations : [];
+    let restoredQty = 0;
+
+    if (allocations.length) {
+        allocations.forEach(allocation => {
+            const qty = +allocation.qty || 0;
+            if (qty <= 0) return;
+            let target = findBatchForRestore(batches, allocation, line);
+            if (!target) {
+                target = {
+                    id: allocation.batchId || makeBatchId(),
+                    mrp: allocation.mrp ?? line.mrp ?? item.mrp ?? 0,
+                    purchasePrice: allocation.purchasePrice ?? line.purchasePrice ?? item.purchasePrice ?? 0,
+                    salePrice: allocation.salePrice ?? line.price ?? item.salePrice ?? 0,
+                    qty: 0,
+                    receivedDate: allocation.receivedDate || today(),
+                    isActive: true
+                };
+                batches.push(target);
+            }
+            target.qty = +((target.qty || 0) + qty).toFixed(4);
+            restoredQty += qty;
+        });
+    }
+
+    const fallbackQty = +((getLinePrimaryQty(line) || 0) - restoredQty).toFixed(4);
+    if (fallbackQty > 0) {
+        let target = findBatchForRestore(batches, null, line);
+        if (!target) {
+            const active = batches.filter(b => (b.isActive ?? b.is_active) !== false).sort((a, b) => (a.receivedDate || a.received_date || '') < (b.receivedDate || b.received_date || '') ? -1 : 1);
+            target = active[active.length - 1] || batches[batches.length - 1];
+        }
+        if (!target) {
+            target = {
+                id: makeBatchId(),
+                mrp: line.mrp ?? item.mrp ?? 0,
+                purchasePrice: line.purchasePrice ?? item.purchasePrice ?? 0,
+                salePrice: line.price ?? item.salePrice ?? 0,
+                qty: 0,
+                receivedDate: today(),
+                isActive: true
+            };
+            batches.push(target);
+        }
+        target.qty = +((target.qty || 0) + fallbackQty).toFixed(4);
+    }
+
     return { updatedBatches: batches, priceSync: syncItemPricesFromBatches(batches) };
+}
+function applyPurchaseLineToBatches(item, line, { remove = false, dateVal = today() } = {}) {
+    const qty = getLinePrimaryQty(line);
+    const batches = JSON.parse(JSON.stringify(item.batches || []));
+    let target = null;
+
+    if (line && line.mrp !== undefined && line.mrp !== null && line.mrp !== '') {
+        target = batches.find(b => +b.mrp === +line.mrp && (b.isActive ?? b.is_active) !== false);
+    }
+    if (!target && batches.length) {
+        const active = batches.filter(b => (b.isActive ?? b.is_active) !== false).sort((a, b) => (a.receivedDate || a.received_date || '') < (b.receivedDate || b.received_date || '') ? -1 : 1);
+        target = active[active.length - 1] || batches[batches.length - 1];
+    }
+    if (!target && !remove) {
+        target = {
+            id: makeBatchId(),
+            mrp: line.mrp ?? item.mrp ?? 0,
+            purchasePrice: line.price ?? line.purchasePrice ?? item.purchasePrice ?? 0,
+            salePrice: line.salePrice ?? item.salePrice ?? 0,
+            qty: 0,
+            receivedDate: dateVal || today(),
+            isActive: true
+        };
+        batches.push(target);
+    }
+    if (!target) return { updatedBatches: batches.length ? batches : null, priceSync: batches.length ? syncItemPricesFromBatches(batches) : {}, remaining: qty };
+
+    if (remove) {
+        const deduct = Math.min(qty, +target.qty || 0);
+        target.qty = +((target.qty || 0) - deduct).toFixed(4);
+        return {
+            updatedBatches: batches,
+            priceSync: syncItemPricesFromBatches(batches),
+            remaining: +((qty || 0) - deduct).toFixed(4)
+        };
+    }
+
+    target.qty = +((target.qty || 0) + qty).toFixed(4);
+    target.purchasePrice = line.price ?? line.purchasePrice ?? target.purchasePrice ?? item.purchasePrice ?? 0;
+    if (line.salePrice !== undefined && line.salePrice !== null) target.salePrice = line.salePrice;
+    else if (target.salePrice === undefined || target.salePrice === null) target.salePrice = item.salePrice ?? 0;
+    if (line.mrp !== undefined && line.mrp !== null && line.mrp !== '') target.mrp = line.mrp;
+    target.receivedDate = target.receivedDate || dateVal || today();
+    target.isActive = target.isActive ?? true;
+
+    return { updatedBatches: batches, priceSync: syncItemPricesFromBatches(batches), remaining: 0 };
+}
+function validateSaleLinesBeforePost(inventory, lines, { existingLines = [] } = {}) {
+    const co = DB.getObj('db_company') || {};
+    if (co.allowNegativeStock) return { ok: true };
+
+    const requestedQty = sumPrimaryQtyByItem(lines);
+    const existingQty = sumPrimaryQtyByItem(existingLines);
+
+    for (const [itemId, qtyNeeded] of requestedQty.entries()) {
+        const item = inventory.find(x => String(x.id) === String(itemId));
+        if (!item) {
+            return { ok: false, message: `Item ${itemId} is missing from inventory.` };
+        }
+        const stockInfo = getAvailableStock(item);
+        const reusableQty = existingQty.get(String(itemId)) || 0;
+        let availableQty = (stockInfo.available || 0) + reusableQty;
+        if (item.batches && item.batches.length) {
+            availableQty = Math.min(availableQty, getItemBatchPoolQty(item) + reusableQty);
+        }
+        if (qtyNeeded > availableQty + 0.0001) {
+            return {
+                ok: false,
+                item,
+                qtyNeeded: +qtyNeeded.toFixed(4),
+                availableQty: +availableQty.toFixed(4),
+                message: `Only ${availableQty.toFixed(2)} ${(item.unit || 'Pcs')} available for ${item.name}.`
+            };
+        }
+    }
+    return { ok: true };
+}
+// FIFO deduction: reduces batch qtys oldest-first, returns {updatedBatches, priceSync}
+function deductBatchQtyFifo(item, qtyToDeduct) {
+    const result = buildSaleBatchAllocation(item, qtyToDeduct);
+    return {
+        allocations: result.allocations,
+        updatedBatches: result.updatedBatches,
+        priceSync: result.priceSync,
+        remaining: result.remaining
+    };
 }
 
 async function openItemModal(id) {
@@ -5492,6 +5695,124 @@ function importItemExcel() {
 }
 
 let pendingItemImports = [];
+let pendingItemImportErrors = [];
+let pendingItemImportQuery = '';
+
+function filterItemImportPreview(query = '') {
+    pendingItemImportQuery = query || '';
+    renderItemImportPreview();
+}
+
+function cancelItemImportPreview() {
+    pendingItemImports = [];
+    pendingItemImportErrors = [];
+    pendingItemImportQuery = '';
+    renderInventory();
+}
+
+function renderItemImportPreview() {
+    const totalCount = pendingItemImports.length;
+    const newCount = pendingItemImports.filter(p => !p.isUpdate).length;
+    const updCount = pendingItemImports.filter(p => p.isUpdate).length;
+    const newCats = pendingItemImports.filter(p => p._catNeedsCreation).length;
+    const query = (pendingItemImportQuery || '').trim().toLowerCase();
+    const visibleItems = pendingItemImports.filter(p => {
+        if (!query) return true;
+        return [
+            p.itemCode,
+            p.name,
+            p.category,
+            p.subCategory,
+            p.hsn,
+            p.unit,
+            p.warehouse,
+            p.isUpdate ? 'update' : 'new'
+        ].some(v => String(v || '').toLowerCase().includes(query));
+    });
+
+    pageContent.innerHTML = `
+        <div class="section-toolbar" style="margin-bottom:16px;align-items:flex-start;gap:12px">
+            <div>
+                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                    <button class="btn btn-outline" onclick="cancelItemImportPreview()"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-2px">arrow_back</span> Back</button>
+                    <h3 style="margin:0;font-size:1rem;font-weight:700">Import Items Preview</h3>
+                </div>
+                <div style="margin-top:6px;font-size:0.85rem;color:var(--text-muted)">Review new and update rows in full page before importing.</div>
+            </div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap">
+                <button class="btn btn-outline" onclick="cancelItemImportPreview()">Cancel</button>
+                <button class="btn btn-primary item-import-confirm-btn" onclick="commitItemImport()" ${totalCount === 0 ? 'disabled' : ''}><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-2px">upload</span> Confirm & Import Items</button>
+            </div>
+        </div>
+
+        ${pendingItemImportErrors.length ? `
+        <div style="margin-bottom:14px;padding:12px;background:var(--danger-soft);border:1px solid rgba(239,68,68,0.3);border-radius:8px;font-size:0.85rem">
+            <strong style="color:var(--danger)">${pendingItemImportErrors.length} Errors (Rows skipped)</strong>
+            <div style="margin-top:8px;max-height:140px;overflow-y:auto;color:var(--danger)">
+                <ul style="margin:0;padding-left:18px">${pendingItemImportErrors.map(e => `<li>${escapeHtml(e)}</li>`).join('')}</ul>
+            </div>
+        </div>` : ''}
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:14px">
+            <div class="card"><div class="card-body" style="padding:14px"><div style="font-size:1.45rem;font-weight:800;color:#3b82f6">${totalCount}</div><div style="font-size:0.75rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">Valid Items</div></div></div>
+            <div class="card"><div class="card-body" style="padding:14px"><div style="font-size:1.45rem;font-weight:800;color:#10b981">${newCount}</div><div style="font-size:0.75rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">New Items</div></div></div>
+            <div class="card"><div class="card-body" style="padding:14px"><div style="font-size:1.45rem;font-weight:800;color:#f59e0b">${updCount}</div><div style="font-size:0.75rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">Updates</div></div></div>
+            <div class="card"><div class="card-body" style="padding:14px"><div style="font-size:1.45rem;font-weight:800;color:${newCats ? '#8b5cf6' : 'var(--text-primary)'}">${newCats}</div><div style="font-size:0.75rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">New Cat/Sub-Cat</div></div></div>
+        </div>
+
+        ${newCats > 0 ? `<div style="margin-bottom:14px;padding:12px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.25);border-radius:8px;font-size:0.85rem;color:#b45309">Note: ${newCats} item(s) will create missing category or sub-category automatically.</div>` : ''}
+
+        <div class="card">
+            <div class="card-body">
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+                    <div style="font-size:0.88rem;color:var(--text-muted)">Showing <strong style="color:var(--text-primary)">${visibleItems.length}</strong> of <strong style="color:var(--text-primary)">${totalCount}</strong> items</div>
+                    <input type="text" class="search-box" placeholder="Search preview items..." value="${escapeHtml(pendingItemImportQuery)}" oninput="filterItemImportPreview(this.value)" style="min-width:220px;max-width:320px;width:100%">
+                </div>
+                <div style="overflow:auto">
+                    <table class="data-table" style="min-width:1200px">
+                        <thead>
+                            <tr>
+                                <th style="min-width:120px">Code</th>
+                                <th style="min-width:220px">Item Name</th>
+                                <th style="min-width:170px">Category / Sub</th>
+                                <th style="min-width:80px">Unit</th>
+                                <th style="min-width:80px;text-align:right">GST %</th>
+                                <th style="min-width:100px;text-align:right">Purchase</th>
+                                <th style="min-width:100px;text-align:right">Sale</th>
+                                <th style="min-width:100px;text-align:right">MRP</th>
+                                <th style="min-width:90px;text-align:right">Stock</th>
+                                <th style="min-width:120px">Warehouse</th>
+                                <th style="min-width:110px">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${visibleItems.map(p => `
+                                <tr>
+                                    <td style="font-family:monospace;font-size:0.8rem;color:var(--accent);font-weight:600">${escapeHtml(p.itemCode || '-')}</td>
+                                    <td style="font-weight:600;color:var(--text-primary)">${escapeHtml(p.name || '')}${p.hsn ? `<div style="font-size:0.74rem;color:var(--text-muted);margin-top:3px">HSN: ${escapeHtml(p.hsn)}</div>` : ''}</td>
+                                    <td>${escapeHtml(p.category || '')}${p.subCategory ? ` <span style="color:var(--text-muted)">> ${escapeHtml(p.subCategory)}</span>` : ''}</td>
+                                    <td>${escapeHtml(p.unit || 'Pcs')}${p.secUom ? `<div style="font-size:0.74rem;color:var(--text-muted);margin-top:3px">${escapeHtml(p.secUom)}${p.secUomRatio ? ` (${escapeHtml(p.secUomRatio)})` : ''}</div>` : ''}</td>
+                                    <td style="text-align:right">${p.gstRate ?? 0}</td>
+                                    <td style="text-align:right">${currency(p.purchasePrice || 0)}</td>
+                                    <td style="text-align:right;font-weight:700;color:var(--accent)">${currency(p.salePrice || 0)}</td>
+                                    <td style="text-align:right">${currency(p.mrp || 0)}</td>
+                                    <td style="text-align:right">${p.stock || 0}</td>
+                                    <td>${escapeHtml(p.warehouse || 'Main Warehouse')}</td>
+                                    <td><span class="badge ${p.isUpdate ? 'badge-warning' : 'badge-success'}">${p.isUpdate ? 'Update' : 'New'}</span></td>
+                                </tr>
+                            `).join('') || '<tr><td colspan="11"><div class="empty-state"><p>No items match this search.</p></div></td></tr>'}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:16px;flex-wrap:wrap">
+            <button class="btn btn-outline" onclick="cancelItemImportPreview()">Cancel</button>
+            <button class="btn btn-primary item-import-confirm-btn" onclick="commitItemImport()" ${totalCount === 0 ? 'disabled' : ''}><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-2px">upload</span> Confirm & Import Items</button>
+        </div>`;
+}
+
 function processItemImport(event) {
     const file = event.target.files[0];
     if (!file) return;
@@ -5544,16 +5865,9 @@ function processItemImport(event) {
             if (existingItem) entry.id = existingItem.id;
             pendingItemImports.push(entry);
         }
-        let html = '';
-        if (errors.length) html += `<div style="margin-bottom:14px;padding:12px;background:var(--danger-soft);border:1px solid rgba(239,68,68,0.3);border-radius:8px;font-size:0.85rem"><strong style="color:var(--danger)"> ${errors.length} Errors (Rows skipped)</strong><ul style="margin-top:6px;padding-left:14px;color:var(--danger);max-height:100px;overflow-y:auto">${errors.map(e => `<li>${e}</li>`).join('')}</ul></div>`;
-        const newCount = pendingItemImports.filter(p => !p.isUpdate).length;
-        const updCount = pendingItemImports.filter(p => p.isUpdate).length;
-        html += `<div style="margin-bottom:10px;font-weight:600"> ${pendingItemImports.length} Valid Items <span style="font-size:0.8rem;color:var(--text-muted)">(${newCount} New, ${updCount} Update)</span></div>`;
-        const newCats = pendingItemImports.filter(p => p._catNeedsCreation).length;
-        if (newCats > 0) html += `<div style="margin-bottom:10px;font-size:0.85rem;color:var(--warning)">Note: ${newCats} items have missing Category/Sub-Category  will be created automatically.</div>`;
-        if (pendingItemImports.length) html += `<div style="max-height:300px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius-sm)"><table class="data-table"><thead><tr><th>Name</th><th>Cat / Sub</th><th>Sale </th><th>Action</th></tr></thead><tbody>${pendingItemImports.map(p => `<tr><td>${p.name}</td><td>${p.category} > ${p.subCategory}</td><td>${currency(p.salePrice)}</td><td><span class="badge ${p.isUpdate ? 'badge-warning' : 'badge-success'}">${p.isUpdate ? 'Update' : 'New'}</span></td></tr>`).join('')}</tbody></table></div>`;
-        html += `<div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="commitItemImport()" ${pendingItemImports.length === 0 ? 'disabled' : ''}> Confirm & Import Items</button></div>`;
-        openModal('Import Items Preview', html);
+        pendingItemImportErrors = errors;
+        pendingItemImportQuery = '';
+        renderItemImportPreview();
         event.target.value = '';
     }
 
@@ -5570,8 +5884,14 @@ function processItemImport(event) {
 }
 
 async function commitItemImport() {
-    const btn = document.querySelector('#modal-body .btn-primary');
-    if (btn) { btn.disabled = true; btn.innerText = ' Importing...'; }
+    const btns = [...document.querySelectorAll('.item-import-confirm-btn')];
+    const modalBtn = document.querySelector('#modal-body .btn-primary');
+    if (!btns.length && modalBtn) btns.push(modalBtn);
+    const originalBtnHtml = btns.map(btn => btn.innerHTML);
+    btns.forEach(btn => {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-2px">hourglass_top</span> Importing...';
+    });
 
     let added = 0, updated = 0;
 
@@ -5599,13 +5919,14 @@ async function commitItemImport() {
 
             const isUpdate = p.isUpdate;
             const itemId = p.id;
-            delete p._catNeedsCreation;
-            delete p.isUpdate;
-            delete p.id;
+            const payload = { ...p };
+            delete payload._catNeedsCreation;
+            delete payload.isUpdate;
+            delete payload.id;
 
             if (isUpdate) {
                 const existing = inventory.find(it => it.id === itemId);
-                const dataToUpdate = _cleanInvItem({ ...p });
+                const dataToUpdate = _cleanInvItem(payload);
                 if (existing) {
                     dataToUpdate.stock = existing.stock;
                     if (!dataToUpdate.priceTiers || !dataToUpdate.priceTiers.length) {
@@ -5615,7 +5936,7 @@ async function commitItemImport() {
                 await DB.update('inventory', itemId, dataToUpdate);
                 updated++;
             } else {
-                const inserted = await DB.insert('inventory', { ...p });
+                const inserted = await DB.insert('inventory', payload);
                 added++;
                 if (p.stock > 0) {
                     inserted.stock = p.stock;
@@ -5628,7 +5949,8 @@ async function commitItemImport() {
         }
 
         pendingItemImports = [];
-        closeModal();
+        pendingItemImportErrors = [];
+        pendingItemImportQuery = '';
         await renderInventory();
         if (importErrors.length) {
             showToast(`Import done: ${added} added, ${updated} updated. ${importErrors.length} failed.`, 'warning');
@@ -5637,7 +5959,10 @@ async function commitItemImport() {
             showToast(`Import complete! ${added} added, ${updated} updated.`, 'success');
         }
     } catch (err) {
-        closeModal();
+        btns.forEach((btn, idx) => {
+            btn.disabled = false;
+            btn.innerHTML = originalBtnHtml[idx] || 'Confirm & Import Items';
+        });
         alert('Error during item import: ' + err.message);
     }
 }
@@ -7040,32 +7365,70 @@ async function renderPurchaseInvoices() {
     const suppliers = parties.filter(p => p.type === 'Supplier');
     const totalAmt = pinvs.reduce((s, i) => s + i.total, 0);
     const activeCount = pinvs.filter(i => i.status !== 'cancelled').length;
+    const isMobile = window.innerWidth < 768;
 
-    pageContent.innerHTML = `
-        <div class="stats-grid-sm" style="margin-bottom:14px">
-            <div class="stat-card blue"><div class="stat-icon"></div><div class="stat-value">${pinvs.length}</div><div class="stat-label">Total Invoices</div></div>
-            <div class="stat-card red"><div class="stat-icon"></div><div class="stat-value">${currency(totalAmt)}</div><div class="stat-label">Total Purchase</div></div>
-            <div class="stat-card green"><div class="stat-icon"></div><div class="stat-value">${activeCount}</div><div class="stat-label">Active</div></div>
-        </div>
-        <div style="display:flex;gap:8px;margin-bottom:14px">
-            <button class="catalog-pill" onclick="renderPurchaseOrders()" style="font-size:0.85rem"> Purchase Orders</button>
-            <button class="catalog-pill active" onclick="renderPurchaseInvoices()" style="font-size:0.85rem"> Purchase Invoices</button>
-        </div>
-        <div class="section-toolbar">
-            <div class="filter-group">
-                <input class="search-box" id="pinv-search" placeholder="Search invoice or supplier..." oninput="filterPInvTable()" style="width:220px">
-                <select id="pinv-supplier" onchange="filterPInvTable()"><option value="">All Suppliers</option>${suppliers.map(s => `<option value="${s.name}">${s.name}</option>`).join('')}</select>
-                <input type="date" id="pinv-from" onchange="filterPInvTable()" placeholder="From">
-                <input type="date" id="pinv-to" onchange="filterPInvTable()" placeholder="To">
+    if (isMobile) {
+        pageContent.innerHTML = `
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px">
+                <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center">
+                    <div style="font-size:1.2rem;font-weight:800;color:#2563eb">${pinvs.length}</div>
+                    <div style="font-size:0.65rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">Invoices</div>
+                </div>
+                <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center">
+                    <div style="font-size:1.2rem;font-weight:800;color:#dc2626">${currency(totalAmt)}</div>
+                    <div style="font-size:0.65rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">Purchase</div>
+                </div>
+                <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center">
+                    <div style="font-size:1.2rem;font-weight:800;color:#16a34a">${activeCount}</div>
+                    <div style="font-size:0.65rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">Active</div>
+                </div>
             </div>
-            ${canEdit() ? `<button class="btn btn-primary" onclick="openDirectPurchaseInvoiceModal()">+ Direct Purchase Invoice</button>` : ''}
-        </div>
-        <div class="card"><div class="card-body" style="overflow-x:auto">
-            <table class="data-table" id="pinv-table" style="min-width:700px">
-                <thead><tr><th>Date</th><th>Invoice #</th><th>Supplier</th><th>From PO</th><th>Items</th><th style="text-align:right">Total</th><th>Status</th><th>Actions</th></tr></thead>
-                <tbody id="pinv-tbody">${renderPInvRows(pinvs)}</tbody>
-            </table>
-        </div></div>`;
+            <div style="display:flex;gap:8px;margin-bottom:12px">
+                <button class="catalog-pill" onclick="renderPurchaseOrders()" style="font-size:0.85rem">Purchase Orders</button>
+                <button class="catalog-pill active" onclick="renderPurchaseInvoices()" style="font-size:0.85rem">Purchase Invoices</button>
+            </div>
+            <div style="display:flex;gap:6px;margin-bottom:8px">
+                <input id="pinv-search" placeholder="Search invoice or supplier..." oninput="filterPInvTable()" style="flex:1;font-size:0.82rem;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input)">
+                ${canEdit() ? `<button class="btn btn-primary btn-sm" onclick="openDirectPurchaseInvoiceModal()" style="padding:8px 12px;white-space:nowrap">+ Direct</button>` : ''}
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px">
+                <select id="pinv-supplier" onchange="filterPInvTable()" style="padding:8px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input)">
+                    <option value="">All Suppliers</option>
+                    ${suppliers.map(s => `<option value="${s.name}">${s.name}</option>`).join('')}
+                </select>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+                    <input type="date" id="pinv-from" onchange="filterPInvTable()" style="padding:8px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input)">
+                    <input type="date" id="pinv-to" onchange="filterPInvTable()" style="padding:8px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input)">
+                </div>
+            </div>
+            <div id="pinv-list">${renderPInvCards(pinvs)}</div>`;
+    } else {
+        pageContent.innerHTML = `
+            <div class="stats-grid-sm" style="margin-bottom:14px">
+                <div class="stat-card blue"><div class="stat-icon"></div><div class="stat-value">${pinvs.length}</div><div class="stat-label">Total Invoices</div></div>
+                <div class="stat-card red"><div class="stat-icon"></div><div class="stat-value">${currency(totalAmt)}</div><div class="stat-label">Total Purchase</div></div>
+                <div class="stat-card green"><div class="stat-icon"></div><div class="stat-value">${activeCount}</div><div class="stat-label">Active</div></div>
+            </div>
+            <div style="display:flex;gap:8px;margin-bottom:14px">
+                <button class="catalog-pill" onclick="renderPurchaseOrders()" style="font-size:0.85rem"> Purchase Orders</button>
+                <button class="catalog-pill active" onclick="renderPurchaseInvoices()" style="font-size:0.85rem"> Purchase Invoices</button>
+            </div>
+            <div class="section-toolbar">
+                <div class="filter-group">
+                    <input class="search-box" id="pinv-search" placeholder="Search invoice or supplier..." oninput="filterPInvTable()" style="width:220px">
+                    <select id="pinv-supplier" onchange="filterPInvTable()"><option value="">All Suppliers</option>${suppliers.map(s => `<option value="${s.name}">${s.name}</option>`).join('')}</select>
+                    <input type="date" id="pinv-from" onchange="filterPInvTable()" placeholder="From">
+                    <input type="date" id="pinv-to" onchange="filterPInvTable()" placeholder="To">
+                </div>
+                ${canEdit() ? `<button class="btn btn-primary" onclick="openDirectPurchaseInvoiceModal()">+ Direct Purchase Invoice</button>` : ''}
+            </div>
+            <div class="card"><div class="card-body" style="overflow-x:auto">
+                <table class="data-table" id="pinv-table" style="min-width:700px">
+                    <thead><tr><th>Date</th><th>Invoice #</th><th>Supplier</th><th>From PO</th><th>Items</th><th style="text-align:right">Total</th><th>Status</th><th>Actions</th></tr></thead>
+                    <tbody id="pinv-tbody">${renderPInvRows(pinvs)}</tbody>
+                </table>
+            </div></div>`;
+    }
     window._pinvsAll = pinvs;
     window._pinvsInv = inventory;
 }
@@ -7086,6 +7449,32 @@ function renderPInvRows(invs) {
         </div></td>
     </tr>`).join('');
 }
+function renderPInvCards(invs) {
+    if (!invs.length) return '<div class="empty-state"><p>No purchase invoices found</p></div>';
+    return invs.map(i => `
+        <div style="background:#fff;border-radius:12px;padding:14px 16px;margin-bottom:10px;box-shadow:0 1px 6px rgba(0,0,0,0.07)">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:6px">
+                <div style="min-width:0;flex:1">
+                    <div style="font-weight:700;font-size:0.94rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(i.partyName || '')}</div>
+                    <div style="font-size:0.75rem;color:var(--text-muted);margin-top:2px">${escapeHtml(i.invoiceNo || '')}${i.fromOrder ? ` • PO ${escapeHtml(i.fromOrder)}` : ''}</div>
+                </div>
+                <span class="badge ${i.status === 'cancelled' ? 'badge-danger' : 'badge-success'}">${i.status === 'cancelled' ? 'Cancelled' : 'Posted'}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                <span style="font-size:1.15rem;font-weight:800;color:#1d4ed8">${currency(i.total)}</span>
+                <span style="font-size:0.78rem;color:var(--text-muted)">${fmtDate(i.date)}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;padding-top:8px;border-top:1px solid var(--border)">
+                <div style="font-size:0.78rem;color:var(--text-muted)">
+                    <span>${(i.items || []).length} item(s)</span>
+                </div>
+                <div style="display:flex;gap:4px">
+                    <button class="btn-icon" onclick="viewPurchaseInvoice('${i.id}')" title="View"><span class="material-symbols-outlined" style="font-size:1.15rem">visibility</span></button>
+                    ${i.status !== 'cancelled' && canEdit() ? `<button class="btn-icon" style="color:var(--danger)" onclick="cancelPurchaseInvoice('${i.id}')" title="Cancel"><span class="material-symbols-outlined" style="font-size:1.15rem">block</span></button>` : ''}
+                </div>
+            </div>
+        </div>`).join('');
+}
 
 function filterPInvTable() {
     const s = ($('pinv-search') || {}).value.toLowerCase();
@@ -7097,7 +7486,8 @@ function filterPInvTable() {
     if (sup) invs = invs.filter(i => i.partyName === sup);
     if (from) invs = invs.filter(i => i.date >= from);
     if (to) invs = invs.filter(i => i.date <= to);
-    $('pinv-tbody').innerHTML = renderPInvRows(invs);
+    if ($('pinv-list')) $('pinv-list').innerHTML = renderPInvCards(invs);
+    if ($('pinv-tbody')) $('pinv-tbody').innerHTML = renderPInvRows(invs);
 }
 
 async function viewPurchaseInvoice(id) {
@@ -7121,14 +7511,28 @@ async function viewPurchaseInvoice(id) {
 }
 
 async function cancelPurchaseInvoice(id) {
-    if (!confirm('Cancel this purchase invoice? Stock added will NOT be reversed automatically.')) return;
+    const invoices = await DB.getAll('invoices');
+    const inv = invoices.find(i => i.id === id);
+    if (!inv || inv.status === 'cancelled') return alert('This invoice is already cancelled.');
+    openModal('Cancel Purchase Invoice', `
+        <div style="margin-bottom:14px;padding:12px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:8px;font-size:0.9rem">
+            <strong>Invoice:</strong> ${escapeHtml(inv.invoiceNo || '')}<br>
+            <strong>Supplier:</strong> ${escapeHtml(inv.partyName || '')} | <strong>Amount:</strong> ${currency(inv.total || 0)}
+        </div>
+        <p style="margin-bottom:16px;font-size:0.9rem">Cancel this purchase invoice? Stock and supplier balance will be reversed.</p>
+        <div class="modal-actions">
+            <button class="btn btn-outline" onclick="closeModal()">Keep Invoice</button>
+            <button id="btn-confirm-cancel" class="btn btn-danger" onclick="executePurchaseInvoiceCancel('${id}')">Cancel Invoice</button>
+        </div>`);
+}
+async function executePurchaseInvoiceCancel(id) {
     try {
-        await DB.update('invoices', id, { status: 'cancelled' });
-        showToast('Invoice Cancelled', 'success');
-        renderInvoices();
-        showToast('Purchase invoice cancelled', 'success');
+        closeModal();
+        await executeCancelInvoice(id, { skipNav: true });
         await renderPurchaseInvoices();
-    } catch (e) { alert(e.message); }
+    } catch (err) {
+        alert('Error cancelling purchase invoice: ' + err.message);
+    }
 }
 
 async function openDirectPurchaseInvoiceModal() {
@@ -7198,48 +7602,78 @@ async function saveDirectPurchaseInvoice() {
     const partyId = ($('f-di-party-id') || {}).value || '';
     if (!partyId) return alert('Please select a supplier');
     if (!poItems.length) return alert('Add at least one item');
+    if (!beginSave()) return;
     try {
         const parties = await DB.getAll('parties');
         const party = parties.find(p => String(p.id) === String(partyId));
-        if (!party) return alert('Supplier not found. Please re-select.');
+        if (!party) { endSave(); return alert('Supplier not found. Please re-select.'); }
         const invNo = await nextNumber('PINV-');
         const invDate = $('f-di-date').value;
         const notes = ($('f-di-notes') || {}).value || '';
-        const total = poItems.reduce((s, l) => s + l.amount, 0);
+        const persistedItems = poItems.map(li => ({ ...li, primaryQty: getLinePrimaryQty(li) || (+li.qty || 0) }));
+        const total = persistedItems.reduce((s, l) => s + l.amount, 0);
         const inv = {
             invoiceNo: invNo, date: invDate, type: 'purchase',
-            partyId, partyName: party.name, items: [...poItems],
+            partyId, partyName: party.name, items: persistedItems,
             subtotal: total, gst: 0, total, status: 'posted',
             notes, createdBy: currentUser.name
         };
-        await DB.insert('invoices', inv);
-        // Update inventory stock + batch qty + FIFO price sync
         const inventory = await DB.getAll('inventory');
-        for (const li of poItems) {
+        const ops = [DB.rawInsert('invoices', inv)];
+
+        for (const li of persistedItems) {
             const item = inventory.find(i => String(i.id) === String(li.itemId));
-            if (item) {
-                const itemUpdate = { stock: item.stock + li.qty };
-                // If line has MRP, add qty to matching batch and re-sync prices
-                if (li.mrp && item.batches && item.batches.length) {
-                    const batches = JSON.parse(JSON.stringify(item.batches));
-                    const b = batches.find(x => +x.mrp === +li.mrp);
-                    if (b) { b.qty = (b.qty || 0) + li.qty; }
-                    itemUpdate.batches = batches;
-                    Object.assign(itemUpdate, syncItemPricesFromBatches(batches));
-                    // purchasePrice always from newest (this received batch)
-                    itemUpdate.purchasePrice = li.price || item.purchasePrice;
-                }
-                await DB.update('inventory', item.id, itemUpdate);
-                await addLedgerEntry(item.id, item.name, 'Purchase', li.qty, invNo, `Direct purchase invoice${li.mrp ? ` | MRP ${li.mrp}` : ''}`);
+            if (!item) throw new Error(`Item not found: ${li.name || li.itemId}`);
+            const qty = getLinePrimaryQty(li);
+            if (qty <= 0) throw new Error(`Invalid quantity for ${li.name || item.name}`);
+            const itemUpdate = { stock: (item.stock || 0) + qty };
+            const batchResult = applyPurchaseLineToBatches(item, li, { dateVal: invDate });
+            if (batchResult.updatedBatches) {
+                itemUpdate.batches = batchResult.updatedBatches;
+                Object.assign(itemUpdate, batchResult.priceSync || {});
             }
+            if (li.price !== undefined && li.price !== null && li.price !== '') {
+                itemUpdate.purchasePrice = li.price;
+            }
+            item.stock = itemUpdate.stock;
+            if (itemUpdate.batches) item.batches = itemUpdate.batches;
+            ops.push(DB.rawUpdate('inventory', item.id, itemUpdate));
+            ops.push(DB.rawInsert('stock_ledger', {
+                date: invDate,
+                itemId: item.id,
+                itemName: item.name,
+                entryType: 'Purchase',
+                qty,
+                runningStock: item.stock,
+                documentNo: invNo,
+                reason: `Direct purchase invoice${li.mrp ? ` | MRP ${li.mrp}` : ''}`,
+                createdBy: currentUser.userId
+            }));
         }
-        // Update supplier ledger
-        await addPartyLedgerEntry(partyId, party.name, 'Purchase Invoice', total, invNo, `Direct purchase: ${invNo}`);
+
+        const newBal = +((party.balance || 0) - total).toFixed(2);
+        ops.push(DB.rawUpdate('parties', partyId, { balance: newBal }));
+        ops.push(DB.rawInsert('party_ledger', {
+            date: invDate,
+            partyId,
+            partyName: party.name,
+            type: 'Purchase Invoice',
+            amount: -total,
+            runningBalance: newBal,
+            documentNo: invNo,
+            reason: `Direct purchase: ${invNo}`,
+            createdBy: currentUser.userId
+        }));
+
+        await Promise.all(ops);
         closeModal();
         poItems = [];
         await renderPurchaseInvoices();
         showToast(`Purchase Invoice ${invNo} saved! Stock updated.`, 'success');
-    } catch (e) { alert('Error: ' + e.message); }
+    } catch (e) {
+        endSave();
+        alert('Error: ' + e.message);
+    }
 }
 
 async function openPurchaseOrderModal() {
@@ -7371,22 +7805,18 @@ async function receivePO(id) {
         for (const li of o.items) {
             const item = inventory.find(i => i.id === li.itemId);
             if (item) {
-                const newStock = item.stock + li.qty;
+                const qty = getLinePrimaryQty(li);
+                const newStock = (item.stock || 0) + qty;
                 const itemUpdate = { stock: newStock };
-                // Update batch qty if item has batches and line has MRP
-                if (item.batches && item.batches.length && li.mrp) {
-                    const batches = JSON.parse(JSON.stringify(item.batches));
-                    const b = batches.find(x => +x.mrp === +li.mrp);
-                    if (b) {
-                        b.qty = (b.qty || 0) + li.qty;
-                    } else {
-                        batches.push({ id: 'b_' + Date.now().toString(36), mrp: li.mrp, purchasePrice: li.price || item.purchasePrice, salePrice: li.salePrice || item.salePrice, qty: li.qty, receivedDate: today(), isActive: true });
-                    }
-                    itemUpdate.batches = batches;
-                    Object.assign(itemUpdate, syncItemPricesFromBatches(batches));
+                const batchResult = applyPurchaseLineToBatches(item, { ...li, primaryQty: qty }, { dateVal: today() });
+                if (batchResult.updatedBatches) {
+                    itemUpdate.batches = batchResult.updatedBatches;
+                    Object.assign(itemUpdate, batchResult.priceSync || {});
                 }
+                item.stock = newStock;
+                if (itemUpdate.batches) item.batches = itemUpdate.batches;
                 await DB.update('inventory', item.id, itemUpdate);
-                await addLedgerEntry(item.id, item.name, 'Purchase', li.qty, invNo, `Received from ${o.poNo}`);
+                await addLedgerEntry(item.id, item.name, 'Purchase', qty, invNo, `Received from ${o.poNo}`);
             }
         }
 
@@ -7476,9 +7906,7 @@ async function renderInvoices() {
             </div>
         </div>
         
-        <div id="invoice-list">${renderInvoiceCards(visibleInvoices)}</div>
-        <tbody id="invoice-tbody" style="display:none"></tbody>
-        <table id="tbl-invoices" style="display:none"><tbody></tbody></table>`;
+        <div id="invoice-list">${renderInvoiceCards(visibleInvoices)}</div>`;
     } else {
         pageContent.innerHTML = `
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
@@ -8180,6 +8608,9 @@ async function addInvoiceLine() {
         purchasePrice: +unitPurchasePrice.toFixed(2),
         discountAmt: 0, discountPct: 0,
         amount: lineAmount, unit, primaryQty, gstRate: itemGstRate,
+        primaryUnit,
+        secUom,
+        secUomRatio: secRatio,
         baseAmount: lineBase, taxAmount: lineTax,
         hsn: itemObj.hsn || '', mrp: itemObj.mrp || itemObj.salePrice || price
     });
@@ -8238,15 +8669,29 @@ function updateInvoiceLine(idx, field, value) {
 
     if (field === 'qty') {
         const newQty = Math.max(1, +value || 1);
-        const item = DB.cache['inventory'].find(x => x.id === li.itemId);
+        const inventory = DB.cache['inventory'] || [];
+        const item = inventory.find(x => x.id === li.itemId);
+        const primaryUnit = item?.unit || li.primaryUnit || li.unit || 'Pcs';
+        const secUom = item?.secUom || li.secUom || '';
+        const secRatio = +(item?.secUomRatio || li.secUomRatio || 0);
+        const currentPrimaryQty = getLinePrimaryQty(li);
+        let newPrimaryQty = newQty;
+        if (li.unit !== primaryUnit && secUom && li.unit === secUom && secRatio > 0) {
+            newPrimaryQty = newQty / secRatio;
+        }
         if (item && type === 'sale') {
-            const avail = getAvailableStock(item).available + li.qty;
-            if (newQty > avail) {
-                alert(`Cannot update to ${newQty} ${li.unit || 'Pcs'}. Only ${avail} available.`);
+            const co = DB.getObj('db_company') || {};
+            const avail = getAvailableStock(item).available + currentPrimaryQty;
+            if (newPrimaryQty > avail && !co.allowNegativeStock) {
+                alert(`Cannot update to ${newQty} ${li.unit || 'Pcs'}. Only ${avail.toFixed(2)} ${primaryUnit} available.`);
                 return;
             }
         }
         li.qty = newQty;
+        li.primaryQty = +newPrimaryQty.toFixed(4);
+        li.primaryUnit = primaryUnit;
+        li.secUom = secUom;
+        li.secUomRatio = secRatio;
         if (li.discountPct > 0) li.discountAmt = +((li.qty * li.price) * (li.discountPct / 100)).toFixed(2);
     }
     if (field === 'price') {
@@ -8488,26 +8933,53 @@ async function saveInvoice(id) {
     try {
         const inventory = await DB.getAll('inventory');
         const orders = await DB.getAll('sales_orders');
+        const company = DB.getObj('db_company') || {};
+        const persistedItems = invoiceItems.map(li => ({ ...li, primaryQty: getLinePrimaryQty(li) }));
+        if (invType === 'sale') {
+            const validation = validateSaleLinesBeforePost(inventory, persistedItems);
+            if (!validation.ok) {
+                endSave();
+                return alert(validation.message || 'Insufficient stock to post this invoice.');
+            }
+        }
         const ops = [];
 
-        for (const li of invoiceItems) {
+        for (const li of persistedItems) {
             const item = inventory.find(x => x.id === li.itemId);
-            if (!item) continue;
-            const qtyChange = invType === 'sale' ? -li.qty : li.qty;
+            if (!item) throw new Error(`Item not found: ${li.name || li.itemId}`);
+            const primaryQty = getLinePrimaryQty(li);
+            if (primaryQty <= 0) throw new Error(`Invalid quantity for ${li.name || item.name}`);
+            const qtyChange = invType === 'sale' ? -primaryQty : primaryQty;
             const newStock = (item.stock || 0) + qtyChange;
             const itemUpdate = { stock: newStock };
-            if (item.batches && item.batches.length && li.mrp) {
-                const batches = JSON.parse(JSON.stringify(item.batches));
-                const b = batches.find(x => +x.mrp === +li.mrp);
-                if (b) {
-                    b.qty = (b.qty || 0) + qtyChange;
-                    if (b.qty < 0) b.qty = 0;
-                } else if (invType === 'purchase') {
-                    batches.push({ id: 'b_' + Date.now().toString(36), mrp: li.mrp, purchasePrice: li.price || item.purchasePrice || 0, salePrice: li.salePrice || item.salePrice || 0, qty: qtyChange > 0 ? qtyChange : 0, receivedDate: today(), isActive: true });
+            if (invType === 'sale') {
+                if (!company.allowNegativeStock && newStock < -0.0001) {
+                    throw new Error(`Insufficient stock for ${item.name}.`);
                 }
-                itemUpdate.batches = batches;
-                Object.assign(itemUpdate, syncItemPricesFromBatches(batches));
+                if (item.batches && item.batches.length) {
+                    const batchResult = deductBatchQtyFifo(item, primaryQty);
+                    if (batchResult.remaining > 0.0001 && !company.allowNegativeStock) {
+                        throw new Error(`Batch stock is insufficient for ${item.name}.`);
+                    }
+                    if (batchResult.updatedBatches) {
+                        itemUpdate.batches = batchResult.updatedBatches;
+                        Object.assign(itemUpdate, batchResult.priceSync || {});
+                        item.batches = batchResult.updatedBatches;
+                    }
+                    li.batchAllocations = batchResult.allocations || [];
+                }
+            } else {
+                const batchResult = applyPurchaseLineToBatches(item, li, { dateVal });
+                if (batchResult.updatedBatches) {
+                    itemUpdate.batches = batchResult.updatedBatches;
+                    Object.assign(itemUpdate, batchResult.priceSync || {});
+                    item.batches = batchResult.updatedBatches;
+                }
+                if (li.price !== undefined && li.price !== null && li.price !== '') {
+                    itemUpdate.purchasePrice = li.price;
+                }
             }
+            item.stock = newStock;
             ops.push(DB.rawUpdate('inventory', item.id, itemUpdate));
             ops.push(DB.rawInsert('stock_ledger', {
                 date: dateVal, itemId: item.id, itemName: item.name,
@@ -8546,6 +9018,7 @@ async function saveInvoice(id) {
             status: 'posted', created_by: currentUser.userId,
             vyapar_invoice_no: vyaparInvNo, from_order: fromOrderId ? (orders.find(o => o.id === fromOrderId)?.orderNo || '') : null
         };
+        invData.items = persistedItems;
 
         if (fromOrderId) ops.push(DB.rawUpdate('sales_orders', fromOrderId, { invoice_no: invNo }));
 
@@ -8800,34 +9273,38 @@ async function saveEditedInvoice(id) {
         if (!inv) { endSave(); return alert('Invoice not found.'); }
         if (inv.status === 'cancelled') { endSave(); return alert('Cannot edit a cancelled invoice.'); }
 
+        const company = DB.getObj('db_company') || {};
+        const persistedItems = invoiceItems.map(li => ({ ...li, primaryQty: getLinePrimaryQty(li) }));
+        const validation = validateSaleLinesBeforePost(inventory, persistedItems, { existingLines: inv.items || [] });
+        if (!validation.ok) {
+            endSave();
+            return alert(validation.message || 'Insufficient stock to update this invoice.');
+        }
+
         const party = parties.find(p => p.id === inv.partyId);
         const gst = +($('f-inv-gst')?.value || 0);
         const discPct = +($('f-inv-disc-pct')?.value || 0);
         const discAmt = +($('f-inv-disc-amt')?.value || 0);
         const roundOff = +($('f-inv-roundoff')?.value || 0);
-        const sub = invoiceItems.reduce((s, li) => s + li.amount, 0);
+        const sub = persistedItems.reduce((s, li) => s + li.amount, 0);
         const newTotal = Math.max(0, +(sub + roundOff - discAmt).toFixed(2));
         const oldTotal = inv.total;
 
         const ops = [];
 
-        // 1. Reverse original stock effects (including batch qty restoration)
         for (const li of (inv.items || [])) {
             const item = inventory.find(x => x.id === li.itemId);
-            if (!item) continue;
-            const effectiveQty = li.packedQty !== undefined ? li.packedQty : li.qty;
-            const reverseQty = effectiveQty; // restore sold qty back to stock
+            if (!item) throw new Error(`Original item missing from inventory: ${li.name || li.itemId}`);
+            const reverseQty = getLinePrimaryQty(li);
             item.stock = (item.stock || 0) + reverseQty;
             const itemUpdateReverse = { stock: item.stock };
-            // Restore batch qty: add back to newest active batch (reverse of FIFO)
             if (item.batches && item.batches.length) {
-                const batches = JSON.parse(JSON.stringify(item.batches));
-                const active = batches.filter(b => b.isActive !== false).sort((a, b) => (a.receivedDate || '') < (b.receivedDate || '') ? -1 : 1);
-                const target = active[active.length - 1] || batches[batches.length - 1];
-                if (target) target.qty = (target.qty || 0) + reverseQty;
-                itemUpdateReverse.batches = batches;
-                Object.assign(itemUpdateReverse, syncItemPricesFromBatches(batches));
-                item.batches = batches;
+                const restoreResult = restoreSaleLineBatches(item, li);
+                if (restoreResult.updatedBatches) {
+                    itemUpdateReverse.batches = restoreResult.updatedBatches;
+                    Object.assign(itemUpdateReverse, restoreResult.priceSync || {});
+                    item.batches = restoreResult.updatedBatches;
+                }
             }
             ops.push(DB.rawUpdate('inventory', item.id, itemUpdateReverse));
             ops.push(DB.rawInsert('stock_ledger', {
@@ -8838,30 +9315,37 @@ async function saveEditedInvoice(id) {
             }));
         }
 
-        // 2. Apply new stock effects (including FIFO batch qty deduction)
-        for (const li of invoiceItems) {
+        for (const li of persistedItems) {
             const item = inventory.find(x => x.id === li.itemId);
-            if (!item) continue;
-            item.stock = (item.stock || 0) - li.qty;
+            if (!item) throw new Error(`Item not found: ${li.name || li.itemId}`);
+            const primaryQty = getLinePrimaryQty(li);
+            if (primaryQty <= 0) throw new Error(`Invalid quantity for ${li.name || item.name}`);
+            item.stock = (item.stock || 0) - primaryQty;
+            if (!company.allowNegativeStock && item.stock < -0.0001) {
+                throw new Error(`Insufficient stock for ${item.name}.`);
+            }
             const itemUpdateNew = { stock: item.stock };
             if (item.batches && item.batches.length) {
-                const batchResult = deductBatchQtyFifo(item, li.qty);
+                const batchResult = deductBatchQtyFifo(item, primaryQty);
+                if (batchResult.remaining > 0.0001 && !company.allowNegativeStock) {
+                    throw new Error(`Batch stock is insufficient for ${item.name}.`);
+                }
                 if (batchResult && batchResult.updatedBatches) {
                     itemUpdateNew.batches = batchResult.updatedBatches;
                     Object.assign(itemUpdateNew, batchResult.priceSync || {});
                     item.batches = batchResult.updatedBatches;
                 }
+                li.batchAllocations = batchResult.allocations || [];
             }
             ops.push(DB.rawUpdate('inventory', item.id, itemUpdateNew));
             ops.push(DB.rawInsert('stock_ledger', {
                 date: inv.date, itemId: item.id, itemName: item.name,
-                entryType: 'Sale', qty: -li.qty,
+                entryType: 'Sale', qty: -primaryQty,
                 runningStock: item.stock, documentNo: inv.invoiceNo,
                 reason: `Edited Invoice ${inv.invoiceNo}`, createdBy: currentUser.userId
             }));
         }
 
-        // 3. Adjust party balance (net difference)
         if (party) {
             const balDiff = newTotal - oldTotal;
             const newBal = +((party.balance || 0) + balDiff).toFixed(2);
@@ -8876,8 +9360,10 @@ async function saveEditedInvoice(id) {
             }
         }
 
-        // 4. Update discount expense
-        const oldDiscExp = expenses.find(e => e.category === 'Sales Discount' && e.docNo === inv.invoiceNo);
+        const oldDiscExp = expenses.find(e =>
+            e.category === 'Sales Discount' &&
+            ((e.docNo || e.doc_no || e.documentNo || '') === inv.invoiceNo)
+        );
         if (oldDiscExp) await DB.delete('expenses', oldDiscExp.id);
         if (discAmt > 0) {
             ops.push(DB.rawInsert('expenses', {
@@ -8887,19 +9373,17 @@ async function saveEditedInvoice(id) {
             }));
         }
 
-        // 5. Update invoice
         ops.push(DB.rawUpdate('invoices', id, {
-            items: [...invoiceItems],
+            items: persistedItems,
             subtotal: sub, gst, discount_pct: discPct, discount_amt: discAmt,
             round_off: roundOff, total: newTotal
         }));
 
         await Promise.all(ops);
 
-        // BUG 3: Recalculate running stock for all affected items
         const affectedItemIds = new Set();
         for (const li of (inv.items || [])) { if (li.itemId) affectedItemIds.add(li.itemId); }
-        for (const li of invoiceItems) { if (li.itemId) affectedItemIds.add(li.itemId); }
+        for (const li of persistedItems) { if (li.itemId) affectedItemIds.add(li.itemId); }
         await Promise.all([...affectedItemIds].map(itemId => recalculateStockLedger(itemId)));
 
         await DB.refreshTables(['invoices', 'inventory', 'parties', 'expenses', 'stock_ledger', 'party_ledger']);
@@ -8998,12 +9482,10 @@ function cancelInvoiceDirectly(id) {
 }
 async function executeCancelInvoice(id, { skipNav = false } = {}) {
     if (_cancellingInvoices.has(id)) return;
-    // Check cache first for fast early exit before any await
     const cachedInvs = DB.cache['invoices'] || [];
     const cachedInv = cachedInvs.find(x => x.id === id);
     if (cachedInv && cachedInv.status === 'cancelled') { closeModal(); return; }
     _cancellingInvoices.add(id);
-    // Disable the button immediately to prevent double-click
     const btn = document.getElementById('btn-confirm-cancel');
     if (btn) { btn.disabled = true; btn.textContent = 'Cancelling...'; }
 
@@ -9013,17 +9495,6 @@ async function executeCancelInvoice(id, { skipNav = false } = {}) {
     if (inv.status === 'cancelled') { _cancellingInvoices.delete(id); closeModal(); showToast('Invoice already cancelled.', 'warning'); return; }
 
     try {
-        // ✅ MARK AS CANCELLED FIRST — prevents double-cancel if anything below fails
-        await DB.update('invoices', id, { status: 'cancelled' });
-
-        // Sync cache immediately — if RLS blocks SELECT the update still succeeded (no error above)
-        if (Array.isArray(DB.cache['invoices'])) {
-            const ci = DB.cache['invoices'].find(x => x.id === id);
-            if (ci) ci.status = 'cancelled';
-        }
-
-        // ✅ LEDGER DEDUPLICATION GUARD — reliable across page refreshes & retries
-        // If Sale Return entries already exist for this invoice, stock was already restored
         const existingLedger = await DB.getAll('stock_ledger');
         const alreadyRestored = existingLedger.some(e =>
             e.documentNo === inv.invoiceNo &&
@@ -9031,39 +9502,61 @@ async function executeCancelInvoice(id, { skipNav = false } = {}) {
             e.reason === 'Invoice Cancelled'
         );
         if (alreadyRestored) {
+            await DB.update('invoices', id, { status: 'cancelled' });
+            if (Array.isArray(DB.cache['invoices'])) {
+                const ci = DB.cache['invoices'].find(x => x.id === id);
+                if (ci) ci.status = 'cancelled';
+            }
             _cancellingInvoices.delete(id);
-            closeModal();
-            await renderInvoices();
+            if (!skipNav) {
+                closeModal();
+                await renderInvoices();
+            }
             showToast('Invoice ' + inv.invoiceNo + ' was already cancelled.', 'warning');
             return;
         }
 
-        // Restore stock
         const inventory = await DB.getAll('inventory');
+        const company = DB.getObj('db_company') || {};
+        const affectedItemIds = new Set();
         for (const li of (inv.items || [])) {
             const item = inventory.find(x => x.id === li.itemId);
-            if (item) {
-                // BUG-018 fix: use packedQty if available (partial packing), else fall back to qty
-                const effectiveQty = li.packedQty !== undefined ? li.packedQty : li.qty;
-                const qtyChange = inv.type === 'sale' ? effectiveQty : -effectiveQty;
-                const newStock = (item.stock || 0) + qtyChange;
-                const itemUpdate = { stock: newStock };
-                // Restore batch quantities for sale cancellation (reverse FIFO)
-                if (inv.type === 'sale' && item.batches && item.batches.length) {
-                    const batches = JSON.parse(JSON.stringify(item.batches));
-                    // Add back to the newest active batch (or last batch)
-                    const active = batches.filter(b => b.isActive !== false).sort((a, b) => (a.receivedDate || '') < (b.receivedDate || '') ? -1 : 1);
-                    const target = active[active.length - 1] || batches[batches.length - 1];
-                    if (target) target.qty = (target.qty || 0) + effectiveQty;
-                    itemUpdate.batches = batches;
-                    Object.assign(itemUpdate, syncItemPricesFromBatches(batches));
-                }
-                await DB.update('inventory', item.id, itemUpdate);
-                await addLedgerEntry(item.id, item.name, inv.type === 'sale' ? 'Sale Return' : 'Purchase Return', qtyChange, inv.invoiceNo, 'Invoice Cancelled');
+            if (!item) throw new Error(`Item not found during cancellation: ${li.name || li.itemId}`);
+
+            const effectiveQty = getLinePrimaryQty(li);
+            const qtyChange = inv.type === 'sale' ? effectiveQty : -effectiveQty;
+            const newStock = (item.stock || 0) + qtyChange;
+            const itemUpdate = { stock: newStock };
+
+            if (inv.type === 'purchase' && !company.allowNegativeStock && newStock < -0.0001) {
+                throw new Error(`Cannot cancel purchase invoice. ${item.name} only has ${Math.max(0, item.stock || 0).toFixed(2)} ${(item.unit || 'Pcs')} in stock.`);
             }
+
+            if (inv.type === 'sale' && item.batches && item.batches.length) {
+                const restoreResult = restoreSaleLineBatches(item, li);
+                if (restoreResult.updatedBatches) {
+                    itemUpdate.batches = restoreResult.updatedBatches;
+                    Object.assign(itemUpdate, restoreResult.priceSync || {});
+                    item.batches = restoreResult.updatedBatches;
+                }
+            } else if (inv.type === 'purchase' && item.batches && item.batches.length) {
+                const batchResult = applyPurchaseLineToBatches(item, li, { remove: true, dateVal: inv.date || today() });
+                if (batchResult.remaining > 0.0001) {
+                    throw new Error(`Cannot safely cancel purchase invoice for ${item.name}. Batch stock has already been consumed.`);
+                }
+                if (batchResult.updatedBatches) {
+                    itemUpdate.batches = batchResult.updatedBatches;
+                    Object.assign(itemUpdate, batchResult.priceSync || {});
+                    item.batches = batchResult.updatedBatches;
+                }
+            }
+
+            item.stock = newStock;
+            affectedItemIds.add(item.id);
+            await DB.update('inventory', item.id, itemUpdate);
+            await addLedgerEntry(item.id, item.name, inv.type === 'sale' ? 'Sale Return' : 'Purchase Return', qtyChange, inv.invoiceNo, 'Invoice Cancelled');
         }
 
-        // Reverse party balance
         const parties = await DB.getAll('parties');
         const party = parties.find(p => p.id === inv.partyId);
         if (party) {
@@ -9073,29 +9566,39 @@ async function executeCancelInvoice(id, { skipNav = false } = {}) {
             await addPartyLedgerEntry(party.id, party.name, inv.type === 'sale' ? 'Sale Cancel' : 'Purchase Cancel', balChange, inv.invoiceNo, 'Invoice Cancelled');
         }
 
-        // Clean up Sales Discount from Expenses to fix P&L
-        if (inv.discountAmt > 0 && inv.type === 'sale') {
+        if ((inv.discountAmt || inv.discount_amt || 0) > 0 && inv.type === 'sale') {
             const expenses = await DB.getAll('expenses');
-            const exp = expenses.find(e => e.category === 'Sales Discount' && e.docNo === inv.invoiceNo);
+            const exp = expenses.find(e =>
+                e.category === 'Sales Discount' &&
+                ((e.docNo || e.doc_no || e.documentNo || '') === inv.invoiceNo)
+            );
             if (exp) await DB.delete('expenses', exp.id);
         }
 
-        // Reset associated sales order — mark cancelled so it won't reappear in packing module
-        if (inv.fromOrder) {
+        if (inv.type === 'sale' && inv.fromOrder) {
             const orders = await DB.getAll('salesorders');
             const order = orders.find(o => o.orderNo === inv.fromOrder);
-            if (order && order.status !== 'cancelled') {
-                await DB.update('salesorders', order.id, { invoiceCancelled: true, invoiceNo: null, status: 'cancelled' });
-                // Patch cache immediately
+            if (order) {
+                const resetOrder = {
+                    invoiceCancelled: true,
+                    invoiceNo: null,
+                    packed: false,
+                    packedBy: null,
+                    packedAt: null,
+                    packedItems: null,
+                    packedTotal: null,
+                    status: 'approved'
+                };
+                await DB.update('salesorders', order.id, resetOrder);
                 if (Array.isArray(DB.cache['salesorders'])) {
                     const co = DB.cache['salesorders'].find(x => x.id === order.id);
-                    if (co) { co.invoiceCancelled = true; co.invoiceNo = null; co.status = 'cancelled'; }
+                    if (co) Object.assign(co, resetOrder);
                 }
             }
         }
 
-        // Auto-release any payments allocated to this invoice
         const allPayments = await DB.getAll('payments');
+        const latestParties = await DB.getAll('parties');
         for (const pay of allPayments) {
             if (!pay.allocations || !pay.allocations[inv.invoiceNo]) continue;
             const releasedAmt = pay.allocations[inv.invoiceNo];
@@ -9103,17 +9606,16 @@ async function executeCancelInvoice(id, { skipNav = false } = {}) {
             delete newAlloc[inv.invoiceNo];
             const newInvNo = Object.keys(newAlloc).join(',') || '';
             await DB.rawUpdate('payments', pay.id, { allocations: newAlloc, invoice_no: newInvNo });
-            // Reverse the balance reduction on the party for the released amount
-            const payParties = await DB.getAll('parties');
-            const payParty = payParties.find(p => p.id === pay.partyId);
+            const payParty = latestParties.find(p => p.id === pay.partyId);
             if (payParty) {
                 const reversal = pay.type === 'in' ? releasedAmt : -releasedAmt;
-                await DB.rawUpdate('parties', payParty.id, { balance: +((payParty.balance || 0) + reversal).toFixed(2) });
+                const newPayBalance = +((payParty.balance || 0) + reversal).toFixed(2);
+                await DB.rawUpdate('parties', payParty.id, { balance: newPayBalance });
+                payParty.balance = newPayBalance;
                 await addPartyLedgerEntry(payParty.id, payParty.name, 'Payment Unallocated', reversal, pay.payNo || pay.id, `Released from cancelled invoice ${inv.invoiceNo}`);
             }
         }
 
-        // Cancel delivery records and patch cache immediately
         const dels = await DB.getAll('delivery');
         for (const d of dels) {
             if (d.invoiceNo === inv.invoiceNo && d.status !== 'Delivered' && d.status !== 'Cancelled') {
@@ -9123,6 +9625,15 @@ async function executeCancelInvoice(id, { skipNav = false } = {}) {
                     if (cd) cd.status = 'Cancelled';
                 }
             }
+        }
+
+        await DB.update('invoices', id, { status: 'cancelled' });
+        if (Array.isArray(DB.cache['invoices'])) {
+            const ci = DB.cache['invoices'].find(x => x.id === id);
+            if (ci) ci.status = 'cancelled';
+        }
+        if (affectedItemIds.size) {
+            await Promise.all([...affectedItemIds].map(itemId => recalculateStockLedger(itemId)));
         }
 
         _cancellingInvoices.delete(id);
@@ -10975,10 +11486,14 @@ async function saveDirectPayment() {
         }
 
         closeModal();
-        if ($('invoice-tbody')) {
+        if ($('invoice-list')) {
+            await filterInvTable2();
+        } else if ($('invoice-tbody')) {
             await filterInvTable2();
         } else if (currentPage === 'payments') {
             await renderPayments();
+        } else if (currentPage === 'invoices') {
+            await renderInvoices();
         } else {
             DB.refreshTables(['payments', 'parties', 'party_ledger', 'expenses']).catch(console.error);
         }
@@ -13057,8 +13572,9 @@ async function bulkGenerateInvoicesFromPacked() {
             let hasStock = true;
             for (const li of packedItems) {
                 const item = inventory.find(x => x.id === li.itemId);
-                const qty = li.packedQty !== undefined ? li.packedQty : li.qty;
-                if (!item || ((item.stock || 0) < qty && !DB.getObj('db_company').allowNegativeStock)) { hasStock = false; break; }
+                const qty = getLinePrimaryQty(li);
+                const available = item ? getAvailableStock(item).available : 0;
+                if (!item || (available < qty && !DB.getObj('db_company').allowNegativeStock)) { hasStock = false; break; }
             }
             if (!hasStock && !DB.getObj('db_company').allowNegativeStock) { skipCount++; continue; }
 
@@ -13144,6 +13660,7 @@ async function confirmBulkInvoices() {
             const party = parties.find(p => String(p.id) === String(o.partyId));
             const invoiceItems = packedItems.map(li => {
                 const qty = li.packedQty !== undefined ? li.packedQty : li.qty;
+                const primaryQty = getLinePrimaryQty(li);
                 const price = li.price || li.salePrice || 0;
                 const discountAmt = li.discountAmt || 0;
                 const discountPct = li.discountPct || 0;
@@ -13157,9 +13674,15 @@ async function confirmBulkInvoices() {
                     discountPct,
                     amount: +((qty * price) - discountAmt).toFixed(2),
                     unit: li.uom || li.unit || 'Pcs',
-                    primaryQty: qty
+                    primaryQty
                 };
             });
+
+            const validation = validateSaleLinesBeforePost(inventory, invoiceItems);
+            if (!validation.ok) {
+                skippedCount++;
+                continue;
+            }
 
             const sub = invoiceItems.reduce((s, li) => s + li.amount, 0);
             const roundoff = +(Math.round(sub) - sub).toFixed(2);
@@ -13168,15 +13691,25 @@ async function confirmBulkInvoices() {
             const ops = [];
             for (const li of invoiceItems) {
                 const item = inventory.find(x => x.id === li.itemId);
-                if (!item) continue;
-                const newStock = (item.stock || 0) - li.qty;
+                if (!item) throw new Error(`Item not found: ${li.name || li.itemId}`);
+                const primaryQty = getLinePrimaryQty(li);
+                const newStock = (item.stock || 0) - primaryQty;
                 const itemUpdate = { stock: newStock };
                 if (item.batches && item.batches.length) {
-                    const { updatedBatches, priceSync } = deductBatchQtyFifo(item, li.qty);
-                    if (updatedBatches) { itemUpdate.batches = updatedBatches; Object.assign(itemUpdate, priceSync); }
+                    const { updatedBatches, priceSync, allocations, remaining } = deductBatchQtyFifo(item, primaryQty);
+                    if (remaining > 0.0001 && !DB.getObj('db_company').allowNegativeStock) {
+                        throw new Error(`Batch stock is insufficient for ${item.name}.`);
+                    }
+                    if (updatedBatches) {
+                        itemUpdate.batches = updatedBatches;
+                        Object.assign(itemUpdate, priceSync);
+                        item.batches = updatedBatches;
+                    }
+                    li.batchAllocations = allocations || [];
                 }
+                item.stock = newStock;
                 ops.push(DB.rawUpdate('inventory', item.id, itemUpdate));
-                ops.push(DB.rawInsert('stock_ledger', { date: today(), itemId: item.id, itemName: item.name, entryType: 'Sale', qty: -li.qty, runningStock: newStock, documentNo: r.invNo, reason: 'Sale Invoice', createdBy: currentUser.name }));
+                ops.push(DB.rawInsert('stock_ledger', { date: today(), itemId: item.id, itemName: item.name, entryType: 'Sale', qty: -primaryQty, runningStock: newStock, documentNo: r.invNo, reason: 'Sale Invoice', createdBy: currentUser.name }));
             }
 
             if (party) {
@@ -13202,7 +13735,7 @@ async function confirmBulkInvoices() {
 
         await DB.refreshTables(['invoices', 'inventory', 'parties', 'sales_orders']);
         renderPacking();
-        showToast(` ${successCount} invoice(s) generated successfully!`, 'success');
+        showToast(`${successCount} invoice(s) generated successfully${skippedCount ? `, ${skippedCount} skipped` : ''}!`, 'success');
     } catch (err) {
         alert('Bulk Error: ' + err.message);
     }
