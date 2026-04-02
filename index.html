@@ -19,7 +19,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0" rel="stylesheet" />
-    <link rel="stylesheet" href="style.css?v=42">
+    <link rel="stylesheet" href="style.css?v=124">
     <style>
         .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
 
@@ -105,8 +105,7 @@
                 <div class="logo-icon"><img src="logo_prakash.png" alt="Logo"></div>
                 <h1 id="login-company-name">Prakash Traders</h1>
                 <p>Distributor Business Management</p>
-                <div style="font-size:0.72rem;color:var(--text-muted);margin-top:6px;font-weight:600">App Version: v123
-                </div>
+                <div style="font-size:0.72rem;color:var(--text-muted);margin-top:6px;font-weight:600">App Version: <span id="login-app-version"></span></div>
             </div>
             <div class="login-form">
                 <div class="form-group">
@@ -122,9 +121,9 @@
                 </div>
                 <button id="btn-login" class="btn btn-primary btn-block">Sign In</button>
                 <div style="text-align:center;margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
-                    <p style="font-size:0.78rem;color:var(--text-muted);margin-bottom:10px">Are you a customer?</p>
+                    <p style="display:none;font-size:0.78rem;color:var(--text-muted);margin-bottom:10px">Are you a customer?</p>
                     <button onclick="showCustomerPortal()" class="btn btn-outline btn-block"
-                        style="border-color:var(--accent);color:var(--accent)">
+                        style="display:none;border-color:var(--accent);color:var(--accent)">
                         🛍️ Customer Portal
                     </button>
                     <button onclick="forceHardRefresh()" class="btn btn-outline btn-block"
@@ -198,7 +197,7 @@
                 <a href="#" class="nav-item" data-page="deliverypersons">
                     <span class="nav-icon material-symbols-outlined">delivery_dining</span><span class="nav-label">Delivery Persons</span>
                 </a>
-                <a href="#" class="nav-item" data-page="customerrequests">
+                <a href="#" class="nav-item" data-page="customerrequests" style="display:none">
                     <span class="nav-icon material-symbols-outlined">local_mall</span><span class="nav-label">Customer Requests</span>
                 </a>
                 <a href="#" class="nav-item" data-page="staffmaster">
@@ -310,9 +309,15 @@
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" defer></script>
     <script src="qrcode.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js"></script>
-    <script src="app.js?v=123"></script>
+    <script src="app.js?v=124"></script>
     <script>
-        const APP_VERSION = 'v123';
+        window.APP_VERSION = 'v124';
+        window.APP_RELEASE_NOTE = 'Mobile layout fixes, sticky catalog filters, and photo capture recovery.';
+
+        const loginAppVersion = document.getElementById('login-app-version');
+        if (loginAppVersion) loginAppVersion.textContent = window.APP_VERSION;
+        const sidebarVersion = document.getElementById('sidebar-version');
+        if (sidebarVersion) sidebarVersion.textContent = window.APP_VERSION;
 
         function showUpdateBanner() {
             const b = document.getElementById('update-banner');
@@ -332,7 +337,7 @@
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('sw.js').then(reg => {
+                navigator.serviceWorker.register('sw.js?v=124').then(reg => {
                     console.log('SW registered');
                     reg.update(); // Trigger check
 

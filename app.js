@@ -977,6 +977,9 @@ const ROLE_NAME_MAP = {
     packer: 'Packing'
 };
 const CUSTOMER_PORTAL_ENABLED = false; // Feature kept in codebase for future relaunch, disabled for current live release.
+function getAppVersion() {
+    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v124';
+}
 
 const PAGE_LABELS = {
     dashboard: 'Dashboard',
@@ -1315,7 +1318,8 @@ async function doLoginSuccess(user, isRestore = false) {
     appEl.classList.remove('hidden');
     $('sidebar-username').textContent = user.name;
     const displayRoles = Array.isArray(user.roles) && user.roles.length ? user.roles.join(' | ') : (user.role || '');
-    $('sidebar-role').textContent = displayRoles + ' (v100)';
+    $('sidebar-role').textContent = `${displayRoles} (${getAppVersion()})`;
+    if ($('sidebar-version')) $('sidebar-version').textContent = getAppVersion();
     $('sidebar-avatar').textContent = user.name.charAt(0).toUpperCase();
 
     const co = DB.ls.getObj('db_company');
@@ -1658,7 +1662,7 @@ function initSearchDropdown(inputId, items, onSelect) {
         dd.classList.add('open');
         // Keep extra gap only on larger layouts; on mobile it creates dead space above the keyboard.
         if (isPriorityMobileDropdown && isMobileView) {
-            wrapper.style.marginBottom = Math.min(maxHeight, 88) + 'px';
+            wrapper.style.marginBottom = '24px';
         } else {
             const h = Math.min(maxHeight, (dd._filtered || []).length * 56 + 20);
             wrapper.style.marginBottom = h + 'px';
@@ -3534,7 +3538,8 @@ function toggleDashPeriodMenu() {
     setTimeout(() => {
         function outsideClose(e) {
             const menu = document.getElementById('dash-period-menu');
-            if (menu && !menu.contains(e.target) && e.target.id !== 'dash-period-btn') {
+            const clickedButton = e.target && e.target.closest ? e.target.closest('#dash-period-btn') : null;
+            if (menu && !menu.contains(e.target) && !clickedButton) {
                 menu.style.display = 'none';
             }
             document.removeEventListener('click', outsideClose);
@@ -4111,13 +4116,13 @@ function renderItemPhotoList(items) {
                 <div style="font-weight:600;font-size:0.92rem;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(i.name)}</div>
                 <div style="font-size:0.78rem;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${i.itemCode ? '[' + i.itemCode + '] ' : ''}${i.category || ''}</div>
             </div>
-                <label class="btn btn-outline btn-sm" style="padding:6px 10px;font-size:0.82rem;margin:0;cursor:pointer;" title="Camera">
+                <label class="btn btn-outline btn-sm file-picker-btn" style="padding:6px 10px;font-size:0.82rem;margin:0;cursor:pointer;" title="Camera">
                     ${msIcon('photo_camera', '', 'font-size:1rem')}
-                    <input type="file" accept="image/*" capture="environment" onchange="uploadItemPhotoQuick('${i.id}', this)" style="display:none;">
+                    <input type="file" accept="image/*" capture="environment" onchange="uploadItemPhotoQuick('${i.id}', this)" class="file-picker-input">
                 </label>
-                <label class="btn btn-primary btn-sm" style="padding:6px 10px;font-size:0.82rem;margin:0;cursor:pointer;" title="Gallery">
+                <label class="btn btn-primary btn-sm file-picker-btn" style="padding:6px 10px;font-size:0.82rem;margin:0;cursor:pointer;" title="Gallery">
                     ${msIcon('imagesmode', '', 'font-size:1rem')}
-                    <input type="file" accept="image/*" onchange="uploadItemPhotoQuick('${i.id}', this)" style="display:none;">
+                    <input type="file" accept="image/*" onchange="uploadItemPhotoQuick('${i.id}', this)" class="file-picker-input">
                 </label>
             </div>
         </div>
@@ -4198,6 +4203,8 @@ async function uploadItemPhotoQuick(itemId, inputEl) {
         console.error('Photo upload error:', err);
         showToast('Failed to save photo: ' + (err && err.message ? err.message : String(err || 'Unknown error')), 'error');
         if (row) row.style.opacity = '1';
+    } finally {
+        inputEl.value = '';
     }
 }
 function capturePartyLiveGPS() {
@@ -5656,20 +5663,20 @@ async function renderItemFormPage() {
     </div>
     <div class="modal-body" style="max-width:600px;margin:0 auto">
         <div style="margin-bottom:14px;display:flex;align-items:center;gap:14px">
-            <label id="item-photo-preview" style="display:flex;width:70px;height:70px;border-radius:10px;border:2px dashed var(--border);align-items:center;justify-content:center;overflow:hidden;cursor:pointer;flex-shrink:0;background:var(--bg-body);margin-bottom:0;">
-                <input type="file" accept="image/*" onchange="previewItemPhoto(event)" style="display:none;">
+            <label id="item-photo-preview" class="file-picker-btn" style="display:flex;width:70px;height:70px;border-radius:10px;border:2px dashed var(--border);align-items:center;justify-content:center;overflow:hidden;cursor:pointer;flex-shrink:0;background:var(--bg-body);margin-bottom:0;position:relative;">
+                <input type="file" accept="image/*" onchange="previewItemPhoto(event)" class="file-picker-input">
                 ${i && (i.imageUrl || i.photo) ? `<img src="${i.imageUrl || i.photo}" style="width:100%;height:100%;object-fit:cover;pointer-events:none;">` : `<span class="material-symbols-outlined" style="font-size:1.5rem;pointer-events:none;">photo_camera</span>`}
             </label>
             <div style="flex:1">
                 <div style="font-size:0.82rem;color:var(--text-muted);margin-bottom:4px">Item Photo (optional)</div>
                 <div style="display:flex;gap:6px;flex-wrap:wrap">
-                    <label class="btn btn-outline btn-sm" style="font-size:0.78rem;margin:0;cursor:pointer;">
+                    <label class="btn btn-outline btn-sm file-picker-btn" style="font-size:0.78rem;margin:0;cursor:pointer;">
                         ${msIcon('photo_camera', '', 'font-size:1rem;vertical-align:-3px')} Camera
-                        <input type="file" accept="image/*" capture="environment" onchange="previewItemPhoto(event)" style="display:none;">
+                        <input type="file" accept="image/*" capture="environment" onchange="previewItemPhoto(event)" class="file-picker-input">
                     </label>
-                    <label class="btn btn-outline btn-sm" style="font-size:0.78rem;margin:0;cursor:pointer;">
+                    <label class="btn btn-outline btn-sm file-picker-btn" style="font-size:0.78rem;margin:0;cursor:pointer;">
                         ${msIcon('imagesmode', '', 'font-size:1rem;vertical-align:-3px')} Gallery
-                        <input type="file" accept="image/*" onchange="previewItemPhoto(event)" style="display:none;">
+                        <input type="file" accept="image/*" onchange="previewItemPhoto(event)" class="file-picker-input">
                     </label>
                     ${i && (i.imageUrl || i.photo) ? '<button type="button" class="btn btn-outline btn-sm" onclick="removeItemPhoto()" style="font-size:0.78rem"> Remove</button>' : ''}
                 </div>
@@ -5757,6 +5764,7 @@ function previewItemPhoto(event) {
     // Clear existing URL since a new file will replace it
     const existing = $('f-item-existing-url');
     if (existing) existing.value = '';
+    event.target.value = '';
 }
 function removeItemPhoto() {
     window._itemPhotoFile = null;
@@ -21111,9 +21119,7 @@ function ensureCatalogTopButtonBinding() {
 function updateCatalogTopButtonVisibility() {
     const btn = $('catalog-top-btn');
     if (!btn) return;
-    const scrollTop = window.scrollY || document.documentElement.scrollTop || (pageContent ? pageContent.scrollTop : 0) || 0;
-    const shouldShow = currentPage === 'catalog' && scrollTop > 280;
-    btn.classList.toggle('show', shouldShow);
+    btn.classList.add('show');
     btn.classList.toggle('with-cart', catalogCart.length > 0);
 }
 
@@ -21147,24 +21153,24 @@ async function renderCatalog() {
 
     pageContent.innerHTML = `
         <div id="catalog-page-top" class="catalog-shell">
-            <section class="catalog-hero">
-                <div>
-                    <div class="catalog-kicker">Smart Browse</div>
-                    <h2 class="catalog-title">Item Catalog</h2>
-                    <p class="catalog-subtitle">Filter fast-moving lines, compare MRP bands, and build orders without losing your place.</p>
-                    <div class="catalog-hero-meta">
-                        <span>${items.length} active items</span>
-                        <span>${catNames.length} categories</span>
-                        <span>Default sort: MRP low to high</span>
+            <section class="catalog-control-card catalog-control-card-sticky">
+                <div class="catalog-control-head">
+                    <div class="catalog-control-meta">
+                        <span class="catalog-control-chip">${items.length} active items</span>
+                        <span class="catalog-control-chip">${catNames.length} categories</span>
+                        <span class="catalog-control-chip">Default: MRP low-high</span>
+                    </div>
+                    <div class="catalog-control-actions">
+                        <button class="btn btn-outline btn-sm catalog-sync-btn" onclick="syncCatalogData()">
+                            <span class="material-symbols-outlined" style="font-size:1rem">sync</span>
+                            <span>Sync Data</span>
+                        </button>
+                        <button id="catalog-top-btn" class="catalog-inline-top-btn" onclick="scrollCatalogToTop()" title="Back to top">
+                            <span class="material-symbols-outlined">vertical_align_top</span>
+                        </button>
                     </div>
                 </div>
-                <button class="btn btn-outline btn-sm catalog-sync-btn" onclick="syncCatalogData()">
-                    <span class="material-symbols-outlined" style="font-size:1rem">sync</span>
-                    <span>Sync Data</span>
-                </button>
-            </section>
 
-            <section class="catalog-control-card">
                 <div class="catalog-control-grid">
                     <input class="search-box catalog-search-box" id="catalog-search" placeholder="Search products..." oninput="filterCatalog()">
                     <select id="catalog-sort" class="search-box catalog-sort-box" onchange="filterCatalog()">
@@ -21191,9 +21197,6 @@ async function renderCatalog() {
                 ${await renderCatalogCards(sortedItems)}
             </div>
         </div>
-        <button id="catalog-top-btn" class="catalog-top-btn" onclick="scrollCatalogToTop()" title="Back to top">
-            <span class="material-symbols-outlined">vertical_align_top</span>
-        </button>
         ${catalogCart.length ? renderCatalogCartBar() : ''}`;
     updateCatalogTopButtonVisibility();
 }
