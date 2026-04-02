@@ -763,8 +763,8 @@ async function nextNumber(prefix) {
         if (prefix === 'SO-') code = 'SALES_ORDER';
         else if (prefix === 'PO-') code = 'PURCHASE_ORDER';
         else if (prefix === 'PINV-' || prefix === 'PUR-') code = 'PURCHASE_INVOICE';
-        else if (prefix === 'PT-NS-') code = 'VYAPAR_INVOICE';
-        else if (prefix === 'PAY-IN') code = 'PAYMENT_IN';
+        else if (prefix === 'PT-26-27-') code = 'VYAPAR_INVOICE';
+        else if (prefix === 'PTR-26-') code = 'PAYMENT_IN';
         else if (prefix === 'PAY-') code = 'PAYMENT_OUT';
         else if (prefix === 'EXP-') code = 'EXPENSE';
         const { data, error } = await supabaseClient.rpc('get_next_no_fy', { p_code: code });
@@ -4159,8 +4159,11 @@ function syncItemPricesFromBatches(batches) {
     const active = batches.filter(b => (b.isActive ?? b.is_active) !== false).sort((a, b) => (a.receivedDate || a.received_date || '') < (b.receivedDate || b.received_date || '') ? -1 : 1);
     const fifo = active.find(b => (b.qty || 0) > 0) || active[0];
     const newest = active[active.length - 1];
-    const update = {};
-    if (fifo) { update.mrp = fifo.mrp; update.salePrice = fifo.salePrice ?? fifo.sale_price; }
+    if (fifo) { 
+        update.mrp = fifo.mrp; 
+        update.salePrice = fifo.salePrice ?? fifo.sale_price; 
+        if (fifo.priceTiers) update.priceTiers = fifo.priceTiers;
+    }
     if (newest) { update.purchasePrice = newest.purchasePrice ?? newest.purchase_price; }
     return update;
 }
@@ -4350,6 +4353,10 @@ function updatePriceTier(idx, field, value) {
 function renderPriceTiers() {
     const el = $('price-tiers-container');
     if (!el) return;
+    if (currentItemBatches && currentItemBatches.length > 0) {
+        el.innerHTML = '<div style="font-size:0.8rem;color:var(--text-muted);padding:8px;background:var(--surface);border-radius:6px;border:1px dashed var(--border)">Item has MRP batches. Please define volume pricing inside the active MRP batch.</div>';
+        return;
+    }
     if (!currentItemTiers.length) {
         el.innerHTML = '<div style="font-size:0.8rem;color:var(--text-muted)">No volume pricing added. Standard Sale Price will be used.</div>';
         return;
@@ -4414,11 +4421,21 @@ function toggleItemBatchActive(idx) {
 function deleteItemBatch(idx) {
     if (!confirm('Remove this batch?')) return;
     currentItemBatches.splice(idx, 1);
+    
+    // Auto-update total stock based on batches
+    const totalQty = currentItemBatches.reduce((s, b) => s + (+(b.qty) || 0), 0);
+    const stockEl = $('f-item-stock');
+    if (stockEl) stockEl.value = totalQty;
+
     // Resync item prices after deleting a batch
     const sync = syncItemPricesFromBatches(currentItemBatches);
-    if (sync.mrp) { const el = $('f-item-mrp'); if (el) el.value = sync.mrp; }
-    if (sync.salePrice) { const el = $('f-item-sp'); if (el) el.value = sync.salePrice; }
-    if (sync.purchasePrice) { const el = $('f-item-pp'); if (el) el.value = sync.purchasePrice; }
+    if (sync.mrp !== undefined) { const el = $('f-item-mrp'); if (el) el.value = sync.mrp; }
+    if (sync.salePrice !== undefined) { const el = $('f-item-sp'); if (el) el.value = sync.salePrice; }
+    if (sync.purchasePrice !== undefined) { const el = $('f-item-pp'); if (el) el.value = sync.purchasePrice; }
+    if (sync.priceTiers !== undefined) {
+        currentItemTiers = sync.priceTiers ? JSON.parse(JSON.stringify(sync.priceTiers)) : [];
+        renderPriceTiers();
+    }
     renderItemBatches();
 }
 
@@ -4441,6 +4458,10 @@ function openAddBatchForm(editIdx = -1) {
             <div class="form-row">
                 <div class="form-group"><label>Purchase Price  *</label><input type="number" id="f-batch-pp" value="${b ? (b.purchasePrice||b.purchase_price||'') : ''}" placeholder="Your cost price" step="1" min="0"></div>
                 <div class="form-group"><label>Sale Price  *</label><input type="number" id="f-batch-sp" value="${b ? (b.salePrice||b.sale_price||'') : ''}" placeholder="Price to customer" step="1" min="0"></div>
+            </div>
+            <div class="form-row" style="background:var(--surface);padding:8px;border-radius:6px;margin:8px 0;border:1px solid var(--border)">
+                <div class="form-group" style="margin:0"><label style="font-size:0.75rem">Volume Qty Limit (Opt)</label><input type="number" id="f-batch-vqty" value="${b && b.priceTiers && b.priceTiers.length ? b.priceTiers[0].minQty : ''}" placeholder="Min Qty for discount"></div>
+                <div class="form-group" style="margin:0"><label style="font-size:0.75rem">Volume Sale Price</label><input type="number" id="f-batch-vprice" value="${b && b.priceTiers && b.priceTiers.length ? b.priceTiers[0].price : ''}" placeholder="Discounted price"></div>
             </div>
             <div class="form-group"><label>Opening Qty</label><input type="number" id="f-batch-qty" value="${b ? (b.qty||0) : 0}" min="0"></div>
             <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:10px">
@@ -4473,9 +4494,14 @@ function saveItemBatch(editIdx = -1) {
     const sp = +($('f-batch-sp') || {}).value;
     const qty = +($('f-batch-qty') || {}).value || 0;
     const date = ($('f-batch-date') || {}).value || '';
+    const vqty = +($('f-batch-vqty') || {}).value || 0;
+    const vprice = +($('f-batch-vprice') || {}).value || 0;
+    
     if (!mrp) return alert('MRP is required');
     if (!pp) return alert('Purchase Price is mandatory for a new MRP batch');
     if (!sp) return alert('Sale Price is mandatory for a new MRP batch');
+    
+    const tiers = (vqty > 0 && vprice >= 0) ? [{ minQty: vqty, price: vprice }] : [];
     
     if (editIdx > -1) {
         const b = currentItemBatches[editIdx];
@@ -4484,15 +4510,26 @@ function saveItemBatch(editIdx = -1) {
         b.salePrice = Math.round(sp);
         b.qty = qty;
         b.receivedDate = date;
+        b.priceTiers = tiers;
     } else {
-        currentItemBatches.push({ id: 'b_' + Date.now().toString(36), mrp: Math.round(mrp), purchasePrice: Math.round(pp), salePrice: Math.round(sp), qty, receivedDate: date, isActive: true });
+        currentItemBatches.push({ id: 'b_' + Date.now().toString(36), mrp: Math.round(mrp), purchasePrice: Math.round(pp), salePrice: Math.round(sp), qty, receivedDate: date, isActive: true, priceTiers: tiers });
     }
     
+    // Auto-update total stock based on batches
+    const totalQty = currentItemBatches.reduce((s, b) => s + (+(b.qty) || 0), 0);
+    const stockEl = $('f-item-stock');
+    if (stockEl) stockEl.value = totalQty;
+
     // Sync main form fields to reflect the new batch prices
     const sync = syncItemPricesFromBatches(currentItemBatches);
-    if (sync.mrp) { const el = $('f-item-mrp'); if (el) el.value = sync.mrp; }
-    if (sync.salePrice) { const el = $('f-item-sp'); if (el) el.value = sync.salePrice; }
-    if (sync.purchasePrice) { const el = $('f-item-pp'); if (el) el.value = sync.purchasePrice; }
+    if (sync.mrp !== undefined) { const el = $('f-item-mrp'); if (el) el.value = sync.mrp; }
+    if (sync.salePrice !== undefined) { const el = $('f-item-sp'); if (el) el.value = sync.salePrice; }
+    if (sync.purchasePrice !== undefined) { const el = $('f-item-pp'); if (el) el.value = sync.purchasePrice; }
+    
+    if (sync.priceTiers && sync.priceTiers.length) {
+        currentItemTiers = JSON.parse(JSON.stringify(sync.priceTiers));
+        renderPriceTiers();
+    }
     
     cancelAddBatchForm(); // remove inline form
     renderItemBatches();
@@ -8337,7 +8374,7 @@ async function saveInvoice(id) {
         : rawInvNo;
     const rawVyaparNo = invType === 'sale' ? ($('f-vyapar-inv-no')?.value.trim() || '') : '';
     const vyaparInvNo = (invType === 'sale' && (!rawVyaparNo || rawVyaparNo === 'Auto'))
-        ? await nextNumber('PT-NS-')
+        ? await nextNumber('PT-26-27-')
         : rawVyaparNo;
     if (invType === 'sale' && !vyaparInvNo) { endSave(); return alert('Vyapar Invoice No. is mandatory.'); }
 
@@ -21395,7 +21432,7 @@ async function postVyaparImportPayments() {
     // Sequential to prevent race conditions on nextNumber
     for (const r of liveRows) {
         try {
-            const payRefNo = await nextNumber('PAY-IN');
+            const payRefNo = await nextNumber('PTR-26-');
             const freshParty = freshParties.find(p => p.id === r.partyId) || r.party;
             const newBal = +((freshParty.balance || 0) - r.amount).toFixed(2);
 
