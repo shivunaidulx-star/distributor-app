@@ -3064,10 +3064,8 @@ function renderItemPhotoList(items) {
                 <div style="font-size:0.78rem;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${i.itemCode ? '[' + i.itemCode + '] ' : ''}${i.category || ''}</div>
             </div>
             <div style="display:flex;gap:4px;flex-shrink:0">
-                <input type="file" id="photo-cam-${i.id}" accept="image/*" capture="environment" style="position:absolute;opacity:0;width:0;height:0;pointer-events:none" onchange="uploadItemPhotoQuick('${i.id}', this)">
-                <input type="file" id="photo-gal-${i.id}" accept="image/*" style="position:absolute;opacity:0;width:0;height:0;pointer-events:none" onchange="uploadItemPhotoQuick('${i.id}', this)">
-                <button type="button" class="btn btn-outline btn-sm" style="padding:6px 10px;font-size:0.82rem;cursor:pointer;margin:0" title="Camera" onclick="var el=document.getElementById('photo-cam-${i.id}');el.value='';el.click()">📷</button>
-                <button type="button" class="btn btn-primary btn-sm" style="padding:6px 10px;font-size:0.82rem;cursor:pointer;margin:0" title="Gallery" onclick="var el=document.getElementById('photo-gal-${i.id}');el.value='';el.click()">🖼️</button>
+                <button type="button" class="btn btn-outline btn-sm" style="padding:6px 10px;font-size:0.82rem;cursor:pointer;margin:0" title="Camera" onclick="triggerItemPhotoCapture('${i.id}', true)">📷</button>
+                <button type="button" class="btn btn-primary btn-sm" style="padding:6px 10px;font-size:0.82rem;cursor:pointer;margin:0" title="Gallery" onclick="triggerItemPhotoCapture('${i.id}', false)">🖼️</button>
             </div>
         </div>
     `;
@@ -3083,6 +3081,25 @@ function filterItemPhotoList(q) {
         (i.category || '').toLowerCase().includes(s)
     );
     $('photo-item-list').innerHTML = renderItemPhotoList(filtered);
+}
+
+// Dynamically create and trigger file input inside the user gesture — most reliable on mobile
+function triggerItemPhotoCapture(itemId, useCamera) {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    if (useCamera) input.setAttribute('capture', 'environment');
+    input.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0;';
+    document.body.appendChild(input);
+    input.addEventListener('change', function () {
+        uploadItemPhotoQuick(itemId, input);
+        // Clean up after a delay to avoid issues
+        setTimeout(() => { try { document.body.removeChild(input); } catch(e){} }, 5000);
+    });
+    input.addEventListener('cancel', function () {
+        setTimeout(() => { try { document.body.removeChild(input); } catch(e){} }, 500);
+    });
+    input.click();
 }
 
 async function uploadItemPhotoQuick(itemId, inputEl) {
@@ -4216,11 +4233,9 @@ async function openItemModal(id) {
             </div>
             <div style="flex:1">
                 <div style="font-size:0.82rem;color:var(--text-muted);margin-bottom:4px">Item Photo (optional)</div>
-                <input type="file" id="f-item-photo-gallery" accept="image/*" style="display:none" onchange="previewItemPhoto(event)">
-                <input type="file" id="f-item-photo-camera" accept="image/*" capture="environment" style="display:none" onchange="previewItemPhoto(event)">
                 <div style="display:flex;gap:6px;flex-wrap:wrap">
-                    <button class="btn btn-outline btn-sm" onclick="document.getElementById('f-item-photo-camera').click()" style="font-size:0.78rem">📷 Camera</button>
-                    <button class="btn btn-outline btn-sm" onclick="document.getElementById('f-item-photo-gallery').click()" style="font-size:0.78rem">🖼️ Gallery</button>
+                    <button type="button" class="btn btn-outline btn-sm" onclick="triggerEditItemPhoto(true)" style="font-size:0.78rem">📷 Camera</button>
+                    <button type="button" class="btn btn-outline btn-sm" onclick="triggerEditItemPhoto(false)" style="font-size:0.78rem">🖼️ Gallery</button>
                     ${i && (i.imageUrl || i.photo) ? '<button class="btn btn-outline btn-sm" onclick="removeItemPhoto()" style="font-size:0.78rem"> Remove</button>' : ''}
                 </div>
             </div>
@@ -9545,6 +9560,7 @@ async function renderPayments() {
                 <span style="color:var(--text-muted);font-size:0.8rem">–</span>
                 <input type="date" id="pay-f-to" value="${today1}" onchange="filterPayTable()" style="flex:1;font-size:0.78rem;padding:7px 8px;border:1px solid var(--border);border-radius:7px;background:var(--bg-input)">
                 <button onclick="togglePayFilters()" id="pay-filter-toggle" style="border:1px solid var(--border);background:var(--bg-input);border-radius:7px;padding:7px 10px;font-size:0.85rem;cursor:pointer;flex-shrink:0"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-3px">tune</span></button>
+                <button onclick="openVyaparPaymentImport()" style="border:1px solid #7c3aed;background:transparent;color:#7c3aed;border-radius:7px;padding:7px 10px;font-size:0.85rem;cursor:pointer;flex-shrink:0" title="Import from Vyapar"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-3px">upload_file</span></button>
                 <button class="btn btn-primary btn-sm" onclick="openPaymentModal()" style="white-space:nowrap;padding:7px 14px;flex-shrink:0">+ Record</button>
             </div>
             <div id="pay-extra-filters" style="display:none">
@@ -9587,6 +9603,7 @@ async function renderPayments() {
                 <div style="display:flex;gap:6px;align-items:center;padding-top:14px">
                     <button class="btn btn-outline btn-sm" onclick="DB.exportToExcel('tbl-payments', 'payments')" title="Export Excel" style="border-color:#16a34a;color:#16a34a"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span></button>
                     <button class="btn btn-outline btn-sm" onclick="openColumnPersonalizer('payments','renderPayments')" title="Column Config" style="border-color:var(--accent);color:var(--accent)"><span class="material-symbols-outlined" style="font-size:1.1rem">view_column</span></button>
+                    <button class="btn btn-outline btn-sm" onclick="openVyaparPaymentImport()" title="Import Payments from Vyapar" style="border-color:#7c3aed;color:#7c3aed"><span class="material-symbols-outlined" style="font-size:1.1rem">upload_file</span></button>
                     <button class="btn btn-primary" onclick="openPaymentModal()" style="white-space:nowrap;padding:8px 16px">+ Record</button>
                 </div>
             </div>
@@ -21010,4 +21027,405 @@ async function resetSalaryPaid(staffId, staffName, month) {
         showToast('Salary reset successfully', 'success');
         renderHRPayroll();
     } catch (err) { alert('Error: ' + err.message); }
+}
+
+
+// =============================================
+//  VYAPAR PAYMENT IMPORT
+// =============================================
+
+function downloadVyaparPaymentTemplate() {
+    const wb = XLSX.utils.book_new();
+    const headers = ['Customer_ID', 'Customer_Name', 'Date', 'Amount', 'Invoice_No', 'Mode', 'User_Name'];
+    const sample = [['CUST001', 'Raju Traders', '01-04-2026', '5000', 'INV-2026-001', 'Cash', 'Raju']];
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...sample]);
+    ws['!cols'] = headers.map(() => ({ wch: 20 }));
+    XLSX.utils.book_append_sheet(wb, ws, 'Payments');
+    XLSX.writeFile(wb, 'VyaparPaymentImport_Template.xlsx');
+}
+
+async function openVyaparPaymentImport() {
+    const fab = $('app-fab');
+    if (fab) fab.classList.add('hidden');
+    document.body.classList.remove('pay-form-open');
+
+    pageContent.innerHTML = `
+        <div class="pay-page-header">
+            <button class="btn-icon pay-back-btn" onclick="renderPayments()"><span class="material-symbols-outlined">arrow_back</span></button>
+            <div style="flex:1">
+                <div style="font-size:1rem;font-weight:700;color:var(--text-primary)">Import Payments from Vyapar</div>
+                <div style="font-size:0.75rem;color:var(--text-muted)">Upload Excel → Review → Post</div>
+            </div>
+            <button class="btn btn-outline btn-sm" onclick="downloadVyaparPaymentTemplate()" style="border-color:#16a34a;color:#16a34a;white-space:nowrap">
+                <span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-3px">download</span> Template
+            </button>
+        </div>
+
+        <div id="vyapar-import-body" style="padding:0 0 100px 0">
+            <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:14px;padding:24px;text-align:center;margin-bottom:16px">
+                <div style="font-size:2.5rem;margin-bottom:8px">📄</div>
+                <div style="font-size:0.95rem;font-weight:600;color:var(--text-primary);margin-bottom:6px">Upload Vyapar Payment Export</div>
+                <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:16px;line-height:1.5">
+                    Excel columns: <strong>Customer_ID, Customer_Name, Date, Amount, Invoice_No, Mode, User_Name</strong><br>
+                    Date format: DD-MM-YYYY &nbsp;|&nbsp; Mode: Cash / UPI / Cheque / Bank Transfer
+                </div>
+                <label style="display:inline-block;cursor:pointer">
+                    <input type="file" id="vyapar-import-file" accept=".xlsx,.xls,.csv" style="display:none" onchange="handleVyaparImportFile(this)">
+                    <div class="btn btn-primary" style="display:inline-flex;align-items:center;gap:6px;pointer-events:none">
+                        <span class="material-symbols-outlined" style="font-size:1.1rem">upload_file</span> Choose Excel File
+                    </div>
+                </label>
+                <div id="vyapar-file-name" style="margin-top:10px;font-size:0.78rem;color:var(--text-muted)">No file selected</div>
+            </div>
+            <div id="vyapar-import-table-wrap"></div>
+        </div>
+    `;
+}
+
+async function handleVyaparImportFile(inputEl) {
+    const file = inputEl.files[0];
+    if (!file) return;
+
+    const nameEl = document.getElementById('vyapar-file-name');
+    if (nameEl) nameEl.textContent = file.name;
+
+    showToast('Parsing file...', 'info');
+    try {
+        const rows = await _parseVyaparImportFile(file);
+        if (!rows.length) return showToast('No data rows found in file', 'error');
+
+        const [parties, invoices] = await Promise.all([DB.getAll('parties'), DB.getAll('invoices')]);
+        renderVyaparImportTable(rows, parties, invoices);
+        showToast(rows.length + ' rows loaded. Review below.', 'success');
+    } catch (err) {
+        showToast('Failed to parse file: ' + err.message, 'error');
+    }
+}
+
+function _parseVyaparImportFile(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            try {
+                const wb = XLSX.read(e.target.result, { type: 'array', cellDates: true });
+                const ws = wb.Sheets[wb.SheetNames[0]];
+                const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+                if (raw.length < 2) return resolve([]);
+
+                // Normalise header names
+                const headerRow = raw[0].map(h => String(h).trim().toLowerCase().replace(/[\s\-]+/g, '_'));
+                const colIdx = {};
+                headerRow.forEach((h, i) => { colIdx[h] = i; });
+
+                const get = (row, ...keys) => {
+                    for (const k of keys) {
+                        const i = colIdx[k];
+                        if (i !== undefined && row[i] !== '' && row[i] !== null && row[i] !== undefined) {
+                            return String(row[i]).trim();
+                        }
+                    }
+                    return '';
+                };
+
+                const rows = [];
+                for (let r = 1; r < raw.length; r++) {
+                    const row = raw[r];
+                    if (!row || row.every(c => c === '' || c === null || c === undefined)) continue;
+
+                    // Parse date: handle DD-MM-YYYY, DD/MM/YYYY, JS Date object (from cellDates)
+                    let dateVal = '';
+                    const rawDate = colIdx['date'] !== undefined ? row[colIdx['date']] : undefined;
+                    if (rawDate instanceof Date) {
+                        dateVal = rawDate.toISOString().split('T')[0];
+                    } else {
+                        dateVal = get(row, 'date');
+                        if (/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4}$/.test(dateVal)) {
+                            const parts = dateVal.split(/[\/\-]/);
+                            dateVal = `${parts[2]}-${parts[1].padStart(2,'0')}-${parts[0].padStart(2,'0')}`;
+                        }
+                    }
+
+                    rows.push({
+                        customerId:   get(row, 'customer_id', 'customerid', 'party_code', 'partycode', 'cust_id'),
+                        customerName: get(row, 'customer_name', 'customername', 'party_name', 'partyname', 'party', 'name'),
+                        date:         dateVal || today(),
+                        amount:       parseFloat(get(row, 'amount', 'amt', 'total', 'received') || '0') || 0,
+                        invoiceNo:    get(row, 'invoice_no', 'invoiceno', 'invoice', 'bill_no', 'billno', 'vyapar_invoice_no', 'ref_no'),
+                        mode:         get(row, 'mode', 'payment_mode', 'paymentmode', 'pay_mode', 'method') || 'Cash',
+                        userName:     get(row, 'user_name', 'username', 'collected_by', 'salesman', 'user', 'collector') || currentUser.name,
+                    });
+                }
+                resolve(rows);
+            } catch (err) { reject(err); }
+        };
+        reader.onerror = () => reject(new Error('Failed to read file'));
+        reader.readAsArrayBuffer(file);
+    });
+}
+
+function renderVyaparImportTable(rows, parties, invoices) {
+    const customerParties = parties.filter(p => !p.type || p.type === 'Customer' || p.type === 'Both');
+
+    window._vyaparImportRows = rows.map((r, idx) => {
+        // Match party: by partyCode first, then exact name, then partial name
+        let party = null;
+        if (r.customerId) party = customerParties.find(p => (p.partyCode || '').toLowerCase() === r.customerId.toLowerCase());
+        if (!party && r.customerName) party = customerParties.find(p => p.name.toLowerCase() === r.customerName.toLowerCase());
+        if (!party && r.customerName) party = customerParties.find(p =>
+            p.name.toLowerCase().includes(r.customerName.toLowerCase()) ||
+            r.customerName.toLowerCase().includes(p.name.toLowerCase())
+        );
+
+        const partyInvoices = party ? invoices.filter(i => i.type === 'sale' && i.status !== 'cancelled' && i.partyId === party.id) : [];
+
+        // Match invoice
+        let invoice = null;
+        if (r.invoiceNo) {
+            invoice = partyInvoices.find(i =>
+                (i.vyaparInvoiceNo || '').toLowerCase() === r.invoiceNo.toLowerCase() ||
+                (i.invoiceNo || '').toLowerCase() === r.invoiceNo.toLowerCase()
+            );
+            if (!invoice) {
+                // Try global search if party not matched yet
+                invoice = invoices.find(i => i.type === 'sale' && i.status !== 'cancelled' && (
+                    (i.vyaparInvoiceNo || '').toLowerCase() === r.invoiceNo.toLowerCase() ||
+                    (i.invoiceNo || '').toLowerCase() === r.invoiceNo.toLowerCase()
+                ));
+            }
+        }
+
+        return { ...r, idx, party, invoice, partyInvoices, _removed: false };
+    });
+
+    window._vyaparImportParties = parties;
+    window._vyaparImportInvoices = invoices;
+
+    const modeOptions = ['Cash', 'UPI', 'Cheque', 'Bank Transfer'];
+
+    const rowsHtml = window._vyaparImportRows.map((r, idx) => {
+        const partyOpts = customerParties.map(p =>
+            `<option value="${p.id}" ${r.party && r.party.id === p.id ? 'selected' : ''}>${escapeHtml(p.name)}${p.partyCode ? ' [' + p.partyCode + ']' : ''}</option>`
+        ).join('');
+
+        const invOpts = r.partyInvoices.map(i =>
+            `<option value="${escapeHtml(i.invoiceNo)}" ${r.invoice && r.invoice.invoiceNo === i.invoiceNo ? 'selected' : ''}>${escapeHtml(i.vyaparInvoiceNo || i.invoiceNo)} — ${currency(i.total || 0)}</option>`
+        ).join('');
+
+        const modeOpts = modeOptions.map(m => `<option ${r.mode === m ? 'selected' : ''}>${m}</option>`).join('');
+
+        return `<tr id="vi-row-${idx}" style="border-bottom:1px solid var(--border)">
+            <td style="padding:8px 6px;width:28px;text-align:center" id="vi-status-${idx}">${_vyaparRowStatus(r)}</td>
+            <td style="padding:6px;min-width:160px">
+                <select class="vi-party-sel form-control" style="font-size:0.78rem;padding:4px 6px;width:100%" data-idx="${idx}" onchange="onVyaparImportPartyChange(${idx})">
+                    <option value="">— Select Party —</option>${partyOpts}
+                </select>
+                ${!r.party ? `<div style="font-size:0.68rem;color:var(--danger);margin-top:2px;white-space:nowrap">Not found: "${escapeHtml((r.customerName || r.customerId).substring(0,20))}"</div>` : ''}
+            </td>
+            <td style="padding:6px;white-space:nowrap">
+                <input type="date" class="vi-date form-control" value="${r.date}" style="font-size:0.78rem;padding:4px 6px;min-width:120px" data-idx="${idx}">
+            </td>
+            <td style="padding:6px;text-align:right">
+                <input type="number" class="vi-amount form-control" value="${r.amount}" style="font-size:0.82rem;font-weight:700;padding:4px 6px;width:90px;text-align:right" data-idx="${idx}" min="0" step="0.01">
+            </td>
+            <td style="padding:6px;min-width:170px">
+                <select class="vi-inv-sel form-control" style="font-size:0.78rem;padding:4px 6px;width:100%" data-idx="${idx}" id="vi-inv-sel-${idx}">
+                    <option value="">Advance / No Invoice</option>${invOpts}
+                </select>
+                ${r.invoiceNo && !r.invoice ? `<div style="font-size:0.68rem;color:var(--warning,#f59e0b);margin-top:2px;white-space:nowrap">Not found: "${escapeHtml(r.invoiceNo.substring(0,20))}"</div>` : ''}
+            </td>
+            <td style="padding:6px;min-width:130px">
+                <select class="vi-mode-sel form-control" style="font-size:0.78rem;padding:4px 6px;width:100%" data-idx="${idx}">${modeOpts}</select>
+            </td>
+            <td style="padding:6px;min-width:110px">
+                <input class="vi-user form-control" value="${escapeHtml(r.userName)}" style="font-size:0.78rem;padding:4px 6px;width:100%" data-idx="${idx}" placeholder="Collected by">
+            </td>
+            <td style="padding:6px;text-align:center">
+                <button onclick="removeVyaparImportRow(${idx})" style="background:none;border:none;cursor:pointer;color:var(--danger);font-size:1.1rem;line-height:1" title="Remove">✕</button>
+            </td>
+        </tr>`;
+    }).join('');
+
+    const readyCount = window._vyaparImportRows.filter(r => r.party && r.amount > 0).length;
+    const total = window._vyaparImportRows.reduce((s, r) => s + r.amount, 0);
+
+    document.getElementById('vyapar-import-table-wrap').innerHTML = `
+        <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:80px">
+            <div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                <div style="font-size:0.88rem;font-weight:700;flex:1">${window._vyaparImportRows.length} entries &nbsp;|&nbsp; Total: <span style="color:var(--success)">${currency(total)}</span></div>
+                <div id="vi-summary-badge" style="font-size:0.78rem;color:var(--text-muted)">${readyCount} ready &bull; ${window._vyaparImportRows.length - readyCount} need attention</div>
+            </div>
+            <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+                <table style="width:100%;border-collapse:collapse;font-size:0.82rem;min-width:720px">
+                    <thead>
+                        <tr style="background:var(--bg-input);font-size:0.7rem;font-weight:700;text-transform:uppercase;color:var(--text-muted)">
+                            <th style="padding:8px 6px;text-align:center"></th>
+                            <th style="padding:8px 6px;text-align:left">Party</th>
+                            <th style="padding:8px 6px">Date</th>
+                            <th style="padding:8px 6px;text-align:right">Amount (₹)</th>
+                            <th style="padding:8px 6px">Invoice No</th>
+                            <th style="padding:8px 6px">Mode</th>
+                            <th style="padding:8px 6px">Collected By</th>
+                            <th style="padding:8px 6px"></th>
+                        </tr>
+                    </thead>
+                    <tbody id="vi-tbody">${rowsHtml}</tbody>
+                </table>
+            </div>
+        </div>
+
+        <div style="position:fixed;bottom:0;left:0;right:0;background:var(--bg-card);border-top:2px solid var(--border);padding:12px 16px;display:flex;gap:10px;z-index:200;box-shadow:0 -4px 12px rgba(0,0,0,0.12)">
+            <button class="btn btn-outline" style="flex:1;min-height:46px" onclick="renderPayments()">Cancel</button>
+            <button class="btn btn-primary" id="vi-post-btn" style="flex:2;min-height:46px;font-size:1rem;font-weight:700" onclick="postVyaparImportPayments()">Post ${readyCount} Payment${readyCount !== 1 ? 's' : ''}</button>
+        </div>
+    `;
+}
+
+function _vyaparRowStatus(r) {
+    if (!r.party) return '<span title="Party not matched" style="font-size:1rem">⚠️</span>';
+    if (!r.amount || r.amount <= 0) return '<span title="Invalid amount" style="font-size:1rem">❌</span>';
+    return '<span title="Ready to post" style="font-size:1rem">✅</span>';
+}
+
+async function onVyaparImportPartyChange(idx) {
+    const sel = document.querySelector(`#vi-row-${idx} .vi-party-sel`);
+    if (!sel) return;
+    const partyId = sel.value;
+    const parties = window._vyaparImportParties || [];
+    const invoices = window._vyaparImportInvoices || [];
+    const party = partyId ? (parties.find(p => p.id === partyId) || null) : null;
+    const row = window._vyaparImportRows[idx];
+    row.party = party;
+    row.partyInvoices = party ? invoices.filter(i => i.type === 'sale' && i.status !== 'cancelled' && i.partyId === party.id) : [];
+
+    if (row.invoiceNo && party) {
+        row.invoice = row.partyInvoices.find(i =>
+            (i.vyaparInvoiceNo || '').toLowerCase() === row.invoiceNo.toLowerCase() ||
+            (i.invoiceNo || '').toLowerCase() === row.invoiceNo.toLowerCase()
+        ) || null;
+    } else {
+        row.invoice = null;
+    }
+
+    // Refresh invoice dropdown for this row
+    const invSel = document.getElementById('vi-inv-sel-' + idx);
+    if (invSel) {
+        const invOpts = row.partyInvoices.map(i =>
+            `<option value="${escapeHtml(i.invoiceNo)}" ${row.invoice && row.invoice.invoiceNo === i.invoiceNo ? 'selected' : ''}>${escapeHtml(i.vyaparInvoiceNo || i.invoiceNo)} — ${currency(i.total || 0)}</option>`
+        ).join('');
+        invSel.innerHTML = `<option value="">Advance / No Invoice</option>${invOpts}`;
+    }
+
+    const statusCell = document.getElementById('vi-status-' + idx);
+    if (statusCell) statusCell.innerHTML = _vyaparRowStatus(row);
+    _updateVyaparImportFooter();
+}
+
+function removeVyaparImportRow(idx) {
+    if (window._vyaparImportRows[idx]) window._vyaparImportRows[idx]._removed = true;
+    const rowEl = document.getElementById('vi-row-' + idx);
+    if (rowEl) rowEl.remove();
+    _updateVyaparImportFooter();
+}
+
+function _updateVyaparImportFooter() {
+    const rows = (window._vyaparImportRows || []).filter(r => !r._removed);
+    const readyCount = rows.filter(r => r.party && r.amount > 0).length;
+    const btn = document.getElementById('vi-post-btn');
+    if (btn) btn.textContent = `Post ${readyCount} Payment${readyCount !== 1 ? 's' : ''}`;
+    const badge = document.getElementById('vi-summary-badge');
+    if (badge) badge.textContent = `${readyCount} ready \u2022 ${rows.length - readyCount} need attention`;
+}
+
+async function postVyaparImportPayments() {
+    const allRows = (window._vyaparImportRows || []).filter(r => !r._removed);
+
+    // Collect live values from DOM
+    const liveRows = allRows.map(r => {
+        const partyId = document.querySelector(`#vi-row-${r.idx} .vi-party-sel`)?.value || (r.party?.id || '');
+        const party = (window._vyaparImportParties || []).find(p => p.id === partyId) || r.party;
+        const amount = parseFloat(document.querySelector(`#vi-row-${r.idx} .vi-amount`)?.value || r.amount) || 0;
+        const dateVal = document.querySelector(`#vi-row-${r.idx} .vi-date`)?.value || r.date;
+        const invoiceNo = document.getElementById('vi-inv-sel-' + r.idx)?.value || '';
+        const mode = document.querySelector(`#vi-row-${r.idx} .vi-mode-sel`)?.value || r.mode || 'Cash';
+        const userName = document.querySelector(`#vi-row-${r.idx} .vi-user`)?.value?.trim() || r.userName || currentUser.name;
+        return { party, partyId, date: dateVal, amount, invoiceNo, mode, userName };
+    });
+
+    const invalid = liveRows.filter(r => !r.party || !r.partyId || r.amount <= 0);
+    if (invalid.length > 0) {
+        return alert(`${invalid.length} row(s) have missing party or zero amount. Please fix highlighted rows before posting.`);
+    }
+
+    const totalAmt = liveRows.reduce((s, r) => s + r.amount, 0);
+    if (!confirm(`Post ${liveRows.length} payment(s) totalling ${currency(totalAmt)}?\n\nThis cannot be undone.`)) return;
+
+    const btn = document.getElementById('vi-post-btn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Posting...'; }
+    showToast('Posting payments...', 'info');
+
+    // Refresh party balances to get latest before updating
+    await DB.refreshTables(['parties']);
+    const freshParties = await DB.getAll('parties');
+
+    let successCount = 0, errorCount = 0;
+
+    // Sequential to prevent race conditions on nextNumber
+    for (const r of liveRows) {
+        try {
+            const payRefNo = await nextNumber('PAY-IN');
+            const freshParty = freshParties.find(p => p.id === r.partyId) || r.party;
+            const newBal = +((freshParty.balance || 0) - r.amount).toFixed(2);
+
+            await Promise.all([
+                DB.rawInsert('payments', {
+                    pay_no: payRefNo,
+                    date: r.date,
+                    type: 'in',
+                    party_id: r.partyId,
+                    party_name: r.party.name,
+                    amount: r.amount,
+                    discount: 0,
+                    total_reduction: r.amount,
+                    mode: r.mode,
+                    note: 'Imported from Vyapar',
+                    invoice_no: r.invoiceNo || 'Advance',
+                    allocations: r.invoiceNo ? { [r.invoiceNo]: r.amount } : {},
+                    collected_by: r.userName,
+                    created_by: currentUser ? currentUser.userId : 'System',
+                    status: 'posted'
+                }),
+                DB.rawUpdate('parties', r.partyId, { balance: newBal }),
+                DB.rawInsert('party_ledger', {
+                    date: r.date,
+                    partyId: r.partyId,
+                    partyName: r.party.name,
+                    type: 'Payment In',
+                    amount: -r.amount,
+                    runningBalance: newBal,
+                    documentNo: payRefNo,
+                    reason: `${r.mode} | Imported from Vyapar`,
+                    createdBy: currentUser ? currentUser.userId : 'System'
+                })
+            ]);
+
+            // Keep running balance fresh for subsequent rows of same party
+            const pi = freshParties.findIndex(p => p.id === r.partyId);
+            if (pi >= 0) freshParties[pi] = { ...freshParties[pi], balance: newBal };
+
+            successCount++;
+        } catch (err) {
+            console.error('Vyapar import — failed to post row:', r, err);
+            errorCount++;
+        }
+    }
+
+    await DB.refreshTables(['payments', 'parties', 'party_ledger']);
+
+    if (errorCount === 0) {
+        showToast(`${successCount} payment(s) posted successfully!`, 'success');
+        renderPayments();
+    } else {
+        showToast(`${successCount} posted, ${errorCount} failed. Check console for details.`, 'error');
+        if (btn) { btn.disabled = false; btn.textContent = `Retry (${errorCount} failed)`; }
+    }
 }
