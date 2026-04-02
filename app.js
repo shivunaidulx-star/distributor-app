@@ -276,7 +276,7 @@ const DB = {
         if (!user) return;
         try {
             await supabaseClient.rpc('set_session_role', {
-                user_role: user.role,
+                user_role: getPrimaryUserRole(user),
                 user_id: (user.userId || user.id || '').toLowerCase()
             });
         } catch (e) {
@@ -307,7 +307,7 @@ const DB = {
             let val = obj[key];
 
             // 🚀 FIX: Global safety net to catch and parse corrupted JSON strings from the DB
-            if (typeof val === 'string' && ['items', 'packed_items', 'allocations', 'price_tiers', 'batches', 'package_numbers', 'cannot_complete_lines', 'sub_categories'].includes(key)) {
+            if (typeof val === 'string' && ['items', 'packed_items', 'allocations', 'price_tiers', 'batches', 'package_numbers', 'cannot_complete_lines', 'sub_categories', 'roles', 'extra_perms', 'allow_perms', 'deny_perms'].includes(key)) {
                 try {
                     const parsed = JSON.parse(val);
                     if (typeof parsed === 'object' && parsed !== null) val = parsed;
@@ -485,24 +485,14 @@ const DB = {
 
 
     // --- SECURITY & PERMISSIONS ---
-    // Check if current user can edit/delete records (Admin only by default)
     canEdit() {
-        if (!window.currentUser) return false;
-        if (window.currentUser.role === 'Admin') return true;
-        return !!window.currentUser.canEdit; // Check custom per-user permission
+        return hasPerm('action.records.edit', window.currentUser);
     },
 
-    // Check if user can post to a back-date (Admin only)
     canPostBackDate(dateStr) {
-        // Use the local currentUser variable which is the source of truth
         const u = currentUser;
         if (!u) return false;
-
-        // Robust role checking
-        const roles = (Array.isArray(u.roles) ? u.roles : [u.role]).map(r => (r || '').toLowerCase());
-        const isAdmin = roles.some(r => r === 'admin' || r === 'administrator' || r === 'owner' || r === 'manager');
-
-        if (isAdmin) return true;
+        if (hasPerm('action.docs.backdate', u)) return true;
 
         const todayStr = today();
         return dateStr >= todayStr;
@@ -766,7 +756,7 @@ async function nextNumber(prefix) {
         else if (prefix === 'PO-') code = 'PURCHASE_ORDER';
         else if (prefix === 'PINV-' || prefix === 'PUR-') code = 'PURCHASE_INVOICE';
         else if (prefix === 'PT-26-27-') code = 'VYAPAR_INVOICE';
-        else if (prefix === 'PTR-26-') code = 'PAYMENT_IN';
+        else if (prefix === 'PTR-26-' || prefix === 'PAY-IN') code = 'PAYMENT_IN';
         else if (prefix === 'PAY-') code = 'PAYMENT_OUT';
         else if (prefix === 'EXP-') code = 'EXPENSE';
         const { data, error } = await supabaseClient.rpc('get_next_no_fy', { p_code: code });
@@ -973,19 +963,185 @@ async function repairCancelledInvoiceOrders() {
 }
 
 // --- Role Permissions ---
-const ROLE_PAGES = {
-    Admin: ['dashboard', 'parties', 'partyledger', 'inventorysetup', 'categories', 'uom', 'inventory', 'catalog', 'salesorders', 'purchaseorders', 'invoices', 'payments', 'expenses', 'packing', 'delivery', 'reports', 'packers', 'deliverypersons', 'users', 'setup', 'noseries', 'staffmaster', 'attendance', 'hrpayroll'],
-    Manager: ['dashboard', 'parties', 'partyledger', 'inventorysetup', 'categories', 'uom', 'inventory', 'catalog', 'salesorders', 'purchaseorders', 'invoices', 'payments', 'expenses', 'packing', 'delivery', 'reports', 'packers', 'deliverypersons'],
-    Salesman: ['dashboard', 'parties', 'inventory', 'catalog', 'salesorders', 'payments'],
-    Delivery: ['dashboard', 'delivery'],
-    Packing: ['dashboard', 'packing']
+const ROLE_BADGE_CLASS = { Admin: 'badge-danger', Manager: 'badge-info', Salesman: 'badge-success', Delivery: 'badge-info', Packing: 'badge-warning' };
+const ROLE_NAME_MAP = {
+    admin: 'Admin',
+    administrator: 'Admin',
+    owner: 'Admin',
+    manager: 'Manager',
+    salesman: 'Salesman',
+    sales: 'Salesman',
+    delivery: 'Delivery',
+    driver: 'Delivery',
+    packing: 'Packing',
+    packer: 'Packing'
 };
+const PAGE_LABELS = {
+    dashboard: 'Dashboard',
+    parties: 'Parties',
+    partyledger: 'Party Ledger',
+    inventorysetup: 'Inventory Setup',
+    categories: 'Categories',
+    uom: 'UOM',
+    inventory: 'Inventory',
+    catalog: 'Catalog',
+    salesorders: 'Sales Orders',
+    purchaseorders: 'Purchase Orders',
+    invoices: 'Invoices',
+    payments: 'Payments',
+    expenses: 'Expenses',
+    packing: 'Packing',
+    delivery: 'Delivery',
+    reports: 'Reports',
+    packers: 'Packers',
+    deliverypersons: 'Delivery Persons',
+    users: 'Users & Roles',
+    setup: 'Company Setup',
+    noseries: 'No. Series',
+    customerrequests: 'Customer Requests',
+    staffmaster: 'Staff Master',
+    attendance: 'Attendance',
+    hrpayroll: 'Payroll',
+    packorder: 'Pack Order',
+    stockledger: 'Stock Ledger'
+};
+const PAGE_PERMISSION_MAP = {
+    dashboard: 'page.dashboard',
+    parties: 'page.parties',
+    partyledger: 'page.partyledger',
+    inventorysetup: 'page.inventorysetup',
+    categories: 'page.categories',
+    uom: 'page.uom',
+    inventory: 'page.inventory',
+    catalog: 'page.catalog',
+    salesorders: 'page.salesorders',
+    purchaseorders: 'page.purchaseorders',
+    invoices: 'page.invoices',
+    payments: 'page.payments',
+    expenses: 'page.expenses',
+    packing: 'page.packing',
+    delivery: 'page.delivery',
+    reports: 'page.reports',
+    packers: 'page.packers',
+    deliverypersons: 'page.deliverypersons',
+    users: 'page.users',
+    setup: 'page.setup',
+    noseries: 'page.noseries',
+    customerrequests: 'page.customerrequests',
+    staffmaster: 'page.staffmaster',
+    attendance: 'page.attendance',
+    hrpayroll: 'page.hrpayroll',
+    packorder: 'page.packing',
+    stockledger: 'page.inventory'
+};
+const NAV_PAGE_KEYS = ['dashboard', 'parties', 'partyledger', 'inventorysetup', 'categories', 'uom', 'inventory', 'catalog', 'salesorders', 'purchaseorders', 'invoices', 'payments', 'expenses', 'packing', 'delivery', 'reports', 'packers', 'deliverypersons', 'users', 'setup', 'noseries', 'customerrequests', 'staffmaster', 'attendance', 'hrpayroll'];
+const SPECIAL_PERMISSION_OPTIONS = [
+    { key: 'action.records.edit', label: 'Edit Records', group: 'Actions' },
+    { key: 'action.records.delete', label: 'Delete Records', group: 'Actions' },
+    { key: 'action.partyLedger.view', label: 'View Ledger Entries', group: 'Actions' },
+    { key: 'action.docs.backdate', label: 'Allow Back-Date Posting', group: 'Actions' },
+    { key: 'action.users.manage', label: 'Manage Users', group: 'Actions' },
+    { key: 'action.setup.manage', label: 'Manage Setup', group: 'Actions' },
+    { key: 'action.attendance.mark', label: 'Mark Attendance', group: 'HR' },
+    { key: 'action.payroll.process', label: 'Process Payroll', group: 'HR' },
+    { key: 'page.partyledger', label: 'Party Ledger Page', group: 'Pages' },
+    { key: 'page.reports', label: 'Reports Page', group: 'Pages' },
+    { key: 'page.invoices', label: 'Invoices Page', group: 'Pages' },
+    { key: 'page.expenses', label: 'Expenses Page', group: 'Pages' },
+    { key: 'page.staffmaster', label: 'Staff Page', group: 'Pages' },
+    { key: 'page.attendance', label: 'Attendance Page', group: 'Pages' },
+    { key: 'page.hrpayroll', label: 'Payroll Page', group: 'Pages' },
+    { key: 'page.users', label: 'Users Page', group: 'Pages' },
+    { key: 'page.setup', label: 'Setup Page', group: 'Pages' }
+];
+const LEGACY_EXTRA_PERMISSION_MAP = {
+    partyledger: ['page.partyledger', 'action.partyLedger.view'],
+    reports: ['page.reports'],
+    invoices: ['page.invoices'],
+    expenses: ['page.expenses']
+};
+const LEGACY_EDIT_PERMISSION_KEYS = ['action.records.edit', 'action.records.delete'];
+const ALL_PAGE_PERMISSION_KEYS = [...new Set(Object.values(PAGE_PERMISSION_MAP))];
+const ROLE_PERMISSION_TEMPLATES = {
+    Admin: [...ALL_PAGE_PERMISSION_KEYS, 'action.records.edit', 'action.records.delete', 'action.partyLedger.view', 'action.docs.backdate', 'action.users.manage', 'action.setup.manage', 'action.attendance.mark', 'action.payroll.process'],
+    Manager: [...ALL_PAGE_PERMISSION_KEYS.filter(key => !['page.users', 'page.setup', 'page.noseries', 'page.staffmaster', 'page.attendance', 'page.hrpayroll'].includes(key)), 'action.records.edit', 'action.records.delete', 'action.partyLedger.view', 'action.docs.backdate'],
+    Salesman: ['page.dashboard', 'page.parties', 'page.inventory', 'page.catalog', 'page.salesorders', 'page.payments'],
+    Delivery: ['page.dashboard', 'page.delivery'],
+    Packing: ['page.dashboard', 'page.packing']
+};
+const ROLE_PAGES = Object.fromEntries(Object.keys(ROLE_PERMISSION_TEMPLATES).map(role => [role, NAV_PAGE_KEYS.filter(page => (ROLE_PERMISSION_TEMPLATES[role] || []).includes(PAGE_PERMISSION_MAP[page]))]));
 
+function normalizeRoleName(role) {
+    const raw = String(role || '').trim();
+    if (!raw) return '';
+    return ROLE_NAME_MAP[raw.toLowerCase()] || raw;
+}
+function getUserRoles(user) {
+    const rawRoles = Array.isArray(user?.roles) && user.roles.length ? user.roles : [user?.role];
+    const normalized = rawRoles.map(normalizeRoleName).filter(Boolean);
+    return [...new Set(normalized)];
+}
+function getPrimaryUserRole(user = currentUser) {
+    return normalizeRoleName(user?.role) || getUserRoles(user)[0] || 'Salesman';
+}
+function userHasRole(user, roleName) {
+    const target = normalizeRoleName(roleName);
+    return !!target && getUserRoles(user).includes(target);
+}
+function normalizePermissionList(value) {
+    if (!Array.isArray(value)) return [];
+    return [...new Set(value.map(v => String(v || '').trim()).filter(Boolean))];
+}
+function getExplicitAllowedPermissionKeys(user) {
+    const modern = normalizePermissionList(user?.allowPerms || user?.allow_perms);
+    const legacyExtras = normalizePermissionList(user?.extraPerms || user?.extra_perms).flatMap(key => LEGACY_EXTRA_PERMISSION_MAP[key] || []);
+    const legacyEdit = user?.canEdit ? LEGACY_EDIT_PERMISSION_KEYS : [];
+    return [...new Set([...modern, ...legacyExtras, ...legacyEdit])];
+}
+function getExplicitDeniedPermissionKeys(user) {
+    return normalizePermissionList(user?.denyPerms || user?.deny_perms);
+}
+function getRoleTemplatePermissionKeys(roleName) {
+    const role = normalizeRoleName(roleName);
+    return [...new Set(ROLE_PERMISSION_TEMPLATES[role] || [])];
+}
+function getUserPermissionSet(user = currentUser) {
+    if (!user) return new Set();
+    const roles = getUserRoles(user);
+    const allow = getExplicitAllowedPermissionKeys(user);
+    const deny = getExplicitDeniedPermissionKeys(user);
+    const signature = JSON.stringify({ roles, allow, deny });
+    if (user._permCacheSig === signature && user._permCache instanceof Set) return user._permCache;
+    const set = new Set();
+    roles.forEach(role => getRoleTemplatePermissionKeys(role).forEach(key => set.add(key)));
+    allow.forEach(key => set.add(key));
+    deny.forEach(key => set.delete(key));
+    user._permCacheSig = signature;
+    user._permCache = set;
+    return set;
+}
+function hasPerm(permissionKey, user = currentUser) {
+    if (!permissionKey) return true;
+    return getUserPermissionSet(user).has(permissionKey);
+}
+function hasAnyPerm(permissionKeys, user = currentUser) {
+    return (permissionKeys || []).some(key => hasPerm(key, user));
+}
+function canAccessPage(page, user = currentUser) {
+    const permissionKey = PAGE_PERMISSION_MAP[page];
+    return permissionKey ? hasPerm(permissionKey, user) : true;
+}
 function getUserPages(user) {
-    const roles = Array.isArray(user.roles) && user.roles.length ? user.roles : [user.role];
-    const basePages = [...new Set(roles.flatMap(r => ROLE_PAGES[r] || []))];
-    const extra = Array.isArray(user.extra_perms) ? user.extra_perms : [];
-    return [...new Set([...basePages, ...extra])];
+    return NAV_PAGE_KEYS.filter(page => canAccessPage(page, user));
+}
+function getRolePages(roleName) {
+    return ROLE_PAGES[normalizeRoleName(roleName)] || [];
+}
+function getLegacyExtraPermsFromAllowKeys(allowKeys) {
+    const allowSet = new Set(normalizePermissionList(allowKeys));
+    return Object.entries(LEGACY_EXTRA_PERMISSION_MAP)
+        .filter(([, keys]) => keys.every(key => allowSet.has(key)))
+        .map(([legacyKey]) => legacyKey);
 }
 
 // --- State ---
@@ -1681,6 +1837,14 @@ function initSwipeActions() { /* placeholder for future swipe-to-delete/edit */ 
 async function navigateTo(page, options = {}) {
     const isSilent = options.silent === true;
     if (!currentUser) return showLoginScreen();
+    if (!canAccessPage(page, currentUser)) {
+        const fallback = canAccessPage('dashboard', currentUser) ? 'dashboard' : (getUserPages(currentUser)[0] || 'dashboard');
+        if (page !== fallback) {
+            showToast('Access denied for this page.', 'error');
+            return navigateTo(fallback, options);
+        }
+        return showToast('Access denied for this page.', 'error');
+    }
     // Clear balance filter when navigating away from parties
     if (page !== 'parties') window._partyBalanceFilter = null;
     currentPage = page;
@@ -1825,6 +1989,17 @@ const DEFAULT_QUICK_ACTIONS = {
     Packing: ['packing', 'salesorders'],
     Delivery: ['delivery', 'salesorders'],
 };
+function getBottomNavTabs(user = currentUser) {
+    const primaryRole = getPrimaryUserRole(user);
+    const allowedPages = new Set(getUserPages(user));
+    const configuredTabs = (BOTTOM_NAV_TABS[primaryRole] || BOTTOM_NAV_TABS['Admin'] || [])
+        .filter(tab => !tab.page || allowedPages.has(tab.page));
+    if (configuredTabs.length) return configuredTabs;
+    const fallback = ['dashboard', 'catalog', 'salesorders', 'payments', 'parties']
+        .filter(page => allowedPages.has(page))
+        .map(page => ({ page, icon: (ALL_QUICK_ACTIONS.find(a => a.key === page)?.icon) || 'apps', label: PAGE_LABELS[page] || page }));
+    return fallback.length ? fallback : [{ page: 'dashboard', icon: 'bar_chart', label: 'Home' }];
+}
 function getQuickActionKeys(role) {
     const saved = DB.ls.getObj('qa_prefs_' + role);
     return Array.isArray(saved) && saved.length ? saved : (DEFAULT_QUICK_ACTIONS[role] || DEFAULT_QUICK_ACTIONS['Admin']);
@@ -1857,8 +2032,7 @@ function openEditQuickActions() {
 function showBottomNav() {
     const bn = $('bottom-nav');
     if (!bn) return;
-    const role = currentUser?.role || 'Admin';
-    const tabs = BOTTOM_NAV_TABS[role] || BOTTOM_NAV_TABS['Admin'];
+    const tabs = getBottomNavTabs(currentUser);
     // Rebuild tabs using DOM API to avoid encoding/parsing issues with innerHTML
     bn.innerHTML = '';
     tabs.forEach(function (t) {
@@ -1916,9 +2090,8 @@ function showBottomNav() {
 function buildMoreSheet() {
     const grid = $('more-sheet-grid');
     if (!grid) return;
-    const role = currentUser?.role || 'Admin';
     const allowed = getUserPages(currentUser || { role: 'Admin', roles: [] });
-    const mainTabPages = (BOTTOM_NAV_TABS[role] || []).map(t => t.page);
+    const mainTabPages = getBottomNavTabs(currentUser).map(t => t.page);
     // Only show items in More sheet that are allowed AND not already a main tab
     const moreItems = MORE_ITEMS.filter(it => {
         if (it.fn) return true;
@@ -2148,21 +2321,16 @@ function getPaymentInvoiceSummary(payment) {
     return getInvoiceDisplayNo(payment.invoiceNo);
 }
 function isSalesman() {
-    const r = (currentUser?.role || '').toLowerCase();
-    return r === 'salesman';
+    return userHasRole(currentUser, 'Salesman');
 }
 function isPacker() {
-    const r = (currentUser?.role || '').toLowerCase();
-    return r === 'packing' || r === 'packer';
+    return userHasRole(currentUser, 'Packing');
 }
 function canEdit() {
-    const r = (currentUser?.role || '').toLowerCase();
-    return r === 'admin' || r === 'administrator' || r === 'manager';
+    return hasPerm('action.records.edit');
 }
 function canViewLedger() {
-    const r = (currentUser?.role || '').toLowerCase();
-    if (r === 'admin' || r === 'administrator' || r === 'manager') return true;
-    return Array.isArray(currentUser?.extra_perms) && currentUser.extra_perms.includes('partyledger');
+    return hasAnyPerm(['page.partyledger', 'action.partyLedger.view']);
 }
 
 // =============================================
@@ -2483,6 +2651,48 @@ async function renderDashboard() {
     const nonMovingItems = inventory.filter(i => !itemSalesMap[i.id] && i.stock > 0);
     const slowMovingItems = inventory.filter(i => itemSalesMap[i.id] && itemSalesMap[i.id] <= 5 && i.stock > 0);
 
+    pageContent.innerHTML = await buildAdminCommandCenter({
+        role,
+        invoices,
+        inventory,
+        pendingSO,
+        approvedUnpacked,
+        undeliveredCount,
+        lowStock,
+        pendingCheques,
+        totalReceivable,
+        totalPayable,
+        drParties,
+        crParties,
+        tmSales,
+        tmPayIn,
+        tmExp,
+        salesDiff,
+        lmSales,
+        nonMovingItems,
+        slowMovingItems,
+        itemSalesMap,
+        company: DB.getObj('db_company') || {}
+    });
+    requestAnimationFrame(() => { renderDashChart(); });
+    requestAnimationFrame(() => {
+        document.querySelectorAll('.dash-count[data-val]').forEach(el => {
+            const target = parseFloat(el.dataset.val) || 0;
+            if (target === 0) return;
+            const isAmount = el.dataset.kind === 'amount' || el.classList.contains('dash-kpi-amount') || el.classList.contains('dash-pulse-val');
+            const dur = 700, start = Date.now();
+            const tick = () => {
+                const p = Math.min((Date.now() - start) / dur, 1);
+                const eased = 1 - Math.pow(1 - p, 3);
+                const cur = target * eased;
+                el.textContent = isAmount ? currency(cur) : Math.round(cur);
+                if (p < 1) requestAnimationFrame(tick);
+            };
+            tick();
+        });
+    });
+    return;
+
     const tileHover = 'onmouseover="this.style.transform=\'translateY(-2px)\';this.style.boxShadow=\'0 6px 20px rgba(0,0,0,0.2)\'" onmouseout="this.style.transform=\'none\';this.style.boxShadow=\'none\'"';
 
     pageContent.innerHTML = `
@@ -2595,6 +2805,357 @@ async function renderDashboard() {
 // =============================================
 //  DASHBOARD CHART & PERIOD HELPERS
 // =============================================
+async function buildAdminCommandCenter(model) {
+    const {
+        role,
+        invoices,
+        inventory,
+        pendingSO,
+        approvedUnpacked,
+        undeliveredCount,
+        lowStock,
+        pendingCheques,
+        totalReceivable,
+        totalPayable,
+        drParties,
+        crParties,
+        tmSales,
+        tmPayIn,
+        tmExp,
+        salesDiff,
+        lmSales,
+        nonMovingItems,
+        slowMovingItems,
+        itemSalesMap,
+        company
+    } = model;
+
+    const dashboardTitle = role === 'Manager' ? 'Operations Command Center' : 'Admin Command Center';
+    const companyLabel = company?.name || 'Prakash Traders';
+    const todayLabel = new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'short' });
+    const monthlyCollectionPct = tmSales > 0 ? Math.min(100, Math.round((tmPayIn / tmSales) * 100)) : (tmPayIn > 0 ? 100 : 0);
+    const workingCapital = totalReceivable - totalPayable;
+    const stockExposure = inventory.length ? Math.round((lowStock / inventory.length) * 100) : 0;
+    const pressureIndex = pendingSO + approvedUnpacked + undeliveredCount + lowStock + pendingCheques;
+    const pressureTone = pressureIndex >= 24 ? 'high' : pressureIndex >= 10 ? 'busy' : pressureIndex > 0 ? 'steady' : 'calm';
+    const pressureLabel = pressureTone === 'high' ? 'High pressure' : pressureTone === 'busy' ? 'Busy pulse' : pressureTone === 'steady' ? 'Stable flow' : 'Calm control';
+    const focusNote = pendingSO
+        ? `${pendingSO} sales orders are waiting for approval.`
+        : approvedUnpacked
+            ? `${approvedUnpacked} approved orders are ready for packing.`
+            : undeliveredCount
+                ? `${undeliveredCount} delivery exceptions need follow-up.`
+                : lowStock
+                    ? `${lowStock} SKUs are already below stock threshold.`
+                    : 'Everything is quiet right now. This is a good window to push collections and tighten follow-ups.';
+    const salesCompareHtml = salesDiff !== null
+        ? `<span class="admin-dash-trend ${salesDiff >= 0 ? 'up' : 'down'}">${salesDiff >= 0 ? '+' : '-'}${Math.abs(salesDiff)}% vs last month</span>`
+        : `<span class="admin-dash-trend neutral">Last month: ${currency(lmSales)}</span>`;
+
+    const quickActionMeta = {
+        'new-sale': { desc: 'Launch a fresh sale and move stock fast.', accent: '#22c55e' },
+        'payment-in': { desc: 'Capture receipts, allocations, and follow-up cash.', accent: '#14b8a6' },
+        'catalog': { desc: 'Open the product showcase with cleaner visuals.', accent: '#8b5cf6' },
+        'salesorders': { desc: 'Control approvals, edits, and dispatch readiness.', accent: '#f97316' },
+        'parties': { desc: 'Monitor customers, suppliers, and route quality.', accent: '#3b82f6' },
+        'inventory': { desc: 'Jump into stock pressure, value, and availability.', accent: '#ef4444' },
+        'delivery': { desc: 'Watch dispatches and close delivery gaps quickly.', accent: '#0ea5e9' },
+        'reports': { desc: 'Dive into analytics, risks, and trend signals.', accent: '#f59e0b' },
+        'payments': { desc: 'Review receipts, collectors, and settlement flow.', accent: '#10b981' },
+        'expenses': { desc: 'Clamp down on outflow and protect margins.', accent: '#fb7185' },
+        'purchaseorders': { desc: 'Replenish fast-moving lines with intent.', accent: '#a855f7' },
+        'packing': { desc: 'Push approved orders into invoice-ready status.', accent: '#06b6d4' },
+        'new-party': { desc: 'Onboard new customers and suppliers faster.', accent: '#84cc16' },
+        'update-party-gps': { desc: 'Sharpen route intelligence for field teams.', accent: '#f97316' },
+        'update-item-photo': { desc: 'Refresh visuals for catalog and selling.', accent: '#ec4899' }
+    };
+
+    const radarItems = [
+        { label: 'Pending approvals', count: pendingSO, note: 'Sales orders waiting for a decision', color: '#f59e0b', fn: "navigateTo('salesorders')", icon: 'hourglass_top' },
+        { label: 'Ready for packing', count: approvedUnpacked, note: 'Approved orders waiting for warehouse action', color: '#60a5fa', fn: "navigateTo('packing')", icon: 'inventory_2' },
+        { label: 'Delivery exceptions', count: undeliveredCount, note: 'Undelivered or returned dispatches', color: '#f87171', fn: "navigateTo('delivery')", icon: 'local_shipping' },
+        { label: 'Low stock SKUs', count: lowStock, note: 'Items already below replenishment threshold', color: '#fb7185', fn: "navigateTo('inventory')", icon: 'warning' },
+        { label: 'Pending cheques', count: pendingCheques, note: 'Cheque receipts still pending clearance', color: '#fbbf24', fn: "navigateTo('reports');setTimeout(()=>showReport('chequeregister'),200)", icon: 'account_balance' }
+    ];
+    const radarMax = Math.max(...radarItems.map(item => item.count), 1);
+    const visibleSignals = radarItems.filter(item => item.count > 0).sort((a, b) => b.count - a.count).slice(0, 4);
+    const recentInvoices = (invoices || []).filter(i => i.status !== 'cancelled').slice(-6).reverse();
+    const watchSections = [];
+
+    if (nonMovingItems.length) {
+        watchSections.push(`
+            <div class="admin-dash-watch-card danger">
+                <div class="admin-dash-watch-head">
+                    <span class="admin-dash-watch-tag">Non-moving</span>
+                    <strong>${nonMovingItems.length}</strong>
+                </div>
+                <p class="admin-dash-watch-copy">No sales in the last 90 days.</p>
+                <div class="admin-dash-watch-list">
+                    ${nonMovingItems.slice(0, 4).map(i => `
+                        <button class="admin-dash-watch-row" onclick="navigateTo('inventory')">
+                            <span>${escapeHtml(i.name)}</span>
+                            <strong>${i.stock}</strong>
+                        </button>`).join('')}
+                </div>
+            </div>`);
+    }
+    if (slowMovingItems.length) {
+        watchSections.push(`
+            <div class="admin-dash-watch-card warning">
+                <div class="admin-dash-watch-head">
+                    <span class="admin-dash-watch-tag">Slow moving</span>
+                    <strong>${slowMovingItems.length}</strong>
+                </div>
+                <p class="admin-dash-watch-copy">Five units or less sold in 90 days.</p>
+                <div class="admin-dash-watch-list">
+                    ${slowMovingItems.slice(0, 4).map(i => `
+                        <button class="admin-dash-watch-row" onclick="navigateTo('inventory')">
+                            <span>${escapeHtml(i.name)}</span>
+                            <strong>${itemSalesMap[i.id] || 0}</strong>
+                        </button>`).join('')}
+                </div>
+            </div>`);
+    }
+    if (!watchSections.length) {
+        watchSections.push(`
+            <div class="admin-dash-watch-card positive">
+                <div class="admin-dash-watch-head">
+                    <span class="admin-dash-watch-tag">Inventory rhythm</span>
+                    <strong>Healthy</strong>
+                </div>
+                <p class="admin-dash-watch-copy">No slow or non-moving stock is standing out right now.</p>
+            </div>`);
+    }
+
+    const customerReqWidget = await renderCustReqWidget();
+
+    return `
+    <div class="admin-dash-shell">
+        <section class="admin-dash-hero ${pressureTone}">
+            <div class="admin-dash-hero-grid">
+                <div class="admin-dash-hero-copy">
+                    <div class="admin-dash-overline">${dashboardTitle}</div>
+                    <h1 class="admin-dash-headline">${escapeHtml(companyLabel)}</h1>
+                    <p class="admin-dash-subhead">${escapeHtml(focusNote)}</p>
+
+                    <div class="admin-dash-signal-row">
+                        ${visibleSignals.length ? visibleSignals.map(item => `
+                            <button class="admin-dash-signal-chip" onclick="${item.fn}">
+                                <span class="material-symbols-outlined">${item.icon}</span>
+                                <strong>${item.count}</strong>
+                                <span>${item.label}</span>
+                            </button>`).join('') : `
+                            <div class="admin-dash-signal-chip good">
+                                <span class="material-symbols-outlined">verified</span>
+                                <strong>Clear</strong>
+                                <span>No urgent queues right now</span>
+                            </div>`}
+                    </div>
+
+                    <div class="admin-dash-glance-grid">
+                        <button class="admin-dash-glance-card positive" onclick="window._partyBalanceFilter='receivable';navigateTo('parties')">
+                            <span class="admin-dash-glance-label">Receivable</span>
+                            <strong class="admin-dash-glance-value dash-count" data-kind="amount" data-val="${totalReceivable}">${currency(totalReceivable)}</strong>
+                            <span class="admin-dash-glance-meta">${drParties.length} parties carrying dues</span>
+                        </button>
+                        <button class="admin-dash-glance-card negative" onclick="window._partyBalanceFilter='payable';navigateTo('parties')">
+                            <span class="admin-dash-glance-label">Payable</span>
+                            <strong class="admin-dash-glance-value dash-count" data-kind="amount" data-val="${totalPayable}">${currency(totalPayable)}</strong>
+                            <span class="admin-dash-glance-meta">${crParties.length} parties to settle</span>
+                        </button>
+                        <div class="admin-dash-glance-card accent">
+                            <span class="admin-dash-glance-label">Collection efficiency</span>
+                            <strong class="admin-dash-glance-value">${monthlyCollectionPct}%</strong>
+                            <div class="admin-dash-meter compact"><span style="width:${monthlyCollectionPct}%"></span></div>
+                            <span class="admin-dash-glance-meta">${currency(tmPayIn)} collected against ${currency(tmSales)}</span>
+                        </div>
+                    </div>
+                </div>
+
+                <aside class="admin-dash-hero-side">
+                    <div class="admin-dash-spotlight-card">
+                        <div class="admin-dash-spotlight-head">
+                            <div>
+                                <span class="admin-dash-panel-eyebrow">Business pulse</span>
+                                <h3>Monthly sales engine</h3>
+                            </div>
+                            <span class="admin-dash-spotlight-date">${todayLabel}</span>
+                        </div>
+                        <div class="admin-dash-spotlight-value dash-count" data-kind="amount" data-val="${tmSales}" id="dash-chart-total">${currency(tmSales)}</div>
+                        <div id="dash-chart-compare" class="admin-dash-spotlight-compare">${salesCompareHtml}</div>
+                        <div class="admin-dash-meter"><span style="width:${monthlyCollectionPct}%"></span></div>
+                        <div class="admin-dash-spotlight-note">${currency(Math.max(tmSales - tmPayIn, 0))} still to convert from this month's billing.</div>
+                    </div>
+
+                    <div class="admin-dash-mini-grid">
+                        <div class="admin-dash-mini-card">
+                            <span class="admin-dash-mini-label">Pressure index</span>
+                            <strong class="admin-dash-mini-value">${pressureIndex}</strong>
+                            <span class="admin-dash-mini-note">${pressureLabel}</span>
+                        </div>
+                        <div class="admin-dash-mini-card">
+                            <span class="admin-dash-mini-label">Working capital</span>
+                            <strong class="admin-dash-mini-value ${workingCapital >= 0 ? 'positive' : 'negative'}">${currency(Math.abs(workingCapital))}</strong>
+                            <span class="admin-dash-mini-note">${workingCapital >= 0 ? 'Receivables ahead' : 'Payables ahead'}</span>
+                        </div>
+                        <div class="admin-dash-mini-card">
+                            <span class="admin-dash-mini-label">Inventory stress</span>
+                            <strong class="admin-dash-mini-value">${stockExposure}%</strong>
+                            <span class="admin-dash-mini-note">${lowStock}/${inventory.length || 0} items below target</span>
+                        </div>
+                        <div class="admin-dash-mini-card">
+                            <span class="admin-dash-mini-label">Cheque watch</span>
+                            <strong class="admin-dash-mini-value">${pendingCheques}</strong>
+                            <span class="admin-dash-mini-note">${pendingCheques ? 'Needs clearance tracking' : 'No pending cheque risk'}</span>
+                        </div>
+                    </div>
+                </aside>
+            </div>
+        </section>
+
+        <section class="admin-dash-main-grid">
+            <div class="admin-dash-panel admin-dash-chart-panel">
+                <div class="admin-dash-panel-head">
+                    <div>
+                        <span class="admin-dash-panel-eyebrow">Revenue flow</span>
+                        <h3>See momentum, not just totals</h3>
+                    </div>
+                    <div class="admin-dash-period-wrap">
+                        <button id="dash-period-btn" onclick="toggleDashPeriodMenu()" class="admin-dash-period-btn">
+                            <span id="dash-period-label">This Month</span>
+                            <span class="material-symbols-outlined" style="font-size:1rem">expand_more</span>
+                        </button>
+                        <div id="dash-period-menu" class="admin-dash-period-menu" style="display:none">
+                            ${[['week', 'This Week'], ['lastmonth', 'Last Month'], ['month', 'This Month'], ['quarter', 'This Quarter'], ['halfyear', 'Half Year'], ['year', 'This Year']].map(([v, l]) => `<div class="dash-period-opt" data-val="${v}" onclick="selectDashPeriod('${v}','${l}')">${l}</div>`).join('')}
+                        </div>
+                    </div>
+                </div>
+                <div id="dash-chart-wrap" class="admin-dash-chart-wrap"></div>
+
+                <div class="admin-dash-metric-band">
+                    <button class="dash-pulse-tile" onclick="navigateTo('payments')" style="--tile-color:#10b981;animation-delay:0.05s">
+                        <div class="dash-pulse-icon material-symbols-outlined">payments</div>
+                        <div class="dash-pulse-val dash-count" data-kind="amount" data-val="${tmPayIn}" style="color:#10b981">${currency(tmPayIn)}</div>
+                        <div class="dash-pulse-lbl">Collected</div>
+                    </button>
+                    <button class="dash-pulse-tile" onclick="navigateTo('expenses')" style="--tile-color:#ef4444;animation-delay:0.1s">
+                        <div class="dash-pulse-icon material-symbols-outlined">account_balance_wallet</div>
+                        <div class="dash-pulse-val dash-count" data-kind="amount" data-val="${tmExp}" style="color:#ef4444">${currency(tmExp)}</div>
+                        <div class="dash-pulse-lbl">Expenses</div>
+                    </button>
+                    <button class="dash-pulse-tile${lowStock ? ' dash-pulse-alert' : ''}" onclick="navigateTo('inventory')" style="--tile-color:${lowStock ? '#ef4444' : 'var(--text-primary)'};animation-delay:0.15s">
+                        <div class="dash-pulse-icon material-symbols-outlined">inventory_2</div>
+                        <div class="dash-pulse-val">${lowStock}</div>
+                        <div class="dash-pulse-lbl">Low Stock</div>
+                    </button>
+                    <button class="dash-pulse-tile${pendingCheques ? ' dash-pulse-alert' : ''}" onclick="navigateTo('reports');setTimeout(()=>showReport('chequeregister'),200)" style="--tile-color:${pendingCheques ? '#f59e0b' : 'var(--text-primary)'};animation-delay:0.2s">
+                        <div class="dash-pulse-icon material-symbols-outlined">account_balance</div>
+                        <div class="dash-pulse-val" style="color:${pendingCheques ? '#f59e0b' : 'var(--text-primary)'}">${pendingCheques}</div>
+                        <div class="dash-pulse-lbl">Cheques</div>
+                    </button>
+                </div>
+            </div>
+
+            <div class="admin-dash-panel admin-dash-radar-panel">
+                <div class="admin-dash-panel-head">
+                    <div>
+                        <span class="admin-dash-panel-eyebrow">Operational radar</span>
+                        <h3>Where attention is building</h3>
+                    </div>
+                </div>
+                <div class="admin-dash-radar-list">
+                    ${radarItems.map(item => `
+                        <button class="admin-dash-radar-item" onclick="${item.fn}">
+                            <div class="admin-dash-radar-top">
+                                <div class="admin-dash-radar-title">
+                                    <span class="material-symbols-outlined">${item.icon}</span>
+                                    <div>
+                                        <strong>${item.label}</strong>
+                                        <span>${item.note}</span>
+                                    </div>
+                                </div>
+                                <b>${item.count}</b>
+                            </div>
+                            <div class="admin-dash-radar-meter">
+                                <span style="width:${Math.max(8, Math.round((item.count / radarMax) * 100))}%;background:${item.color}"></span>
+                            </div>
+                        </button>`).join('')}
+                </div>
+            </div>
+        </section>
+
+        <section class="admin-dash-panel admin-dash-actions-panel">
+            <div class="admin-dash-panel-head">
+                <div>
+                    <span class="admin-dash-panel-eyebrow">Launchpad</span>
+                    <h3>Move the business from here</h3>
+                </div>
+                <button class="admin-dash-edit-btn" onclick="openEditQuickActions()" title="Edit Quick Actions">
+                    <span class="material-symbols-outlined">tune</span>
+                    <span>Edit</span>
+                </button>
+            </div>
+            <div class="admin-dash-actions-grid">
+                ${getQuickActionKeys(currentUser?.role || 'Admin').map(key => {
+                    const action = ALL_QUICK_ACTIONS.find(x => x.key === key);
+                    if (!action) return '';
+                    const meta = quickActionMeta[key] || { desc: 'Open the workspace and take action fast.', accent: 'var(--primary)' };
+                    return `<button class="admin-dash-action-card" onclick="${action.fn}" style="--action-accent:${meta.accent}">
+                        <span class="admin-dash-action-glow"></span>
+                        <span class="admin-dash-action-icon material-symbols-outlined">${action.icon}</span>
+                        <strong class="admin-dash-action-title">${action.label}</strong>
+                        <span class="admin-dash-action-copy">${meta.desc}</span>
+                        <span class="admin-dash-action-arrow material-symbols-outlined">north_east</span>
+                    </button>`;
+                }).join('')}
+            </div>
+        </section>
+
+        <section class="admin-dash-bottom-grid">
+            <div class="admin-dash-panel">
+                <div class="admin-dash-panel-head">
+                    <div>
+                        <span class="admin-dash-panel-eyebrow">Activity feed</span>
+                        <h3>Recent invoices</h3>
+                    </div>
+                </div>
+                <div class="admin-dash-feed">
+                    ${recentInvoices.length ? recentInvoices.map(i => {
+                        const displayNo = getInvoiceDisplayNo(i) || i.invoiceNo || '-';
+                        return `<button class="admin-dash-feed-item" onclick="viewInvoice('${i.id}')">
+                            <div class="admin-dash-feed-meta">
+                                <span class="admin-dash-feed-badge ${i.type === 'sale' ? 'sale' : 'purchase'}">${i.type === 'sale' ? 'Sale' : 'Purchase'}</span>
+                                <span class="admin-dash-feed-date">${fmtDate(i.date)}</span>
+                            </div>
+                            <div class="admin-dash-feed-main">
+                                <div>
+                                    <strong>${escapeHtml(displayNo)}</strong>
+                                    <span>${escapeHtml(i.partyName || '-')}</span>
+                                </div>
+                                <b class="${i.type === 'sale' ? 'amount-green' : 'amount-red'}">${currency(i.total)}</b>
+                            </div>
+                        </button>`;
+                    }).join('') : `<div class="empty-state" style="padding:32px"><div class="empty-icon"></div><p>No invoices yet</p></div>`}
+                </div>
+            </div>
+
+            <div class="admin-dash-panel">
+                <div class="admin-dash-panel-head">
+                    <div>
+                        <span class="admin-dash-panel-eyebrow">Inventory watchlist</span>
+                        <h3>Slow and non-moving focus</h3>
+                    </div>
+                </div>
+                <div class="admin-dash-watch-grid">
+                    ${watchSections.join('')}
+                </div>
+            </div>
+        </section>
+
+        ${customerReqWidget}
+    </div>`;
+}
+
 function toggleDashPeriodMenu() {
     const menu = document.getElementById('dash-period-menu');
     if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
@@ -2682,15 +3243,22 @@ function renderDashChart() {
     const barW = Math.max(12, Math.min(32, Math.floor((wrap.offsetWidth || 320) / data.length) - 4));
 
     wrap.innerHTML = `
-        <div style="display:flex;align-items:flex-end;gap:${barW > 20 ? 4 : 2}px;height:80px;overflow-x:auto;padding-bottom:18px;position:relative">
-            ${data.map(d => {
-                const h = Math.max(d.val > 0 ? 6 : 2, Math.round((d.val / max) * 68));
-                const isToday = d.label === String(now.getDate()) && (period === 'month' || period === 'lastmonth');
-                return `<div style="display:flex;flex-direction:column;align-items:center;flex-shrink:0;width:${barW}px" title="${d.label}: ${currency(d.val)}">
-                    <div style="width:${barW - 2}px;height:${h}px;background:${isToday ? 'var(--primary)' : d.val > 0 ? 'rgba(249,115,22,0.55)' : 'var(--border)'};border-radius:3px 3px 0 0;transition:height 0.3s"></div>
-                    <div style="font-size:${barW > 22 ? 9 : 7}px;color:var(--text-muted);margin-top:3px;white-space:nowrap;overflow:hidden;width:${barW}px;text-align:center">${d.label}</div>
-                </div>`;
-            }).join('')}
+        <div class="admin-dash-chart-canvas">
+            <div class="admin-dash-chart-gridlines">
+                <span></span><span></span><span></span><span></span>
+            </div>
+            <div class="admin-dash-chart-bars" style="gap:${barW > 20 ? 6 : 3}px">
+                ${data.map(d => {
+                    const h = Math.max(d.val > 0 ? 10 : 4, Math.round((d.val / max) * 88));
+                    const isToday = d.label === String(now.getDate()) && (period === 'month' || period === 'lastmonth');
+                    return `<div class="admin-dash-bar-col" style="width:${barW}px" title="${d.label}: ${currency(d.val)}">
+                        <div class="admin-dash-bar-track">
+                            <div class="admin-dash-bar-fill${isToday ? ' is-today' : ''}${d.val <= 0 ? ' is-empty' : ''}" style="height:${h}px;width:${Math.max(10, barW - 2)}px"></div>
+                        </div>
+                        <div class="admin-dash-bar-label" style="font-size:${barW > 22 ? 10 : 8}px">${d.label}</div>
+                    </div>`;
+                }).join('')}
+            </div>
         </div>`;
 }
 
@@ -18173,17 +18741,52 @@ async function deleteDelPerson(id) {
 // =============================================
 //  USERS & ROLES
 // =============================================
+function getRoleAccessSummary(role) {
+    const pages = getRolePages(role);
+    const actions = SPECIAL_PERMISSION_OPTIONS
+        .filter(opt => opt.key.startsWith('action.') && getRoleTemplatePermissionKeys(role).includes(opt.key))
+        .map(opt => opt.label);
+    return { pages, actions };
+}
+function renderPermissionOverrideInputs(prefix, selectedKeys = []) {
+    const groups = SPECIAL_PERMISSION_OPTIONS.reduce((acc, item) => {
+        if (!acc[item.group]) acc[item.group] = [];
+        acc[item.group].push(item);
+        return acc;
+    }, {});
+    const selected = new Set(selectedKeys || []);
+    const borderColor = prefix === 'allow' ? 'var(--primary)' : 'var(--danger)';
+    const fillColor = prefix === 'allow' ? 'rgba(59,130,246,0.08)' : 'rgba(239,68,68,0.08)';
+    return Object.entries(groups).map(([groupName, items]) => `
+        <div style="margin-top:10px">
+            <div style="font-size:0.78rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:8px">${groupName}</div>
+            <div style="display:flex;flex-wrap:wrap;gap:10px">
+                ${items.map(item => `
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:6px 12px;border:2px solid ${selected.has(item.key) ? borderColor : 'var(--border)'};border-radius:20px;font-size:0.85rem;${selected.has(item.key) ? `background:${fillColor};font-weight:600` : ''}">
+                    <input type="checkbox" class="chk-user-${prefix}-perm" value="${item.key}" ${selected.has(item.key) ? 'checked' : ''} onchange="this.parentElement.style.borderColor=this.checked?'${borderColor}':'var(--border)';this.parentElement.style.background=this.checked?'${fillColor}':'';this.parentElement.style.fontWeight=this.checked?'600':'400'">
+                    ${item.label}
+                </label>`).join('')}
+            </div>
+        </div>`).join('');
+}
+function getUserOverrideSummary(user) {
+    return {
+        allow: getExplicitAllowedPermissionKeys(user).length,
+        deny: getExplicitDeniedPermissionKeys(user).length
+    };
+}
 function renderUsers() {
     const users = DB.cache['users'] || [];
-    const roleBadgeClass = { Admin: 'badge-danger', Manager: 'badge-info', Salesman: 'badge-success', Delivery: 'badge-info', Packing: 'badge-warning' };
+    const canManageUsers = hasPerm('action.users.manage');
     const isMobile = window.innerWidth < 768;
     if (isMobile) {
         pageContent.innerHTML = `
         <div style="display:flex;justify-content:flex-end;margin-bottom:10px">
-            <button class="btn btn-primary" onclick="openUserModal()">+ Add User</button>
+            ${canManageUsers ? `<button class="btn btn-primary" onclick="openUserModal()">+ Add User</button>` : ''}
         </div>
         ${users.map(u => {
-            const roles = Array.isArray(u.roles) && u.roles.length ? u.roles : [u.role];
+            const roles = getUserRoles(u);
+            const override = getUserOverrideSummary(u);
             return `<div class="card" style="margin-bottom:8px;padding:12px 14px">
                 <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
                     <div style="width:40px;height:40px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-size:1.1rem;font-weight:700;color:#fff;flex-shrink:0">${(u.name||'?')[0].toUpperCase()}</div>
@@ -18191,12 +18794,13 @@ function renderUsers() {
                         <div style="font-weight:700">${escapeHtml(u.name)}</div>
                         <div style="font-size:0.78rem;font-family:monospace;color:var(--accent)">${escapeHtml(u.userId || u.name)}</div>
                     </div>
-                    <div style="display:flex;gap:4px">
+                    ${canManageUsers ? `<div style="display:flex;gap:4px">
                         <button class="btn-icon" onclick="openUserModal('${u.id}')"><span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--warning)">edit</span></button>
                         ${users.length > 1 ? `<button class="btn-icon" onclick="deleteUser('${u.id}')"><span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--danger)">delete</span></button>` : ''}
-                    </div>
+                    </div>` : ''}
                 </div>
-                <div style="display:flex;flex-wrap:wrap;gap:4px">${roles.map(r => `<span class="badge ${roleBadgeClass[r] || 'badge-info'}">${r}</span>`).join('')}</div>
+                <div style="display:flex;flex-wrap:wrap;gap:4px">${roles.map(r => `<span class="badge ${ROLE_BADGE_CLASS[r] || 'badge-info'}">${r}</span>`).join('')}</div>
+                ${(override.allow || override.deny) ? `<div style="margin-top:8px;font-size:0.76rem;color:var(--text-muted)">Overrides: +${override.allow} / -${override.deny}</div>` : ''}
             </div>`;
         }).join('') || '<div class="empty-state"><p>No users</p></div>'}`;
         return;
@@ -18204,23 +18808,25 @@ function renderUsers() {
     pageContent.innerHTML = `
         <div class="section-toolbar">
             <h3 style="font-size:1rem">Users & Access</h3>
-            <button class="btn btn-primary" onclick="openUserModal()">+ Add User</button>
+            ${canManageUsers ? `<button class="btn btn-primary" onclick="openUserModal()">+ Add User</button>` : ''}
         </div>
         <div class="card"><div class="card-body">
             <div class="table-wrapper">
                 <table class="data-table">
-                    <thead><tr><th>Name</th><th>User ID</th><th>Roles</th><th>PIN</th><th>Actions</th></tr></thead>
+                    <thead><tr><th>Name</th><th>User ID</th><th>Roles</th><th>Overrides</th><th>PIN</th><th>Actions</th></tr></thead>
                     <tbody>${users.map(u => {
-        const roles = Array.isArray(u.roles) && u.roles.length ? u.roles : [u.role];
+        const roles = getUserRoles(u);
+        const override = getUserOverrideSummary(u);
         return `<tr>
                             <td style="font-weight:600">${escapeHtml(u.name)}</td>
                             <td style="font-family:monospace;color:var(--accent);font-weight:600">${escapeHtml(u.userId || u.name)}</td>
-                            <td>${roles.map(r => `<span class="badge ${roleBadgeClass[r] || 'badge-info'}" style="margin-right:4px">${r}</span>`).join('')}</td>
+                            <td>${roles.map(r => `<span class="badge ${ROLE_BADGE_CLASS[r] || 'badge-info'}" style="margin-right:4px">${r}</span>`).join('')}</td>
+                            <td style="font-size:0.8rem;color:var(--text-muted)">${override.allow || override.deny ? `+${override.allow} / -${override.deny}` : '-'}</td>
                             <td style="color:var(--text-muted);letter-spacing:3px">${''.repeat((u.pin || '').length)}</td>
-                            <td><div class="action-btns">
+                            <td>${canManageUsers ? `<div class="action-btns">
                                 <button class="btn-icon" onclick="openUserModal('${u.id}')" title="Edit"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button>
                                 ${users.length > 1 ? `<button class="btn-icon" onclick="deleteUser('${u.id}')" title="Delete" style="color:var(--danger)"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>` : ''}
-                            </div></td>
+                            </div>` : '<span style="color:var(--text-muted)">View only</span>'}</td>
                         </tr>`;
     }).join('')}</tbody>
                 </table>
@@ -18231,18 +18837,26 @@ function renderUsers() {
         <table class="data-table" style="font-size:0.82rem">
             <thead><tr><th>Role</th><th>Access</th></tr></thead>
             <tbody>
-                ${Object.entries(ROLE_PAGES).map(([role, pages]) => `<tr>
-                    <td><span class="badge ${roleBadgeClass[role] || 'badge-info'}">${role}</span></td>
-                    <td style="color:var(--text-muted)">${pages.map(p => p.charAt(0).toUpperCase() + p.slice(1)).join(', ')}</td>
-                </tr>`).join('')}
+                ${Object.keys(ROLE_PERMISSION_TEMPLATES).map(role => {
+        const summary = getRoleAccessSummary(role);
+        return `<tr>
+                    <td><span class="badge ${ROLE_BADGE_CLASS[role] || 'badge-info'}">${role}</span></td>
+                    <td style="color:var(--text-muted)">
+                        <div><strong>Pages:</strong> ${summary.pages.map(p => PAGE_LABELS[p] || p).join(', ') || '-'}</div>
+                        <div style="margin-top:4px"><strong>Actions:</strong> ${summary.actions.join(', ') || 'Standard page access only'}</div>
+                    </td>
+                </tr>`;
+    }).join('')}
             </tbody>
         </table></div></div></div>`;
 }
 function openUserModal(id) {
+    if (!hasPerm('action.users.manage')) return alert('Access denied');
     const u = id ? (DB.cache['users'] || []).find(x => x.id === id) : null;
-    const userRoles = u ? (Array.isArray(u.roles) && u.roles.length ? u.roles : [u.role]) : [];
+    const userRoles = getUserRoles(u);
+    const allowPerms = getExplicitAllowedPermissionKeys(u);
+    const denyPerms = getExplicitDeniedPermissionKeys(u);
     const allRoles = ['Admin', 'Manager', 'Salesman', 'Delivery', 'Packing'];
-    const roleBadgeClass = { Admin: 'badge-danger', Manager: 'badge-info', Salesman: 'badge-success', Delivery: 'badge-info', Packing: 'badge-warning' };
     openModal(u ? 'Edit User' : 'Add User', `
         <div class="form-group">
             <label>Full Name *</label>
@@ -18253,12 +18867,12 @@ function openUserModal(id) {
             <input id="f-user-userid" class="form-control" value="${u ? escapeHtml(u.userId || '') : ''}" placeholder="e.g. ram01" style="text-transform:lowercase;font-family:monospace" oninput="this.value=this.value.toLowerCase().replace(/\\s/g,'')">
         </div>
         <div class="form-group">
-            <label>Roles * <span style="font-size:0.78rem;color:var(--text-muted)">(select one or more)</span></label>
+            <label>Roles * <span style="font-size:0.78rem;color:var(--text-muted)">(select one or more; first selected stays primary)</span></label>
             <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:8px">
                 ${allRoles.map(r => `
                 <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:6px 12px;border:2px solid var(--border);border-radius:20px;font-size:0.85rem;transition:all 0.15s;${userRoles.includes(r) ? 'border-color:var(--primary);background:var(--primary-light,#eff6ff);font-weight:600' : ''}">
                     <input type="checkbox" class="chk-user-role" value="${r}" ${userRoles.includes(r) ? 'checked' : ''} onchange="this.parentElement.style.borderColor=this.checked?'var(--primary)':'var(--border)';this.parentElement.style.background=this.checked?'var(--primary-light,#eff6ff)':'';this.parentElement.style.fontWeight=this.checked?'600':'400'">
-                    <span class="badge ${roleBadgeClass[r]}">${r}</span>
+                    <span class="badge ${ROLE_BADGE_CLASS[r]}">${r}</span>
                 </label>`).join('')}
             </div>
         </div>
@@ -18270,33 +18884,16 @@ function openUserModal(id) {
             </div>
         </div>
         <div class="form-group">
-            <label>Monthly Sales Target () <span style="font-size:0.78rem;color:var(--text-muted)">(optional)</span></label>
+            <label>Monthly Sales Target (INR) <span style="font-size:0.78rem;color:var(--text-muted)">(optional)</span></label>
             <input type="number" id="f-user-target" class="form-control" value="${u ? (u.monthlyTarget || 0) : 0}" placeholder="e.g. 500000">
         </div>
         <div class="form-group" id="extra-perms-section">
-            <label>Extra Permissions <span style="font-size:0.78rem;color:var(--text-muted)">(beyond role defaults)</span></label>
-            <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:8px">
-                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:6px 12px;border:2px solid var(--border);border-radius:20px;font-size:0.85rem;${(u && Array.isArray(u.extra_perms) && u.extra_perms.includes('partyledger')) ? 'border-color:var(--primary);background:#eff6ff;font-weight:600' : ''}">
-                    <input type="checkbox" id="perm-partyledger" value="partyledger" ${(u && Array.isArray(u.extra_perms) && u.extra_perms.includes('partyledger')) ? 'checked' : ''} onchange="this.parentElement.style.borderColor=this.checked?'var(--primary)':'var(--border)';this.parentElement.style.background=this.checked?'#eff6ff':'';this.parentElement.style.fontWeight=this.checked?'600':'400'">
-                     View Party Ledger
-                </label>
-                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:6px 12px;border:2px solid var(--border);border-radius:20px;font-size:0.85rem;${(u && Array.isArray(u.extra_perms) && u.extra_perms.includes('reports')) ? 'border-color:var(--primary);background:#eff6ff;font-weight:600' : ''}">
-                    <input type="checkbox" id="perm-reports" value="reports" ${(u && Array.isArray(u.extra_perms) && u.extra_perms.includes('reports')) ? 'checked' : ''} onchange="this.parentElement.style.borderColor=this.checked?'var(--primary)':'var(--border)';this.parentElement.style.background=this.checked?'#eff6ff':'';this.parentElement.style.fontWeight=this.checked?'600':'400'">
-                     View Reports
-                </label>
-                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:6px 12px;border:2px solid var(--border);border-radius:20px;font-size:0.85rem;${(u && Array.isArray(u.extra_perms) && u.extra_perms.includes('invoices')) ? 'border-color:var(--primary);background:#eff6ff;font-weight:600' : ''}">
-                    <input type="checkbox" id="perm-invoices" value="invoices" ${(u && Array.isArray(u.extra_perms) && u.extra_perms.includes('invoices')) ? 'checked' : ''} onchange="this.parentElement.style.borderColor=this.checked?'var(--primary)':'var(--border)';this.parentElement.style.background=this.checked?'#eff6ff':'';this.parentElement.style.fontWeight=this.checked?'600':'400'">
-                     View Invoices
-                </label>
-                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:6px 12px;border:2px solid var(--border);border-radius:20px;font-size:0.85rem;${(u && Array.isArray(u.extra_perms) && u.extra_perms.includes('expenses')) ? 'border-color:var(--primary);background:#eff6ff;font-weight:600' : ''}">
-                    <input type="checkbox" id="perm-expenses" value="expenses" ${(u && Array.isArray(u.extra_perms) && u.extra_perms.includes('expenses')) ? 'checked' : ''} onchange="this.parentElement.style.borderColor=this.checked?'var(--primary)':'var(--border)';this.parentElement.style.background=this.checked?'#eff6ff':'';this.parentElement.style.fontWeight=this.checked?'600':'400'">
-                     View Expenses
-                </label>
-                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:6px 12px;border:2px solid var(--accent);border-radius:20px;font-size:0.85rem;${(u && u.canEdit) ? 'border-color:var(--accent);background:rgba(249,115,22,0.1);font-weight:600' : ''}">
-                    <input type="checkbox" id="f-user-canedit" ${u && u.canEdit ? 'checked' : ''} onchange="this.parentElement.style.borderColor=this.checked?'var(--accent)':'var(--border)';this.parentElement.style.background=this.checked?'rgba(249,115,22,0.1)':'';this.parentElement.style.fontWeight=this.checked?'600':'400'">
-                     Can Edit Records
-                </label>
-            </div>
+            <label>Allow Extra Access <span style="font-size:0.78rem;color:var(--text-muted)">(adds to role defaults)</span></label>
+            ${renderPermissionOverrideInputs('allow', allowPerms)}
+        </div>
+        <div class="form-group" id="deny-perms-section">
+            <label>Restrict Access <span style="font-size:0.78rem;color:var(--text-muted)">(removes access from role defaults)</span></label>
+            ${renderPermissionOverrideInputs('deny', denyPerms)}
         </div>
         <div class="modal-actions">
             <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
@@ -18305,14 +18902,13 @@ function openUserModal(id) {
         </div>`);
 }
 async function saveUser(id) {
+    if (!hasPerm('action.users.manage')) return alert('Access denied');
     const name = $('f-user-name').value.trim();
     const userId = $('f-user-userid').value.trim().toLowerCase().replace(/\s/g, '');
     const pin = $('f-user-pin').value.trim();
     const selectedRoles = [...document.querySelectorAll('.chk-user-role:checked')].map(c => c.value);
-    const extraPerms = ['partyledger', 'reports', 'invoices', 'expenses'].filter(p => {
-        const el = document.getElementById('perm-' + p);
-        return el && el.checked;
-    });
+    const allowPerms = [...document.querySelectorAll('.chk-user-allow-perm:checked')].map(c => c.value);
+    const denyPerms = [...document.querySelectorAll('.chk-user-deny-perm:checked')].map(c => c.value);
 
     if (!name) return alert('Name is required');
     if (!userId) return alert('User ID is required');
@@ -18323,17 +18919,30 @@ async function saveUser(id) {
     const allUsers = DB.cache['users'] || [];
     const conflict = allUsers.find(u => u.userId && u.userId.toLowerCase() === userId && u.id !== id);
     if (conflict) return alert(`User ID "${userId}" is already taken by ${conflict.name}`);
-
-    const canEditPerm = $('f-user-canedit').checked;
+    const denySet = new Set(denyPerms);
+    const conflictingKeys = allowPerms.filter(key => denySet.has(key));
+    if (conflictingKeys.length) return alert('The same permission cannot be both allowed and denied.');
 
     const primaryRole = selectedRoles[0];
-    const data = { name, userId, role: primaryRole, roles: selectedRoles, pin, monthlyTarget: target, extra_perms: extraPerms, canEdit: canEditPerm };
+    const data = {
+        name,
+        userId,
+        role: primaryRole,
+        roles: selectedRoles,
+        pin,
+        monthlyTarget: target,
+        allowPerms,
+        denyPerms,
+        extraPerms: getLegacyExtraPermsFromAllowKeys(allowPerms),
+        canEdit: allowPerms.includes('action.records.edit')
+    };
 
     try {
+        let savedUser;
         if (id) {
-            await DB.update('users', id, data);
+            savedUser = await DB.update('users', id, data);
         } else {
-            await DB.insert('users', data);
+            savedUser = await DB.insert('users', data);
             // Auto-create Packer or Delivery Person record
             if (selectedRoles.includes('Packing')) {
                 const packers = await DB.getAll('packers');
@@ -18344,12 +18953,23 @@ async function saveUser(id) {
                 if (!dps.some(p => p.name === name)) await DB.insert('delivery_persons', { name });
             }
         }
+        if (currentUser && savedUser && currentUser.id === savedUser.id) {
+            currentUser = { ...currentUser, ...savedUser };
+            window.currentUser = currentUser;
+            dmSaveSession(currentUser);
+            buildSidebar();
+            showBottomNav();
+            if (!canAccessPage(currentPage, currentUser)) {
+                await navigateTo('dashboard');
+            }
+        }
         closeModal(); renderUsers();
         showToast('User saved!', 'success');
         if (window._saveAndNew) { window._saveAndNew = false; openUserModal(); }
     } catch (e) { window._saveAndNew = false; alert('Error saving user: ' + e.message); }
 }
 async function deleteUser(id) {
+    if (!hasPerm('action.users.manage')) return alert('Access denied');
     if (!confirm('Delete user?')) return;
     if (currentUser && currentUser.id === id) return alert('Cannot delete yourself');
     try { await DB.delete('users', id); renderUsers(); }
@@ -19187,8 +19807,8 @@ function openSmartReset() {
         <p style="color:var(--text-secondary);font-size:0.88rem;margin-bottom:14px">Choose what to delete. This <strong>cannot be undone</strong>.</p>
         <div id="reset-opt-entries" class="reset-option-card active" onclick="selectResetOption('entries')">
             <div style="font-weight:700"> Entries Only</div>
-            <div style="font-size:0.8rem;color:var(--text-muted);margin-top:4px">Orders, Invoices, Payments, Expenses, Packing, Delivery, Ledger entries</div>
-            <div style="font-size:0.78rem;color:var(--success);margin-top:4px"> Masters (Parties, Items, etc.) kept</div>
+            <div style="font-size:0.8rem;color:var(--text-muted);margin-top:4px">Sales Orders, Purchase Orders, Invoices, Payments, Expenses, Packing, Delivery, Ledger entries</div>
+            <div style="font-size:0.78rem;color:var(--success);margin-top:4px"> Masters (Parties, Items, etc.) kept, item stock/batches are cleared, and document numbering restarts</div>
         </div>
         <div id="reset-opt-all" class="reset-option-card" onclick="selectResetOption('all')" style="margin-top:10px">
             <div style="font-weight:700"> Entries + Masters</div>
@@ -19208,6 +19828,7 @@ function openSmartReset() {
         <div style="margin-top:16px">
             <label style="font-size:0.85rem;color:var(--text-secondary)">Type <strong>RESET</strong> to confirm:</label>
             <input id="reset-confirm-input" type="text" class="form-input" placeholder="RESET" style="margin-top:6px;font-weight:700;letter-spacing:2px;text-transform:uppercase">
+            <div style="font-size:0.76rem;color:var(--text-muted);margin-top:8px">Document no. series resets with entry reset. Party-code series resets only if Parties master is deleted.</div>
         </div>`,
         `<button class="btn btn-outline" onclick="closeModal()">Cancel</button>
          <button class="btn btn-danger" onclick="executeSmartReset()"> Reset Now</button>`);
@@ -19224,8 +19845,16 @@ async function executeSmartReset() {
     const confirmVal = ($('reset-confirm-input') || {}).value || '';
     if (confirmVal.trim().toUpperCase() !== 'RESET') { showToast('Type RESET to confirm', 'error'); return; }
 
-    const entryTables = ['sales_orders', 'invoices', 'payments', 'expenses', 'stock_ledger', 'party_ledger', 'delivery'];
-    const entryLsKeys = ['db_salesorders', 'db_invoices', 'db_payments', 'db_expenses', 'db_packing', 'db_delivery', 'db_stock_ledger', 'db_party_ledger', 'db_counters'];
+    const entryTables = ['sales_orders', 'purchase_orders', 'invoices', 'payments', 'expenses', 'stock_ledger', 'party_ledger', 'delivery'];
+    const documentSeriesCodes = ['INVOICE', 'SALES_ORDER', 'PURCHASE_ORDER', 'PURCHASE_INVOICE', 'VYAPAR_INVOICE', 'PAYMENT_IN', 'PAYMENT_OUT', 'EXPENSE'];
+    const entryLsKeys = [
+        'db_salesorders', 'db_sales_orders',
+        'db_purchaseorders', 'db_purchase_orders',
+        'db_invoices', 'db_payments', 'db_expenses',
+        'db_packing', 'db_delivery',
+        'db_stock_ledger', 'db_party_ledger',
+        'db_counters'
+    ];
     const masterMap = [
         { id: 'rm-parties', supabase: 'parties', ls: 'db_parties' },
         { id: 'rm-inventory', supabase: 'inventory', ls: 'db_inventory' },
@@ -19241,6 +19870,7 @@ async function executeSmartReset() {
     if (btn) { btn.disabled = true; btn.textContent = ' Resetting...'; }
 
     try {
+        const failures = [];
         // Re-set session role so RLS policies allow delete
         if (currentUser) {
             await supabaseClient.rpc('set_session_role', {
@@ -19250,34 +19880,112 @@ async function executeSmartReset() {
         }
         for (const t of entryTables) {
             const { error } = await supabaseClient.from(t).delete().not('id', 'is', null);
-            if (error) console.warn(`Reset: failed to delete ${t}:`, error.message);
+            if (error) {
+                console.warn(`Reset: failed to delete ${t}:`, error.message);
+                failures.push(`${t}: ${error.message}`);
+            }
         }
         // Zero out all party balances so receivable/payable resets
-        await supabaseClient.from('parties').update({ balance: 0 }).not('id', 'is', null);
+        const { error: partyResetError } = await supabaseClient.from('parties').update({ balance: 0 }).not('id', 'is', null);
+        if (partyResetError) failures.push(`parties balance reset: ${partyResetError.message}`);
+
+        // Keep item masters, but wipe transaction-driven inventory state.
+        const { error: inventoryResetError } = await supabaseClient
+            .from('inventory')
+            .update({ stock: 0, batches: [] })
+            .not('id', 'is', null);
+        if (inventoryResetError) failures.push(`inventory stock reset: ${inventoryResetError.message}`);
+
+        const { error: docSeriesResetError } = await supabaseClient
+            .from('no_series')
+            .update({ last_no: 0 })
+            .in('code', documentSeriesCodes);
+        if (docSeriesResetError) failures.push(`document series reset: ${docSeriesResetError.message}`);
+
+        const paySettings = { ...(DB.ls.getObj('pay_settings') || {}) };
+        paySettings.currentNo = '1';
+        DB.ls.set('pay_settings', paySettings);
+        const { error: paySettingsError } = await supabaseClient
+            .from('settings')
+            .upsert({ key: 'pay_settings', value: paySettings }, { onConflict: 'key' });
+        if (paySettingsError) failures.push(`pay_settings reset: ${paySettingsError.message}`);
+
+        const vyaparSettings = { ...(DB.ls.getObj('vyapar_settings') || {}) };
+        vyaparSettings.currentNo = '1';
+        DB.ls.set('vyapar_settings', vyaparSettings);
+        const { error: vyaparSettingsError } = await supabaseClient
+            .from('settings')
+            .upsert({ key: 'vyapar_settings', value: vyaparSettings }, { onConflict: 'key' });
+        if (vyaparSettingsError) failures.push(`vyapar_settings reset: ${vyaparSettingsError.message}`);
+
         entryLsKeys.forEach(k => localStorage.removeItem(k));
         localStorage.removeItem('db_parties'); // force re-fetch so balance shows 0
 
         // Clear IndexedDB cache so stale data is not restored on reload
-        const idbEntryKeys = ['db_sales_orders', 'db_invoices', 'db_payments', 'db_expenses',
-                              'db_stock_ledger', 'db_party_ledger', 'db_delivery'];
+        const idbEntryKeys = [
+            'db_sales_orders', 'db_purchase_orders',
+            'db_invoices', 'db_payments', 'db_expenses',
+            'db_stock_ledger', 'db_party_ledger', 'db_delivery'
+        ];
         for (const k of idbEntryKeys) {
             await DB.idb.set(k, []).catch(() => {});
             // Also wipe the in-memory cache
-            const tableKey = k.replace(/^db_/, '');
+            const tableKey = DB.mapTable(k.replace(/^db_/, ''));
             if (DB.cache[tableKey]) DB.cache[tableKey] = [];
         }
         // Reset party balances in memory too
         if (DB.cache['parties']) DB.cache['parties'].forEach(p => p.balance = 0);
         await DB.idb.set('db_parties', DB.cache['parties'] || []).catch(() => {});
 
+        // Reset inventory stock/batches in memory too, so the UI cannot revive stale negative values.
+        const inventoryCache = (DB.cache['inventory'] || DB.get('db_inventory') || []).map(item => ({
+            ...item,
+            stock: 0,
+            batches: []
+        }));
+        DB.cache['inventory'] = inventoryCache;
+        DB.cache['db_inventory'] = inventoryCache;
+        await DB.idb.set('db_inventory', inventoryCache).catch(() => {});
+        localStorage.removeItem('db_inventory');
+
+        if (DB.cache['no_series']) {
+            const updatedSeries = DB.cache['no_series'].map(row =>
+                documentSeriesCodes.includes(String(row.code || '').toUpperCase())
+                    ? { ...row, lastNo: 0 }
+                    : row
+            );
+            DB.cache['no_series'] = updatedSeries;
+            await DB.idb.set('db_no_series', updatedSeries).catch(() => {});
+        }
+
         if (window._resetOption === 'all') {
             for (const m of masterMap) {
                 const el = document.getElementById(m.id);
                 if (el && el.checked) {
-                    if (m.supabase) await supabaseClient.from(m.supabase).delete().not('id', 'is', null);
+                    if (m.supabase) {
+                        const { error } = await supabaseClient.from(m.supabase).delete().not('id', 'is', null);
+                        if (error) failures.push(`${m.supabase}: ${error.message}`);
+                    }
                     localStorage.removeItem(m.ls);
                 }
             }
+        }
+
+        const shouldResetPartySeries = window._resetOption === 'all'
+            && !!(document.getElementById('rm-parties') && document.getElementById('rm-parties').checked);
+        if (shouldResetPartySeries) {
+            const partySeries = { ...(DB.ls.getObj('db_number_series') || {}) };
+            partySeries.cust_start = 1;
+            partySeries.supp_start = 1;
+            DB.ls.set('db_number_series', partySeries);
+            const { error: partySeriesError } = await supabaseClient
+                .from('settings')
+                .upsert({ key: 'db_number_series', value: partySeries }, { onConflict: 'key' });
+            if (partySeriesError) failures.push(`party code series reset: ${partySeriesError.message}`);
+        }
+
+        if (failures.length) {
+            throw new Error('Reset incomplete. ' + failures.slice(0, 4).join(' | ') + (failures.length > 4 ? ' ...' : ''));
         }
 
         closeModal();
