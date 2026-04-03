@@ -980,7 +980,7 @@ const ROLE_NAME_MAP = {
 };
 const CUSTOMER_PORTAL_ENABLED = false; // Feature kept in codebase for future relaunch, disabled for current live release.
 function getAppVersion() {
-    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v133';
+    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v1.106.9';
 }
 
 const PAGE_LABELS = {
@@ -1691,7 +1691,7 @@ function openModal(title, html, footer, isFullScreen = false) {
 
     $('modal-overlay').classList.remove('hidden');
     // Prevent background page scroll while modal is open
-    document.body.style.overflow = 'hidden';
+    document.body.classList.add('body-scroll-lock');
     document.body.classList.add('modal-open');
     // Hide FAB so it doesn't overlap modal buttons
     const fab = $('app-fab');
@@ -1712,7 +1712,7 @@ function openModal(title, html, footer, isFullScreen = false) {
 }
 function closeModal() {
     $('modal-overlay').classList.add('hidden');
-    document.body.style.overflow = ''; // Restore page scroll
+    document.body.classList.remove('body-scroll-lock'); // Restore page scroll
     document.body.classList.remove('modal-open');
     document.querySelectorAll('.search-dropdown-list').forEach(d => d.remove());
     const footerEl = $('modal-footer');
@@ -2366,6 +2366,7 @@ function initSwipeActions() { /* placeholder for future swipe-to-delete/edit */ 
 // --- Navigation ---
 async function navigateTo(page, options = {}) {
     setPageChromeMode('default');
+    document.body.classList.remove('body-scroll-lock'); // ALWAYS UNLOCK ON NAVIGATION
     const isSilent = options.silent === true;
     if (!currentUser) return showLoginScreen();
     if (page === 'customerrequests' && !CUSTOMER_PORTAL_ENABLED) {
@@ -3893,12 +3894,12 @@ async function buildAdminCommandCenter(model) {
 
                 <div class="admin-dash-single-actions">
                     ${dashboardActions.map(action => {
-            const isPrimary = action.key === 'new-sale' || action.key === 'payment-in';
-            return `<button type="button" class="admin-dash-single-action ${isPrimary ? 'primary' : ''}" onclick="${action.fn}" title="${action.meta.desc}">
+        const isPrimary = action.key === 'new-sale' || action.key === 'payment-in';
+        return `<button type="button" class="admin-dash-single-action ${isPrimary ? 'primary' : ''}" onclick="${action.fn}" title="${action.meta.desc}">
                                 <span class="material-symbols-outlined">${action.icon}</span>
                                 <strong>${action.label}</strong>
                             </button>`;
-        }).join('')}
+    }).join('')}
                 </div>
             </section>
 
@@ -8014,6 +8015,7 @@ async function filterSOTable() {
     soUpdateBulkBtn();
 }
 async function openSalesOrderModal() {
+    document.body.classList.add('body-scroll-lock'); // LOCK SCROLL
     soItems = [];
     window._soExpandedLines = new Set();
     currentPage = 'salesorders';
@@ -25625,3 +25627,13 @@ async function postVyaparImportPayments() {
     }
 }
 
+// ============================================
+// APP INITIALIZATION & GLOBAL EVENT LISTENERS
+// ============================================
+
+// Disable pull-to-refresh on older mobile iOS browsers
+document.addEventListener('touchmove', function(e) {
+    if (window.scrollY === 0 && e.touches && e.touches[0].clientY > 0) {
+        e.preventDefault();
+    }
+}, { passive: false });
