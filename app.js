@@ -1167,6 +1167,11 @@ function setPageChromeMode(mode = 'default') {
     } else if (mode === 'catalog') {
         document.body.classList.add('catalog-page-open');
     }
+    // Hide sticky catalog filter when leaving catalog page
+    if (mode !== 'catalog') {
+        const sf = document.getElementById('catalog-sticky-filter');
+        if (sf) sf.classList.remove('visible');
+    }
 }
 function isCompactMobileView() {
     return window.innerWidth <= 768;
@@ -22179,8 +22184,44 @@ async function renderCatalog() {
             ${msIcon('arrow_upward')}
         </button>`;
 
+    // Add sticky filter bar for scroll-up visibility
+    let stickyFilter = document.getElementById('catalog-sticky-filter');
+    if (!stickyFilter) {
+        stickyFilter = document.createElement('div');
+        stickyFilter.id = 'catalog-sticky-filter';
+        stickyFilter.className = 'catalog-sticky-filter';
+        document.body.appendChild(stickyFilter);
+    }
+    // Clone category and movement pills into sticky filter
+    const movPillsEl = document.getElementById('catalog-movement-pills');
+    const catPillsEl = document.getElementById('catalog-pills');
+    if (stickyFilter && (movPillsEl || catPillsEl)) {
+        stickyFilter.innerHTML = '';
+        if (catPillsEl) {
+            const catClone = catPillsEl.cloneNode(true);
+            catClone.removeAttribute('id');
+            catClone.style.cssText = 'display:flex;gap:6px;flex-shrink:0;';
+            catClone.querySelectorAll('.catalog-pill').forEach(pill => {
+                const cat = pill.dataset.cat || '';
+                pill.onclick = () => filterCatalogByCat(cat);
+            });
+            stickyFilter.appendChild(catClone);
+        }
+        if (movPillsEl) {
+            const movClone = movPillsEl.cloneNode(true);
+            movClone.removeAttribute('id');
+            movClone.style.cssText = 'display:flex;gap:6px;flex-shrink:0;';
+            movClone.querySelectorAll('.catalog-pill').forEach(pill => {
+                const movement = pill.dataset.movement || '';
+                pill.onclick = () => filterCatalogByMovement(movement);
+            });
+            stickyFilter.appendChild(movClone);
+        }
+    }
+
     bindCatalogTopButton();
     updateCatalogTopButtonVisibility();
+    bindCatalogStickyFilter();
 }
 
 async function syncCatalogData(silent = false) {
@@ -22246,7 +22287,11 @@ async function renderCatalogCards(items) {
             </div>
         </div>`;
     }));
-    return cards.join('');
+    return cards.join('') + `
+        <div class="catalog-scroll-top-card" onclick="scrollCatalogToTop()">
+            <div class="catalog-scroll-top-icon">${msIcon('arrow_upward')}</div>
+            <span class="catalog-scroll-top-label">Back to Top</span>
+        </div>`;
 }
 
 function renderCatalogCartBar() {
@@ -22336,6 +22381,58 @@ function bindCatalogTopButton() {
     }
     window.addEventListener('resize', onScroll, { passive: true });
     _catalogTopButtonBound = true;
+}
+
+let _catalogStickyBound = false;
+let _catalogLastScrollY = 0;
+
+function bindCatalogStickyFilter() {
+    if (_catalogStickyBound) return;
+    const root = getCatalogScrollRoot();
+    if (!root) return;
+
+    const getScrollY = () => {
+        if (root === document.scrollingElement || root === document.documentElement) {
+            return window.scrollY || document.documentElement.scrollTop || 0;
+        }
+        return root.scrollTop || 0;
+    };
+
+    const onScroll = () => {
+        if (currentPage !== 'catalog') return;
+        const stickyFilter = document.getElementById('catalog-sticky-filter');
+        if (!stickyFilter) return;
+
+        const y = getScrollY();
+        const isScrollingUp = y < _catalogLastScrollY && y > 200;
+        stickyFilter.classList.toggle('visible', isScrollingUp);
+        _catalogLastScrollY = y;
+
+        // Keep sticky filter pills in sync with actual filter state
+        if (isScrollingUp) {
+            const activeCat = document.querySelector('#catalog-pills .catalog-pill.active');
+            const activeMov = document.querySelector('#catalog-movement-pills .catalog-pill.active');
+            if (activeCat) {
+                const catVal = activeCat.dataset.cat || '';
+                stickyFilter.querySelectorAll('[data-cat]').forEach(p => {
+                    p.classList.toggle('active', (p.dataset.cat || '') === catVal);
+                });
+            }
+            if (activeMov) {
+                const movVal = activeMov.dataset.movement || '';
+                stickyFilter.querySelectorAll('[data-movement]').forEach(p => {
+                    p.classList.toggle('active', (p.dataset.movement || '') === movVal);
+                });
+            }
+        }
+    };
+
+    if (root === document.scrollingElement || root === document.documentElement) {
+        window.addEventListener('scroll', onScroll, { passive: true });
+    } else {
+        root.addEventListener('scroll', onScroll, { passive: true });
+    }
+    _catalogStickyBound = true;
 }
 
 async function getItemMovementMap() {
