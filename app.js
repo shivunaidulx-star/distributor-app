@@ -978,7 +978,7 @@ const ROLE_NAME_MAP = {
 };
 const CUSTOMER_PORTAL_ENABLED = false; // Feature kept in codebase for future relaunch, disabled for current live release.
 function getAppVersion() {
-    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v127';
+    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v128';
 }
 
 const PAGE_LABELS = {
@@ -1160,7 +1160,7 @@ function setDocFormMode(isOpen) {
 }
 function setPageChromeMode(mode = 'default') {
     document.body.classList.remove('sales-doc-page-open', 'catalog-page-open');
-    setPageChromeMode('default');
+    setDocFormMode(false);
     if (mode === 'sales-doc') {
         document.body.classList.add('sales-doc-page-open');
         setDocFormMode(true);
