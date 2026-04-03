@@ -978,7 +978,7 @@ const ROLE_NAME_MAP = {
 };
 const CUSTOMER_PORTAL_ENABLED = false; // Feature kept in codebase for future relaunch, disabled for current live release.
 function getAppVersion() {
-    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v128';
+    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v129';
 }
 
 const PAGE_LABELS = {
@@ -4391,14 +4391,12 @@ function renderItemPhotoList(items) {
                 <div style="font-weight:600;font-size:0.92rem;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(i.name)}</div>
                 <div style="font-size:0.78rem;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${i.itemCode ? '[' + i.itemCode + '] ' : ''}${i.category || ''}</div>
             </div>
-                <label class="btn btn-outline btn-sm file-picker-btn" style="padding:6px 10px;font-size:0.82rem;margin:0;cursor:pointer;" title="Camera">
+                <button type="button" class="btn btn-outline btn-sm file-picker-btn" style="padding:6px 10px;font-size:0.82rem;margin:0;cursor:pointer;" title="Camera" onclick="pickItemPhotoQuick('${i.id}', true)">
                     ${msIcon('photo_camera', '', 'font-size:1rem')}
-                    <input type="file" accept="image/*" capture="environment" onchange="uploadItemPhotoQuick('${i.id}', this)" class="file-picker-input">
-                </label>
-                <label class="btn btn-primary btn-sm file-picker-btn" style="padding:6px 10px;font-size:0.82rem;margin:0;cursor:pointer;" title="Gallery">
+                </button>
+                <button type="button" class="btn btn-primary btn-sm file-picker-btn" style="padding:6px 10px;font-size:0.82rem;margin:0;cursor:pointer;" title="Gallery" onclick="pickItemPhotoQuick('${i.id}', false)">
                     ${msIcon('imagesmode', '', 'font-size:1rem')}
-                    <input type="file" accept="image/*" onchange="uploadItemPhotoQuick('${i.id}', this)" class="file-picker-input">
-                </label>
+                </button>
             </div>
         </div>
     `;
@@ -4414,6 +4412,31 @@ function filterItemPhotoList(q) {
         (i.category || '').toLowerCase().includes(s)
     );
     $('photo-item-list').innerHTML = renderItemPhotoList(filtered);
+}
+
+function openTransientImagePicker(useCamera, onInputReady) {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    if (useCamera) input.setAttribute('capture', 'environment');
+    input.className = 'native-file-input';
+
+    input.addEventListener('change', () => {
+        onInputReady && onInputReady(input);
+        // Keep it in the same task; some browsers need the input to live until change fires.
+        setTimeout(() => input.remove(), 0);
+    }, { once: true });
+
+    document.body.appendChild(input);
+    input.click();
+}
+
+function pickItemPhotoQuick(itemId, useCamera) {
+    openTransientImagePicker(!!useCamera, (input) => uploadItemPhotoQuick(itemId, input));
+}
+
+function pickItemFormPhoto(useCamera) {
+    openTransientImagePicker(!!useCamera, (input) => previewItemPhoto({ target: input }));
 }
 
 async function uploadItemPhotoQuick(itemId, inputEl) {
@@ -5942,14 +5965,12 @@ async function renderItemFormPage() {
             <div style="flex:1">
                 <div style="font-size:0.82rem;color:var(--text-muted);margin-bottom:4px">Item Photo (optional)</div>
                 <div style="display:flex;gap:6px;flex-wrap:wrap">
-                    <label class="btn btn-outline btn-sm file-picker-btn" style="font-size:0.78rem;margin:0;cursor:pointer;">
+                    <button type="button" class="btn btn-outline btn-sm file-picker-btn" style="font-size:0.78rem;margin:0;cursor:pointer;" onclick="pickItemFormPhoto(true)">
                         ${msIcon('photo_camera', '', 'font-size:1rem;vertical-align:-3px')} Camera
-                        <input type="file" accept="image/*" capture="environment" onchange="previewItemPhoto(event)" class="file-picker-input">
-                    </label>
-                    <label class="btn btn-outline btn-sm file-picker-btn" style="font-size:0.78rem;margin:0;cursor:pointer;">
+                    </button>
+                    <button type="button" class="btn btn-outline btn-sm file-picker-btn" style="font-size:0.78rem;margin:0;cursor:pointer;" onclick="pickItemFormPhoto(false)">
                         ${msIcon('imagesmode', '', 'font-size:1rem;vertical-align:-3px')} Gallery
-                        <input type="file" accept="image/*" onchange="previewItemPhoto(event)" class="file-picker-input">
-                    </label>
+                    </button>
                     ${i && (i.imageUrl || i.photo) ? '<button type="button" class="btn btn-outline btn-sm" onclick="removeItemPhoto()" style="font-size:0.78rem"> Remove</button>' : ''}
                 </div>
             </div>
@@ -22108,7 +22129,7 @@ function getCatalogMrpValue(item) {
 
 async function renderCatalog() {
     // Ping GPS in background — don't block page render
-    getFreshLocationAndSort([], 'none').catch(() => {});
+    setPageChromeMode('catalog');
     // Setup background interval if not already running
     if (!_catalogAutoSyncInterval) {
         _catalogAutoSyncInterval = setInterval(() => {
@@ -22132,13 +22153,12 @@ async function renderCatalog() {
             <button class="btn btn-outline btn-sm" onclick="syncCatalogData()"> Sync Data</button>
         </div>
         <div style="margin-bottom:16px;display:flex;gap:10px">
-            <input class="search-box" id="catalog-search" placeholder=" Search products..." oninput="filterCatalog()" style="flex:1;font-size:1rem;padding:12px 16px;border-radius:12px">
+            <input class="search-box" id="catalog-search" placeholder="Search products..." oninput="filterCatalog()" style="flex:1;font-size:1rem;padding:12px 16px;border-radius:12px">
             <select id="catalog-sort" class="search-box" style="width:auto;border-radius:12px" onchange="filterCatalog()">
-                <option value="">Sort: Default</option>
+                <option value="mrp-asc" selected>MRP: Low to High</option>
+                <option value="mrp-desc">MRP: High to Low</option>
                 <option value="name-asc">Name: A to Z</option>
                 <option value="name-desc">Name: Z to A</option>
-                <option value="price-asc">Price: Low to High</option>
-                <option value="price-desc">Price: High to Low</option>
             </select>
         </div>
         <div id="catalog-pills" style="display:flex;gap:8px;overflow-x:auto;padding-bottom:8px;margin-bottom:8px;-webkit-overflow-scrolling:touch">
@@ -22154,7 +22174,13 @@ async function renderCatalog() {
         <div id="catalog-grid" class="catalog-grid">
             ${await renderCatalogCards(items)}
         </div>
-        ${catalogCart.length ? renderCatalogCartBar() : ''}`;
+        ${catalogCart.length ? renderCatalogCartBar() : ''}
+        <button id="catalog-top-btn" class="catalog-top-btn" type="button" onclick="scrollCatalogToTop()" aria-label="Back to top">
+            ${msIcon('arrow_upward')}
+        </button>`;
+
+    bindCatalogTopButton();
+    updateCatalogTopButtonVisibility();
 }
 
 async function syncCatalogData(silent = false) {
@@ -22246,20 +22272,70 @@ async function filterCatalog() {
     let items = allItems.filter(i => i.active !== false); // Hide deactivated
     if (cat) items = items.filter(i => i.category === cat);
     if (subCat) items = items.filter(i => (i.subCategory || '') === subCat);
-    if (s) items = items.filter(i => i.name.toLowerCase().includes(s) || (i.itemCode || '').toLowerCase().includes(s) || (i.category || '').toLowerCase().includes(s) || (i.subCategory || '').toLowerCase().includes(s));
+    if (s) items = items.filter(i =>
+        ((i.name || '').toLowerCase().includes(s)) ||
+        ((i.itemCode || '').toLowerCase().includes(s)) ||
+        ((i.category || '').toLowerCase().includes(s)) ||
+        ((i.subCategory || '').toLowerCase().includes(s))
+    );
     if (movement) {
         const movementMap = await getItemMovementMap();
         items = items.filter(i => movementMap[i.id] === movement);
     }
 
-    const sortBy = $('catalog-sort') ? $('catalog-sort').value : '';
+    const sortBy = $('catalog-sort') ? $('catalog-sort').value : 'mrp-asc';
     if (sortBy === 'name-asc') items.sort((a, b) => a.name.localeCompare(b.name));
     else if (sortBy === 'name-desc') items.sort((a, b) => b.name.localeCompare(a.name));
-    else if (sortBy === 'price-asc') items.sort((a, b) => a.salePrice - b.salePrice);
-    else if (sortBy === 'price-desc') items.sort((a, b) => b.salePrice - a.salePrice);
+    else if (sortBy === 'mrp-asc') items.sort((a, b) => getCatalogMrpValue(a) - getCatalogMrpValue(b));
+    else if (sortBy === 'mrp-desc') items.sort((a, b) => getCatalogMrpValue(b) - getCatalogMrpValue(a));
 
     const grid = $('catalog-grid');
     if (grid) grid.innerHTML = await renderCatalogCards(items);
+    updateCatalogTopButtonVisibility();
+}
+
+function getCatalogScrollRoot() {
+    return document.querySelector('.main-content') || document.scrollingElement || document.documentElement;
+}
+
+function scrollCatalogToTop() {
+    const root = getCatalogScrollRoot();
+    try {
+        root.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch (e) {
+        root.scrollTop = 0;
+    }
+    updateCatalogTopButtonVisibility();
+}
+
+function updateCatalogTopButtonVisibility() {
+    const btn = $('catalog-top-btn');
+    if (!btn) return;
+    const root = getCatalogScrollRoot();
+    const y = (root === document.scrollingElement || root === document.documentElement)
+        ? (window.scrollY || document.documentElement.scrollTop || 0)
+        : (root.scrollTop || 0);
+    btn.classList.toggle('show', y > 600);
+    btn.classList.toggle('with-cart', !!document.getElementById('catalog-cart-bar'));
+}
+
+function bindCatalogTopButton() {
+    if (_catalogTopButtonBound) return;
+    const root = getCatalogScrollRoot();
+    if (!root) return;
+
+    const onScroll = () => {
+        if (currentPage !== 'catalog') return;
+        updateCatalogTopButtonVisibility();
+    };
+
+    if (root === document.scrollingElement || root === document.documentElement) {
+        window.addEventListener('scroll', onScroll, { passive: true });
+    } else {
+        root.addEventListener('scroll', onScroll, { passive: true });
+    }
+    window.addEventListener('resize', onScroll, { passive: true });
+    _catalogTopButtonBound = true;
 }
 
 async function getItemMovementMap() {
@@ -22351,7 +22427,8 @@ function filterCatalogBySubcat(subcat) {
     filterCatalog();
 }
 
-async function renderCatalog() {
+// Disabled: the "catalog-native" UI variant (kept only for reference).
+async function renderCatalogNative() {
     setPageChromeMode('catalog');
     const [allItems] = await Promise.all([
         DB.getAll('inventory'),
@@ -22374,8 +22451,8 @@ async function renderCatalog() {
             </div>
             <div class="catalog-native-controls">
                 <div class="catalog-native-search-row">
-                    <input class="search-box" id="catalog-search" placeholder="Search products..." oninput="filterCatalog()">
-                    <select id="catalog-sort" class="search-box" onchange="filterCatalog()">
+                    <input class="search-box" id="catalog-search" placeholder="Search products..." oninput="filterCatalogNative()">
+                    <select id="catalog-sort" class="search-box" onchange="filterCatalogNative()">
                         <option value="mrp-asc" selected>MRP: Low to High</option>
                         <option value="mrp-desc">MRP: High to Low</option>
                         <option value="name-asc">Name: A to Z</option>
@@ -22383,24 +22460,24 @@ async function renderCatalog() {
                     </select>
                 </div>
                 <div id="catalog-pills" class="catalog-native-pill-row">
-                    <button class="catalog-native-pill active" data-cat="" onclick="filterCatalogByCat('')">All</button>
-                    ${catNames.map(c => `<button class="catalog-native-pill" data-cat="${c}" onclick="filterCatalogByCat('${c}')">${c}</button>`).join('')}
+                    <button class="catalog-native-pill active" data-cat="" onclick="filterCatalogByCatNative('')">All</button>
+                    ${catNames.map(c => `<button class="catalog-native-pill" data-cat="${c}" onclick="filterCatalogByCatNative('${c}')">${c}</button>`).join('')}
                 </div>
                 <div id="catalog-subcat-pills" class="catalog-native-pill-row catalog-native-pill-row-secondary"></div>
                 <div id="catalog-movement-pills" class="catalog-native-pill-row catalog-native-pill-row-secondary">
-                    <button class="catalog-native-pill active" data-movement="" onclick="filterCatalogByMovement('')">All Items</button>
-                    <button class="catalog-native-pill" data-movement="slow" onclick="filterCatalogByMovement('slow')">Slow Moving</button>
-                    <button class="catalog-native-pill" data-movement="non" onclick="filterCatalogByMovement('non')">Non-Moving (10d)</button>
+                    <button class="catalog-native-pill active" data-movement="" onclick="filterCatalogByMovementNative('')">All Items</button>
+                    <button class="catalog-native-pill" data-movement="slow" onclick="filterCatalogByMovementNative('slow')">Slow Moving</button>
+                    <button class="catalog-native-pill" data-movement="non" onclick="filterCatalogByMovementNative('non')">Non-Moving (10d)</button>
                 </div>
             </div>
             <div id="catalog-grid" class="catalog-native-grid">
-                ${await renderCatalogCards(items)}
+                ${await renderCatalogCardsNative(items)}
             </div>
             ${catalogCart.length ? renderCatalogCartBar() : ''}
         </div>`;
 }
 
-async function renderCatalogCards(items) {
+async function renderCatalogCardsNative(items) {
     if (!items.length) return '<div class="empty-state" style="padding:40px"><div class="empty-icon"></div><p>No products found</p></div>';
     const cards = await Promise.all(items.map(async i => {
         const stockData = await getAvailableStock(i);
@@ -22446,7 +22523,7 @@ async function renderCatalogCards(items) {
     return cards.join('');
 }
 
-async function filterCatalog() {
+async function filterCatalogNative() {
     const s = ($('catalog-search') ? $('catalog-search').value : '').toLowerCase();
     const activeCatPill = document.querySelector('#catalog-pills .catalog-native-pill.active');
     const cat = activeCatPill ? activeCatPill.dataset.cat || '' : '';
@@ -22476,17 +22553,17 @@ async function filterCatalog() {
     else if (sortBy === 'mrp-desc') items.sort((a, b) => (+b.mrp || +b.salePrice || 0) - (+a.mrp || +a.salePrice || 0));
 
     const grid = $('catalog-grid');
-    if (grid) grid.innerHTML = await renderCatalogCards(items);
+    if (grid) grid.innerHTML = await renderCatalogCardsNative(items);
 }
 
-function filterCatalogByMovement(movement) {
+function filterCatalogByMovementNative(movement) {
     document.querySelectorAll('#catalog-movement-pills .catalog-native-pill').forEach(p => {
         p.classList.toggle('active', (p.dataset.movement || '') === movement);
     });
-    filterCatalog();
+    filterCatalogNative();
 }
 
-function filterCatalogByCat(cat) {
+function filterCatalogByCatNative(cat) {
     document.querySelectorAll('#catalog-pills .catalog-native-pill').forEach(p => {
         p.classList.toggle('active', (p.dataset.cat || '') === cat);
     });
@@ -22497,8 +22574,8 @@ function filterCatalogByCat(cat) {
             const catObj = (DB.get('db_categories') || []).find(c => c.name === cat);
             const subCats = (catObj && catObj.subCategories) ? catObj.subCategories : [];
             if (subCats.length) {
-                subPillsContainer.innerHTML = `<button class="catalog-native-pill active" data-subcat="" onclick="filterCatalogBySubcat('All')">All ${escapeHtml(cat)}</button>` +
-                    subCats.map(sc => `<button class="catalog-native-pill" data-subcat="${sc}" onclick="filterCatalogBySubcat('${sc}')">${escapeHtml(sc)}</button>`).join('');
+                subPillsContainer.innerHTML = `<button class="catalog-native-pill active" data-subcat="" onclick="filterCatalogBySubcatNative('All')">All ${escapeHtml(cat)}</button>` +
+                    subCats.map(sc => `<button class="catalog-native-pill" data-subcat="${sc}" onclick="filterCatalogBySubcatNative('${sc}')">${escapeHtml(sc)}</button>`).join('');
             } else {
                 subPillsContainer.innerHTML = '';
             }
@@ -22506,15 +22583,15 @@ function filterCatalogByCat(cat) {
             subPillsContainer.innerHTML = '';
         }
     }
-    filterCatalog();
+    filterCatalogNative();
 }
 
-function filterCatalogBySubcat(subcat) {
+function filterCatalogBySubcatNative(subcat) {
     document.querySelectorAll('#catalog-subcat-pills .catalog-native-pill').forEach(p => {
         const psc = p.dataset.subcat || '';
         p.classList.toggle('active', subcat === 'All' ? psc === '' : psc === subcat);
     });
-    filterCatalog();
+    filterCatalogNative();
 }
 
 async function addToCatalogCart(itemId, uom) {
