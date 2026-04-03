@@ -10,10 +10,24 @@
 CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
+    user_id TEXT,
     role TEXT DEFAULT 'Salesman',
+    roles JSONB DEFAULT '[]',
     pin TEXT,
+    monthly_target NUMERIC DEFAULT 0,
+    extra_perms JSONB DEFAULT '[]',
+    can_edit BOOLEAN DEFAULT false,
+    allow_perms JSONB DEFAULT '[]',
+    deny_perms JSONB DEFAULT '[]',
     dashboard_prefs JSONB DEFAULT '{}'
 );
+ALTER TABLE users ADD COLUMN IF NOT EXISTS user_id TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS roles JSONB DEFAULT '[]';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS monthly_target NUMERIC DEFAULT 0;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS extra_perms JSONB DEFAULT '[]';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS can_edit BOOLEAN DEFAULT false;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS allow_perms JSONB DEFAULT '[]';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS deny_perms JSONB DEFAULT '[]';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS dashboard_prefs JSONB DEFAULT '{}';
 
 -- ─────────────────────────────────────────────

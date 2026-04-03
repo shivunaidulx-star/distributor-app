@@ -1155,6 +1155,22 @@ let currentLedgerPartyId = null;
 // --- DOM Refs ---
 const $ = id => document.getElementById(id);
 const msIcon = (name, className = '', style = '') => `<span class="material-symbols-outlined${className ? ' ' + className : ''}"${style ? ` style="${style}"` : ''}>${name}</span>`;
+function setDocFormMode(isOpen) {
+    document.body.classList.toggle('doc-form-open', !!isOpen);
+}
+function setPageChromeMode(mode = 'default') {
+    document.body.classList.remove('sales-doc-page-open', 'catalog-page-open');
+    setPageChromeMode('default');
+    if (mode === 'sales-doc') {
+        document.body.classList.add('sales-doc-page-open');
+        setDocFormMode(true);
+    } else if (mode === 'catalog') {
+        document.body.classList.add('catalog-page-open');
+    }
+}
+function isCompactMobileView() {
+    return window.innerWidth <= 768;
+}
 const loginScreen = $('login-screen');
 const setupWizard = $('setup-wizard');
 const appEl = $('app');
@@ -1662,7 +1678,7 @@ function initSearchDropdown(inputId, items, onSelect) {
         dd.classList.add('open');
         // Keep extra gap only on larger layouts; on mobile it creates dead space above the keyboard.
         if (isMobileView) {
-            wrapper.style.marginBottom = isPriorityMobileDropdown ? '24px' : '12px';
+            wrapper.style.marginBottom = isPriorityMobileDropdown ? '8px' : '6px';
         } else {
             const h = Math.min(maxHeight, (dd._filtered || []).length * 56 + 20);
             wrapper.style.marginBottom = h + 'px';
@@ -1794,6 +1810,209 @@ function renderSOItemSubModal(categories) {
 }
 
 // Helper to build item list for search dropdown
+function renderSOItemSubModal(categories) {
+    return `
+    <div id="so-item-sub-modal" class="sub-modal doc-item-modal">
+        <div class="sub-modal-header doc-item-modal-header">
+            <button class="btn-icon" onclick="closeSoItemSubModal()">${msIcon('arrow_back', '', 'font-size:1.2rem')}</button>
+            <h3>Add Items to Sale Order</h3>
+            <button class="btn-icon" onclick="closeSoItemSubModal()">${msIcon('close', '', 'font-size:1.2rem')}</button>
+        </div>
+        <div class="sub-modal-body so-item-sub-body doc-item-modal-body">
+            <div class="doc-field-grid doc-field-grid-2 doc-item-filter-block">
+                <div class="doc-input-shell">
+                    <label>Category</label>
+                    <select id="f-so-cat-filter" onchange="onSOCatFilterChange()">
+                        <option value="">All Categories</option>
+                        ${categories.map(c => `<option value="${c.name}">${c.name}</option>`).join('')}
+                    </select>
+                </div>
+                <div class="doc-input-shell">
+                    <label>Sub-Category</label>
+                    <select id="f-so-subcat-filter" onchange="onSOSubcatFilterChange()">
+                        <option value="">All Sub-Categories</option>
+                    </select>
+                </div>
+            </div>
+            <div class="doc-item-sheet-card">
+                <div class="doc-input-shell doc-input-shell-focus so-item-search-group" style="margin-bottom:12px">
+                    <label>Item Name</label>
+                    <input id="f-so-item-input" class="so-item-search-input search-dropdown-mobile-priority" placeholder="e.g. Chocolate Cake">
+                </div>
+                <div class="doc-field-grid doc-field-grid-2" style="margin-bottom:12px">
+                    <div class="doc-input-shell">
+                        <label>Quantity</label>
+                        <input type="number" id="f-so-qty" value="1" min="1">
+                    </div>
+                    <div class="doc-input-shell">
+                        <label>Unit</label>
+                        <select id="f-so-uom" onchange="onSOUomChange()"><option value="">Select Unit</option></select>
+                    </div>
+                </div>
+                <div class="doc-input-shell" style="margin-bottom:12px">
+                    <label>MRP</label>
+                    <input type="number" id="f-so-mrp" value="" readonly placeholder="MRP">
+                </div>
+                <div class="doc-field-grid doc-field-grid-2" style="margin-bottom:12px">
+                    <div class="doc-input-shell">
+                        <label>Rate (Price / Unit)</label>
+                        <input type="number" id="f-so-price" value="" min="0" step="0.01" placeholder="Listed">
+                    </div>
+                    <div class="doc-input-shell">
+                        <label>Tax Mode</label>
+                        <select id="f-so-tax-mode" disabled>
+                            <option value="inclusive">With Tax</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="doc-item-modal-actions">
+            <button class="btn btn-outline" onclick="closeSoItemSubModal()">Done Adding</button>
+            <button class="btn btn-primary so-item-add-btn" onclick="addSOLine()">
+                ${msIcon('add', '', 'font-size:1.1rem')}
+                <span>Add Item</span>
+            </button>
+        </div>
+    </div>`;
+}
+
+function renderSOItemSubModal(categories) {
+    return `
+    <div id="so-item-sub-modal" class="sub-modal doc-item-modal">
+        <div class="sub-modal-header doc-item-modal-header">
+            <button class="btn-icon" onclick="closeSoItemSubModal()">${msIcon('arrow_back', '', 'font-size:1.2rem')}</button>
+            <h3>Add Items to Sale Order</h3>
+            <div style="width:40px"></div>
+        </div>
+        <div class="sub-modal-body so-item-sub-body doc-item-modal-body">
+            <div class="doc-field-grid doc-field-grid-2 doc-item-filter-block">
+                <div class="doc-input-shell">
+                    <label>Category</label>
+                    <select id="f-so-cat-filter" onchange="onSOCatFilterChange()">
+                        <option value="">All Categories</option>
+                        ${categories.map(c => `<option value="${c.name}">${c.name}</option>`).join('')}
+                    </select>
+                </div>
+                <div class="doc-input-shell">
+                    <label>Sub-Category</label>
+                    <select id="f-so-subcat-filter" onchange="onSOSubcatFilterChange()">
+                        <option value="">All Sub-Categories</option>
+                    </select>
+                </div>
+            </div>
+            <div class="doc-item-sheet-card">
+                <div class="doc-input-shell doc-input-shell-focus so-item-search-group" style="margin-bottom:12px">
+                    <label>Item Name</label>
+                    <input id="f-so-item-input" class="so-item-search-input search-dropdown-mobile-priority" placeholder="Search item or code">
+                </div>
+                <div class="doc-field-grid doc-field-grid-2" style="margin-bottom:12px">
+                    <div class="doc-input-shell">
+                        <label>Quantity</label>
+                        <input type="number" id="f-so-qty" value="1" min="1">
+                    </div>
+                    <div class="doc-input-shell">
+                        <label>Unit</label>
+                        <select id="f-so-uom" onchange="onSOUomChange()"><option value="">Select Unit</option></select>
+                    </div>
+                </div>
+                <div class="doc-input-shell" style="margin-bottom:12px">
+                    <label>MRP</label>
+                    <input type="number" id="f-so-mrp" value="" readonly placeholder="MRP">
+                </div>
+                <div class="doc-field-grid doc-field-grid-2" style="margin-bottom:12px">
+                    <div class="doc-input-shell">
+                        <label>Rate (Price / Unit)</label>
+                        <input type="number" id="f-so-price" value="" min="0" step="0.01" placeholder="Listed">
+                    </div>
+                    <div class="doc-input-shell">
+                        <label>Tax Mode</label>
+                        <select id="f-so-tax-mode" disabled>
+                            <option value="inclusive">With Tax</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="doc-item-note" id="f-so-item-note">Pick an item to see stock and code.</div>
+            </div>
+        </div>
+        <div class="doc-item-modal-actions">
+            <button class="btn btn-outline" onclick="addSOLine()">Save &amp; New</button>
+            <button class="btn btn-primary so-item-add-btn" onclick="addSOLineAndClose()">
+                ${msIcon('check', '', 'font-size:1.1rem')}
+                <span>Save</span>
+            </button>
+        </div>
+    </div>`;
+}
+
+function renderInvoiceItemSubModal(categories, title = 'Add Items to Invoice') {
+    return `
+    <div id="inv-item-sub-modal" class="sub-modal doc-item-modal">
+        <div class="sub-modal-header doc-item-modal-header">
+            <button class="btn-icon" onclick="closeInvItemSubModal()">${msIcon('arrow_back', '', 'font-size:1.2rem')}</button>
+            <h3>${escapeHtml(title)}</h3>
+            <div style="width:40px"></div>
+        </div>
+        <div class="sub-modal-body doc-item-modal-body">
+            <div class="doc-field-grid doc-field-grid-2 doc-item-filter-block">
+                <div class="doc-input-shell">
+                    <label>Category</label>
+                    <select id="f-inv-cat-filter" onchange="onInvCatFilterChange()">
+                        <option value="">All Categories</option>
+                        ${categories.map(c => `<option value="${c.name}">${c.name}</option>`).join('')}
+                    </select>
+                </div>
+                <div class="doc-input-shell">
+                    <label>Sub-Category</label>
+                    <select id="f-inv-subcat-filter" onchange="onInvSubcatFilterChange()">
+                        <option value="">All Sub-Categories</option>
+                    </select>
+                </div>
+            </div>
+            <div class="doc-item-sheet-card">
+                <div class="doc-input-shell doc-input-shell-focus" style="margin-bottom:12px">
+                    <label>Item Name</label>
+                    <input id="f-inv-item-input" class="search-dropdown-mobile-priority" placeholder="Search item or code">
+                </div>
+                <div class="doc-field-grid doc-field-grid-2" style="margin-bottom:12px">
+                    <div class="doc-input-shell">
+                        <label>Quantity</label>
+                        <input type="number" id="f-inv-qty" value="1" min="1">
+                    </div>
+                    <div class="doc-input-shell">
+                        <label>Unit</label>
+                        <select id="f-inv-uom" onchange="onInvUomChange()"><option value="">Select Unit</option></select>
+                    </div>
+                </div>
+                <div class="doc-input-shell" style="margin-bottom:12px">
+                    <label>MRP</label>
+                    <input type="number" id="f-inv-mrp" value="" readonly placeholder="MRP">
+                </div>
+                <div class="doc-field-grid doc-field-grid-2" style="margin-bottom:12px">
+                    <div class="doc-input-shell">
+                        <label>Rate (Price / Unit)</label>
+                        <input type="number" id="f-inv-price" value="" min="0" step="0.01" placeholder="Listed">
+                    </div>
+                    <div class="doc-input-shell">
+                        <label>Tax Mode</label>
+                        <select id="f-inv-tax-mode" disabled>
+                            <option value="inclusive">With Tax</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="doc-item-note" id="f-inv-item-note">Pick an item to see stock and code.</div>
+            </div>
+        </div>
+        <div class="doc-item-modal-actions">
+            <button class="btn btn-outline" onclick="addInvoiceLine()">Save &amp; New</button>
+            <button class="btn btn-primary so-item-add-btn" onclick="addInvoiceLineAndClose()">
+                ${msIcon('check', '', 'font-size:1.1rem')}
+                <span>Save</span>
+            </button>
+        </div>
+    </div>`;
+}
+
 function buildItemSearchList(inventoryItems) {
     // Filter out deactivated items from all lookups
     const activeItems = inventoryItems.filter(i => i.active !== false);
@@ -1810,6 +2029,7 @@ function buildItemSearchList(inventoryItems) {
             searchText: (i.name + ' ' + (i.itemCode || '')),
             salePrice: i.salePrice,
             purchasePrice: i.purchasePrice,
+            mrp: i.mrp || i.salePrice || 0,
             unit: i.unit || 'Pcs',
             secUom: i.secUom || '',
             secUomRatio: i.secUomRatio || 0,
@@ -1974,6 +2194,7 @@ function initSwipeActions() { /* placeholder for future swipe-to-delete/edit */ 
 
 // --- Navigation ---
 async function navigateTo(page, options = {}) {
+    setDocFormMode(false);
     const isSilent = options.silent === true;
     if (!currentUser) return showLoginScreen();
     if (page === 'customerrequests' && !CUSTOMER_PORTAL_ENABLED) {
@@ -2049,12 +2270,8 @@ async function navigateTo(page, options = {}) {
     if (renderers[page]) {
         await renderers[page]();
     }
-    // Auto-sync Catalog in background
-    if (page === 'catalog') {
-        syncCatalogData(true); // silent=true
-    }
     // Update user location only on pages that still use GPS-aware sorting/tools
-    if (['catalog', 'parties'].includes(page)) {
+    if (page === 'parties') {
         updateUserLocation();
     }
 }
@@ -7695,9 +7912,53 @@ function onSOSubcatFilterChange() {
 
     $('f-so-item-input').value = '';
     $('f-so-price').value = '';
+    setDocItemMeta('so', null);
     initSOItemPickerDropdown(inv);
 }
 var _soItemDropdown = null;
+
+function resolveSelectedInventoryItem(inputId) {
+    const sel = $(inputId);
+    if (!sel || !sel.value) return null;
+    const match = sel.value.match(/^(.*) \[Avail:/);
+    const itemName = (match ? match[1] : sel.value).trim().toLowerCase();
+    return (DB.get('db_inventory') || []).find(i =>
+        (i.name || '').trim().toLowerCase() === itemName ||
+        (i.itemCode || '').trim().toLowerCase() === itemName
+    ) || null;
+}
+
+function setDocItemMeta(prefix, item) {
+    const mrpEl = $(`f-${prefix}-mrp`);
+    const noteEl = $(`f-${prefix}-item-note`);
+    if (!item) {
+        if (mrpEl) mrpEl.value = '';
+        if (noteEl) noteEl.textContent = 'Pick an item to see stock and code.';
+        return;
+    }
+    const mrp = item.mrp || item.salePrice || item.purchasePrice || '';
+    if (mrpEl) mrpEl.value = mrp !== '' ? (+mrp).toFixed(2) : '';
+    if (noteEl) {
+        const stockInfo = getAvailableStock(item);
+        const bits = [`Available: ${stockInfo.available} ${item.unit || 'Pcs'}`];
+        if (item.itemCode) bits.push(`Code: ${item.itemCode}`);
+        if (item.category) bits.push(item.category);
+        noteEl.textContent = bits.join(' | ');
+    }
+}
+
+function resetDocItemPicker(prefix, focusItem = true) {
+    const itemInput = $(`f-${prefix}-item-input`);
+    const priceInput = $(`f-${prefix}-price`);
+    const qtyInput = $(`f-${prefix}-qty`);
+    const uomSel = $(`f-${prefix}-uom`);
+    if (priceInput) priceInput.value = '';
+    if (qtyInput) qtyInput.value = '1';
+    if (itemInput) itemInput.value = '';
+    if (uomSel) uomSel.innerHTML = '<option value="">Select Unit</option>';
+    setDocItemMeta(prefix, null);
+    if (focusItem && itemInput) itemInput.focus();
+}
 
 function focusPickerQtyField(inputId) {
     const qtyEl = $(inputId);
@@ -7712,9 +7973,140 @@ function initSOItemPickerDropdown(items) {
     _soItemDropdown = initSearchDropdown('f-so-item-input', buildItemSearchList(items), function (item) {
         $('f-so-price').value = item.salePrice || '';
         populateUomSelect($('f-so-uom'), item);
+        setDocItemMeta('so', item._raw || item);
         focusPickerQtyField('f-so-qty');
     });
     return _soItemDropdown;
+}
+
+function renderSalesOrderFormShell(config) {
+    const {
+        title,
+        subtitle,
+        orderNo,
+        date,
+        expectedDeliveryDate,
+        priority,
+        partyName,
+        partyId,
+        notes,
+        discountPct,
+        discountAmt,
+        categories,
+        editId,
+        showSaveAndNew,
+        cancelAction,
+        primaryAction
+    } = config;
+    return `
+    <div class="sales-doc-shell">
+        ${editId ? `<input type="hidden" id="f-so-edit-id" value="${editId}">` : ''}
+        <div class="sales-doc-header">
+            <button class="sales-doc-back" onclick="navigateTo('salesorders')">${msIcon('arrow_back')}</button>
+            <div class="sales-doc-header-copy">
+                <h2>${escapeHtml(title)}</h2>
+                <p>${escapeHtml(subtitle)}</p>
+            </div>
+            <div class="sales-doc-header-tag">${escapeHtml(orderNo)}</div>
+        </div>
+        <div class="sales-doc-body">
+            <section class="sales-doc-panel">
+                <div class="sales-doc-section-head">
+                    <div>
+                        <h3>Order Details</h3>
+                        <p>Keep the essentials visible on one mobile screen.</p>
+                    </div>
+                </div>
+                <div class="sales-doc-grid sales-doc-grid-3">
+                    <div class="doc-input-shell">
+                        <label>Order No.</label>
+                        <input id="f-so-no" value="${escapeHtml(orderNo)}" readonly>
+                    </div>
+                    <div class="doc-input-shell">
+                        <label>Date</label>
+                        <input type="date" id="f-so-date" value="${escapeHtml(date || today())}">
+                    </div>
+                    <div class="doc-input-shell">
+                        <label>Priority</label>
+                        <select id="f-so-priority">
+                            <option value="Normal" ${priority === 'Normal' ? 'selected' : ''}>Normal</option>
+                            <option value="Urgent" ${priority === 'Urgent' ? 'selected' : ''}>Urgent</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="sales-doc-grid sales-doc-grid-2">
+                    <div class="doc-input-shell">
+                        <label>Expected Delivery</label>
+                        <input type="date" id="f-so-delivery" value="${escapeHtml(expectedDeliveryDate || '')}">
+                    </div>
+                    <div class="sales-doc-kpi-card">
+                        <span class="sales-doc-kpi-label">Fast Entry</span>
+                        <strong>Add customer, add items, save.</strong>
+                        <small>This layout is tuned for thumb use on phones.</small>
+                    </div>
+                </div>
+            </section>
+
+            <section class="sales-doc-panel">
+                <div class="sales-doc-section-head">
+                    <div>
+                        <h3>Customer</h3>
+                        <p>New names still auto-create a customer card.</p>
+                    </div>
+                </div>
+                <div class="doc-input-shell doc-input-shell-focus">
+                    <label>Customer Name *</label>
+                    <input id="f-so-party" class="search-dropdown-mobile-priority" value="${escapeHtml(partyName || '')}" data-selected-id="${escapeHtml(partyId || '')}" placeholder="Search customer or type new name">
+                </div>
+            </section>
+
+            <section class="sales-doc-panel">
+                <div class="sales-doc-section-head">
+                    <div>
+                        <h3>Items</h3>
+                        <p>Add items in a dedicated full-screen sheet.</p>
+                    </div>
+                    <button class="sales-doc-inline-btn" onclick="openSoItemSubModal()">${msIcon('add')}<span>Add Items</span></button>
+                </div>
+                <div id="so-lines-list" class="sales-line-list"></div>
+            </section>
+
+            <section class="sales-doc-panel sales-doc-summary-panel">
+                <div class="sales-doc-section-head">
+                    <div>
+                        <h3>Discount & Notes</h3>
+                        <p>Keep commercial adjustments close to the total.</p>
+                    </div>
+                </div>
+                <div class="sales-doc-grid sales-doc-grid-2">
+                    <div class="doc-input-shell">
+                        <label>Discount %</label>
+                        <input type="number" id="f-so-disc-pct" value="${escapeHtml(String(discountPct ?? 0))}" min="0" max="100" step="0.01" oninput="onSoDiscPctChange()">
+                    </div>
+                    <div class="doc-input-shell">
+                        <label>Discount Amount</label>
+                        <input type="number" id="f-so-disc-amt" value="${escapeHtml(String(discountAmt ?? 0))}" min="0" step="0.01" oninput="onSoDiscAmtChange()">
+                    </div>
+                </div>
+                <div class="doc-input-shell">
+                    <label>Notes</label>
+                    <textarea id="f-so-notes" rows="3" placeholder="Optional notes...">${escapeHtml(notes || '')}</textarea>
+                </div>
+            </section>
+        </div>
+        <div class="sales-doc-footer">
+            <div class="sales-doc-footer-main">
+                <span>Order Total</span>
+                <strong id="so-total-display">Total: ${currency(0)}</strong>
+            </div>
+            <div class="sales-doc-footer-actions">
+                <button class="btn btn-outline" onclick="${cancelAction || `navigateTo('salesorders')`}">Cancel</button>
+                ${showSaveAndNew ? `<button class="btn btn-outline" onclick="window._saveAndNew=true;saveSalesOrder()">Save &amp; New</button>` : ''}
+                <button class="btn btn-primary" onclick="${primaryAction || 'saveSalesOrder()'}">${showSaveAndNew ? 'Save Order' : 'Save Changes'}</button>
+            </div>
+        </div>
+        ${renderSOItemSubModal(categories)}
+    </div>`;
 }
 
 // Category filter handler for SO modal
@@ -7736,6 +8128,7 @@ function onSOCatFilterChange() {
     if (sc) inv = inv.filter(function (i) { return (i.subCategory || '') === sc; });
     $('f-so-item-input').value = '';
     $('f-so-price').value = '';
+    setDocItemMeta('so', null);
     initSOItemPickerDropdown(inv);
 }
 
@@ -7785,16 +8178,17 @@ function filterSOItems(catFilterId, subcatFilterId, itemSelectInputId, priceInpu
 
 function onSOItemChange() {
     const sel = $('f-so-item-input');
-    if (!sel || !sel.value) { $('f-so-price').value = ''; return; }
+    if (!sel || !sel.value) { $('f-so-price').value = ''; setDocItemMeta('so', null); return; }
 
     // Resolve item
     const match = sel.value.match(/^(.*) \[Avail:/);
     let itemName = match ? match[1].trim() : sel.value.trim();
     const inv = DB.get('db_inventory');
     const item = inv.find(i => i.name.toLowerCase() === itemName.toLowerCase() || (i.itemCode || '').toLowerCase() === itemName.toLowerCase());
-    if (!item) { $('f-so-price').value = ''; return; }
+    if (!item) { $('f-so-price').value = ''; setDocItemMeta('so', null); return; }
 
     $('f-so-price').value = item.salePrice || '';
+    setDocItemMeta('so', item);
     populateUomSelect($('f-so-uom'), item);
 }
 function onSOUomChange() {
@@ -7815,6 +8209,7 @@ function onSOUomChange() {
         listedPrice = listedPrice / secRatio;
     }
     $('f-so-price').value = listedPrice > 0 ? listedPrice.toFixed(2) : '';
+    setDocItemMeta('so', item);
 }
 function addSOLine() {
     const sel = $('f-so-item-input'); if (!sel || !sel.value) return;
@@ -7911,15 +8306,14 @@ function addSOLine() {
     });
 
     showToast('Item added to order', 'success');
-    $('f-so-price').value = '';
-    $('f-so-qty').value = '1';
-    $('f-so-item-input').value = '';
-    const uomSel2 = $('f-so-uom');
-    if (uomSel2) uomSel2.innerHTML = '<option value="">--</option>';
-
     renderSOLines();
     if (window._soItemDropdown) window._soItemDropdown.clear();
-    $('f-so-item-input').focus();
+    resetDocItemPicker('so');
+}
+function addSOLineAndClose() {
+    const before = soItems.length;
+    addSOLine();
+    if (soItems.length > before) closeSoItemSubModal();
 }
 function removeSOLine(i) { soItems.splice(i, 1); renderSOLines(); }
 function updateSOLine(idx, field, value) {
@@ -8402,6 +8796,171 @@ async function editSalesOrder(id) {
 
     renderSOLines();
 }
+function renderSOLines() {
+    const el = $('so-lines-list');
+    if (!el) return;
+    if (!window._soExpandedLines) window._soExpandedLines = new Set();
+
+    const forceExpanded = isCompactMobileView();
+    el.innerHTML = soItems.map((li, i) => {
+        const edited = li.listedPrice !== undefined && Math.abs(li.price - li.listedPrice) > 0.01;
+        const borderClass = li._priceAlert ? 'is-alert' : edited ? 'is-edited' : '';
+        const isExpanded = forceExpanded || window._soExpandedLines.has(i);
+        const discSummary = li.discountPct > 0
+            ? `${li.discountPct}% off`
+            : (li.discountAmt > 0 ? `-${currency(li.discountAmt)}` : 'No discount');
+        return `
+        <div class="sales-line-card ${borderClass}">
+            <div class="sales-line-head" onclick="${forceExpanded ? '' : `toggleSOLine(${i})`}">
+                <div class="sales-line-index">${i + 1}</div>
+                <div class="sales-line-copy">
+                    <div class="sales-line-name">${escapeHtml(li.name)}</div>
+                    <div class="sales-line-meta">${li.qty} ${escapeHtml(li.unit || 'Pcs')} | ${currency(li.price)} | ${discSummary}${li.gstRate ? ` | GST ${li.gstRate}%` : ''}</div>
+                </div>
+                <div class="sales-line-summary">
+                    <strong>${currency(li.amount)}</strong>
+                    ${forceExpanded ? '' : `<span>${isExpanded ? 'Hide' : 'Edit'}</span>`}
+                </div>
+                <button class="sales-line-delete" onclick="event.stopPropagation();removeSOLine(${i})">${msIcon('delete')}</button>
+            </div>
+            ${isExpanded ? `
+            <div class="sales-line-editor">
+                <div class="sales-line-grid">
+                    <label class="sales-line-field">
+                        <span>Qty</span>
+                        <input type="number" value="${li.qty}" min="1" onchange="updateSOLine(${i},'qty',this.value)">
+                    </label>
+                    <label class="sales-line-field">
+                        <span>Unit</span>
+                        <input value="${escapeHtml(li.unit || 'Pcs')}" readonly>
+                    </label>
+                    <label class="sales-line-field sales-line-field-wide">
+                        <span>Price ${edited ? `(listed ${currency(li.listedPrice)})` : ''}</span>
+                        <input type="number" value="${(+li.price).toFixed(2)}" min="0" step="0.01" onchange="updateSOLine(${i},'price',this.value)">
+                    </label>
+                    <label class="sales-line-field">
+                        <span>Discount %</span>
+                        <input type="number" value="${li.discountPct || 0}" min="0" max="100" step="0.01" onchange="updateSOLine(${i},'discountPct',this.value)">
+                    </label>
+                    <div class="sales-line-amount">
+                        <span>Amount</span>
+                        <strong>${currency(li.amount)}</strong>
+                    </div>
+                </div>
+                ${li.gstRate ? `<div class="sales-line-note">Base ${currency(li.baseAmount || li.amount)} + GST ${li.gstRate}%: ${currency(li.taxAmount || 0)}</div>` : ''}
+                ${li._priceAlert ? `<div class="sales-line-note sales-line-note-danger">Selling below purchase price (${currency(li.purchasePrice)})</div>` : ''}
+            </div>` : ''}
+        </div>`;
+    }).join('');
+
+    updateSoTotal();
+}
+
+async function openSalesOrderModal() {
+    soItems = [];
+    window._soExpandedLines = new Set();
+    currentPage = 'salesorders';
+    pageTitle.textContent = 'New Sales Order';
+    setPageChromeMode('sales-doc');
+
+    const [parties, inv, categories] = await Promise.all([
+        DB.getAll('parties'),
+        DB.getAll('inventory'),
+        DB.getAll('categories')
+    ]);
+    const customers = parties.filter(p => p.type === 'Customer');
+    pageContent.innerHTML = renderSalesOrderFormShell({
+        title: 'Sale Order',
+        subtitle: 'Create a clean mobile-first order entry.',
+        orderNo: 'Auto',
+        date: today(),
+        expectedDeliveryDate: '',
+        priority: 'Normal',
+        partyName: '',
+        partyId: '',
+        notes: '',
+        discountPct: 0,
+        discountAmt: 0,
+        categories,
+        editId: '',
+        showSaveAndNew: true
+    });
+
+    initPartySearchField('f-so-party', customers, { autofocus: true, sortByGps: false, refreshGps: false });
+    initSOItemPickerDropdown(inv);
+    renderSOLines();
+}
+
+async function editSalesOrder(id) {
+    const [orders, inv, categories, parties] = await Promise.all([
+        DB.getAll('salesorders'),
+        DB.getAll('inventory'),
+        DB.getAll('categories'),
+        DB.getAll('parties')
+    ]);
+    const orig = orders.find(o => o.id === id);
+    if (!orig) return;
+    const customers = parties.filter(p => p.type === 'Customer');
+
+    soItems = orig.items.map(li => {
+        const item = inv.find(x => x.id === li.itemId);
+        let latestListed = item ? item.salePrice : li.listedPrice || li.price;
+        const activeUnit = li.unit || (item ? item.unit : 'Pcs');
+        if (item && activeUnit !== item.unit && item.secUom && activeUnit === item.secUom) {
+            const secRatio = +(item.secUomRatio) || 0;
+            if (secRatio > 0) latestListed = latestListed / secRatio;
+        }
+        const discountAmt = li.discountAmt || 0;
+        const discountPct = li.discountPct || 0;
+        const amount = +((li.qty * li.price) - discountAmt).toFixed(2);
+        const gstRate = li.gstRate || (item ? (item.gstRate || 0) : 0);
+        const baseAmount = gstRate > 0 ? +(amount / (1 + gstRate / 100)).toFixed(2) : amount;
+        const taxAmount = +(amount - baseAmount).toFixed(2);
+        return {
+            itemId: li.itemId,
+            name: li.name,
+            qty: li.qty,
+            price: li.price,
+            listedPrice: latestListed,
+            discountAmt,
+            discountPct,
+            amount,
+            unit: li.unit || (item ? item.unit : 'Pcs'),
+            purchasePrice: li.purchasePrice || (item ? item.purchasePrice : 0),
+            gstRate,
+            baseAmount,
+            taxAmount,
+            hsn: li.hsn || (item ? item.hsn : ''),
+            primaryQty: li.primaryQty || li.qty
+        };
+    });
+
+    window._soExpandedLines = new Set();
+    currentPage = 'salesorders';
+    pageTitle.textContent = 'Edit Sales Order';
+    setPageChromeMode('sales-doc');
+    pageContent.innerHTML = renderSalesOrderFormShell({
+        title: `Edit ${orig.orderNo}`,
+        subtitle: 'Adjust customer, lines, and commercial terms.',
+        orderNo: orig.orderNo || 'Auto',
+        date: orig.date || today(),
+        expectedDeliveryDate: orig.expectedDeliveryDate || '',
+        priority: orig.priority || 'Normal',
+        partyName: orig.partyName || '',
+        partyId: orig.partyId || '',
+        notes: orig.notes || '',
+        discountPct: orig.discountPct || 0,
+        discountAmt: orig.discountAmt || 0,
+        categories,
+        editId: orig.id,
+        showSaveAndNew: false
+    });
+
+    initPartySearchField('f-so-party', customers, { autofocus: false, sortByGps: false, refreshGps: false });
+    initSOItemPickerDropdown(inv);
+    renderSOLines();
+}
+
 async function approveSalesOrder(id) {
     try {
         await DB.update('salesorders', id, {
@@ -9696,6 +10255,7 @@ async function renderInvoiceFormPage() {
     _invItemDropdown = initSearchDropdown('f-inv-item-input', buildItemSearchList(inv), function (item) {
         const type = $('f-inv-type') ? $('f-inv-type').value : 'sale';
         $('f-inv-price').value = type === 'sale' ? (item.salePrice || '') : (item.purchasePrice || '');
+        setDocItemMeta('inv', item._raw || item);
         populateUomSelect($('f-inv-uom'), item);
         focusPickerQtyField('f-inv-qty');
     });
@@ -9841,9 +10401,11 @@ async function onInvSubcatFilterChange() {
 
     $('f-inv-item-input').value = '';
     $('f-inv-price').value = '';
+    setDocItemMeta('inv', null);
     _invItemDropdown = initSearchDropdown('f-inv-item-input', buildItemSearchList(inv), function (item) {
         const type = $('f-inv-type') ? $('f-inv-type').value : 'sale';
         $('f-inv-price').value = type === 'sale' ? (item.salePrice || '') : (item.purchasePrice || '');
+        setDocItemMeta('inv', item._raw || item);
         populateUomSelect($('f-inv-uom'), item);
         focusPickerQtyField('f-inv-qty');
     });
@@ -9869,9 +10431,11 @@ async function onInvCatFilterChange() {
     if (sc) inv = inv.filter(function (i) { return (i.subCategory || '') === sc; });
     $('f-inv-item-input').value = '';
     $('f-inv-price').value = '';
+    setDocItemMeta('inv', null);
     _invItemDropdown = initSearchDropdown('f-inv-item-input', buildItemSearchList(inv), function (item) {
         const type = $('f-inv-type') ? $('f-inv-type').value : 'sale';
         $('f-inv-price').value = type === 'sale' ? (item.salePrice || '') : (item.purchasePrice || '');
+        setDocItemMeta('inv', item._raw || item);
         populateUomSelect($('f-inv-uom'), item);
         focusPickerQtyField('f-inv-qty');
     });
@@ -9899,6 +10463,7 @@ async function onInvUomChange() {
         listedPrice = listedPrice / secRatio;
     }
     $('f-inv-price').value = listedPrice > 0 ? listedPrice.toFixed(2) : '';
+    setDocItemMeta('inv', item);
 }
 
 async function addInvoiceLine() {
@@ -10010,15 +10575,14 @@ async function addInvoiceLine() {
     }
 
     showToast('Item added to invoice', 'success');
-    $('f-inv-price').value = '';
-    $('f-inv-qty').value = '1';
-    $('f-inv-item-input').value = '';
-    const uomSel2 = $('f-inv-uom');
-    if (uomSel2) uomSel2.innerHTML = '<option value="">--</option>';
-
     renderInvoiceLines();
     if (window._invItemDropdown) window._invItemDropdown.clear();
-    $('f-inv-item-input').focus();
+    resetDocItemPicker('inv');
+}
+async function addInvoiceLineAndClose() {
+    const before = invoiceItems.length;
+    await addInvoiceLine();
+    if (invoiceItems.length > before) closeInvItemSubModal();
 }
 function removeInvoiceLine(idx) {
     invoiceItems.splice(idx, 1);
@@ -10640,6 +11204,429 @@ async function renderEditInvoiceFormPage() {
     // Initialize item search dropdown for adding new items
     _invItemDropdown = initSearchDropdown('f-inv-item-input', buildItemSearchList(inventoryData), function (item) {
         $('f-inv-price').value = item.salePrice || '';
+        setDocItemMeta('inv', item._raw || item);
+        populateUomSelect($('f-inv-uom'), item);
+        focusPickerQtyField('f-inv-qty');
+    });
+
+    renderInvoiceLines();
+    updateInvoiceTotal();
+}
+
+function renderInvoiceFormShell(config) {
+    const {
+        title,
+        subtitle,
+        invoiceNo,
+        date,
+        dueDate,
+        deliveryDate,
+        boxNo,
+        type,
+        partyLabel,
+        partyName,
+        partyId,
+        partyReadOnly,
+        vyaparInvoiceNo,
+        gst,
+        discountPct,
+        discountAmt,
+        roundOff,
+        categories,
+        saveAction,
+        saveLabel,
+        showSaveAndNew,
+        bannerHtml
+    } = config;
+    return `
+    <div class="sales-doc-shell invoice-doc-shell">
+        <div class="sales-doc-header">
+            <button class="sales-doc-back" onclick="navigateTo('invoices')">${msIcon('arrow_back')}</button>
+            <div class="sales-doc-header-copy">
+                <h2>${escapeHtml(title)}</h2>
+                <p>${escapeHtml(subtitle)}</p>
+            </div>
+            <div class="sales-doc-header-tag">${escapeHtml(invoiceNo)}</div>
+        </div>
+        <div class="sales-doc-body">
+            ${bannerHtml || ''}
+            <input type="hidden" id="f-inv-from-order" value="">
+            <input type="hidden" id="f-inv-type" value="${escapeHtml(type)}">
+
+            <section class="sales-doc-panel">
+                <div class="sales-doc-section-head">
+                    <div>
+                        <h3>Invoice Details</h3>
+                        <p>Minimal, fast, and stable on mobile screens.</p>
+                    </div>
+                </div>
+                <div class="sales-doc-grid sales-doc-grid-3">
+                    <div class="doc-input-shell">
+                        <label>Invoice No.</label>
+                        <input id="f-inv-no" value="${escapeHtml(invoiceNo)}" placeholder="Auto-assigned" readonly>
+                    </div>
+                    <div class="doc-input-shell">
+                        <label>Date</label>
+                        <input type="date" id="f-inv-date" value="${escapeHtml(date || today())}" onchange="onInvDateChange()">
+                    </div>
+                    <div class="doc-input-shell">
+                        <label>Due Date</label>
+                        <input type="date" id="f-inv-due-date" value="${escapeHtml(dueDate || '')}" placeholder="Select party...">
+                    </div>
+                </div>
+                <div class="sales-doc-grid sales-doc-grid-2">
+                    <div class="doc-input-shell">
+                        <label>Delivery Date</label>
+                        <input type="date" id="f-inv-delivery-date" value="${escapeHtml(deliveryDate || today())}" onchange="this.dataset.manuallySet='1'">
+                    </div>
+                    <div class="doc-input-shell">
+                        <label>Box / Crate No.</label>
+                        <input type="text" id="f-inv-box-no" value="${escapeHtml(boxNo || '')}" placeholder="B-001, C-05">
+                    </div>
+                </div>
+                ${type === 'sale' ? `
+                <div class="doc-input-shell">
+                    <label>Vyapar Invoice No.</label>
+                    <input id="f-vyapar-inv-no" value="${escapeHtml(vyaparInvoiceNo || 'Auto')}" placeholder="Auto-assigned">
+                </div>` : ''}
+            </section>
+
+            <section class="sales-doc-panel">
+                <div class="sales-doc-section-head">
+                    <div>
+                        <h3>${escapeHtml(partyLabel)}</h3>
+                        <p>${partyReadOnly ? 'Posted invoice customer is kept fixed.' : 'Search by name or mobile.'}</p>
+                    </div>
+                </div>
+                ${partyReadOnly ? `
+                <div class="sales-doc-kpi-card sales-doc-kpi-card-strong">
+                    <span class="sales-doc-kpi-label">${escapeHtml(partyLabel)}</span>
+                    <strong>${escapeHtml(partyName || '-')}</strong>
+                    <small>This invoice will reverse and repost stock on save.</small>
+                </div>` : `
+                <div class="doc-input-shell doc-input-shell-focus">
+                    <label>${escapeHtml(partyLabel)} *</label>
+                    <input id="f-inv-party" class="search-dropdown-mobile-priority" value="${escapeHtml(partyName || '')}" data-selected-id="${escapeHtml(partyId || '')}" placeholder="Search name or mobile">
+                </div>`}
+            </section>
+
+            <section class="sales-doc-panel">
+                <div class="sales-doc-section-head">
+                    <div>
+                        <h3>Items</h3>
+                        <p>Use the full-screen picker to keep search and qty entry clean.</p>
+                    </div>
+                    <button class="sales-doc-inline-btn" onclick="openInvItemSubModal()">${msIcon('add')}<span>Add Items</span></button>
+                </div>
+                <div id="inv-lines-list" class="sales-line-list"></div>
+            </section>
+
+            <section class="sales-doc-panel sales-doc-summary-panel">
+                <div class="sales-doc-section-head">
+                    <div>
+                        <h3>Totals</h3>
+                        <p>GST, discounts, round off, and advance adjustments.</p>
+                    </div>
+                </div>
+                <div class="sales-doc-grid sales-doc-grid-3">
+                    <div class="doc-input-shell">
+                        <label>GST %</label>
+                        <input type="number" id="f-inv-gst" value="${escapeHtml(String(gst ?? 0))}" min="0" max="100" step="0.1" onchange="updateInvoiceTotal()">
+                    </div>
+                    <div class="doc-input-shell">
+                        <label>Discount %</label>
+                        <input type="number" id="f-inv-disc-pct" value="${escapeHtml(String(discountPct ?? 0))}" min="0" max="100" step="0.1" oninput="onInvDiscPctChange()">
+                    </div>
+                    <div class="doc-input-shell">
+                        <label>Discount Amount</label>
+                        <input type="number" id="f-inv-disc-amt" value="${escapeHtml(String(discountAmt ?? 0))}" min="0" step="0.01" oninput="onInvDiscAmtChange()">
+                    </div>
+                </div>
+                <div class="sales-doc-grid sales-doc-grid-2">
+                    <div class="doc-input-shell">
+                        <label>Round Off</label>
+                        <div class="sales-doc-inline-field">
+                            <input type="number" id="f-inv-roundoff" value="${escapeHtml(String(roundOff ?? 0))}" step="0.01" oninput="updateInvoiceTotal()">
+                            <button class="btn btn-outline btn-sm" onclick="autoRoundOff()" type="button">${msIcon('autorenew')}</button>
+                        </div>
+                    </div>
+                    <div id="inv-advance-section"></div>
+                </div>
+                <div id="inv-total-display" class="invoice-total-stack">Total: ${currency(0)}</div>
+            </section>
+        </div>
+        <div class="sales-doc-footer">
+            <div class="sales-doc-footer-main">
+                <span>Invoice Total</span>
+                <strong id="inv-footer-total">${currency(0)}</strong>
+            </div>
+            <div class="sales-doc-footer-actions">
+                <button class="btn btn-outline" onclick="navigateTo('invoices')">Cancel</button>
+                ${showSaveAndNew ? `<button class="btn btn-outline" onclick="window._saveAndNew=true;saveInvoice()">Save &amp; New</button>` : ''}
+                <button class="btn btn-primary" onclick="${saveAction}">${escapeHtml(saveLabel)}</button>
+            </div>
+        </div>
+        ${renderInvoiceItemSubModal(categories, type === 'sale' ? 'Add Items to Sale Invoice' : 'Add Items to Stock In')}
+    </div>`;
+}
+
+function renderInvoiceLines() {
+    const el = $('inv-lines-list');
+    if (!el) return;
+    el.innerHTML = invoiceItems.map((li, i) => {
+        const edited = li.listedPrice !== undefined && Math.abs(li.price - li.listedPrice) > 0.01;
+        const borderClass = li._priceAlert ? 'is-alert' : edited ? 'is-edited' : '';
+        return `
+        <div class="sales-line-card ${borderClass}">
+            <div class="sales-line-head">
+                <div class="sales-line-index">${i + 1}</div>
+                <div class="sales-line-copy">
+                    <div class="sales-line-name">${escapeHtml(li.name)}</div>
+                    <div class="sales-line-meta">${li.qty} ${escapeHtml(li.unit || 'Pcs')} | ${currency(li.price)}${li.gstRate ? ` | GST ${li.gstRate}%` : ''}</div>
+                </div>
+                <div class="sales-line-summary">
+                    <strong>${currency(li.amount)}</strong>
+                </div>
+                <button class="sales-line-delete" onclick="removeInvoiceLine(${i})">${msIcon('delete')}</button>
+            </div>
+            <div class="sales-line-editor">
+                <div class="sales-line-grid">
+                    <label class="sales-line-field">
+                        <span>Qty</span>
+                        <input type="number" value="${li.qty}" min="0.001" step="any" onchange="updateInvoiceLine(${i},'qty',this.value)">
+                    </label>
+                    <label class="sales-line-field">
+                        <span>Unit</span>
+                        <input value="${escapeHtml(li.unit || 'Pcs')}" readonly>
+                    </label>
+                    <label class="sales-line-field sales-line-field-wide">
+                        <span>Price ${edited ? `(listed ${currency(li.listedPrice)})` : ''}</span>
+                        <input type="number" value="${(+li.price).toFixed(2)}" min="0" step="0.01" onchange="updateInvoiceLine(${i},'price',this.value)">
+                    </label>
+                    <label class="sales-line-field">
+                        <span>Discount %</span>
+                        <input type="number" value="${li.discountPct || 0}" min="0" max="100" step="0.01" onchange="updateInvoiceLine(${i},'discountPct',this.value)">
+                    </label>
+                    <div class="sales-line-amount">
+                        <span>Amount</span>
+                        <strong>${currency(li.amount)}</strong>
+                    </div>
+                </div>
+                ${li.gstRate ? `<div class="sales-line-note">Base ${currency(li.baseAmount || li.amount)} + GST ${li.gstRate}%: ${currency(li.taxAmount || 0)}</div>` : ''}
+                ${li._priceAlert ? `<div class="sales-line-note sales-line-note-danger">Selling below purchase price (${currency(li.purchasePrice)})</div>` : ''}
+            </div>
+        </div>`;
+    }).join('');
+
+    const invTypeEl = $('f-inv-type');
+    if (invTypeEl && invTypeEl.value === 'sale') {
+        const sub = invoiceItems.reduce((s, li) => s + li.amount, 0);
+        const discAmt = +(($('f-inv-disc-amt') || {}).value || 0);
+        const net = +(sub - discAmt).toFixed(2);
+        const roEl = $('f-inv-roundoff');
+        if (roEl) roEl.value = +(Math.round(net) - net).toFixed(2);
+    }
+    updateInvoiceTotal();
+}
+
+function updateInvoiceTotal() {
+    const sub = invoiceItems.reduce((s, li) => s + li.amount, 0);
+    const gst = +(($('f-inv-gst') || {}).value || 0);
+    const roundoff = +(($('f-inv-roundoff') || {}).value || 0);
+    const pct = +(($('f-inv-disc-pct') || {}).value || 0);
+    let discAmt = +(($('f-inv-disc-amt') || {}).value || 0);
+
+    if (pct > 0) {
+        discAmt = +(sub * pct / 100).toFixed(2);
+        const amtEl = $('f-inv-disc-amt');
+        if (amtEl) amtEl.value = discAmt;
+    }
+
+    const totalDiscount = discAmt;
+    let total = sub + roundoff - totalDiscount;
+    total = Math.max(0, total);
+
+    const el = $('inv-total-display');
+    if (!el) return;
+
+    const hasItemGst = invoiceItems.some(li => li.gstRate > 0);
+    let taxableAmt;
+    let totalTax;
+    let rateLines = '';
+    if (hasItemGst) {
+        taxableAmt = invoiceItems.reduce((s, li) => s + (li.baseAmount || li.amount), 0);
+        totalTax = invoiceItems.reduce((s, li) => s + (li.taxAmount || 0), 0);
+        const rateMap = {};
+        invoiceItems.forEach(li => {
+            if (li.gstRate > 0) rateMap[li.gstRate] = (rateMap[li.gstRate] || 0) + (li.taxAmount || 0);
+        });
+        rateLines = Object.entries(rateMap).sort((a, b) => +a[0] - +b[0]).map(([r, amt]) =>
+            `<span>GST ${r}% (Incl.): <b>${currency(amt)}</b></span>`
+        ).join('');
+    } else if (gst > 0) {
+        taxableAmt = +(sub / (1 + gst / 100)).toFixed(2);
+        totalTax = +(sub - taxableAmt).toFixed(2);
+        rateLines = `<span>GST ${gst}% (Incl.): <b>${currency(totalTax)}</b></span>`;
+    }
+
+    el.innerHTML = `
+        <div class="invoice-total-stack">
+            ${taxableAmt !== undefined ? `<span>Taxable Amount: <b>${currency(taxableAmt)}</b></span>` : ''}
+            ${rateLines || ''}
+            ${totalTax ? `<span>Total GST: <b>${currency(totalTax)}</b></span>` : ''}
+            <span>Subtotal: <b>${currency(sub)}</b></span>
+            ${totalDiscount ? `<span class="is-negative">Discount: <b>-${currency(totalDiscount)}</b></span>` : ''}
+            ${roundoff ? `<span>Round Off: <b>${roundoff > 0 ? '+' : ''}${currency(roundoff)}</b></span>` : ''}
+            <strong class="invoice-total-grand">Total: ${currency(total)}</strong>
+        </div>`;
+
+    const footerTotal = $('inv-footer-total');
+    if (footerTotal) footerTotal.textContent = currency(total);
+}
+
+async function renderInvoiceFormPage() {
+    const type = window._invType || 'sale';
+    const ptype = type === 'sale' ? 'Customer' : 'Supplier';
+    const [parties, inv, categories] = await Promise.all([
+        DB.getAll('parties'),
+        DB.getAll('inventory'),
+        DB.getAll('categories')
+    ]);
+    const filteredParties = parties.filter(p => p.type === ptype);
+    const pageContent = document.getElementById('page-content');
+    setPageChromeMode('sales-doc');
+    pageContent.innerHTML = renderInvoiceFormShell({
+        title: type === 'sale' ? 'Sale Invoice' : 'Purchase / Stock In',
+        subtitle: type === 'sale' ? 'Fast invoice entry tuned for mobile.' : 'Receive stock without the cramped modal layout.',
+        invoiceNo: 'Auto',
+        date: today(),
+        dueDate: '',
+        deliveryDate: today(),
+        boxNo: '',
+        type,
+        partyLabel: ptype,
+        partyName: '',
+        partyId: '',
+        partyReadOnly: false,
+        vyaparInvoiceNo: 'Auto',
+        gst: 0,
+        discountPct: 0,
+        discountAmt: 0,
+        roundOff: 0,
+        categories,
+        saveAction: 'saveInvoice()',
+        saveLabel: 'Save',
+        showSaveAndNew: true,
+        bannerHtml: ''
+    });
+
+    const onInvPartySelect = function (party) {
+        const t = $('f-inv-type') ? $('f-inv-type').value : 'sale';
+        if (t === 'sale') loadAvailableAdvances(party.id);
+        updateInvDueDate(party);
+    };
+    initPartySearchField('f-inv-party', filteredParties, {
+        onSelect: onInvPartySelect,
+        autofocus: !window._invPreFillPartyId,
+        sortByGps: false,
+        refreshGps: false
+    });
+
+    _invItemDropdown = initSearchDropdown('f-inv-item-input', buildItemSearchList(inv), function (item) {
+        const t = $('f-inv-type') ? $('f-inv-type').value : 'sale';
+        $('f-inv-price').value = t === 'sale' ? (item.salePrice || '') : (item.purchasePrice || '');
+        setDocItemMeta('inv', item._raw || item);
+        populateUomSelect($('f-inv-uom'), item);
+        focusPickerQtyField('f-inv-qty');
+    });
+
+    if (window._invKbHandler) document.removeEventListener('keydown', window._invKbHandler);
+    window._invKbHandler = function (e) {
+        if (!$('f-inv-party')) { document.removeEventListener('keydown', window._invKbHandler); return; }
+        if ((e.target.tagName || '').toLowerCase() === 'textarea') return;
+        if (e.ctrlKey && e.altKey && (e.key === 's' || e.key === 'S')) {
+            e.preventDefault(); window._saveAndNew = true; saveInvoice();
+        } else if (e.ctrlKey && !e.altKey && (e.key === 's' || e.key === 'S')) {
+            e.preventDefault(); saveInvoice();
+        } else if (e.ctrlKey && (e.key === 'p' || e.key === 'P')) {
+            e.preventDefault(); window._printAndNew = true; saveInvoice();
+        }
+    };
+    document.addEventListener('keydown', window._invKbHandler);
+
+    if (window._invPreFillPartyId) {
+        const partyEl = $('f-inv-party');
+        if (partyEl) {
+            partyEl.value = window._invPreFillPartyName || '';
+            partyEl.dataset.selectedId = window._invPreFillPartyId;
+            const matchedParty = filteredParties.find(p => p.id === window._invPreFillPartyId);
+            if (matchedParty) {
+                loadAvailableAdvances(matchedParty.id);
+                updateInvDueDate(matchedParty);
+            }
+        }
+    }
+    if (window._invFromOrderId) {
+        const refEl = $('f-inv-from-order');
+        if (refEl) refEl.value = window._invFromOrderId;
+    }
+    if (window._invBoxNo) {
+        const boxEl = $('f-inv-box-no');
+        if (boxEl) boxEl.value = window._invBoxNo;
+    }
+    if (window._invGstRate !== null && window._invGstRate !== undefined) {
+        const gstEl = $('f-inv-gst');
+        if (gstEl) gstEl.value = window._invGstRate;
+    }
+    if (invoiceItems.length) renderInvoiceLines();
+    updateInvoiceTotal();
+}
+
+async function renderEditInvoiceFormPage() {
+    const id = window._editInvoiceId;
+    if (!id) { navigateTo('invoices'); return; }
+    if (!canEdit()) { alert('Access Denied'); navigateTo('invoices'); return; }
+    const [invoices, inventoryData, categories] = await Promise.all([
+        DB.getAll('invoices'),
+        DB.getAll('inventory'),
+        DB.getAll('categories')
+    ]);
+    const inv = invoices.find(i => i.id === id);
+    if (!inv) { navigateTo('invoices'); return; }
+    if (inv.status === 'cancelled') { alert('Cannot edit a cancelled invoice.'); navigateTo('invoices'); return; }
+    if (inv.type !== 'sale') { alert('Only sale invoices can be edited here.'); navigateTo('invoices'); return; }
+
+    invoiceItems = (inv.items || []).map(li => ({ ...li }));
+    const pageContent = document.getElementById('page-content');
+    setPageChromeMode('sales-doc');
+    pageContent.innerHTML = renderInvoiceFormShell({
+        title: `Edit ${inv.invoiceNo}`,
+        subtitle: 'Update posted lines and repost stock safely.',
+        invoiceNo: inv.invoiceNo,
+        date: inv.date || today(),
+        dueDate: inv.dueDate || '',
+        deliveryDate: inv.deliveryDate || inv.date || today(),
+        boxNo: inv.boxNo || '',
+        type: inv.type,
+        partyLabel: 'Customer',
+        partyName: inv.partyName || '',
+        partyId: inv.partyId || '',
+        partyReadOnly: true,
+        vyaparInvoiceNo: inv.vyaparInvoiceNo || '',
+        gst: inv.gst || 0,
+        discountPct: inv.discountPct || 0,
+        discountAmt: inv.discountAmt || 0,
+        roundOff: inv.roundOff || 0,
+        categories,
+        saveAction: `saveEditedInvoice('${id}')`,
+        saveLabel: 'Save Changes',
+        showSaveAndNew: false,
+        bannerHtml: `<div class="sales-doc-banner"><strong>Editing posted invoice</strong><span>Party: ${escapeHtml(inv.partyName)} | Date: ${fmtDate(inv.date)}</span></div>`
+    });
+
+    _invItemDropdown = initSearchDropdown('f-inv-item-input', buildItemSearchList(inventoryData), function (item) {
+        $('f-inv-price').value = item.salePrice || '';
+        setDocItemMeta('inv', item._raw || item);
         populateUomSelect($('f-inv-uom'), item);
         focusPickerQtyField('f-inv-qty');
     });
@@ -21364,6 +22351,172 @@ function filterCatalogBySubcat(subcat) {
     filterCatalog();
 }
 
+async function renderCatalog() {
+    setPageChromeMode('catalog');
+    const [allItems] = await Promise.all([
+        DB.getAll('inventory'),
+        DB.getAll('categories')
+    ]);
+    const items = allItems.filter(i => i.active !== false);
+    const catNames = [...new Set(items.map(i => i.category).filter(Boolean))];
+
+    pageContent.innerHTML = `
+        <div class="catalog-native-shell">
+            <div class="catalog-native-toolbar">
+                <div class="catalog-native-head">
+                    <h2>Item Catalog</h2>
+                    <p>Browse by category, MRP, and availability without wasting screen space.</p>
+                </div>
+                <div class="catalog-native-head-actions">
+                    <span class="catalog-native-chip">${items.length} active items</span>
+                    <button class="btn btn-outline btn-sm" onclick="syncCatalogData()">Sync Data</button>
+                </div>
+            </div>
+            <div class="catalog-native-controls">
+                <div class="catalog-native-search-row">
+                    <input class="search-box" id="catalog-search" placeholder="Search products..." oninput="filterCatalog()">
+                    <select id="catalog-sort" class="search-box" onchange="filterCatalog()">
+                        <option value="mrp-asc" selected>MRP: Low to High</option>
+                        <option value="mrp-desc">MRP: High to Low</option>
+                        <option value="name-asc">Name: A to Z</option>
+                        <option value="name-desc">Name: Z to A</option>
+                    </select>
+                </div>
+                <div id="catalog-pills" class="catalog-native-pill-row">
+                    <button class="catalog-native-pill active" data-cat="" onclick="filterCatalogByCat('')">All</button>
+                    ${catNames.map(c => `<button class="catalog-native-pill" data-cat="${c}" onclick="filterCatalogByCat('${c}')">${c}</button>`).join('')}
+                </div>
+                <div id="catalog-subcat-pills" class="catalog-native-pill-row catalog-native-pill-row-secondary"></div>
+                <div id="catalog-movement-pills" class="catalog-native-pill-row catalog-native-pill-row-secondary">
+                    <button class="catalog-native-pill active" data-movement="" onclick="filterCatalogByMovement('')">All Items</button>
+                    <button class="catalog-native-pill" data-movement="slow" onclick="filterCatalogByMovement('slow')">Slow Moving</button>
+                    <button class="catalog-native-pill" data-movement="non" onclick="filterCatalogByMovement('non')">Non-Moving (10d)</button>
+                </div>
+            </div>
+            <div id="catalog-grid" class="catalog-native-grid">
+                ${await renderCatalogCards(items)}
+            </div>
+            ${catalogCart.length ? renderCatalogCartBar() : ''}
+        </div>`;
+}
+
+async function renderCatalogCards(items) {
+    if (!items.length) return '<div class="empty-state" style="padding:40px"><div class="empty-icon"></div><p>No products found</p></div>';
+    const cards = await Promise.all(items.map(async i => {
+        const stockData = await getAvailableStock(i);
+        const cartEntries = catalogCart.filter(c => c.itemId === i.id);
+        const isLow = i.stock <= (i.lowStockAlert || 5);
+        return `
+        <article class="catalog-native-card ${isLow ? 'is-low' : ''}">
+            <button class="catalog-native-media" onclick="viewCatalogItem('${i.id}')">
+                ${(i.imageUrl || i.photo)
+                    ? `<img src="${i.imageUrl || i.photo}" alt="${escapeHtml(i.name)}">`
+                    : `<span>${escapeHtml((i.name || '?').charAt(0).toUpperCase())}</span>`}
+            </button>
+            <div class="catalog-native-body">
+                <div class="catalog-native-name">${escapeHtml(i.name)}</div>
+                <div class="catalog-native-meta">
+                    ${i.category ? `<span>${escapeHtml(i.category)}</span>` : ''}
+                    ${i.subCategory ? `<span>${escapeHtml(i.subCategory)}</span>` : ''}
+                    ${i.itemCode ? `<span>${escapeHtml(i.itemCode)}</span>` : ''}
+                </div>
+                <div class="catalog-native-price-row">
+                    <strong>${currency(i.salePrice || 0)}</strong>
+                    <span>MRP ${currency(i.mrp || i.salePrice || 0)}</span>
+                </div>
+                <div class="catalog-native-stock">
+                    <div><span>Stock</span><b>${stockData.stock} ${escapeHtml(i.unit || 'Pcs')}</b></div>
+                    <div><span>Reserved</span><b>${stockData.reserved} ${escapeHtml(i.unit || 'Pcs')}</b></div>
+                    <div class="${isLow ? 'is-danger' : 'is-success'}"><span>Available</span><b>${stockData.available} ${escapeHtml(i.unit || 'Pcs')}</b></div>
+                </div>
+            </div>
+            <div class="catalog-native-action">
+                ${cartEntries.length ? `<div style="width:100%">
+                    ${cartEntries.map(ce => `<div class="catalog-native-qty-row">
+                        <button class="catalog-qty-btn" onclick="updateCartQty('${i.id}',-1,'${ce.unit}')">-</button>
+                        <span>${ce.qty}</span>
+                        <button class="catalog-qty-btn" onclick="updateCartQty('${i.id}',1,'${ce.unit}')">+</button>
+                        <small>${escapeHtml(ce.unit)}</small>
+                    </div>`).join('')}
+                    ${i.secUom ? `<button class="catalog-add-btn" onclick="addToCatalogCart('${i.id}')" style="margin-top:6px">+ More</button>` : '' }
+                </div>` : `<button class="catalog-add-btn" onclick="addToCatalogCart('${i.id}')">+ Add</button>`}
+            </div>
+        </article>`;
+    }));
+    return cards.join('');
+}
+
+async function filterCatalog() {
+    const s = ($('catalog-search') ? $('catalog-search').value : '').toLowerCase();
+    const activeCatPill = document.querySelector('#catalog-pills .catalog-native-pill.active');
+    const cat = activeCatPill ? activeCatPill.dataset.cat || '' : '';
+    const activeSubPill = document.querySelector('#catalog-subcat-pills .catalog-native-pill.active');
+    const subCat = activeSubPill ? activeSubPill.dataset.subcat || '' : '';
+    const activeMovPill = document.querySelector('#catalog-movement-pills .catalog-native-pill.active');
+    const movement = activeMovPill ? activeMovPill.dataset.movement || '' : '';
+    const allItems = await DB.getAll('inventory');
+    let items = allItems.filter(i => i.active !== false);
+    if (cat) items = items.filter(i => i.category === cat);
+    if (subCat) items = items.filter(i => (i.subCategory || '') === subCat);
+    if (s) items = items.filter(i =>
+        (i.name || '').toLowerCase().includes(s) ||
+        (i.itemCode || '').toLowerCase().includes(s) ||
+        (i.category || '').toLowerCase().includes(s) ||
+        (i.subCategory || '').toLowerCase().includes(s)
+    );
+    if (movement) {
+        const movementMap = await getItemMovementMap();
+        items = items.filter(i => movementMap[i.id] === movement);
+    }
+
+    const sortBy = $('catalog-sort') ? $('catalog-sort').value : 'mrp-asc';
+    if (sortBy === 'name-asc') items.sort((a, b) => a.name.localeCompare(b.name));
+    else if (sortBy === 'name-desc') items.sort((a, b) => b.name.localeCompare(a.name));
+    else if (sortBy === 'mrp-asc') items.sort((a, b) => (+a.mrp || +a.salePrice || 0) - (+b.mrp || +b.salePrice || 0));
+    else if (sortBy === 'mrp-desc') items.sort((a, b) => (+b.mrp || +b.salePrice || 0) - (+a.mrp || +a.salePrice || 0));
+
+    const grid = $('catalog-grid');
+    if (grid) grid.innerHTML = await renderCatalogCards(items);
+}
+
+function filterCatalogByMovement(movement) {
+    document.querySelectorAll('#catalog-movement-pills .catalog-native-pill').forEach(p => {
+        p.classList.toggle('active', (p.dataset.movement || '') === movement);
+    });
+    filterCatalog();
+}
+
+function filterCatalogByCat(cat) {
+    document.querySelectorAll('#catalog-pills .catalog-native-pill').forEach(p => {
+        p.classList.toggle('active', (p.dataset.cat || '') === cat);
+    });
+
+    const subPillsContainer = $('catalog-subcat-pills');
+    if (subPillsContainer) {
+        if (cat) {
+            const catObj = (DB.get('db_categories') || []).find(c => c.name === cat);
+            const subCats = (catObj && catObj.subCategories) ? catObj.subCategories : [];
+            if (subCats.length) {
+                subPillsContainer.innerHTML = `<button class="catalog-native-pill active" data-subcat="" onclick="filterCatalogBySubcat('All')">All ${escapeHtml(cat)}</button>` +
+                    subCats.map(sc => `<button class="catalog-native-pill" data-subcat="${sc}" onclick="filterCatalogBySubcat('${sc}')">${escapeHtml(sc)}</button>`).join('');
+            } else {
+                subPillsContainer.innerHTML = '';
+            }
+        } else {
+            subPillsContainer.innerHTML = '';
+        }
+    }
+    filterCatalog();
+}
+
+function filterCatalogBySubcat(subcat) {
+    document.querySelectorAll('#catalog-subcat-pills .catalog-native-pill').forEach(p => {
+        const psc = p.dataset.subcat || '';
+        p.classList.toggle('active', subcat === 'All' ? psc === '' : psc === subcat);
+    });
+    filterCatalog();
+}
+
 async function addToCatalogCart(itemId, uom) {
     const items = await DB.getAll('inventory');
     const item = items.find(x => x.id === itemId);
@@ -21667,6 +22820,89 @@ async function createOrderFromCatalog() {
     });
 
     // Render pre-filled lines from cart
+    renderSOLines();
+}
+
+async function createOrderFromCatalog() {
+    if (!catalogCart.length) return alert('Cart is empty');
+    const inv = DB.get('db_inventory') || [];
+
+    soItems = [];
+    catalogCart.forEach(c => {
+        const itemObj = inv.find(x => x.id === c.itemId);
+        if (!itemObj) return;
+        const primaryUnit = itemObj.unit || 'Pcs';
+        const secUom = itemObj.secUom || '';
+        const secRatio = +(itemObj.secUomRatio) || 0;
+        const qty = c.qty;
+        const unit = c.unit || primaryUnit;
+        let primaryQty = qty;
+        if (unit !== primaryUnit && secUom && unit === secUom && secRatio > 0) primaryQty = qty / secRatio;
+
+        let baseListedPrice = +(itemObj.salePrice || 0);
+        if (itemObj.priceTiers && itemObj.priceTiers.length) {
+            for (const t of itemObj.priceTiers) {
+                if (primaryQty >= t.minQty) {
+                    baseListedPrice = t.price;
+                    break;
+                }
+            }
+        }
+        let unitPrice = baseListedPrice;
+        if (unit !== primaryUnit && secUom && unit === secUom && secRatio > 0) unitPrice = baseListedPrice / secRatio;
+
+        const lineAmount = +(qty * unitPrice).toFixed(2);
+        const itemGstRate = +(itemObj.gstRate || 0);
+        const lineBase = itemGstRate > 0 ? +(lineAmount / (1 + itemGstRate / 100)).toFixed(2) : lineAmount;
+        const lineTax = +(lineAmount - lineBase).toFixed(2);
+        soItems.push({
+            itemId: itemObj.id,
+            name: itemObj.name,
+            qty,
+            price: +unitPrice.toFixed(2),
+            listedPrice: +unitPrice.toFixed(2),
+            purchasePrice: +(itemObj.purchasePrice || 0),
+            discountAmt: 0,
+            discountPct: 0,
+            amount: lineAmount,
+            unit,
+            primaryQty,
+            gstRate: itemGstRate,
+            baseAmount: lineBase,
+            taxAmount: lineTax,
+            hsn: itemObj.hsn || ''
+        });
+    });
+
+    window._catalogOrderMode = true;
+    currentPage = 'salesorders';
+    pageTitle.textContent = 'New Sales Order';
+    setPageChromeMode('sales-doc');
+
+    const allParties = await DB.getAll('parties');
+    const customers = allParties.filter(p => p.type === 'Customer');
+    const categories = await DB.getAll('categories');
+
+    pageContent.innerHTML = renderSalesOrderFormShell({
+        title: 'Sale Order',
+        subtitle: 'Cart items are preloaded from catalog.',
+        orderNo: 'Auto',
+        date: today(),
+        expectedDeliveryDate: '',
+        priority: 'Normal',
+        partyName: '',
+        partyId: '',
+        notes: '',
+        discountPct: 0,
+        discountAmt: 0,
+        categories,
+        editId: '',
+        showSaveAndNew: true,
+        cancelAction: `window._catalogOrderMode=false;catalogCart=[];renderCatalog()`
+    });
+
+    initPartySearchField('f-so-party', customers, { autofocus: true, sortByGps: false, refreshGps: false });
+    initSOItemPickerDropdown(inv);
     renderSOLines();
 }
 
