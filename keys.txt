@@ -1,0 +1,1 @@
+["id","name","item_code","category","sub_category","unit","sec_uom","sec_uom_ratio","purchase_price","sale_price","mrp","stock","low_stock_alert","photo","price_tiers","created_at","hsn","warehouse","batches","gst_rate","active","image_url","minStock","secUom","conversionFactor"]

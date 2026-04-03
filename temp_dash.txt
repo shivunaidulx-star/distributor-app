@@ -1,0 +1,31 @@
+2118: async function renderDashboard() {
+2308: const totalReceivable = recParties.reduce((s, p) => s + Math.abs(p.balance), 0);
+2309: const totalPayable = payParties.reduce((s, p) => s + p.balance, 0);
+2362: <div class="dash-kpi-card dash-kpi-green" onclick="window._partyBalanceFilter='receivable';navigateTo('parties')" style="cursor:pointer">
+2363: <div class="dash-kpi-label">Receivable</div>
+2364: <div class="dash-kpi-amount dash-count" data-val="${totalReceivable}">${currency(totalReceivable)}</div>
+2367: <div class="dash-kpi-card dash-kpi-red" onclick="window._partyBalanceFilter='payable';navigateTo('parties')" style="cursor:pointer">
+2368: <div class="dash-kpi-label">Payable</div>
+2369: <div class="dash-kpi-amount dash-count" data-val="${totalPayable}">${currency(totalPayable)}</div>
+2578: // Apply balance filter if coming from dashboard receivable/payable card
+2580: if (balFilter === 'receivable') shown = shown.filter(p => (p.balance || 0) < 0);
+2581: else if (balFilter === 'payable') shown = shown.filter(p => (p.balance || 0) > 0);
+2584: <div style="display:flex;align-items:center;gap:8px;padding:8px 14px;background:${balFilter === 'receivable' ? '#d1fae5' : '#fee2e2'};border-radius:8px;margin-bottom:10px;font-size:0.85rem;font-weight:600;color:${balFilter === 'receivable' ? '#065f46' : '#991b1b'}">
+2585: ${balFilter === 'receivable' ? ' Showing: Parties with Receivable Balance' : ' Showing: Parties with Payable Balance'}
+2590: const totalReceivable = customers.reduce((s, c) => s + (c.balance < 0 ? Math.abs(c.balance) : 0), 0);
+2603: <div style="font-size:0.65rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">Receivables</div>
+2604: <div style="font-size:1.2rem;font-weight:800;color:var(--success)">${currency(totalReceivable)}</div>
+14965: <div class="form-group"><label>Balance</label><select id="r-out-bal" onchange="renderOutstandingRpt()"><option value="">All</option><option value="dr">Receivable (Customer owes us)</option><option value="cr">Payable (We owe them)</option></select></div>
+15990: <td><span class="badge ${p.balance < 0 ? 'badge-success' : 'badge-danger'}">${p.balance < 0 ? 'Receivable' : 'Payable'}</span></td>
+16025: <div class="stat-card green"><div class="stat-icon"></div><div class="stat-value">${currency(totalRec)}</div><div class="stat-label">Receivable</div></div>
+16026: <div class="stat-card red"><div class="stat-icon"></div><div class="stat-value">${currency(totalPay)}</div><div class="stat-label">Payable</div></div>
+17734: // Zero out all party balances so receivable/payable resets
+20226: displayNet = salRec.net_payable || (displayEarned - displayDeducted);
+20248: <div class="stat-card red"><div class="stat-icon"></div><div class="stat-value">${currency(totalNet)}</div><div class="stat-label">Net Payable</div></div>
+20254: <thead><tr><th>Staff</th><th>Salary/Mo</th><th style="text-align:center">P</th><th style="text-align:center"></th><th style="text-align:center">Eff.Days</th><th style="text-align:right">Earned</th><th style="text-align:right">Adv Balance</th><th style="text-align:right">Deducting</th><th style="text-align:right">Net Payable</th><th>Status</th><th>Actions</th></tr></thead>
+20268: ? `<input type="number" id="deduct-${r.s.id}" value="${r.toDeduct}" min="0" max="${r.advPending}" step="1" class="form-control" style="width:90px;text-align:right;padding:4px 6px;font-size:0.85rem;color:#ef4444;font-weight:600" oninput="updateNetPayable('${r.s.id}',${r.earned})">`
+20361: function updateNetPayable(staffId, earned) {
+20407: // Net payable cannot be negative — advance deduction clears to ₹0 minimum
+20408: const netPayable = +Math.max(0, earned - finalDeductionAmount).toFixed(2);
+20414: advances: finalDeductionAmount, net_payable: netPayable,
+20419: if (!confirm(`Confirm Salary for ${staffName}?\nEarned: ${currency(earned)}\nAdv Deducted: ${currency(finalDeductionAmount)}\nNet Payable: ${currency(netPayable)}`)) return;

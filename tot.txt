@@ -1,0 +1,19 @@
+2308: const totalReceivable = recParties.reduce((s, p) => s + Math.abs(p.balance), 0);
+2309: const totalPayable = payParties.reduce((s, p) => s + p.balance, 0);
+2364: <div class="dash-kpi-amount dash-count" data-val="${totalReceivable}">${currency(totalReceivable)}</div>
+2369: <div class="dash-kpi-amount dash-count" data-val="${totalPayable}">${currency(totalPayable)}</div>
+2590: const totalReceivable = customers.reduce((s, c) => s + (c.balance < 0 ? Math.abs(c.balance) : 0), 0);
+2604: <div style="font-size:1.2rem;font-weight:800;color:var(--success)">${currency(totalReceivable)}</div>
+9905: let totalReceived = 0;
+9906: document.querySelectorAll('.f-pay-row-amount').forEach(inp => totalReceived += (+inp.value || 0));
+9908: const totalReduction = totalReceived + disc;
+9910: if ($('pay-total-received-display')) $('pay-total-received-display').textContent = currency(totalReceived);
+10249: const totalReceived = payRows.reduce((sum, r) => sum + r.amount, 0);
+10250: const totalReduction = +(totalReceived + disc).toFixed(2);
+16020: const totalRec = filtered.filter(p => p.balance < 0).reduce((s, p) => s + Math.abs(p.balance), 0);
+16021: const totalPay = filtered.filter(p => p.balance > 0).reduce((s, p) => s + p.balance, 0);
+16025: <div class="stat-card green"><div class="stat-icon"></div><div class="stat-value">${currency(totalRec)}</div><div class="stat-label">Receivable</div></div>
+16026: <div class="stat-card red"><div class="stat-icon"></div><div class="stat-value">${currency(totalPay)}</div><div class="stat-label">Payable</div></div>
+16409: const totalPayments = filteredPayments.reduce((sum, p) => sum + p.amount, 0);
+16410: const outstanding = totalInvoiceValue - totalPayments;
+16448: <div class="stat-card amber"><div class="stat-icon"></div><div class="stat-value">${currency(totalPayments)}</div><div class="stat-label">Total Collected</div></div>

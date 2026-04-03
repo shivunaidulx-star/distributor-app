@@ -1,0 +1,112 @@
+571: { key: 'by', label: 'Created By', visible: false },
+1054: <h3 style="margin-bottom:16px;font-size:1rem">Step 2: Create Admin User</h3>
+1429: // --- Custom Searchable Dropdown (replaces broken datalist inside modals) ---
+1430: function initSearchDropdown(inputId, items, onSelect) {
+1449: // Create dropdown container
+2226: }).join('') || '<tr><td colspan="5" class="empty-state"><p>No orders yet</p><p class="empty-subtitle">Create your first sales order to get started</p></div></td></tr>'}
+2679: balance: `<td style="min-width:120px;text-align:right" class="${(p.balance || 0) < 0 ? 'amount-green' : 'amount-red'}">${currency(Math.abs(p.balance || 0))} ${(p.balance || 0) < 0 ? '(Cr)' : '(Dr)'}</td>`,
+2732: const balLabel = (p.balance || 0) < 0 ? '(Cr)' : ((p.balance || 0) > 0 ? '(Dr)' : '');
+3087: let csv = 'Party Code *,Name *,Type (Customer/Supplier) *,Phone,GSTIN,Address,City,Post Code,Location Lat,Location Lng,Opening Balance,Credit Limit,Payment Terms (COD/Net7/Net15/Net30/Net60),Blocked (true/false)\n';
+3232: // Create party_ledger + invoices entries per document
+3310: // 0:PartyCode, 1:Name, 2:Type, 3:Phone, 4:GSTIN, 5:Address, 6:City, 7:PostCode, 8:Lat, 9:Lng, 10:OpeningBal, 11:CreditLimit, 12:PayTerms, 13:Blocked
+4654: initSearchDropdown('f-adj-item-input', buildItemSearchList(inv), (selectedItem) => {
+4912: let csv = 'Date,Entry Type,Doc No,Qty,Running Stock,Reason,Created By\n';
+4970: let csv = 'Party Code,Name,Type,Phone,GSTIN,Address,City,Post Code,Location Lat,Location Lng,Balance,Credit Limit,Payment Terms,Blocked\n';
+5155: _catNeedsCreation: createdCat, isUpdate: !!existingItem
+5165: const newCats = pendingItemImports.filter(p => p._catNeedsCreation).length;
+5215: delete p._catNeedsCreation;
+5657: initSearchDropdown('f-so-party', buildPartySearchList(customers));
+5664: initSearchDropdown('f-so-party', buildPartySearchList(customers));
+5668: _soItemDropdown = initSearchDropdown('f-so-item-input', buildItemSearchList(inv), function (item) {
+5685: _soItemDropdown = initSearchDropdown('f-so-item-input', buildItemSearchList(inv), function (item) {
+5690: var _soItemDropdown = null;
+5711: _soItemDropdown = initSearchDropdown('f-so-item-input', buildItemSearchList(inv), function (item) {
+5896: if (window._soItemDropdown) window._soItemDropdown.clear();
+6136: // Credit Limit Check
+6167: await logSalesmanAction(editId ? 'Edited Order' : 'Created Order', savedOrderNo);
+6387: initSearchDropdown('f-so-party', buildPartySearchList(customers));
+6391: initSearchDropdown('f-so-party', buildPartySearchList(customers));
+6395: _soItemDropdown = initSearchDropdown('f-so-item-input', buildItemSearchList(inv), function (item) {
+6518: initSearchDropdown('f-so-party', buildPartySearchList(customers));
+6774: initSearchDropdown('f-di-party', buildPartySearchList(suppliers), (p) => {
+6777: initSearchDropdown('f-di-item-input', buildItemSearchList(inv), (item) => {
+6862: openModal('Create Purchase Order', `
+6885: initSearchDropdown('f-po-party', buildPartySearchList(suppliers), (party) => {
+6888: initSearchDropdown('f-po-item-input', buildItemSearchList(inv), (item) => {
+7187: status: `<td style="min-width:90px">${i.status === 'cancelled' ? '<span class="badge badge-danger">Cancelled</span>' : i.status === 'draft' ? '<span class="badge badge-warning">Draft</span>' : '<span class="badge badge-success">Posted</span>'}</td>`,
+7421: openModal(type === 'sale' ? 'Create Sale Invoice' : 'Create Purchase / Stock In', `
+7423: <div class="form-row" style="grid-template-columns:1fr 1fr"><div class="form-group"><label>Delivery Date</label><input type="date" id="f-inv-delivery-date" value="${today()}" onchange="this.dataset.manuallySet='1'"></div><div class="form-group"><label>Box / Crate No.</label><input type="text" id="f-inv-box-no" placeholder="e.g. B-001, C-05"></div></div>
+7530: initSearchDropdown('f-inv-party', buildPartySearchList(filteredParties), onInvPartySelect);
+7535: initSearchDropdown('f-inv-party', buildPartySearchList(filteredParties), onInvPartySelect);
+7539: _invItemDropdown = initSearchDropdown('f-inv-item-input', buildItemSearchList(inv), function (item) {
+7649: var _invItemDropdown = null;
+7662: _invItemDropdown = initSearchDropdown('f-inv-item-input', buildItemSearchList(inv), function (item) {
+7689: _invItemDropdown = initSearchDropdown('f-inv-item-input', buildItemSearchList(inv), function (item) {
+7833: if (window._invItemDropdown) window._invItemDropdown.clear();
+8153: await logSalesmanAction('Created Invoice', invNo);
+8723: return convert(Math.floor(n / 10000000)) + 'Crore ' + (n % 10000000 !== 0 ? convert(n % 10000000) : '');
+8779: <div class="meta-row"><span>Invoice Created By :</span><span style="font-weight:600">${escapeHtml(inv.createdBy||'-')}</span></div>
+8781: ${inv.boxNo ? `<div class="meta-row"><span>Box/Crate No. :</span><span style="font-weight:600">${escapeHtml(inv.boxNo)}</span></div>` : '<div class="meta-row"><span>Box/Crate No. :</span><span>-</span></div>'}
+9814: initSearchDropdown('f-pay-party', buildPartySearchList(customers), onPartySelect);
+9820: initSearchDropdown('f-pay-party', buildPartySearchList(customers), onPartySelect);
+9955: initSearchDropdown('f-pay-party', sortedParties, async (party) => {
+10275: // 5. Create Database Records per Payment Mode
+11418: <table class="data-table"><thead><tr><th>Order #</th><th>Party</th><th>Packer</th><th>Time</th><th>Boxes</th><th>Crates</th><th>Invoice</th><th>Total</th></tr></thead>
+11537: ${crates.length ? `<div style="font-size:0.75rem">Crates: ${crateDisplay}</div>` : ''}
+11990: // Create a temporary file input and trigger it
+12364: <div class="form-group"><label>\ud83d\udccb Total Crates</label><input type="number" id="f-pkg-totalCrates" value="0" min="0" onchange="onPkgCountChange()"></div>
+12385: <span>\ud83d\udccb Crate Numbers</span>
+12386: <button type="button" class="btn btn-outline btn-sm" onclick="addPkgInputRow('crate')" style="padding:4px 8px;font-size:0.8rem">+ Add Crate</button>
+12408: const totalCrates = Math.max(0, +($('f-pkg-totalCrates').value) || 0);
+12410: const crateSection = $('pkg-crate-section'); if (crateSection) crateSection.style.display = totalCrates > 0 ? '' : 'none';
+12412: syncPkgInputRows('crate', totalCrates);
+12428: <input type="text" id="${className}-${rowNum}" name="${className}-${rowNum}" class="${className}" value="" placeholder="${type === 'box' ? 'Box' : 'Crate'} number (required)" required style="flex:1">
+12438: const countId = type === 'box' ? 'f-pkg-totalBoxes' : 'f-pkg-totalCrates';
+12447: const countId = type === 'box' ? 'f-pkg-totalBoxes' : 'f-pkg-totalCrates';
+12457: const totalCrates = +($('f-pkg-totalCrates').value) || 0;
+12459: if (totalBoxes + totalCrates < 1) return alert('Enter at least 1 box or crate');
+12469: if (totalCrates > 0) {
+12470: const emptyCrate = crateInputs.find(inp => !inp.value.trim());
+12471: if (emptyCrate) return alert('Crate number is mandatory for each crate. Please fill all crate numbers.');
+12482: // Cross-user same-day duplicate validation: compare against all orders packed today
+12512: crateCount: totalCrates
+12516: showToast(`Order ${o.orderNo} packed  ${totalBoxes} box(es), ${totalCrates} crate(s)!`, 'success');
+12762: throw new Error(`Critical failure at Invoice ${r.invNo}: ${pErr.message}. Some invoices might have been generated.`);
+12997: const pkgDisplay = `<div>Boxes: ${boxDisp}</div><div style="margin-top:2px">Crates: ${crateDisp}</div>`;
+13135: crates.length ? 'Crates: ' + crates.join(', ') : ''
+13302: let dCrates = d.crateNumbers || [];
+13303: if (!pkgs.length && !dBoxes.length && !dCrates.length && d.orderId) {
+13311: dCrates = linkedOrder.crateNumbers || [];
+13315: if (!dCrates.length && dcc > 0) dCrates = pkgs.slice(dbc, dbc + dcc);
+13316: const pkgHtml = (dBoxes.length || dCrates.length) ? `<div style="margin-bottom:12px;display:flex;gap:16px;flex-wrap:wrap">
+13318: ${dCrates.length ? `<div><span style="font-size:0.78rem;color:var(--text-muted)">Crates: </span>${dCrates.map(n => `<span class="badge badge-outline" style="font-size:0.7rem;border-color:var(--warning);color:var(--warning)">${escapeHtml(n)}</span>`).join(' ')}</div>` : ''}
+13820: let rCrates = d.crateNumbers || [];
+13822: if (!rpkgs.length && !rBoxes.length && !rCrates.length && d.orderId) {
+13824: if (so) { rbc = so.boxCount || 0; rcc = so.crateCount || 0; rBoxes = so.boxNumbers || []; rCrates = so.crateNumbers || []; rpkgs = so.packageNumbers || []; }
+13827: if (!rCrates.length && rcc > 0) rCrates = rpkgs.slice(rbc, rbc + rcc);
+13830: if (rCrates.length) parts.push('Crates: ' + rCrates.join(', '));
+13856: <th style="border:1px solid #ddd;padding:6px">Boxes / Crates</th>
+14239: // Create new dispatch entry
+14736: <div class="form-group"><label>Created By</label><select id="r-p-user" onchange="renderPurchaseRpt()"><option value="">All</option>${poUsers.map(u => `<option>${u.name}</option>`).join('')}</select></div>
+14811: initSearchDropdown('r-soa-party-input', buildPartySearchList(parties), function (p) {
+14830: <div class="table-wrapper"><table class="data-table" id="tbl-soa"><thead><tr><th>Date</th><th>Type</th><th>Ref No</th><th>Description</th><th>Debit (Out)</th><th>Credit (In)</th><th>Balance</th></tr></thead><tbody>`;
+14842: <td style="font-weight:600;color:${(l.runningBalance || l.balance || 0) > 0 ? 'var(--danger)' : 'var(--success)'}">${currency(Math.abs(l.runningBalance || l.balance || 0))} ${(l.runningBalance || l.balance || 0) > 0 ? 'Dr' : 'Cr'}</td>
+15560: <thead><tr><th>Date</th><th>Invoice</th><th>Supplier</th><th>Created By</th><th style="text-align:right">Amount</th></tr></thead>
+16336: const totalDr = txns.reduce((s, t) => s + t.dr, 0);
+16337: const totalCr = txns.reduce((s, t) => s + t.cr, 0);
+16350: <div class="stat-card green"><div class="stat-icon"></div><div class="stat-value">${currency(totalDr)}</div><div class="stat-label">Total Inflow (Sales+Receipts)</div></div>
+16351: <div class="stat-card red"><div class="stat-icon"></div><div class="stat-value">${currency(totalCr)}</div><div class="stat-label">Total Outflow (Purchases+Exp)</div></div>
+16359: <tr style="font-weight:700;background:rgba(0,212,170,0.08)"><td colspan="4" style="text-align:right">Totals</td><td class="amount-green" style="min-width:110px;text-align:right">${currency(totalDr)}</td><td class="amount-red" style="min-width:110px;text-align:right">${currency(totalCr)}</td><td></td></tr>
+17248: openModal(id ? 'Edit No. Series' : 'Create No. Series', `
+17872: <div style="font-size:1.4rem;font-weight:700;color:${party.balance >= 0 ? 'var(--success)' : 'var(--danger)'}">${currency(Math.abs(party.balance || 0))} ${party.balance < 0 ? '(Cr)' : '(Dr)'}</div>
+17899: <tr><th>Date</th><th>Type</th><th>Ref #</th><th>Doc Bal</th><th>Dr/Cr</th><th>Balance</th><th>Reason</th><th>By</th>${canEdit() ? '<th>Actions</th>' : ''}</tr>
+18057: const rows = [['Date', 'Type', 'Ref #', 'Dr/Cr', 'Running Balance', 'Reason', 'By']];
+18093: <div class="form-group"><label>Amount  * <span style="font-weight:normal;color:var(--text-muted)">(Positive = Cr/Received, Negative = Dr/Paid)</span></label>
+18465: <button class="btn btn-primary btn-sm" onclick="createOrderFromCatalog()" style="border-radius:8px;font-weight:600">Create Order </button>
+18732: <button class="btn btn-primary" onclick="closeModal();createOrderFromCatalog()">Create Order </button>
+18881: initSearchDropdown('f-so-party', buildPartySearchList(customers));
+18884: _soItemDropdown = initSearchDropdown('f-so-item-input', buildItemSearchList(inv), function (item) {
+19706: <option value=""> Create New Party </option>
+19721: <label>Credit Limit ()</label>
+19743: // Create new party
+19859: const ROLES = ['Admin', 'Manager', 'Salesman', 'Packer', 'Delivery', 'Driver', 'Helper', 'Accountant', 'Staff'];

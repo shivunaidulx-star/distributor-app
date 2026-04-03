@@ -1,0 +1,36 @@
+4025: <div class="form-group"><label>Conversion Ratio</label><input type="number" id="f-item-secratio" value="${i ? i.secUomRatio || '' : ''}" placeholder="1 Pri = ? Sec"></div>
+4274: secUomRatio: +$('f-item-secratio').value || 0,
+5090: let csv = 'Item Code,Item Name *,Category *,Sub-Category,HSN,GST Rate %,Primary Unit *,Secondary UOM,Conversion Ratio,Purchase Price *,Sale Price *,MRP,Opening Stock,Low Stock Alert,Warehouse,Price Tier 1 Qty,Price Tier 1 Price,Price Tier 2 Qty,Price Tier 2 Price\n';
+5781: const secRatio = +(item.secUomRatio) || 0;
+5785: if (selectedUom !== primaryUnit && secUom && selectedUom === secUom && secRatio > 0) {
+5786: listedPrice = listedPrice / secRatio;
+5802: const secRatio = +(itemObj.secUomRatio) || 0;
+5810: if (unit !== primaryUnit && secUom && unit === secUom && secRatio > 0) {
+5811: primaryQty = qty / secRatio;
+5842: if (unit !== primaryUnit && secUom && unit === secUom && secRatio > 0) {
+5843: unitListedPrice = baseListedPrice / secRatio;
+5844: unitPurchasePrice = unitPurchasePrice / secRatio;
+5871: if (li.unit !== primaryUnit && secUom && li.unit === secUom && secRatio > 0) {
+5872: lineUnitListedPrice = baseListedPrice / secRatio;
+7694: const secRatio = +(item.secUomRatio) || 0;
+7700: if (selectedUom !== primaryUnit && secUom && selectedUom === secUom && secRatio > 0) {
+7701: listedPrice = listedPrice / secRatio;
+7720: const secRatio = +(itemObj.secUomRatio) || 0;
+7728: if (unit !== primaryUnit && secUom && unit === secUom && secRatio > 0) {
+7729: primaryQty = qty / secRatio;
+7761: if (unit !== primaryUnit && secUom && unit === secUom && secRatio > 0) {
+7762: unitListedPrice = listedPrice / secRatio;
+7763: unitPurchasePrice = unitPurchasePrice / secRatio;
+7797: if (li.unit !== primaryUnit && secUom && li.unit === secUom && secRatio > 0) {
+7798: lineUnitListedPrice = listedPrice / secRatio;
+18426: const secRatio = +(item.secUomRatio) || 0;
+18427: const secPrice = secRatio > 0 ? (item.salePrice / secRatio).toFixed(2) : item.salePrice;
+18442: <span style="font-size:0.85rem;color:var(--accent)">${secPrice}${secRatio > 0 ? ` (1 ${priUnit} = ${secRatio} ${secUom})` : ''}</span>
+18451: const secRatio = +(item.secUomRatio) || 0;
+18453: if (selectedUom !== priUnit && item.secUom && selectedUom === item.secUom && secRatio > 0) {
+18454: price = item.salePrice / secRatio;
+18595: const secRatio = +(itemObj.secUomRatio) || 0;
+18601: if (unit !== primaryUnit && secUom && unit === secUom && secRatio > 0) {
+18602: primaryQty = qty / secRatio;
+18618: if (unit !== primaryUnit && secUom && unit === secUom && secRatio > 0) {
+18619: unitPrice = baseListedPrice / secRatio;

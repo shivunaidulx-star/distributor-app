@@ -1,0 +1,20 @@
+﻿5771: function onSOUomChange() {
+5772: const sel = $('f-so-item-input'); if (!sel || !sel.value) return;
+5773: 
+5774: const match = sel.value.match(/^(.*) \[Avail:/);
+5775: let itemName = match ? match[1].trim() : sel.value.trim();
+5776: const item = DB.get('db_inventory').find(i => i.name.toLowerCase() === itemName.toLowerCase() || (i.itemCode || '').toLowerCase() === itemName.toLowerCase());
+5777: if (!item) return;
+5778: 
+5779: const primaryUnit = item.unit || 'Pcs';
+5780: const secUom = item.secUom || '';
+5781: const secRatio = +(item.secUomRatio) || 0;
+5782: const selectedUom = $('f-so-uom').value;
+5783: 
+5784: let listedPrice = +item.salePrice || 0;
+5785: if (selectedUom !== primaryUnit && secUom && selectedUom === secUom && secRatio > 0) {
+5786: listedPrice = listedPrice / secRatio;
+5787: }
+5788: $('f-so-price').value = listedPrice > 0 ? listedPrice.toFixed(2) : '';
+5789: }
+

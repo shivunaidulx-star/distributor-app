@@ -1,0 +1,23 @@
+1434: // BUG-003 fix: clean up old event listeners to prevent ghost duplicate handlers
+3319: errors.push(`Row ${i + 1}: Duplicate party "${name}" in file.`); continue;
+3322: errors.push(`Row ${i + 1}: Duplicate Party Code "${partyCode}" in file.`); continue;
+3371: <p style="margin:4px 0 8px;font-size:0.75rem;color:var(--text-muted)">These rows were skipped because they appear to be group headers, sub-totals, or duplicates. You can safely ignore this and proceed.</p>
+3587: // Merge subcategories (prevent duplicates)
+5123: if (pendingItemImports.some(it => (it.name || '').toLowerCase() === name.toLowerCase())) { errors.push(`Row ${i + 1}: Duplicate item "${name}" in file.`); continue; }
+5376: <button class="btn btn-outline btn-sm" style="padding:4px 8px;font-size:0.75rem;border-radius:6px" onclick="duplicateSalesOrder('${o.id}')">Duplicate</button>
+5459: <button class="btn-icon" onclick="duplicateSalesOrder('${o.id}')" title="Duplicate"><span class="material-symbols-outlined" style="font-size:1.1rem">content_copy</span></button>
+6426: async function duplicateSalesOrder(id) {
+6463: openModal('Duplicate Sales Order', `
+7255: { icon: '<span class="material-symbols-outlined" style="font-size:1.1rem">content_copy</span>', label: 'Duplicate', fn: `duplicateInvoice('${id}')` },
+7286: async function duplicateInvoice(id) {
+8882: + _buildInvoicePageHtml(inv, party, order, co, qrUrl, 'DUPLICATE FOR COLLECTION');
+9041: + _buildInvoicePageHtml(inv, party, order, co, qrUrl, 'DUPLICATE FOR COLLECTION');
+12464: // Check for duplicates within form
+12466: for (const p of allPkgNumbers) { if (seen.has(p)) return alert(`Duplicate package number "${p}" in this form!`); seen.add(p); }
+12468: // Cross-user same-day duplicate validation: compare against all orders packed today
+12471: let duplicateError = '';
+12478: if (usedNums.includes(num)) { duplicateError = `Package number "${num}" already used in order ${so.orderNo} today!`; break; }
+12480: if (duplicateError) break;
+12482: if (duplicateError) return alert(duplicateError);
+19029: // Check for duplicate: already logged in elsewhere or phone not registered
+20224: // Guard: prevent duplicate — clean up any stuck 'processing' record first

@@ -22182,32 +22182,7 @@ async function renderCatalog() {
         stickyFilter.className = 'catalog-sticky-filter';
         document.body.appendChild(stickyFilter);
     }
-    // Clone category and movement pills into sticky filter
-    const movPillsEl = document.getElementById('catalog-movement-pills');
-    const catPillsEl = document.getElementById('catalog-pills');
-    if (stickyFilter && (movPillsEl || catPillsEl)) {
-        stickyFilter.innerHTML = '';
-        if (catPillsEl) {
-            const catClone = catPillsEl.cloneNode(true);
-            catClone.removeAttribute('id');
-            catClone.style.cssText = 'display:flex;gap:6px;flex-shrink:0;';
-            catClone.querySelectorAll('.catalog-pill').forEach(pill => {
-                const cat = pill.dataset.cat || '';
-                pill.onclick = () => filterCatalogByCat(cat);
-            });
-            stickyFilter.appendChild(catClone);
-        }
-        if (movPillsEl) {
-            const movClone = movPillsEl.cloneNode(true);
-            movClone.removeAttribute('id');
-            movClone.style.cssText = 'display:flex;gap:6px;flex-shrink:0;';
-            movClone.querySelectorAll('.catalog-pill').forEach(pill => {
-                const movement = pill.dataset.movement || '';
-                pill.onclick = () => filterCatalogByMovement(movement);
-            });
-            stickyFilter.appendChild(movClone);
-        }
-    }
+    updateCatalogStickyFilter();
 
     bindCatalogTopButton();
     updateCatalogTopButtonVisibility();
@@ -22327,6 +22302,7 @@ async function filterCatalog() {
     const grid = $('catalog-grid');
     if (grid) grid.innerHTML = await renderCatalogCards(items);
     updateCatalogTopButtonVisibility();
+    updateCatalogStickyFilter();
 }
 
 function getCatalogScrollRoot() {
@@ -22362,6 +22338,51 @@ function updateCatalogTopButtonVisibility() {
     );
     btn.classList.toggle('show', y > 600);
     btn.classList.toggle('with-cart', !!document.getElementById('catalog-cart-bar'));
+}
+
+
+function updateCatalogStickyFilter() {
+    const stickyFilter = document.getElementById('catalog-sticky-filter');
+    if (!stickyFilter) return;
+    
+    const movPillsEl = document.getElementById('catalog-movement-pills');
+    const catPillsEl = document.getElementById('catalog-pills');
+    const subPillsEl = document.getElementById('catalog-subcat-pills');
+    
+    stickyFilter.innerHTML = '';
+    
+    if (catPillsEl && catPillsEl.innerHTML.trim() !== '') {
+        const catClone = catPillsEl.cloneNode(true);
+        catClone.removeAttribute('id');
+        catClone.style.cssText = 'display:flex;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:4px;width:100%;';
+        catClone.querySelectorAll('.catalog-pill').forEach(pill => {
+            const cat = pill.dataset.cat || '';
+            pill.onclick = () => filterCatalogByCat(cat);
+        });
+        stickyFilter.appendChild(catClone);
+    }
+    
+    if (subPillsEl && subPillsEl.innerHTML.trim() !== '') {
+        const subClone = subPillsEl.cloneNode(true);
+        subClone.removeAttribute('id');
+        subClone.style.cssText = 'display:flex;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:4px;width:100%;';
+        subClone.querySelectorAll('.catalog-pill').forEach(pill => {
+            const subcat = pill.dataset.subcat || '';
+            pill.onclick = () => filterCatalogBySubcat(subcat);
+        });
+        stickyFilter.appendChild(subClone);
+    }
+    
+    if (movPillsEl && movPillsEl.innerHTML.trim() !== '') {
+        const movClone = movPillsEl.cloneNode(true);
+        movClone.removeAttribute('id');
+        movClone.style.cssText = 'display:flex;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:4px;width:100%;';
+        movClone.querySelectorAll('.catalog-pill').forEach(pill => {
+            const movement = pill.dataset.movement || '';
+            pill.onclick = () => filterCatalogByMovement(movement);
+        });
+        stickyFilter.appendChild(movClone);
+    }
 }
 
 function bindCatalogTopButton() {
@@ -22418,23 +22439,7 @@ function bindCatalogStickyFilter() {
             }
             _catalogLastScrollY = y;
 
-            // Keep sticky filter pills in sync with actual filter state
-            if (stickyFilter.classList.contains('visible')) {
-                const activeCat = document.querySelector('#catalog-pills .catalog-pill.active');
-                const activeMov = document.querySelector('#catalog-movement-pills .catalog-pill.active');
-                if (activeCat) {
-                    const catVal = activeCat.dataset.cat || '';
-                    stickyFilter.querySelectorAll('[data-cat]').forEach(p => {
-                        p.classList.toggle('active', (p.dataset.cat || '') === catVal);
-                    });
-                }
-                if (activeMov) {
-                    const movVal = activeMov.dataset.movement || '';
-                    stickyFilter.querySelectorAll('[data-movement]').forEach(p => {
-                        p.classList.toggle('active', (p.dataset.movement || '') === movVal);
-                    });
-                }
-            }
+            // Sticky filter sync is now handled by updateCatalogStickyFilter on filter change
         });
     };
 

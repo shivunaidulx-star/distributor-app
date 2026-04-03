@@ -1,0 +1,13 @@
+5639: <select id="f-so-uom" onchange="onSOUomChange()" style="background:#fff"><option value="">--</option></select>
+5666: populateUomSelect($('f-so-uom'), item);
+5683: populateUomSelect($('f-so-uom'), item);
+5709: populateUomSelect($('f-so-uom'), item);
+5769: populateUomSelect($('f-so-uom'), item);
+5782: const selectedUom = $('f-so-uom').value;
+5803: const uomSel = $('f-so-uom');
+5888: const uomSel2 = $('f-so-uom');
+6367: <div class="form-group" style="margin-bottom:0"><label style="font-size:0.75rem">UOM</label><select id="f-so-uom" onchange="onSOUomChange()" style="background:#fff"><option value="">--</option></select></div>
+6388: populateUomSelect($('f-so-uom'), item);
+6494: <div class="form-group"><label>UOM</label><select id="f-so-uom"><option value="">--</option></select></div>
+18714: <div class="form-group" style="margin-bottom:0"><label>UOM</label><select id="f-so-uom" onchange="onSOUomChange()"><option value="">--</option></select></div>
+18738: populateUomSelect($('f-so-uom'), item);

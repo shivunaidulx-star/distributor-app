@@ -1,0 +1,12 @@
+2306: const recParties = parties.filter(p => (p.balance || 0) < 0);
+2307: const payParties = parties.filter(p => (p.balance || 0) > 0);
+2308: const totalReceivable = recParties.reduce((s, p) => s + Math.abs(p.balance), 0);
+2309: const totalPayable = payParties.reduce((s, p) => s + p.balance, 0);
+2310: const drParties = recParties;
+2311: const crParties = payParties;
+2364: <div class="dash-kpi-amount dash-count" data-val="${totalReceivable}">${currency(totalReceivable)}</div>
+2369: <div class="dash-kpi-amount dash-count" data-val="${totalPayable}">${currency(totalPayable)}</div>
+2590: const totalReceivable = customers.reduce((s, c) => s + (c.balance < 0 ? Math.abs(c.balance) : 0), 0);
+2604: <div style="font-size:1.2rem;font-weight:800;color:var(--success)">${currency(totalReceivable)}</div>
+8651: const payParties = await DB.getAll('parties');
+8652: const payParty = payParties.find(p => p.id === pay.partyId);

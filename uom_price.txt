@@ -1,0 +1,11 @@
+5090: let csv = 'Item Code,Item Name *,Category *,Sub-Category,HSN,GST Rate %,Primary Unit *,Secondary UOM,Conversion Ratio,Purchase Price *,Sale Price *,MRP,Opening Stock,Low Stock Alert,Warehouse,Price Tier 1 Qty,Price Tier 1 Price,Price Tier 2 Qty,Price Tier 2 Price\n';
+5120: const [code, name, cat, subcat, hsn, gstRateStr, priUnit, secUOM, convStr, ppStr, spStr, mrpStr, stockStr, lowStr, warehouse, t1qty, t1price, t2qty, t2price] = colsMapped;
+5839: // Adjust listed price for alternate UOM
+7758: // Adjust listed price for alternate UOM
+11862: const uomList = item ? [{ name: item.unit || 'Pcs', factor: 1, price: li.price || item.salePrice || 0 }, ...(item.uoms || [])] : [];
+11895: ${uomList.map(u => `<option value="${u.name}" data-factor="${u.factor}" data-price="${u.price}" ${u.name === currentUom ? 'selected' : ''}>${u.name}</option>`).join('')}
+12321: return { ...li, packedQty, selectedUom, uom: selectedUom, price, discountPct, discountAmt, amount, factor, batchId, batchMrp };
+18442: <span style="font-size:0.85rem;color:var(--accent)">${secPrice}${secRatio > 0 ? ` (1 ${priUnit} = ${secRatio} ${secUom})` : ''}</span>
+18460: else catalogCart.push({ itemId: item.id, name: item.name, qty: 1, price: +price.toFixed(2), unit: selectedUom, amount: +price.toFixed(2) });
+18616: // Adjust price for secondary UOM
+19463: return { itemId: id, itemName: item.name, qty, uom: item.uom || '', price, amount: +(qty * price).toFixed(2) };

@@ -1,0 +1,15 @@
+2308: const totalReceivable = recParties.reduce((s, p) => s + Math.abs(p.balance), 0);
+2362: <div class="dash-kpi-card dash-kpi-green" onclick="window._partyBalanceFilter='receivable';navigateTo('parties')" style="cursor:pointer">
+2363: <div class="dash-kpi-label">Receivable</div>
+2364: <div class="dash-kpi-amount dash-count" data-val="${totalReceivable}">${currency(totalReceivable)}</div>
+2578: // Apply balance filter if coming from dashboard receivable/payable card
+2580: if (balFilter === 'receivable') shown = shown.filter(p => (p.balance || 0) < 0);
+2584: <div style="display:flex;align-items:center;gap:8px;padding:8px 14px;background:${balFilter === 'receivable' ? '#d1fae5' : '#fee2e2'};border-radius:8px;margin-bottom:10px;font-size:0.85rem;font-weight:600;color:${balFilter === 'receivable' ? '#065f46' : '#991b1b'}">
+2585: ${balFilter === 'receivable' ? ' Showing: Parties with Receivable Balance' : ' Showing: Parties with Payable Balance'}
+2590: const totalReceivable = customers.reduce((s, c) => s + (c.balance < 0 ? Math.abs(c.balance) : 0), 0);
+2603: <div style="font-size:0.65rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">Receivables</div>
+2604: <div style="font-size:1.2rem;font-weight:800;color:var(--success)">${currency(totalReceivable)}</div>
+14965: <div class="form-group"><label>Balance</label><select id="r-out-bal" onchange="renderOutstandingRpt()"><option value="">All</option><option value="dr">Receivable (Customer owes us)</option><option value="cr">Payable (We owe them)</option></select></div>
+15990: <td><span class="badge ${p.balance < 0 ? 'badge-success' : 'badge-danger'}">${p.balance < 0 ? 'Receivable' : 'Payable'}</span></td>
+16025: <div class="stat-card green"><div class="stat-icon"></div><div class="stat-value">${currency(totalRec)}</div><div class="stat-label">Receivable</div></div>
+17734: // Zero out all party balances so receivable/payable resets
