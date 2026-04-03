@@ -8043,7 +8043,7 @@ function renderSalesOrderFormShell(config) {
                         <p>Keep the essentials visible on one mobile screen.</p>
                     </div>
                 </div>
-                <div class="sales-doc-grid sales-doc-grid-3">
+                <div class="sales-doc-grid sales-doc-grid-2">
                     <div class="doc-input-shell">
                         <label>Order No.</label>
                         <input id="f-so-no" value="${escapeHtml(orderNo)}" readonly>
@@ -8052,6 +8052,8 @@ function renderSalesOrderFormShell(config) {
                         <label>Date</label>
                         <input type="date" id="f-so-date" value="${escapeHtml(date || today())}">
                     </div>
+                </div>
+                <div class="sales-doc-grid sales-doc-grid-2">
                     <div class="doc-input-shell">
                         <label>Priority</label>
                         <select id="f-so-priority">
@@ -8059,16 +8061,9 @@ function renderSalesOrderFormShell(config) {
                             <option value="Urgent" ${priority === 'Urgent' ? 'selected' : ''}>Urgent</option>
                         </select>
                     </div>
-                </div>
-                <div class="sales-doc-grid sales-doc-grid-2">
                     <div class="doc-input-shell">
                         <label>Expected Delivery</label>
                         <input type="date" id="f-so-delivery" value="${escapeHtml(expectedDeliveryDate || '')}">
-                    </div>
-                    <div class="sales-doc-kpi-card">
-                        <span class="sales-doc-kpi-label">Fast Entry</span>
-                        <strong>Add customer, add items, save.</strong>
-                        <small>This layout is tuned for thumb use on phones.</small>
                     </div>
                 </div>
             </section>
@@ -8841,11 +8836,6 @@ function renderSOLines() {
                 <div class="sales-line-index">${i + 1}</div>
                 <div class="sales-line-copy">
                     <div class="sales-line-name">${escapeHtml(li.name)}</div>
-                    <div class="sales-line-meta">${li.qty} ${escapeHtml(li.unit || 'Pcs')} | ${currency(li.price)} | ${discSummary}${li.gstRate ? ` | GST ${li.gstRate}%` : ''}</div>
-                </div>
-                <div class="sales-line-summary">
-                    <strong>${currency(li.amount)}</strong>
-                    ${forceExpanded ? '' : `<span>${isExpanded ? 'Hide' : 'Edit'}</span>`}
                 </div>
                 <button class="sales-line-delete" onclick="event.stopPropagation();removeSOLine(${i})">${msIcon('delete')}</button>
             </div>
@@ -22340,45 +22330,54 @@ async function filterCatalog() {
 }
 
 function getCatalogScrollRoot() {
-    return document.querySelector('.main-content') || document.scrollingElement || document.documentElement;
+    // On mobile the page-content div is the actual scrolling container
+    const pc = document.getElementById('page-content');
+    if (pc && pc.scrollHeight > pc.clientHeight + 10) return pc;
+    const mc = document.querySelector('.main-content');
+    if (mc && mc.scrollHeight > mc.clientHeight + 10) return mc;
+    return document.scrollingElement || document.documentElement;
 }
 
 function scrollCatalogToTop() {
-    const root = getCatalogScrollRoot();
-    try {
-        root.scrollTo({ top: 0, behavior: 'smooth' });
-    } catch (e) {
-        root.scrollTop = 0;
-    }
-    updateCatalogTopButtonVisibility();
+    // Scroll ALL possible scrollable containers to top
+    // page-content is the real scroll container on mobile
+    const pc = document.getElementById('page-content');
+    if (pc) { try { pc.scrollTo({ top: 0, behavior: 'smooth' }); } catch(e) { pc.scrollTop = 0; } }
+    const mc = document.querySelector('.main-content');
+    if (mc) { try { mc.scrollTo({ top: 0, behavior: 'smooth' }); } catch(e) { mc.scrollTop = 0; } }
+    try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch(e) { document.documentElement.scrollTop = 0; }
+    setTimeout(() => updateCatalogTopButtonVisibility(), 400);
 }
 
 function updateCatalogTopButtonVisibility() {
     const btn = $('catalog-top-btn');
     if (!btn) return;
-    const root = getCatalogScrollRoot();
-    const y = (root === document.scrollingElement || root === document.documentElement)
-        ? (window.scrollY || document.documentElement.scrollTop || 0)
-        : (root.scrollTop || 0);
+    const pc = document.getElementById('page-content');
+    const mc = document.querySelector('.main-content');
+    const y = Math.max(
+        pc ? pc.scrollTop : 0,
+        mc ? mc.scrollTop : 0,
+        window.scrollY || 0,
+        document.documentElement.scrollTop || 0
+    );
     btn.classList.toggle('show', y > 600);
     btn.classList.toggle('with-cart', !!document.getElementById('catalog-cart-bar'));
 }
 
 function bindCatalogTopButton() {
     if (_catalogTopButtonBound) return;
-    const root = getCatalogScrollRoot();
-    if (!root) return;
 
     const onScroll = () => {
         if (currentPage !== 'catalog') return;
         updateCatalogTopButtonVisibility();
     };
 
-    if (root === document.scrollingElement || root === document.documentElement) {
-        window.addEventListener('scroll', onScroll, { passive: true });
-    } else {
-        root.addEventListener('scroll', onScroll, { passive: true });
-    }
+    // Listen on ALL possible scroll containers (page-content is the real one on mobile)
+    const pc = document.getElementById('page-content');
+    const mc = document.querySelector('.main-content');
+    if (pc) pc.addEventListener('scroll', onScroll, { passive: true });
+    if (mc) mc.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('scroll', onScroll, { passive: true });
     window.addEventListener('resize', onScroll, { passive: true });
     _catalogTopButtonBound = true;
 }
@@ -22388,50 +22387,63 @@ let _catalogLastScrollY = 0;
 
 function bindCatalogStickyFilter() {
     if (_catalogStickyBound) return;
-    const root = getCatalogScrollRoot();
-    if (!root) return;
 
     const getScrollY = () => {
-        if (root === document.scrollingElement || root === document.documentElement) {
-            return window.scrollY || document.documentElement.scrollTop || 0;
-        }
-        return root.scrollTop || 0;
+        const pc = document.getElementById('page-content');
+        if (pc && pc.scrollTop > 0) return pc.scrollTop;
+        const mc = document.querySelector('.main-content');
+        if (mc && mc.scrollTop > 0) return mc.scrollTop;
+        return window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0;
     };
 
+    let _rafPending = false;
     const onScroll = () => {
         if (currentPage !== 'catalog') return;
-        const stickyFilter = document.getElementById('catalog-sticky-filter');
-        if (!stickyFilter) return;
+        if (_rafPending) return;
+        _rafPending = true;
+        requestAnimationFrame(() => {
+            _rafPending = false;
+            const stickyFilter = document.getElementById('catalog-sticky-filter');
+            if (!stickyFilter) return;
 
-        const y = getScrollY();
-        const isScrollingUp = y < _catalogLastScrollY && y > 200;
-        stickyFilter.classList.toggle('visible', isScrollingUp);
-        _catalogLastScrollY = y;
+            const y = getScrollY();
+            const delta = _catalogLastScrollY - y;
+            const isScrollingUp = delta > 5 && y > 200;
+            const isScrollingDown = delta < -5;
+            
+            if (isScrollingUp) {
+                stickyFilter.classList.add('visible');
+            } else if (isScrollingDown || y <= 100) {
+                stickyFilter.classList.remove('visible');
+            }
+            _catalogLastScrollY = y;
 
-        // Keep sticky filter pills in sync with actual filter state
-        if (isScrollingUp) {
-            const activeCat = document.querySelector('#catalog-pills .catalog-pill.active');
-            const activeMov = document.querySelector('#catalog-movement-pills .catalog-pill.active');
-            if (activeCat) {
-                const catVal = activeCat.dataset.cat || '';
-                stickyFilter.querySelectorAll('[data-cat]').forEach(p => {
-                    p.classList.toggle('active', (p.dataset.cat || '') === catVal);
-                });
+            // Keep sticky filter pills in sync with actual filter state
+            if (stickyFilter.classList.contains('visible')) {
+                const activeCat = document.querySelector('#catalog-pills .catalog-pill.active');
+                const activeMov = document.querySelector('#catalog-movement-pills .catalog-pill.active');
+                if (activeCat) {
+                    const catVal = activeCat.dataset.cat || '';
+                    stickyFilter.querySelectorAll('[data-cat]').forEach(p => {
+                        p.classList.toggle('active', (p.dataset.cat || '') === catVal);
+                    });
+                }
+                if (activeMov) {
+                    const movVal = activeMov.dataset.movement || '';
+                    stickyFilter.querySelectorAll('[data-movement]').forEach(p => {
+                        p.classList.toggle('active', (p.dataset.movement || '') === movVal);
+                    });
+                }
             }
-            if (activeMov) {
-                const movVal = activeMov.dataset.movement || '';
-                stickyFilter.querySelectorAll('[data-movement]').forEach(p => {
-                    p.classList.toggle('active', (p.dataset.movement || '') === movVal);
-                });
-            }
-        }
+        });
     };
 
-    if (root === document.scrollingElement || root === document.documentElement) {
-        window.addEventListener('scroll', onScroll, { passive: true });
-    } else {
-        root.addEventListener('scroll', onScroll, { passive: true });
-    }
+    // Listen on ALL possible scroll containers (page-content is the real one on mobile)
+    const pc = document.getElementById('page-content');
+    const mc = document.querySelector('.main-content');
+    if (pc) pc.addEventListener('scroll', onScroll, { passive: true });
+    if (mc) mc.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('scroll', onScroll, { passive: true });
     _catalogStickyBound = true;
 }
 
