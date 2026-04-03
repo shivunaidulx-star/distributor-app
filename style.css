@@ -2271,6 +2271,7 @@ body.sidebar-collapsed .user-badge {
     }
 
     .sidebar {
+        width: 0;
         transform: translateX(-100%);
     }
     .sidebar.open {
@@ -6351,3 +6352,4 @@ body.catalog-page-open .omnibox-container {
 /* --- Fixes for fixed footers and scrolling --- */
 #sales-order-form, #sale-invoice-form { padding-bottom: 160px !important; }
 .payment-form-container { max-height: 100vh; overflow-y: auto !important; padding-bottom: 120px; }
+
