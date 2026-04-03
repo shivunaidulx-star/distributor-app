@@ -1160,9 +1160,15 @@ const msIcon = (name, className = '', style = '') => `<span class="material-symb
 function setDocFormMode(isOpen) {
     document.body.classList.toggle('doc-form-open', !!isOpen);
 }
+function setDashboardSingleViewMode(isOpen) {
+    const host = $('page-content');
+    document.body.classList.toggle('dashboard-single-view-open', !!isOpen);
+    if (host) host.classList.toggle('dashboard-single-view-host', !!isOpen);
+}
 function setPageChromeMode(mode = 'default') {
     document.body.classList.remove('sales-doc-page-open', 'catalog-page-open');
     setDocFormMode(false);
+    setDashboardSingleViewMode(false);
     if (mode === 'sales-doc') {
         document.body.classList.add('sales-doc-page-open');
         setDocFormMode(true);
@@ -1778,16 +1784,12 @@ function initSearchDropdown(inputId, items, onSelect) {
         if (onSelect) onSelect(item);
     }
 
-    // BUG-005 fix: scroll input into view when focused (avoids keyboard hiding it)
-    inp.addEventListener('focus', () => {
-        setTimeout(() => {
-            inp.scrollIntoView({
-                block: window.innerWidth <= 768 ? 'center' : 'nearest',
-                behavior: 'smooth'
-            });
-        }, 100);
-        openDD();
-    }, sig);
+    inp._mobileKeyboardFocusCallback = openDD;
+    if (!inp._mobileKeyboardScrollAbortCtrl) {
+        inp.addEventListener('focus', () => {
+            openDD();
+        }, sig);
+    }
     inp.addEventListener('input', () => { openDD(); }, sig);
     inp.addEventListener('keydown', (e) => {
         const filtered = dd._filtered || [];
@@ -1840,6 +1842,50 @@ function initSearchDropdown(inputId, items, onSelect) {
     }
 
     return { openDD, closeDD, renderItems, clear };
+}
+
+function attachMobileKeyboardScrollFix(inputEl) {
+    if (!inputEl) return;
+    if (inputEl._mobileKeyboardScrollAbortCtrl) inputEl._mobileKeyboardScrollAbortCtrl.abort();
+
+    const ac = new AbortController();
+    const sig = { signal: ac.signal };
+    const pageContent = $('page-content');
+    inputEl._mobileKeyboardScrollAbortCtrl = ac;
+
+    inputEl.addEventListener('focus', () => {
+        if (typeof inputEl._mobileKeyboardFocusCallback === 'function') {
+            inputEl._mobileKeyboardFocusCallback();
+        }
+        if (window.innerWidth > 768) return;
+        if (pageContent) {
+            inputEl._mobileKeyboardPrevPadding = pageContent.style.getPropertyValue('padding-bottom');
+            inputEl._mobileKeyboardPrevPaddingPriority = pageContent.style.getPropertyPriority('padding-bottom');
+            pageContent.style.setProperty('padding-bottom', 'max(60vh, 400px)', 'important');
+        }
+        clearTimeout(inputEl._mobileKeyboardScrollTimer);
+        inputEl._mobileKeyboardScrollTimer = setTimeout(() => {
+            const scrollTarget = inputEl.closest('.sales-doc-field, .form-group, .search-dropdown-wrapper') || inputEl;
+            scrollTarget.scrollIntoView({
+                behavior: 'smooth',
+                block: 'start'
+            });
+        }, 300);
+    }, sig);
+
+    inputEl.addEventListener('blur', () => {
+        clearTimeout(inputEl._mobileKeyboardScrollTimer);
+        if (!pageContent) return;
+        const prevPadding = inputEl._mobileKeyboardPrevPadding || '';
+        const prevPriority = inputEl._mobileKeyboardPrevPaddingPriority || '';
+        if (prevPadding) {
+            pageContent.style.setProperty('padding-bottom', prevPadding, prevPriority);
+        } else {
+            pageContent.style.removeProperty('padding-bottom');
+        }
+        delete inputEl._mobileKeyboardPrevPadding;
+        delete inputEl._mobileKeyboardPrevPaddingPriority;
+    }, sig);
 }
 
 function renderSOItemSubModal(categories) {
@@ -2225,6 +2271,7 @@ function buildPartySearchList(parties, options = {}) {
 function initPartySearchField(inputId, parties, options = {}) {
     const inp = $(inputId);
     if (!inp) return null;
+    attachMobileKeyboardScrollFix(inp);
 
     const {
         onSelect = null,
@@ -2285,7 +2332,7 @@ function initSwipeActions() { /* placeholder for future swipe-to-delete/edit */ 
 
 // --- Navigation ---
 async function navigateTo(page, options = {}) {
-    setDocFormMode(false);
+    setPageChromeMode('default');
     const isSilent = options.silent === true;
     if (!currentUser) return showLoginScreen();
     if (page === 'customerrequests' && !CUSTOMER_PORTAL_ENABLED) {
@@ -2785,7 +2832,7 @@ function compressImage(file, { maxWidth = 800, maxHeight = 800, quality = 0.70 }
         // ── HEIC / HEIF detection & conversion ──
         let processFile = file;
         const isHeic = file.type === 'image/heic' || file.type === 'image/heif' ||
-                        /\.heic$/i.test(file.name) || /\.heif$/i.test(file.name);
+            /\.heic$/i.test(file.name) || /\.heif$/i.test(file.name);
         if (isHeic && typeof heic2any !== 'undefined') {
             try {
                 showToast('Converting HEIC photo...', 'info');
@@ -3077,6 +3124,7 @@ async function renderDashboard() {
     DB.showSkeleton(pageContent, 3);
     const role = currentUser.role;
     const isMobile = window.innerWidth < 768;
+    setDashboardSingleViewMode(false);
     // Batch fetch data from Supabase
     const [invoices, payments, expenses, inventory, salesOrders, dels, parties] = await Promise.all([
         DB.getAll('invoices'),
@@ -3286,7 +3334,7 @@ async function renderDashboard() {
     // Last month comparison
     const _now = new Date();
     const lmStart = new Date(_now.getFullYear(), _now.getMonth() - 1, 1).toISOString().split('T')[0];
-    const lmEnd   = new Date(_now.getFullYear(), _now.getMonth(), 0).toISOString().split('T')[0];
+    const lmEnd = new Date(_now.getFullYear(), _now.getMonth(), 0).toISOString().split('T')[0];
     const lmSales = window._dashInvoicesAll.filter(i => i.date >= lmStart && i.date <= lmEnd).reduce((s, i) => s + i.total, 0);
     const salesDiff = lmSales > 0 ? Math.round(((tmSales - lmSales) / lmSales) * 100) : null;
     const salesCompareHtml = salesDiff !== null
@@ -3317,6 +3365,7 @@ async function renderDashboard() {
     const nonMovingItems = inventory.filter(i => !itemSalesMap[i.id] && i.stock > 0);
     const slowMovingItems = inventory.filter(i => itemSalesMap[i.id] && itemSalesMap[i.id] <= 5 && i.stock > 0);
 
+    setDashboardSingleViewMode(true);
     pageContent.innerHTML = await buildAdminCommandCenter({
         role,
         invoices,
@@ -3428,9 +3477,9 @@ async function renderDashboard() {
     </div>
     <div class="quick-actions" style="margin-bottom:18px">
         ${getQuickActionKeys(currentUser?.role || 'Admin').map(key => {
-            const a = ALL_QUICK_ACTIONS.find(x => x.key === key);
-            return a ? `<button class="quick-action-btn" onclick="${a.fn}"><span class="qa-icon material-symbols-outlined">${a.icon}</span><span class="qa-label">${a.label}</span></button>` : '';
-        }).join('')}
+        const a = ALL_QUICK_ACTIONS.find(x => x.key === key);
+        return a ? `<button class="quick-action-btn" onclick="${a.fn}"><span class="qa-icon material-symbols-outlined">${a.icon}</span><span class="qa-label">${a.label}</span></button>` : '';
+    }).join('')}
     </div>
 
     ${(nonMovingItems.length || slowMovingItems.length) ? `
@@ -3681,235 +3730,205 @@ async function buildAdminCommandCenter(model) {
             </div>`);
     }
 
+    const primaryMetrics = [
+        {
+            label: 'Sales',
+            raw: tmSales,
+            kind: 'amount',
+            display: currency(tmSales),
+            note: salesDiff !== null ? `${salesDiff >= 0 ? '+' : '-'}${Math.abs(salesDiff)}% vs last month` : 'Monthly billing',
+            icon: 'receipt_long',
+            color: '#60a5fa',
+            fn: "navigateTo('invoices')"
+        },
+        {
+            label: 'Collected',
+            raw: tmPayIn,
+            kind: 'amount',
+            display: currency(tmPayIn),
+            note: `${monthlyCollectionPct}% converted`,
+            icon: 'payments',
+            color: '#34d399',
+            fn: "navigateTo('payments')"
+        },
+        {
+            label: 'Receivable',
+            raw: totalReceivable,
+            kind: 'amount',
+            display: currency(totalReceivable),
+            note: `${drParties.length} parties carrying dues`,
+            icon: 'account_balance_wallet',
+            color: '#fbbf24',
+            fn: "window._partyBalanceFilter='receivable';navigateTo('parties')"
+        },
+        {
+            label: 'Expenses',
+            raw: tmExp,
+            kind: 'amount',
+            display: currency(tmExp),
+            note: 'This month outflow',
+            icon: 'savings',
+            color: '#f87171',
+            fn: "navigateTo('expenses')"
+        },
+        {
+            label: 'Open queues',
+            raw: operationalPressure,
+            kind: 'count',
+            display: operationalPressure,
+            note: activeRadarCount ? `${activeRadarCount} active lanes` : 'All clear',
+            icon: 'hub',
+            color: '#38bdf8',
+            fn: hottestRadar ? hottestRadar.fn : "navigateTo('salesorders')"
+        },
+        {
+            label: 'Low stock',
+            raw: lowStock,
+            kind: 'count',
+            display: lowStock,
+            note: lowStock ? 'Needs replenishment' : 'Healthy cover',
+            icon: 'inventory_2',
+            color: '#fb7185',
+            fn: "navigateTo('inventory')"
+        }
+    ];
+
+    const dashboardActions = ['new-sale', 'payment-in', 'salesorders', 'invoices']
+        .map(key => ({ key, ...ALL_QUICK_ACTIONS.find(x => x.key === key), meta: quickActionMeta[key] || { desc: '' } }))
+        .filter(action => action.label);
+
     return `
-    <div class="admin-dash-shell">
-        <section class="admin-dash-hero ${pressureTone}">
-            <div class="admin-dash-hero-grid">
-                <div class="admin-dash-hero-copy">
-                    <div class="admin-dash-overline">${dashboardTitle}</div>
-                    <h1 class="admin-dash-headline">${escapeHtml(companyLabel)}</h1>
-                    ${focusNote ? `<p class="admin-dash-subhead">${escapeHtml(focusNote)}</p>` : ''}
-
-                    <div class="admin-dash-hero-facts">
-                        ${heroFacts.map(fact => `
-                            <div class="admin-dash-hero-fact">
-                                <span class="admin-dash-hero-fact-label">${fact.label}</span>
-                                <strong class="admin-dash-hero-fact-value ${fact.kind === 'amount' ? 'dash-count' : ''}" ${fact.kind === 'amount' ? `data-kind="amount" data-val="${fact.raw}"` : `data-val="${fact.raw}"`}>${fact.display}</strong>
-                                <small class="admin-dash-hero-fact-note">${fact.note}</small>
-                            </div>`).join('')}
+    <div class="admin-dash-shell admin-dash-single-view">
+        <div class="admin-dash-single-layout">
+            <section class="admin-dash-hero admin-dash-single-header ${pressureTone}">
+                <div class="admin-dash-single-header-main">
+                    <div class="admin-dash-single-header-copy">
+                        <div class="admin-dash-overline">${dashboardTitle}</div>
+                        <h1 class="admin-dash-headline">${escapeHtml(companyLabel)}</h1>
+                        ${focusNote ? `<p class="admin-dash-subhead">${escapeHtml(focusNote)}</p>` : ''}
                     </div>
-
-                    <div class="admin-dash-signal-row">
-                        ${visibleSignals.length ? visibleSignals.map(item => `
-                            <button class="admin-dash-signal-chip" onclick="${item.fn}">
-                                <span class="material-symbols-outlined">${item.icon}</span>
-                                <strong>${item.count}</strong>
-                                <span>${item.label}</span>
-                            </button>`).join('') : `
-                            <div class="admin-dash-signal-chip good">
-                                <span class="material-symbols-outlined">verified</span>
-                                <strong>0</strong>
-                                <span>Urgent queues</span>
-                            </div>`}
-                    </div>
-
-                    <div class="admin-dash-glance-grid">
-                        ${visibleGlances.length ? visibleGlances.join('') : `
-                            <div class="admin-dash-glance-card accent">
-                                <span class="admin-dash-glance-label">Home layout</span>
-                                <strong class="admin-dash-glance-value">Customized</strong>
-                                <span class="admin-dash-glance-meta">All KPI cards are hidden. Use Customize to add them back.</span>
-                            </div>`}
-                    </div>
+                    <button class="admin-dash-edit-btn" onclick="openAdminHomePersonalization()" title="Customize Home">
+                        <span class="material-symbols-outlined">tune</span>
+                        <span>Customize</span>
+                    </button>
                 </div>
 
-                <aside class="admin-dash-hero-side">
-                    <div class="admin-dash-spotlight-card">
-                        <div class="admin-dash-spotlight-head">
-                            <div>
-                                <span class="admin-dash-panel-eyebrow">Business pulse</span>
-                                <h3>Monthly sales engine</h3>
-                            </div>
-                            <span class="admin-dash-spotlight-date">${todayLabel}</span>
-                        </div>
-                        <div class="admin-dash-spotlight-value dash-count" data-kind="amount" data-val="${tmSales}" id="dash-chart-total">${currency(tmSales)}</div>
-                        <div id="dash-chart-compare" class="admin-dash-spotlight-compare">${salesCompareHtml}</div>
-                        <div class="admin-dash-meter"><span style="width:${monthlyCollectionPct}%"></span></div>
-                        <div class="admin-dash-spotlight-note">${currency(Math.max(tmSales - tmPayIn, 0))} still to convert from this month's billing.</div>
-                    </div>
-
-                    <div class="admin-dash-command-radar ${activeRadarCount ? 'active' : 'clear'}">
-                        <div class="admin-dash-command-radar-head">
-                            <div>
-                                <span class="admin-dash-panel-eyebrow">Operational radar</span>
-                                <h3>${hottestRadar && hottestRadar.count > 0 ? hottestRadar.label : 'Queues under control'}</h3>
-                            </div>
-                            <div class="admin-dash-command-radar-badge">
-                                <span>Open queues</span>
-                                <strong>${activeRadarCount}</strong>
-                            </div>
-                        </div>
-                        <p class="admin-dash-command-radar-copy">${hottestRadar && hottestRadar.count > 0 ? `${hottestRadar.count} ${hottestRadar.count === 1 ? 'queue needs' : 'queues need'} attention first. Keep the biggest blocker moving from here.` : 'All operational queues are currently clear.'}</p>
-                        <div class="admin-dash-command-radar-list">
-                            ${heroRadarItems.length ? heroRadarItems.map(item => `
-                                <button class="admin-dash-radar-item ${item.count > 0 ? 'hot' : 'idle'}" onclick="${item.fn}">
-                                    <div class="admin-dash-radar-top">
-                                        <div class="admin-dash-radar-title">
-                                            <span class="material-symbols-outlined">${item.icon}</span>
-                                            <div>
-                                                <strong>${item.label}</strong>
-                                                <span>${item.note}</span>
-                                            </div>
-                                        </div>
-                                        <div class="admin-dash-radar-meta">
-                                            <small>${item.count > 0 ? 'Watch now' : 'Clear'}</small>
-                                            <b>${item.count}</b>
-                                        </div>
-                                    </div>
-                                    <div class="admin-dash-radar-meter">
-                                        <span style="width:${Math.max(8, Math.round((item.count / radarMax) * 100))}%;background:${item.color}"></span>
-                                    </div>
-                                </button>`).join('') : `
-                                <div class="empty-state" style="padding:24px">
-                                    <div class="empty-icon"></div>
-                                    <p>No radar cards selected</p>
-                                    <p class="empty-subtitle">Use Customize to show the operational queues you want on home.</p>
-                                </div>`}
-                        </div>
-                    </div>
-                </aside>
-            </div>
-        </section>
-
-        <section class="admin-dash-main-grid solo">
-            <div class="admin-dash-panel admin-dash-chart-panel">
-                <div class="admin-dash-panel-head">
-                    <div>
-                        <span class="admin-dash-panel-eyebrow">Revenue flow</span>
-                        <h3>See momentum, not just totals</h3>
-                    </div>
-                    <div class="admin-dash-period-wrap">
-                        <button id="dash-period-btn" onclick="toggleDashPeriodMenu()" class="admin-dash-period-btn">
-                            <span id="dash-period-label">This Month</span>
-                            <span class="material-symbols-outlined" style="font-size:1rem">expand_more</span>
-                        </button>
-                        <div id="dash-period-menu" class="admin-dash-period-menu" style="display:none">
-                            ${[['week', 'This Week'], ['lastmonth', 'Last Month'], ['month', 'This Month'], ['quarter', 'This Quarter'], ['halfyear', 'Half Year'], ['year', 'This Year']].map(([v, l]) => `<div class="dash-period-opt" data-val="${v}" onclick="selectDashPeriod('${v}','${l}')">${l}</div>`).join('')}
-                        </div>
-                    </div>
-                </div>
-                <div class="admin-dash-flow-banner">
-                    <div class="admin-dash-flow-chip">
-                        <span>Collected this month</span>
-                        <strong>${currency(tmPayIn)}</strong>
-                    </div>
-                    <div class="admin-dash-flow-chip">
-                        <span>Still to convert</span>
-                        <strong>${currency(unconvertedSales)}</strong>
-                    </div>
-                    <div class="admin-dash-flow-chip">
-                        <span>Cash conversion</span>
-                        <strong>${monthlyCollectionPct}%</strong>
-                    </div>
-                </div>
-                <div id="dash-chart-wrap" class="admin-dash-chart-wrap"></div>
-
-                <div class="admin-dash-metric-band">
-                    ${visibleMetrics.length ? visibleMetrics.join('') : `
-                        <div class="admin-dash-glance-card accent" style="margin:0">
-                            <span class="admin-dash-glance-label">Metric strip hidden</span>
-                            <strong class="admin-dash-glance-value">Customize</strong>
-                            <span class="admin-dash-glance-meta">Add back the tiles you want under the chart.</span>
+                <div class="admin-dash-single-signals">
+                    ${visibleSignals.length ? visibleSignals.map(item => `
+                        <button class="admin-dash-signal-chip" onclick="${item.fn}">
+                            <span class="material-symbols-outlined">${item.icon}</span>
+                            <strong>${item.count}</strong>
+                            <span>${item.label}</span>
+                        </button>`).join('') : `
+                        <div class="admin-dash-signal-chip good">
+                            <span class="material-symbols-outlined">verified</span>
+                            <strong>0</strong>
+                            <span>Urgent queues</span>
                         </div>`}
                 </div>
-            </div>
-        </section>
+            </section>
 
-        <section class="admin-dash-panel admin-dash-actions-panel">
-            <div class="admin-dash-panel-head">
-                <div>
-                    <span class="admin-dash-panel-eyebrow">Launchpad</span>
-                    <h3>Move the business from here</h3>
-                </div>
-                <button class="admin-dash-edit-btn" onclick="openAdminHomePersonalization()" title="Customize Home">
-                    <span class="material-symbols-outlined">tune</span>
-                    <span>Customize</span>
-                </button>
-            </div>
-            <div class="admin-dash-action-groups">
-                ${(() => {
-                    const userKeys = getQuickActionKeys(currentUser?.role || 'Admin');
-                    const actions = userKeys.map(key => ({ key, ...ALL_QUICK_ACTIONS.find(x => x.key === key), meta: quickActionMeta[key] || { desc: '', accent: 'var(--primary)' }})).filter(x => x.label);
-                    
-                    const groups = [
-                        { title: 'Sales & Invoicing', keys: ['new-sale', 'payment-in', 'salesorders', 'invoices'] },
-                        { title: 'Inventory & Operations', keys: ['catalog', 'inventory', 'delivery'] },
-                        { title: 'Management', keys: ['parties', 'payments', 'expenses', 'reports'] }
-                    ];
-
-                    return groups.map(g => {
-                        const groupActions = actions.filter(a => g.keys.includes(a.key));
-                        if (!groupActions.length) return '';
-                        return `
-                        <div class="admin-dash-action-group">
-                            <h4 class="admin-dash-group-title">${g.title}</h4>
-                            <div class="admin-dash-actions-grid-new">
-                                ${groupActions.map(a => {
-                                    const isPrimary = a.key === 'new-sale' || a.key === 'payment-in';
-                                    return `<button class="admin-dash-action-card-new ${isPrimary ? 'primary-action' : ''}" onclick="${a.fn}" title="${a.meta.desc}" style="--action-accent:${a.meta.accent}">
-                                        <span class="admin-dash-action-icon-new material-symbols-outlined">${a.icon}</span>
-                                        <strong class="admin-dash-action-title-new">${a.label}</strong>
-                                    </button>`;
-                                }).join('')}
-                            </div>
-                        </div>`;
-                    }).join('');
-                })()}
-            </div>
-        </section>
-
-        <section class="admin-dash-bottom-grid">
-            <div class="admin-dash-panel">
+            <section class="admin-dash-panel admin-dash-single-main">
                 <div class="admin-dash-panel-head">
                     <div>
-                        <span class="admin-dash-panel-eyebrow">Activity feed</span>
-                        <h3>Recent invoices</h3>
+                        <span class="admin-dash-panel-eyebrow">Single View</span>
+                        <h3>Six critical numbers, one glance</h3>
                     </div>
                 </div>
-                <div class="admin-dash-feed">
-                    ${recentInvoices.length ? recentInvoices.map(i => {
-                        const displayNo = getInvoiceDisplayNo(i) || i.invoiceNo || '-';
-                        return `<button class="admin-dash-feed-item" onclick="viewInvoice('${i.id}')">
-                            <div class="admin-dash-feed-meta">
-                                <span class="admin-dash-feed-badge ${i.type === 'sale' ? 'sale' : 'purchase'}">${i.type === 'sale' ? 'Sale' : 'Purchase'}</span>
-                                <span class="admin-dash-feed-date">${fmtDate(i.date)}</span>
-                            </div>
-                            <div class="admin-dash-feed-main">
-                                <div>
-                                    <strong>${escapeHtml(displayNo)}</strong>
-                                    <span>${escapeHtml(i.partyName || '-')}</span>
+
+                <div class="admin-dash-single-metrics">
+                    ${primaryMetrics.map(metric => `
+                        <button type="button" class="admin-dash-single-metric" onclick="${metric.fn}" style="--metric-accent:${metric.color}">
+                            <span class="admin-dash-single-metric-icon material-symbols-outlined">${metric.icon}</span>
+                            <span class="admin-dash-single-metric-copy">
+                                <span class="admin-dash-single-metric-label">${metric.label}</span>
+                                <strong class="admin-dash-single-metric-value dash-count" ${metric.kind === 'amount' ? `data-kind="amount" data-val="${metric.raw}"` : `data-val="${metric.raw}"`}>${metric.display}</strong>
+                                <small class="admin-dash-single-metric-note">${metric.note}</small>
+                            </span>
+                        </button>`).join('')}
+                </div>
+
+                <div class="admin-dash-single-actions">
+                    ${dashboardActions.map(action => {
+            const isPrimary = action.key === 'new-sale' || action.key === 'payment-in';
+            return `<button type="button" class="admin-dash-single-action ${isPrimary ? 'primary' : ''}" onclick="${action.fn}" title="${action.meta.desc}">
+                                <span class="material-symbols-outlined">${action.icon}</span>
+                                <strong>${action.label}</strong>
+                            </button>`;
+        }).join('')}
+                </div>
+            </section>
+
+            <aside class="admin-dash-single-side">
+                <section class="admin-dash-spotlight-card admin-dash-single-pulse">
+                    <div class="admin-dash-spotlight-head">
+                        <div>
+                            <span class="admin-dash-panel-eyebrow">Business pulse</span>
+                            <h3>Monthly sales engine</h3>
+                        </div>
+                        <span class="admin-dash-spotlight-date">${todayLabel}</span>
+                    </div>
+                    <div class="admin-dash-spotlight-value dash-count" data-kind="amount" data-val="${tmSales}" id="dash-chart-total">${currency(tmSales)}</div>
+                    <div id="dash-chart-compare" class="admin-dash-spotlight-compare">${salesCompareHtml}</div>
+                    <div class="admin-dash-meter compact slim"><span style="width:${monthlyCollectionPct}%"></span></div>
+                    <div class="admin-dash-single-pulse-strip">
+                        <div class="admin-dash-single-pulse-stat">
+                            <span>Collected</span>
+                            <strong>${currency(tmPayIn)}</strong>
+                        </div>
+                        <div class="admin-dash-single-pulse-stat">
+                            <span>Pending</span>
+                            <strong>${currency(unconvertedSales)}</strong>
+                        </div>
+                        <div class="admin-dash-single-pulse-stat">
+                            <span>Cheques</span>
+                            <strong>${pendingCheques}</strong>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="admin-dash-command-radar admin-dash-single-radar ${activeRadarCount ? 'active' : 'clear'}">
+                    <div class="admin-dash-command-radar-head">
+                        <div>
+                            <span class="admin-dash-panel-eyebrow">Operational radar</span>
+                            <h3>${hottestRadar && hottestRadar.count > 0 ? hottestRadar.label : 'Queues under control'}</h3>
+                        </div>
+                        <div class="admin-dash-command-radar-badge">
+                            <span>Open queues</span>
+                            <strong>${activeRadarCount}</strong>
+                        </div>
+                    </div>
+                    <p class="admin-dash-command-radar-copy">${hottestRadar && hottestRadar.count > 0 ? `${hottestRadar.count} ${hottestRadar.count === 1 ? 'queue needs' : 'queues need'} attention first.` : 'All operational queues are currently clear.'}</p>
+                    <div class="admin-dash-command-radar-list">
+                        ${heroRadarItems.length ? heroRadarItems.map(item => `
+                            <button class="admin-dash-radar-item ${item.count > 0 ? 'hot' : 'idle'}" onclick="${item.fn}">
+                                <div class="admin-dash-radar-top">
+                                    <div class="admin-dash-radar-title">
+                                        <span class="material-symbols-outlined">${item.icon}</span>
+                                        <div>
+                                            <strong>${item.label}</strong>
+                                            <span>${item.note}</span>
+                                        </div>
+                                    </div>
+                                    <div class="admin-dash-radar-meta">
+                                        <small>${item.count > 0 ? 'Watch now' : 'Clear'}</small>
+                                        <b>${item.count}</b>
+                                    </div>
                                 </div>
-                                <b class="${i.type === 'sale' ? 'amount-green' : 'amount-red'}">${currency(i.total)}</b>
-                            </div>
-                        </button>`;
-                    }).join('') : `<div class="empty-state" style="padding:32px"><div class="empty-icon"></div><p>No invoices yet</p></div>`}
-                </div>
-            </div>
-
-            <div class="admin-dash-panel">
-                <div class="admin-dash-panel-head">
-                    <div>
-                        <span class="admin-dash-panel-eyebrow">Inventory watchlist</span>
-                        <h3>Slow and non-moving focus</h3>
+                                <div class="admin-dash-radar-meter">
+                                    <span style="width:${Math.max(8, Math.round((item.count / radarMax) * 100))}%;background:${item.color}"></span>
+                                </div>
+                            </button>`).join('') : `
+                            <div class="empty-state" style="padding:18px">
+                                <div class="empty-icon"></div>
+                                <p>No radar cards selected</p>
+                            </div>`}
                     </div>
-                </div>
-                <div class="admin-dash-watch-grid">
-                    ${watchSections.join('')}
-                </div>
-            </div>
-        </section>
+                </section>
+            </aside>
+        </div>
 
-        ${CUSTOMER_PORTAL_ENABLED ? `<div id="dashboard-customer-req-slot">${renderDashboardCustomerReqPlaceholder()}</div>` : ''}
+        ${CUSTOMER_PORTAL_ENABLED ? `<div id="dashboard-customer-req-slot" class="hidden">${renderDashboardCustomerReqPlaceholder()}</div>` : ''}
     </div>`;
 }
 
@@ -4007,15 +4026,15 @@ function renderDashChart() {
             </div>
             <div class="admin-dash-chart-bars" style="gap:${barW > 20 ? 6 : 3}px">
                 ${data.map(d => {
-                    const h = Math.max(d.val > 0 ? 10 : 4, Math.round((d.val / max) * 88));
-                    const isToday = d.label === String(now.getDate()) && (period === 'month' || period === 'lastmonth');
-                    return `<div class="admin-dash-bar-col" style="width:${barW}px" title="${d.label}: ${currency(d.val)}">
+        const h = Math.max(d.val > 0 ? 10 : 4, Math.round((d.val / max) * 88));
+        const isToday = d.label === String(now.getDate()) && (period === 'month' || period === 'lastmonth');
+        return `<div class="admin-dash-bar-col" style="width:${barW}px" title="${d.label}: ${currency(d.val)}">
                         <div class="admin-dash-bar-track">
                             <div class="admin-dash-bar-fill${isToday ? ' is-today' : ''}${d.val <= 0 ? ' is-empty' : ''}" style="height:${h}px;width:${Math.max(10, barW - 2)}px"></div>
                         </div>
                         <div class="admin-dash-bar-label" style="font-size:${barW > 22 ? 10 : 8}px">${d.label}</div>
                     </div>`;
-                }).join('')}
+    }).join('')}
             </div>
         </div>`;
 }
@@ -4073,9 +4092,9 @@ async function renderParties() {
             </div>
             <div id="party-extra-filters" style="display:none;margin-top:8px">
                 <div style="display:flex;gap:6px;margin-bottom:8px">
-                    <button style="flex:1;padding:6px;font-size:0.75rem;border-radius:6px;border:1px solid var(--border);background:${_partyTab==='all'?'var(--primary)':'var(--bg-input)'};color:${_partyTab==='all'?'#fff':'var(--text-primary)'}" onclick="_partyTab='all';window._partyBalanceFilter=null;renderParties()">All</button>
-                    <button style="flex:1;padding:6px;font-size:0.75rem;border-radius:6px;border:1px solid var(--border);background:${_partyTab==='customer'?'var(--primary)':'var(--bg-input)'};color:${_partyTab==='customer'?'#fff':'var(--text-primary)'}" onclick="_partyTab='customer';window._partyBalanceFilter=null;renderParties()">Customers</button>
-                    <button style="flex:1;padding:6px;font-size:0.75rem;border-radius:6px;border:1px solid var(--border);background:${_partyTab==='supplier'?'var(--primary)':'var(--bg-input)'};color:${_partyTab==='supplier'?'#fff':'var(--text-primary)'}" onclick="_partyTab='supplier';window._partyBalanceFilter=null;renderParties()">Suppliers</button>
+                    <button style="flex:1;padding:6px;font-size:0.75rem;border-radius:6px;border:1px solid var(--border);background:${_partyTab === 'all' ? 'var(--primary)' : 'var(--bg-input)'};color:${_partyTab === 'all' ? '#fff' : 'var(--text-primary)'}" onclick="_partyTab='all';window._partyBalanceFilter=null;renderParties()">All</button>
+                    <button style="flex:1;padding:6px;font-size:0.75rem;border-radius:6px;border:1px solid var(--border);background:${_partyTab === 'customer' ? 'var(--primary)' : 'var(--bg-input)'};color:${_partyTab === 'customer' ? '#fff' : 'var(--text-primary)'}" onclick="_partyTab='customer';window._partyBalanceFilter=null;renderParties()">Customers</button>
+                    <button style="flex:1;padding:6px;font-size:0.75rem;border-radius:6px;border:1px solid var(--border);background:${_partyTab === 'supplier' ? 'var(--primary)' : 'var(--bg-input)'};color:${_partyTab === 'supplier' ? '#fff' : 'var(--text-primary)'}" onclick="_partyTab='supplier';window._partyBalanceFilter=null;renderParties()">Suppliers</button>
                 </div>
             </div>
         </div>
@@ -4275,7 +4294,7 @@ async function renderPartyFormPage() {
         <div class="form-row"><div class="form-group"><label>GSTIN</label><input id="f-party-gstin" class="form-control" value="${p ? p.gstin || '' : ''}"></div>
         <div class="form-group"><label>Payment Terms</label><select id="f-party-terms" class="form-control">
             <option value="">-- None / Default --</option>
-            ${getPaymentTermsList().map(t => `<option value="${escapeHtml(t.name)}" ${p && p.paymentTerms && p.paymentTerms.toUpperCase().replace(/\s+/g,'') === t.name.toUpperCase().replace(/\s+/g,'') ? 'selected' : ''}>${escapeHtml(t.name)} (${t.days}d)</option>`).join('')}
+            ${getPaymentTermsList().map(t => `<option value="${escapeHtml(t.name)}" ${p && p.paymentTerms && p.paymentTerms.toUpperCase().replace(/\s+/g, '') === t.name.toUpperCase().replace(/\s+/g, '') ? 'selected' : ''}>${escapeHtml(t.name)} (${t.days}d)</option>`).join('')}
         </select></div></div>
         <div class="form-group"><label>Address</label><input id="f-party-addr" class="form-control" value="${p ? p.address || '' : ''}" placeholder="Street, Area..."></div>
         <div class="form-group">
@@ -4513,8 +4532,8 @@ function renderItemPhotoList(items) {
 function filterItemPhotoList(q) {
     const s = q.toLowerCase();
     const source = window._photoTab === 'missing' ? (window._photoItemsNoPhoto || []) : (window._photoItemsHasPhoto || []);
-    const filtered = source.filter(i => 
-        (i.name || '').toLowerCase().includes(s) || 
+    const filtered = source.filter(i =>
+        (i.name || '').toLowerCase().includes(s) ||
         (i.itemCode || '').toLowerCase().includes(s) ||
         (i.category || '').toLowerCase().includes(s)
     );
@@ -5133,8 +5152,8 @@ function processPartyImport(event) {
             if (!name) { errors.push(`Row ${i + 1}: Name is empty`); continue; }
 
             // Match by Name OR Party Code
-            const existingParty = parties.find(p => 
-                (p.name || '').toLowerCase() === name.toLowerCase() || 
+            const existingParty = parties.find(p =>
+                (p.name || '').toLowerCase() === name.toLowerCase() ||
                 (partyCode && (p.partyCode || '').toUpperCase() === partyCode)
             );
 
@@ -5245,7 +5264,7 @@ async function commitPartyImport() {
         for (let i = 0; i < total; i++) {
             const p = pendingPartyImports[i];
             if (btn && i % 5 === 0) btn.innerText = ` Importing (${i}/${total})...`;
-            
+
             const { isUpdate, id, ...data } = p;
             if (isUpdate) {
                 await DB.rawUpdate('parties', id, data);
@@ -5712,7 +5731,7 @@ function renderInvRows(items, reservedMap = {}, abcMap = {}) {
         return `<tr><td style="width:36px;text-align:center"><input type="checkbox" class="bulk-chk-item" data-id="${i.id}" onchange="toggleBulkItem('${i.id}',this)" style="width:16px;height:16px;cursor:pointer" ${window._bulkItems && window._bulkItems.has(i.id) ? 'checked' : ''}></td>${cols.map(c => cellMap[c.key] || '').join('')}</tr>`;
     }).join('');
 }
-window.onInvCatChange = function() {
+window.onInvCatChange = function () {
     const catName = ($('inv-cat-filter') || {}).value;
     const subSel = $('inv-subcat-filter');
     if (!subSel) return;
@@ -5731,13 +5750,13 @@ function filterInvTable() {
     const cat = ($('inv-cat-filter') || {}).value || '';
     const sub = ($('inv-subcat-filter') || {}).value || '';
     let items = DB.get('db_inventory') || [];
-    
+
     if (s && s === '__low__') items = items.filter(i => (i.stock - (window._inventoryReservedMap?.[i.id] || 0)) <= (i.lowStockAlert || 5));
     else if (s) items = items.filter(i => i.name.toLowerCase().includes(s) || (i.hsn || '').toLowerCase().includes(s) || (i.itemCode || '').toLowerCase().includes(s) || (i.category || '').toLowerCase().includes(s));
-    
+
     if (cat) items = items.filter(i => i.category === cat);
     if (sub) items = items.filter(i => i.subCategory === sub);
-    
+
     if ($('inv-list')) {
         $('inv-list').innerHTML = renderInvCards(items, window._inventoryReservedMap || {});
     } else if ($('inv-tbody')) {
@@ -5748,12 +5767,12 @@ function filterInvTable() {
 function filterInvTableMobile(preset) {
     const searchEl = $('inv-search');
     if (preset === '__low__' && searchEl) { searchEl.value = ''; }
-    
+
     const cat = ($('inv-cat-filter') || {}).value || '';
     const sub = ($('inv-subcat-filter') || {}).value || '';
     let items = DB.get('db_inventory') || [];
     const s = searchEl ? searchEl.value.toLowerCase() : '';
-    
+
     if (s) items = items.filter(i =>
         i.name.toLowerCase().includes(s) ||
         (i.itemCode || '').toLowerCase().includes(s) ||
@@ -5762,10 +5781,10 @@ function filterInvTableMobile(preset) {
         (i.subCategory || '').toLowerCase().includes(s)
     );
     if (preset === '__low__') items = items.filter(i => (i.stock - (window._inventoryReservedMap?.[i.id] || 0)) <= (i.lowStockAlert || 5));
-    
+
     if (cat) items = items.filter(i => i.category === cat);
     if (sub) items = items.filter(i => i.subCategory === sub);
-    
+
     if ($('inv-list')) $('inv-list').innerHTML = renderInvCards(items, window._inventoryReservedMap || {});
 }
 let currentItemTiers = [];
@@ -5794,9 +5813,9 @@ function syncItemPricesFromBatches(batches) {
     const active = batches.filter(b => (b.isActive ?? b.is_active) !== false).sort((a, b) => (a.receivedDate || a.received_date || '') < (b.receivedDate || b.received_date || '') ? -1 : 1);
     const fifo = active.find(b => (b.qty || 0) > 0) || active[0];
     const newest = active[active.length - 1];
-    if (fifo) { 
-        update.mrp = fifo.mrp; 
-        update.salePrice = fifo.salePrice ?? fifo.sale_price; 
+    if (fifo) {
+        update.mrp = fifo.mrp;
+        update.salePrice = fifo.salePrice ?? fifo.sale_price;
         if (fifo.priceTiers) update.priceTiers = fifo.priceTiers;
     }
     if (newest) { update.purchasePrice = newest.purchasePrice ?? newest.purchase_price; }
@@ -6235,7 +6254,8 @@ function renderItemBatches() {
             <th style="padding:4px 6px;text-align:center">Status</th>
             <th style="padding:4px 6px;text-align:center">Actions</th>
         </tr></thead>
-        <tbody>${currentItemBatches.map((b, idx) => { const bActive = (b.isActive ?? b.is_active) !== false; const bPP = b.purchasePrice ?? b.purchase_price; const bSP = b.salePrice ?? b.sale_price; const bDate = b.receivedDate || b.received_date || '-'; return `
+        <tbody>${currentItemBatches.map((b, idx) => {
+        const bActive = (b.isActive ?? b.is_active) !== false; const bPP = b.purchasePrice ?? b.purchase_price; const bSP = b.salePrice ?? b.sale_price; const bDate = b.receivedDate || b.received_date || '-'; return `
             <tr style="border-bottom:1px solid var(--border);opacity:${bActive ? 1 : 0.5}">
                 <td style="padding:5px 6px;font-weight:600">${b.mrp}</td>
                 <td style="padding:5px 6px">${bPP}</td>
@@ -6250,7 +6270,8 @@ function renderItemBatches() {
                     <button class="btn-icon" onclick="openAddBatchForm(${idx})" style="color:var(--primary);margin-left:4px" title="Edit"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button>
                     <button class="btn-icon" onclick="deleteItemBatch(${idx})" style="color:var(--danger);margin-left:4px" title="Delete"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>
                 </td>
-            </tr>`; }).join('')}
+            </tr>`;
+    }).join('')}
         </tbody></table>`;
 }
 
@@ -6269,7 +6290,7 @@ function toggleItemBatchActive(idx) {
 function deleteItemBatch(idx) {
     if (!confirm('Remove this batch?')) return;
     currentItemBatches.splice(idx, 1);
-    
+
     // Auto-update total stock based on batches
     const totalQty = currentItemBatches.reduce((s, b) => s + (+(b.qty) || 0), 0);
     const stockEl = $('f-item-stock');
@@ -6304,14 +6325,14 @@ function openAddBatchForm(editIdx = -1) {
                 <div class="form-group"><label>Date Received</label><input type="date" id="f-batch-date" value="${today}"></div>
             </div>
             <div class="form-row">
-                <div class="form-group"><label>Purchase Price  *</label><input type="number" id="f-batch-pp" value="${b ? (b.purchasePrice||b.purchase_price||'') : ''}" placeholder="Your cost price" step="1" min="0"></div>
-                <div class="form-group"><label>Sale Price  *</label><input type="number" id="f-batch-sp" value="${b ? (b.salePrice||b.sale_price||'') : ''}" placeholder="Price to customer" step="1" min="0"></div>
+                <div class="form-group"><label>Purchase Price  *</label><input type="number" id="f-batch-pp" value="${b ? (b.purchasePrice || b.purchase_price || '') : ''}" placeholder="Your cost price" step="1" min="0"></div>
+                <div class="form-group"><label>Sale Price  *</label><input type="number" id="f-batch-sp" value="${b ? (b.salePrice || b.sale_price || '') : ''}" placeholder="Price to customer" step="1" min="0"></div>
             </div>
             <div class="form-row" style="background:var(--surface);padding:8px;border-radius:6px;margin:8px 0;border:1px solid var(--border)">
                 <div class="form-group" style="margin:0"><label style="font-size:0.75rem">Volume Qty Limit (Opt)</label><input type="number" id="f-batch-vqty" value="${b && b.priceTiers && b.priceTiers.length ? b.priceTiers[0].minQty : ''}" placeholder="Min Qty for discount"></div>
                 <div class="form-group" style="margin:0"><label style="font-size:0.75rem">Volume Sale Price</label><input type="number" id="f-batch-vprice" value="${b && b.priceTiers && b.priceTiers.length ? b.priceTiers[0].price : ''}" placeholder="Discounted price"></div>
             </div>
-            <div class="form-group"><label>Opening Qty</label><input type="number" id="f-batch-qty" value="${b ? (b.qty||0) : 0}" min="0"></div>
+            <div class="form-group"><label>Opening Qty</label><input type="number" id="f-batch-qty" value="${b ? (b.qty || 0) : 0}" min="0"></div>
             <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:10px">
                 <button class="btn btn-outline btn-sm" onclick="cancelAddBatchForm()">Cancel</button>
                 <button class="btn btn-primary btn-sm" onclick="saveItemBatch(${editIdx})">${b ? 'Save Changes' : 'Add Batch'}</button>
@@ -6344,13 +6365,13 @@ function saveItemBatch(editIdx = -1) {
     const date = ($('f-batch-date') || {}).value || '';
     const vqty = +($('f-batch-vqty') || {}).value || 0;
     const vprice = +($('f-batch-vprice') || {}).value || 0;
-    
+
     if (!mrp) return alert('MRP is required');
     if (!pp) return alert('Purchase Price is mandatory for a new MRP batch');
     if (!sp) return alert('Sale Price is mandatory for a new MRP batch');
-    
+
     const tiers = (vqty > 0 && vprice >= 0) ? [{ minQty: vqty, price: vprice }] : [];
-    
+
     if (editIdx > -1) {
         const b = currentItemBatches[editIdx];
         b.mrp = Math.round(mrp);
@@ -6362,7 +6383,7 @@ function saveItemBatch(editIdx = -1) {
     } else {
         currentItemBatches.push({ id: 'b_' + Date.now().toString(36), mrp: Math.round(mrp), purchasePrice: Math.round(pp), salePrice: Math.round(sp), qty, receivedDate: date, isActive: true, priceTiers: tiers });
     }
-    
+
     // Auto-update total stock based on batches
     const totalQty = currentItemBatches.reduce((s, b) => s + (+(b.qty) || 0), 0);
     const stockEl = $('f-item-stock');
@@ -6373,12 +6394,12 @@ function saveItemBatch(editIdx = -1) {
     if (sync.mrp !== undefined) { const el = $('f-item-mrp'); if (el) el.value = sync.mrp; }
     if (sync.salePrice !== undefined) { const el = $('f-item-sp'); if (el) el.value = sync.salePrice; }
     if (sync.purchasePrice !== undefined) { const el = $('f-item-pp'); if (el) el.value = sync.purchasePrice; }
-    
+
     if (sync.priceTiers && sync.priceTiers.length) {
         currentItemTiers = JSON.parse(JSON.stringify(sync.priceTiers));
         renderPriceTiers();
     }
-    
+
     cancelAddBatchForm(); // remove inline form
     renderItemBatches();
 }
@@ -7609,49 +7630,49 @@ async function commitItemImport() {
 
         const importErrors = [];
         for (const p of pendingItemImports) {
-          try {
-            // Ensure category and subcategory exist
-            let catObj = categories.find(c => c.name.toLowerCase() === p.category.toLowerCase());
-            if (!catObj) {
-                catObj = await DB.insert('categories', { name: p.category, subCategories: p.subCategory ? [p.subCategory] : [] });
-                categories.push(catObj);
-            } else {
-                const subs = Array.isArray(catObj.subCategories) ? catObj.subCategories : [];
-                if (p.subCategory && !subs.find(s => s.toLowerCase() === p.subCategory.toLowerCase())) {
-                    catObj.subCategories = [...subs, p.subCategory];
-                    await DB.update('categories', catObj.id, { subCategories: catObj.subCategories });
-                }
-            }
-
-            const isUpdate = p.isUpdate;
-            const itemId = p.id;
-            const payload = { ...p };
-            delete payload._catNeedsCreation;
-            delete payload.isUpdate;
-            delete payload.id;
-
-            if (isUpdate) {
-                const existing = inventory.find(it => it.id === itemId);
-                const dataToUpdate = _cleanInvItem(payload);
-                if (existing) {
-                    dataToUpdate.stock = existing.stock;
-                    if (!dataToUpdate.priceTiers || !dataToUpdate.priceTiers.length) {
-                        dataToUpdate.priceTiers = existing.priceTiers || [];
+            try {
+                // Ensure category and subcategory exist
+                let catObj = categories.find(c => c.name.toLowerCase() === p.category.toLowerCase());
+                if (!catObj) {
+                    catObj = await DB.insert('categories', { name: p.category, subCategories: p.subCategory ? [p.subCategory] : [] });
+                    categories.push(catObj);
+                } else {
+                    const subs = Array.isArray(catObj.subCategories) ? catObj.subCategories : [];
+                    if (p.subCategory && !subs.find(s => s.toLowerCase() === p.subCategory.toLowerCase())) {
+                        catObj.subCategories = [...subs, p.subCategory];
+                        await DB.update('categories', catObj.id, { subCategories: catObj.subCategories });
                     }
                 }
-                await DB.update('inventory', itemId, dataToUpdate);
-                updated++;
-            } else {
-                const inserted = await DB.insert('inventory', payload);
-                added++;
-                if (p.stock > 0) {
-                    inserted.stock = p.stock;
-                    await addLedgerEntry(inserted.id, p.name, 'Opening', p.stock, 'OPEN-IMP', 'Bulk Excel Import');
+
+                const isUpdate = p.isUpdate;
+                const itemId = p.id;
+                const payload = { ...p };
+                delete payload._catNeedsCreation;
+                delete payload.isUpdate;
+                delete payload.id;
+
+                if (isUpdate) {
+                    const existing = inventory.find(it => it.id === itemId);
+                    const dataToUpdate = _cleanInvItem(payload);
+                    if (existing) {
+                        dataToUpdate.stock = existing.stock;
+                        if (!dataToUpdate.priceTiers || !dataToUpdate.priceTiers.length) {
+                            dataToUpdate.priceTiers = existing.priceTiers || [];
+                        }
+                    }
+                    await DB.update('inventory', itemId, dataToUpdate);
+                    updated++;
+                } else {
+                    const inserted = await DB.insert('inventory', payload);
+                    added++;
+                    if (p.stock > 0) {
+                        inserted.stock = p.stock;
+                        await addLedgerEntry(inserted.id, p.name, 'Opening', p.stock, 'OPEN-IMP', 'Bulk Excel Import');
+                    }
                 }
+            } catch (rowErr) {
+                importErrors.push(`"${p.name}": ${rowErr.message}`);
             }
-          } catch (rowErr) {
-            importErrors.push(`"${p.name}": ${rowErr.message}`);
-          }
         }
 
         pendingItemImports = [];
@@ -8633,7 +8654,7 @@ function renderSOLines() {
     updateSoTotal();
 }
 
-window.toggleSOLine = function(i) {
+window.toggleSOLine = function (i) {
     if (!window._soExpandedLines) window._soExpandedLines = new Set();
     if (window._soExpandedLines.has(i)) window._soExpandedLines.delete(i);
     else window._soExpandedLines.add(i);
@@ -8803,9 +8824,9 @@ async function renderOrderDetailPage() {
         </div>` : ''}
         <div style="margin-bottom:8px">
         ${o.items.map((l, idx) => {
-            const edited = l.listedPrice !== undefined && l.price !== l.listedPrice;
-            const borderColor = edited ? 'var(--warning)' : 'var(--border)';
-            return `<div style="border:1px solid ${borderColor};border-radius:8px;padding:8px 10px;margin-bottom:6px;background:var(--surface)">
+        const edited = l.listedPrice !== undefined && l.price !== l.listedPrice;
+        const borderColor = edited ? 'var(--warning)' : 'var(--border)';
+        return `<div style="border:1px solid ${borderColor};border-radius:8px;padding:8px 10px;margin-bottom:6px;background:var(--surface)">
                 <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:6px;margin-bottom:5px">
                     <span style="font-size:0.72rem;color:var(--text-muted);min-width:16px">${idx + 1}.</span>
                     <div style="flex:1;font-size:0.85rem;font-weight:600;line-height:1.3;word-break:break-word">${escapeHtml(l.name)}</div>
@@ -8817,7 +8838,7 @@ async function renderOrderDetailPage() {
                     ${l.discountPct ? `<span>Dis: ${l.discountPct}%</span>` : ''}
                 </div>
             </div>`;
-        }).join('')}
+    }).join('')}
         <div style="text-align:right;font-size:1rem;font-weight:800;color:var(--accent);padding-top:6px;border-top:2px solid var(--border)">Total: ${currency(o.total)}</div>
         </div>
         ${o.notes ? `<div style="margin-top:12px;padding:10px;background:var(--bg-input);border-radius:var(--radius-sm);font-size:0.85rem"><strong>Notes:</strong> ${escapeHtml(o.notes)}</div>` : ''}
@@ -9994,7 +10015,7 @@ function exportInvoiceList() {
     const invs = Array.from(document.querySelectorAll('[data-inv-id]')).map(el => el.dataset.invId);
     // Fall back to full export
     const allInvs = DB.cache['invoices'] || [];
-    const rows = [['Invoice No','Date','Party','Type','Total','Status']];
+    const rows = [['Invoice No', 'Date', 'Party', 'Type', 'Total', 'Status']];
     allInvs.forEach(i => rows.push([i.invoiceNo, i.date, i.partyName, i.type, i.total, i.status]));
     const ws = XLSX.utils.aoa_to_sheet(rows);
     const wb = XLSX.utils.book_new();
@@ -10180,7 +10201,7 @@ async function viewInvoicePaymentHistory(invoiceNo) {
     const payments = await DB.getAll('payments');
     const history = payments.filter(p => p.invoiceNo === invoiceNo || (p.allocations && p.allocations[invoiceNo]));
     const titleInvoiceNo = getInvoiceDisplayNo(invoiceNo);
-    
+
     let html = '';
     if (history.length === 0) {
         html = '<div style="padding:20px;text-align:center;color:var(--text-muted)">No payment history found for this invoice.</div>';
@@ -10189,14 +10210,14 @@ async function viewInvoicePaymentHistory(invoiceNo) {
             const allocatedAmt = p.allocations && p.allocations[invoiceNo] ? Number(p.allocations[invoiceNo]) : p.amount;
             return `<tr>
                 <td style="font-size:0.85rem">${fmtDate(p.date)}</td>
-                <td style="font-size:0.85rem;font-weight:600;color:var(--accent)">${p.payNo || p.id.substring(0,8)}</td>
+                <td style="font-size:0.85rem;font-weight:600;color:var(--accent)">${p.payNo || p.id.substring(0, 8)}</td>
                 <td style="font-size:0.85rem">${p.mode || 'Cash'}</td>
                 <td class="amount-green" style="font-size:0.85rem">${currency(allocatedAmt)}</td>
                 <td style="font-size:0.85rem"><span class="badge ${p.status === 'posted' ? 'badge-success' : 'badge-warning'}">${p.status || 'pending'}</span></td>
-                <td style="font-size:0.85rem"><button class="btn btn-outline btn-sm" onclick="navigateTo('payments');setTimeout(()=>$('pay-search').value='${p.payNo || p.id.substring(0,8)}',200);setTimeout(()=>filterPayTable(),300);closeModal()">View</button></td>
+                <td style="font-size:0.85rem"><button class="btn btn-outline btn-sm" onclick="navigateTo('payments');setTimeout(()=>$('pay-search').value='${p.payNo || p.id.substring(0, 8)}',200);setTimeout(()=>filterPayTable(),300);closeModal()">View</button></td>
             </tr>`;
         }).join('');
-        
+
         html = `
         <div class="table-wrapper">
             <table class="data-table">
@@ -10205,7 +10226,7 @@ async function viewInvoicePaymentHistory(invoiceNo) {
             </table>
         </div>`;
     }
-    
+
     openModal(`Payment History: ${titleInvoiceNo || invoiceNo}`, html, `<button class="btn btn-outline" onclick="closeModal()">Close</button>`);
 }
 
@@ -10238,7 +10259,7 @@ function updateInvDueDate(party) {
     const terms = getPaymentTermsList();
     const normalise = s => s.toLowerCase().replace(/\s+/g, '');
     const term = terms.find(t => t.name === termName) ||
-                 terms.find(t => normalise(t.name) === normalise(termName));
+        terms.find(t => normalise(t.name) === normalise(termName));
     if (!term) { dueDateEl.value = ''; return; }
     const invDateEl = $('f-inv-date');
     const base = invDateEl ? invDateEl.value : today();
@@ -11141,7 +11162,7 @@ async function saveInvoice(id) {
         if (fromOrderId) ops.push(DB.rawUpdate('sales_orders', fromOrderId, { invoice_no: invNo }));
 
         const [savedInv] = await Promise.all([DB.rawInsert('invoices', invData), ...ops]);
-        
+
         await logSalesmanAction('Created Invoice', invNo);
 
         const andNew = window._saveAndNew;
@@ -11294,7 +11315,7 @@ async function renderEditInvoiceFormPage() {
     if (inv.status === 'cancelled') { alert('Cannot edit a cancelled invoice.'); navigateTo('invoices'); return; }
     if (inv.type !== 'sale') { alert('Only sale invoices can be edited here.'); navigateTo('invoices'); return; }
 
-    invoiceItems = (inv.items || []).map(li => ({...li}));
+    invoiceItems = (inv.items || []).map(li => ({ ...li }));
 
     const pageContent = document.getElementById('page-content');
     pageContent.innerHTML = `
@@ -12314,7 +12335,7 @@ function _buildInvoicePageHtml(inv, party, order, co, qrUrl, copyLabel) {
     </div>
     <div class="meta-cell" style="border-right:1px solid #555">
       <div class="meta-head">Transportation Details</div>
-      <div class="meta-row"><span>Invoice Created By :</span><span style="font-weight:600">${escapeHtml(inv.createdBy||'-')}</span></div>
+      <div class="meta-row"><span>Invoice Created By :</span><span style="font-weight:600">${escapeHtml(inv.createdBy || '-')}</span></div>
       ${inv.deliveryDate ? `<div class="meta-row"><span>Delivery Date :</span><span style="font-weight:600">${fmtDate(inv.deliveryDate)}</span></div>` : '<div class="meta-row"><span>Delivery Date :</span><span>-</span></div>'}
       ${inv.boxNo ? `<div class="meta-row"><span>Box/Crate No. :</span><span style="font-weight:600">${escapeHtml(inv.boxNo)}</span></div>` : '<div class="meta-row"><span>Box/Crate No. :</span><span>-</span></div>'}
       <div class="meta-row"><span>Delivered By :</span><span>_____________</span></div>
@@ -12357,7 +12378,7 @@ function _buildInvoicePageHtml(inv, party, order, co, qrUrl, copyLabel) {
     <tfoot>
       <tr>
         <td colspan="4" style="font-weight:700;border-top:1.5px solid #333">Total</td>
-        <td class="tr" style="font-weight:700;border-top:1.5px solid #333">${items.reduce((s,it)=>s+(+it.qty||0),0)}</td>
+        <td class="tr" style="font-weight:700;border-top:1.5px solid #333">${items.reduce((s, it) => s + (+it.qty || 0), 0)}</td>
         <td style="border-top:1.5px solid #333"></td>
         <td class="tr" style="font-weight:800;border-top:1.5px solid #333">&#8377; ${(subTotal).toFixed(2)}</td>
       </tr>
@@ -12394,11 +12415,11 @@ function _buildInvoicePageHtml(inv, party, order, co, qrUrl, copyLabel) {
     </div>
     <div class="amt-section">
       <div class="amt-row"><span>Sub Total</span><span>&#8377; ${subTotal.toFixed(2)}</span></div>
-      <div class="amt-row"><span>Round off</span><span>${(inv.roundOff||0) >= 0 ? '' : ''} &#8377; ${Math.abs(+(inv.roundOff||0)).toFixed(2)}${(inv.roundOff||0) < 0 ? ' (-)' : ''}</span></div>
-      <div class="amt-row grand"><span>Total</span><span>&#8377; ${(inv.total||0).toFixed(2)}</span></div>
-      <div class="amt-row" style="background:#fffbeb;color:#92400e"><span>Current Balance</span><span>&#8377; ${(party.balance||0).toFixed(2)}</span></div>
+      <div class="amt-row"><span>Round off</span><span>${(inv.roundOff || 0) >= 0 ? '' : ''} &#8377; ${Math.abs(+(inv.roundOff || 0)).toFixed(2)}${(inv.roundOff || 0) < 0 ? ' (-)' : ''}</span></div>
+      <div class="amt-row grand"><span>Total</span><span>&#8377; ${(inv.total || 0).toFixed(2)}</span></div>
+      <div class="amt-row" style="background:#fffbeb;color:#92400e"><span>Current Balance</span><span>&#8377; ${(party.balance || 0).toFixed(2)}</span></div>
       <div style="flex:1"></div>
-      <div style="text-align:right;padding:10px 8px;font-size:0.8rem">For : <strong>${escapeHtml(co.name||'')}</strong></div>
+      <div style="text-align:right;padding:10px 8px;font-size:0.8rem">For : <strong>${escapeHtml(co.name || '')}</strong></div>
       <div class="sign-area">
         ${co.signature ? `<div style="text-align:center;margin-bottom:4px"><img src="${co.signature}" style="max-height:50px;max-width:120px;object-fit:contain"></div>` : '<div style="height:44px"></div>'}
         <div style="border-top:1px solid #333;padding-top:5px;text-align:center;font-weight:700;font-size:0.8rem">Authorized Signatory</div>
@@ -13068,9 +13089,9 @@ function _buildPaymentPageHtml(p, co) {
     const isPayIn = p.type === 'in';
     const title = isPayIn ? 'PAYMENT RECEIPT' : 'PAYMENT VOUCHER';
     let allocationsHtml = '';
-    
+
     if (p.allocations && Object.keys(p.allocations).length > 0) {
-        allocationsHtml = Object.entries(p.allocations).map(([inv, amt]) => 
+        allocationsHtml = Object.entries(p.allocations).map(([inv, amt]) =>
             `<tr><td colspan="2" style="font-size:0.8rem;color:#555">Against Invoice: <b>${escapeHtml(getInvoiceDisplayNo(inv) || inv)}</b></td><td style="text-align:right">₹ ${(+amt).toFixed(2)}</td></tr>`
         ).join('');
     } else if (p.invoiceNo && p.invoiceNo !== 'Advance') {
@@ -13468,20 +13489,20 @@ async function onPayPartyTypeChange() {
         sortByGps: false,
         refreshGps: false,
         onSelect: async (party) => {
-        try {
-            await onPayPartyChange();
-        } catch (e) { console.warn('onPayPartyChange error:', e); }
-        // Auto-focus amount column after party selection
-        const focusAmount = () => {
-            const amtInp = $('f-pay-amount-0');
-            if (amtInp) {
-                amtInp.focus();
-                try { amtInp.select(); } catch (e) { }
-            }
-        };
-        requestAnimationFrame(focusAmount);
-        // Fallback in case rAF doesn't work
-        setTimeout(focusAmount, 500);
+            try {
+                await onPayPartyChange();
+            } catch (e) { console.warn('onPayPartyChange error:', e); }
+            // Auto-focus amount column after party selection
+            const focusAmount = () => {
+                const amtInp = $('f-pay-amount-0');
+                if (amtInp) {
+                    amtInp.focus();
+                    try { amtInp.select(); } catch (e) { }
+                }
+            };
+            requestAnimationFrame(focusAmount);
+            // Fallback in case rAF doesn't work
+            setTimeout(focusAmount, 500);
         }
     });
 
@@ -13861,7 +13882,7 @@ async function savePayment(id) {
 
         // 8. Execute all operations
         await Promise.all(ops);
-        
+
         await logSalesmanAction('Collected Payment', payRefNo);
 
         const andNew = window._saveAndNew;
@@ -14334,7 +14355,7 @@ window.saveEditedPayment = async function (id) {
             const finalBal = tempBal + newBalChange;
 
             await DB.update('parties', party.id, { balance: finalBal });
-            
+
             // Find the original ledger entry and update it
             const payRefNo = oldPay.payNo || oldPay.id.substring(0, 8);
             const ledger = await DB.getAll('party_ledger');
@@ -14352,7 +14373,7 @@ window.saveEditedPayment = async function (id) {
                     createdBy: editedCollector || ledgerEntry.createdBy || ledgerEntry.created_by || oldPay.createdBy || currentUser?.userId || currentUser?.name || 'System'
                 });
             }
-            
+
             if (typeof recalculatePartyLedger === 'function') {
                 await recalculatePartyLedger(party.id);
             }
@@ -14558,13 +14579,13 @@ function renderExpCards(expenses) {
     return expenses.map(e => {
         const party = e.partyId ? parties.find(p => p.id === e.partyId) : null;
         const partyDisplay = e.partyName || (party ? party.name : 'General Expense');
-        
+
         let docBtn = '';
         if (e.docNo) {
             const isPayment = e.docNo.startsWith('PAY-');
             docBtn = `<button class="btn-icon" style="padding:4px" onclick="event.stopPropagation(); viewExpenseDoc('${escapeHtml(e.docNo)}','${isPayment ? 'payment' : 'invoice'}')"><span class="material-symbols-outlined" style="font-size:1.2rem;color:var(--accent)">visibility</span></button>`;
         }
-        
+
         return `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:8px;display:flex;align-items:center;gap:12px" onclick="viewExpenseDetails('${e.id}')">
             <div style="flex:1;min-width:0">
                 <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
@@ -14590,7 +14611,7 @@ async function renderExpenses() {
     const total = expenses.reduce((s, e) => s + (e.amount || 0), 0);
     // Build category options
     const cats = [...new Set(expenses.map(e => e.category).filter(Boolean))].sort();
-    
+
     const isMobile = window.innerWidth < 768;
 
     if (isMobile) {
@@ -14801,22 +14822,22 @@ function renderPacking() {
         <!-- Filter Strip -->
         <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:14px">
             <div style="display:flex;gap:6px;align-items:center;">
-                <input type="date" id="pick-from" value="${window._pickListFrom||''}" onchange="window._pickListFrom=this.value" style="flex:1;font-size:0.78rem;padding:7px 8px;border:1px solid var(--border);border-radius:7px;background:var(--bg-input)">
+                <input type="date" id="pick-from" value="${window._pickListFrom || ''}" onchange="window._pickListFrom=this.value" style="flex:1;font-size:0.78rem;padding:7px 8px;border:1px solid var(--border);border-radius:7px;background:var(--bg-input)">
                 <span style="color:var(--text-muted);font-size:0.8rem">–</span>
-                <input type="date" id="pick-to" value="${window._pickListTo||today()}" onchange="window._pickListTo=this.value" style="flex:1;font-size:0.78rem;padding:7px 8px;border:1px solid var(--border);border-radius:7px;background:var(--bg-input)">
+                <input type="date" id="pick-to" value="${window._pickListTo || today()}" onchange="window._pickListTo=this.value" style="flex:1;font-size:0.78rem;padding:7px 8px;border:1px solid var(--border);border-radius:7px;background:var(--bg-input)">
                 <button onclick="togglePackFilters()" id="pack-filter-toggle" style="border:1px solid var(--border);background:var(--bg-input);border-radius:7px;padding:7px 10px;font-size:0.85rem;cursor:pointer;flex-shrink:0"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-3px">tune</span></button>
             </div>
             <div id="pack-extra-filters" style="display:none;margin-top:8px">
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
                     <select id="pick-warehouse" onchange="window._pickListWarehouse=this.value" style="padding:7px;border:1px solid var(--border);border-radius:7px;font-size:0.75rem;background:var(--bg-input)">
-                        <option value="" ${!window._pickListWarehouse?'selected':''}>All Warehouses</option>
-                        <option value="Main Warehouse" ${window._pickListWarehouse==='Main Warehouse'?'selected':''}>Main</option>
-                        <option value="Store" ${window._pickListWarehouse==='Store'?'selected':''}>Store</option>
-                        <option value="Van Stock" ${window._pickListWarehouse==='Van Stock'?'selected':''}>Van</option>
+                        <option value="" ${!window._pickListWarehouse ? 'selected' : ''}>All Warehouses</option>
+                        <option value="Main Warehouse" ${window._pickListWarehouse === 'Main Warehouse' ? 'selected' : ''}>Main</option>
+                        <option value="Store" ${window._pickListWarehouse === 'Store' ? 'selected' : ''}>Store</option>
+                        <option value="Van Stock" ${window._pickListWarehouse === 'Van Stock' ? 'selected' : ''}>Van</option>
                     </select>
                     <select id="pick-report-type" onchange="window._pickListReportType=this.value" style="padding:7px;border:1px solid var(--border);border-radius:7px;font-size:0.75rem;background:var(--bg-input)">
-                        <option value="item" ${window._pickListReportType!=='invoice'?'selected':''}>Item</option>
-                        <option value="invoice" ${window._pickListReportType==='invoice'?'selected':''}>Invoice</option>
+                        <option value="item" ${window._pickListReportType !== 'invoice' ? 'selected' : ''}>Item</option>
+                        <option value="invoice" ${window._pickListReportType === 'invoice' ? 'selected' : ''}>Invoice</option>
                     </select>
                     <button class="btn btn-outline btn-sm" onclick="printPickListPdf()" style="grid-column:span 2;padding:7px">Pick List PDF</button>
                 </div>
@@ -14854,17 +14875,17 @@ function renderPacking() {
         </div>
         <h3 style="margin-bottom:10px;font-size:1rem"> Orders Ready for Packing</h3>
         <div class="section-toolbar" style="margin-bottom:8px"><div class="filter-group" style="flex-wrap:wrap;gap:6px">
-            <input type="date" id="pick-from" value="${window._pickListFrom||''}" onchange="window._pickListFrom=this.value" title="From Date" style="width:135px;padding:5px 8px;font-size:0.82rem">
-            <input type="date" id="pick-to" value="${window._pickListTo||today()}" onchange="window._pickListTo=this.value" title="To Date" style="width:135px;padding:5px 8px;font-size:0.82rem">
+            <input type="date" id="pick-from" value="${window._pickListFrom || ''}" onchange="window._pickListFrom=this.value" title="From Date" style="width:135px;padding:5px 8px;font-size:0.82rem">
+            <input type="date" id="pick-to" value="${window._pickListTo || today()}" onchange="window._pickListTo=this.value" title="To Date" style="width:135px;padding:5px 8px;font-size:0.82rem">
             <select id="pick-warehouse" onchange="window._pickListWarehouse=this.value" style="padding:5px 8px;font-size:0.82rem">
-                <option value="" ${!window._pickListWarehouse?'selected':''}>All Warehouses</option>
-                <option value="Main Warehouse" ${window._pickListWarehouse==='Main Warehouse'?'selected':''}>Main Warehouse</option>
-                <option value="Store" ${window._pickListWarehouse==='Store'?'selected':''}>Store</option>
-                <option value="Van Stock" ${window._pickListWarehouse==='Van Stock'?'selected':''}>Van Stock</option>
+                <option value="" ${!window._pickListWarehouse ? 'selected' : ''}>All Warehouses</option>
+                <option value="Main Warehouse" ${window._pickListWarehouse === 'Main Warehouse' ? 'selected' : ''}>Main Warehouse</option>
+                <option value="Store" ${window._pickListWarehouse === 'Store' ? 'selected' : ''}>Store</option>
+                <option value="Van Stock" ${window._pickListWarehouse === 'Van Stock' ? 'selected' : ''}>Van Stock</option>
             </select>
             <select id="pick-report-type" onchange="window._pickListReportType=this.value" style="padding:5px 8px;font-size:0.82rem">
-                <option value="item" ${window._pickListReportType!=='invoice'?'selected':''}>Item-wise</option>
-                <option value="invoice" ${window._pickListReportType==='invoice'?'selected':''}>Invoice-wise</option>
+                <option value="item" ${window._pickListReportType !== 'invoice' ? 'selected' : ''}>Item-wise</option>
+                <option value="invoice" ${window._pickListReportType === 'invoice' ? 'selected' : ''}>Invoice-wise</option>
             </select>
             <button class="btn btn-outline" onclick="printPickListPdf()" style="border-color:#1e293b;color:#1e293b;padding:5px 12px">Pick List PDF</button>
             <button class="btn btn-outline" onclick="openColumnPersonalizer('packing','renderPacking')" style="border-color:var(--accent);color:var(--accent);padding:5px 10px"> Columns</button>
@@ -14873,22 +14894,22 @@ function renderPacking() {
             <div class="table-wrapper">
                 <table class="data-table"><thead><tr>${ColumnManager.get('packing').filter(c => c.visible).map(c => `<th>${c.label}</th>`).join('')}</tr></thead>
                 <tbody>${readyToPackRows.length ? readyToPackRows.map(o => {
-        const packCols = ColumnManager.get('packing').filter(c => c.visible);
-        const cellMap = {
-            orderNo: `<td style="font-weight:600">${o.orderNo}</td>`,
-            date: `<td>${fmtDate(o.date)}</td>`,
-            party: `<td>${escapeHtml(o.partyName)}</td>`,
-            items: `<td>${o.items.length}</td>`,
-            total: `<td class="amount-green">${currency(o.total)}</td>`,
-            assignedTo: `<td>${o.assignedPacker ? `<span class="badge badge-info">${o.assignedPacker}</span>` : '<span class="badge badge-warning">Unassigned</span>'}</td>`,
-            actions: `<td><div class="action-btns">
+            const packCols = ColumnManager.get('packing').filter(c => c.visible);
+            const cellMap = {
+                orderNo: `<td style="font-weight:600">${o.orderNo}</td>`,
+                date: `<td>${fmtDate(o.date)}</td>`,
+                party: `<td>${escapeHtml(o.partyName)}</td>`,
+                items: `<td>${o.items.length}</td>`,
+                total: `<td class="amount-green">${currency(o.total)}</td>`,
+                assignedTo: `<td>${o.assignedPacker ? `<span class="badge badge-info">${o.assignedPacker}</span>` : '<span class="badge badge-warning">Unassigned</span>'}</td>`,
+                actions: `<td><div class="action-btns">
                             ${!o.assignedPacker && isAdmin ? `<button class="btn btn-outline btn-sm" onclick="openAssignPackerModal('${o.id}')"> Assign</button>` : ''}
                             ${!o.assignedPacker && !isAdmin ? `<button class="btn btn-outline btn-sm" onclick="selfAssign('${o.id}')"> Self Assign</button>` : ''}
                             ${o.assignedPacker === currentUser.name || isAdmin ? `<button class="btn btn-primary btn-sm" onclick="startPacking('${o.id}')"> Start Packing</button>` : ''}
                         </div></td>`,
-        };
-        return `<tr>${packCols.map(c => cellMap[c.key] || '').join('')}</tr>`;
-    }).join('') : '<tr><td colspan="7" class="empty-state"><p>No orders waiting</p></td></tr>'}</tbody></table>
+            };
+            return `<tr>${packCols.map(c => cellMap[c.key] || '').join('')}</tr>`;
+        }).join('') : '<tr><td colspan="7" class="empty-state"><p>No orders waiting</p></td></tr>'}</tbody></table>
             </div>
         </div></div>
         ${cannotCompleteOrders.length ? `<h3 style="margin-bottom:14px;font-size:1rem"> Cannot Complete  Needs Admin Review</h3>
@@ -14896,9 +14917,9 @@ function renderPacking() {
             <div class="table-wrapper">
                 <table class="data-table"><thead><tr><th>Order #</th><th>Party</th><th>Flagged By</th><th>Reason</th><th>Notes</th><th>Line Status</th>${isAdmin ? '<th>Actions</th>' : ''}</tr></thead>
                 <tbody>${cannotCompleteOrders.map(o => {
-        const lines = o.cannotCompleteLines || o.items.map(li => ({ ...li, pickedQty: 0, picked: false }));
-        const linesSummary = lines.map((li, i) => `<div style="font-size:0.78rem;padding:2px 0">${i + 1}. ${li.name}: <strong style="color:${li.picked ? 'var(--success)' : 'var(--danger)'}">${li.pickedQty}/${li.qty}</strong> ${li.picked ? '' : ''}</div>`).join('');
-        return `<tr>
+            const lines = o.cannotCompleteLines || o.items.map(li => ({ ...li, pickedQty: 0, picked: false }));
+            const linesSummary = lines.map((li, i) => `<div style="font-size:0.78rem;padding:2px 0">${i + 1}. ${li.name}: <strong style="color:${li.picked ? 'var(--success)' : 'var(--danger)'}">${li.pickedQty}/${li.qty}</strong> ${li.picked ? '' : ''}</div>`).join('');
+            return `<tr>
                         <td style="font-weight:600">${o.orderNo}</td>
                         <td>${o.partyName}</td>
                         <td><span class="badge badge-info">${o.cannotCompleteBy || '-'}</span></td>
@@ -14910,7 +14931,7 @@ function renderPacking() {
                             <button class="btn btn-danger btn-sm" onclick="cancelOrderFromPacking('${o.id}')"> Cancel Order</button>
                         </div></td>` : ''}
                     </tr>`;
-    }).join('')}
+        }).join('')}
                 </tbody></table>
             </div>
         </div></div>` : ''}
@@ -14945,20 +14966,21 @@ function renderPacking() {
             <div class="table-wrapper">
                 <table class="data-table"><thead><tr><th>Order #</th><th>Party</th><th>Packer</th><th>Time</th><th>Boxes</th><th>Crates</th><th>Invoice</th><th>Total</th></tr></thead>
                 <tbody>${filteredHistory.length ? filteredHistory.map(o => {
-                    const pkgs = o.packageNumbers || [];
-                    const bc = o.boxCount || 0;
-                    const cc = o.crateCount || 0;
-                    const boxes = o.boxNumbers || (bc > 0 ? pkgs.slice(0, bc) : []);
-                    const crates = o.crateNumbers || (cc > 0 ? pkgs.slice(bc, bc + cc) : []);
-                    const boxDisplay = boxes.length ? boxes.map(n => `<span class="badge badge-outline" style="font-size:0.72rem;margin:1px">${escapeHtml(n)}</span>`).join(' ') : '-';
-                    const crateDisplay = crates.length ? crates.map(n => `<span class="badge badge-outline" style="font-size:0.72rem;margin:1px;border-color:var(--warning);color:var(--warning)">${escapeHtml(n)}</span>`).join(' ') : '-';
-                    return `<tr>
+            const pkgs = o.packageNumbers || [];
+            const bc = o.boxCount || 0;
+            const cc = o.crateCount || 0;
+            const boxes = o.boxNumbers || (bc > 0 ? pkgs.slice(0, bc) : []);
+            const crates = o.crateNumbers || (cc > 0 ? pkgs.slice(bc, bc + cc) : []);
+            const boxDisplay = boxes.length ? boxes.map(n => `<span class="badge badge-outline" style="font-size:0.72rem;margin:1px">${escapeHtml(n)}</span>`).join(' ') : '-';
+            const crateDisplay = crates.length ? crates.map(n => `<span class="badge badge-outline" style="font-size:0.72rem;margin:1px;border-color:var(--warning);color:var(--warning)">${escapeHtml(n)}</span>`).join(' ') : '-';
+            return `<tr>
                     <td style="font-weight:600">${o.orderNo}</td><td>${o.partyName}</td><td>${o.packedBy || '-'}</td>
                     <td style="font-size:0.8rem">${o.packingDurationMins !== undefined ? o.packingDurationMins + ' min' : '-'}</td>
                     <td style="font-size:0.8rem">${boxDisplay}</td>
                     <td style="font-size:0.8rem">${crateDisplay}</td>
                     <td><span class="badge badge-success">${o.invoiceNo || '-'}</span></td><td class="amount-green">${currency(o.total)}</td>
-                </tr>`; }).join('') : '<tr><td colspan="8" class="empty-state"><p>No packed history for selected range</p></td></tr>'}</tbody></table>
+                </tr>`;
+        }).join('') : '<tr><td colspan="8" class="empty-state"><p>No packed history for selected range</p></td></tr>'}</tbody></table>
             </div>
         </div></div>`;
     }
@@ -15081,7 +15103,7 @@ async function printPickListPdf() {
 
     let pickInvoices = allInvoices.filter(i => i.type === 'sale' && i.status !== 'cancelled');
     if (from) pickInvoices = pickInvoices.filter(i => (i.date || '') >= from);
-    if (to)   pickInvoices = pickInvoices.filter(i => (i.date || '') <= to);
+    if (to) pickInvoices = pickInvoices.filter(i => (i.date || '') <= to);
     if (!pickInvoices.length) return alert('No sale invoices found for selected date range.');
 
     const dateLabel = from ? `${fmtDate(from)} – ${fmtDate(to)}` : `Up to ${fmtDate(to)}`;
@@ -15818,10 +15840,10 @@ function completePacking(orderId) {
         const price = priceInput ? parseFloat(priceInput.value) : li.price;
         const discountPct = dPctInput ? parseFloat(dPctInput.value) || 0 : (li.discountPct || 0);
         const discountAmt = dAmtInput ? parseFloat(dAmtInput.value) || 0 : (li.discountAmt || 0);
-        
+
         const factor = uomSelInput && uomSelInput.options.length ? parseFloat(uomSelInput.options[uomSelInput.selectedIndex].dataset.factor) : 1;
         const amount = +((packedQty * price) - discountAmt).toFixed(2);
-        
+
         const mrpSel = $(`pack-mrp-${idx}`);
         let batchId = null;
         let batchMrp = null;
@@ -16341,7 +16363,7 @@ async function renderDelivery() {
                     <div style="font-size:0.65rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">Ready</div>
                     <div style="font-size:1.2rem;font-weight:800;color:#f59e0b">${readyToDispatch.length}</div>
                 </div>` : ''}
-                <div style="flex:1;text-align:center;${canEdit()?'padding-left:8px':''}">
+                <div style="flex:1;text-align:center;${canEdit() ? 'padding-left:8px' : ''}">
                     <div style="font-size:0.65rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">Transit</div>
                     <div style="font-size:1.2rem;font-weight:800;color:#3b82f6">${dispatched.length}</div>
                 </div>
@@ -16574,7 +16596,7 @@ async function filterDelTable() {
         dels = dels.filter(d => d.deliveryPerson === currentUser.name);
     }
     if (st) dels = dels.filter(d => d.status === st);
-    
+
     const isMobile = window.innerWidth < 768;
     if (isMobile) {
         if ($('del-list')) $('del-list').innerHTML = renderDelCards(dels, DB.cache['parties'] || []);
@@ -16642,7 +16664,7 @@ async function printDeliverySlip(id) {
     let boxes = d.boxNumbers || [], crates = d.crateNumbers || [];
     if (!pkgs.length && !boxes.length && !crates.length && d.orderId) {
         const so = (DB.cache['salesorders'] || []).find(o => o.id === d.orderId);
-        if (so) { bc = so.boxCount||0; cc = so.crateCount||0; boxes = so.boxNumbers||[]; crates = so.crateNumbers||[]; }
+        if (so) { bc = so.boxCount || 0; cc = so.crateCount || 0; boxes = so.boxNumbers || []; crates = so.crateNumbers || []; }
     }
     if (!boxes.length && bc > 0) boxes = pkgs.slice(0, bc);
     if (!crates.length && cc > 0) crates = pkgs.slice(bc, bc + cc);
@@ -16656,8 +16678,8 @@ async function printDeliverySlip(id) {
         const photoCell = invItem && invItem.photo
             ? `<img src="${invItem.photo}" style="width:40px;height:40px;object-fit:cover;border-radius:4px">`
             : '';
-        const amt = (li.qty||0) * (li.price||li.salePrice||0);
-        return `<tr><td style="border:1px solid #ddd;padding:5px">${photoCell}</td><td style="border:1px solid #ddd;padding:5px;font-weight:600;word-break:break-word;max-width:200px">${li.name||''}</td><td style="border:1px solid #ddd;padding:5px;text-align:center">${li.qty||0} ${li.unit||''}</td><td style="border:1px solid #ddd;padding:5px;text-align:right">${(li.price||li.salePrice||0).toFixed(2)}</td><td style="border:1px solid #ddd;padding:5px;text-align:right;font-weight:700">${amt.toFixed(2)}</td></tr>`;
+        const amt = (li.qty || 0) * (li.price || li.salePrice || 0);
+        return `<tr><td style="border:1px solid #ddd;padding:5px">${photoCell}</td><td style="border:1px solid #ddd;padding:5px;font-weight:600;word-break:break-word;max-width:200px">${li.name || ''}</td><td style="border:1px solid #ddd;padding:5px;text-align:center">${li.qty || 0} ${li.unit || ''}</td><td style="border:1px solid #ddd;padding:5px;text-align:right">${(li.price || li.salePrice || 0).toFixed(2)}</td><td style="border:1px solid #ddd;padding:5px;text-align:right;font-weight:700">${amt.toFixed(2)}</td></tr>`;
     }).join('');
 
     const slipHtml = `<!DOCTYPE html><html><head><title>Delivery Slip - ${d.orderNo}</title>
@@ -16666,22 +16688,22 @@ async function printDeliverySlip(id) {
     </head><body>
     <div style="text-align:center;border-bottom:2px solid #333;padding-bottom:10px;margin-bottom:12px">
         <h2>${co.name || 'Delivery Slip'}</h2>
-        <div style="font-size:12px;color:#666">${co.address||''} ${co.city||''}</div>
-        <div style="font-size:12px;color:#666">${co.phone||''} ${co.gstin ? '| GSTIN: '+co.gstin : ''}</div>
+        <div style="font-size:12px;color:#666">${co.address || ''} ${co.city || ''}</div>
+        <div style="font-size:12px;color:#666">${co.phone || ''} ${co.gstin ? '| GSTIN: ' + co.gstin : ''}</div>
     </div>
-    <table style="margin-bottom:12px;font-size:13px"><tr><td style="padding:3px 8px 3px 0"><strong>Order #:</strong></td><td>${d.orderNo}</td><td style="padding:3px 8px"><strong>Invoice:</strong></td><td>${d.invoiceNo||'-'}</td></tr>
+    <table style="margin-bottom:12px;font-size:13px"><tr><td style="padding:3px 8px 3px 0"><strong>Order #:</strong></td><td>${d.orderNo}</td><td style="padding:3px 8px"><strong>Invoice:</strong></td><td>${d.invoiceNo || '-'}</td></tr>
     <tr><td style="padding:3px 8px 3px 0"><strong>Party:</strong></td><td colspan="3">${d.partyName}</td></tr>
-    <tr><td style="padding:3px 8px 3px 0"><strong>Address:</strong></td><td colspan="3" style="word-break:break-word;max-width:300px">${party.address||party.city||'-'}</td></tr>
-    <tr><td style="padding:3px 8px 3px 0"><strong>Phone:</strong></td><td>${party.phone||'-'}</td><td style="padding:3px 8px"><strong>Status:</strong></td><td>${d.status}</td></tr>
-    <tr><td style="padding:3px 8px 3px 0"><strong>Del. By:</strong></td><td>${d.deliveryPerson||'-'}</td><td style="padding:3px 8px"><strong>Date:</strong></td><td>${d.dispatchedAt || d.date || '-'}</td></tr>
+    <tr><td style="padding:3px 8px 3px 0"><strong>Address:</strong></td><td colspan="3" style="word-break:break-word;max-width:300px">${party.address || party.city || '-'}</td></tr>
+    <tr><td style="padding:3px 8px 3px 0"><strong>Phone:</strong></td><td>${party.phone || '-'}</td><td style="padding:3px 8px"><strong>Status:</strong></td><td>${d.status}</td></tr>
+    <tr><td style="padding:3px 8px 3px 0"><strong>Del. By:</strong></td><td>${d.deliveryPerson || '-'}</td><td style="padding:3px 8px"><strong>Date:</strong></td><td>${d.dispatchedAt || d.date || '-'}</td></tr>
     <tr><td style="padding:3px 8px 3px 0"><strong>Packages:</strong></td><td colspan="3">${pkgStr}</td></tr>
     </table>
     <table style="width:100%;border-collapse:collapse;margin-bottom:12px;font-size:12px">
     <thead><tr style="background:#f3f4f6"><th style="border:1px solid #ddd;padding:5px">Photo</th><th style="border:1px solid #ddd;padding:5px">Item</th><th style="border:1px solid #ddd;padding:5px">Qty</th><th style="border:1px solid #ddd;padding:5px;text-align:right">Rate</th><th style="border:1px solid #ddd;padding:5px;text-align:right">Amt</th></tr></thead>
     <tbody>${itemRows}</tbody>
-    <tfoot><tr><td colspan="4" style="border:1px solid #ddd;padding:6px;text-align:right;font-weight:700">Total</td><td style="border:1px solid #ddd;padding:6px;text-align:right;font-weight:700">${(d.total||0).toFixed(2)}</td></tr></tfoot>
+    <tfoot><tr><td colspan="4" style="border:1px solid #ddd;padding:6px;text-align:right;font-weight:700">Total</td><td style="border:1px solid #ddd;padding:6px;text-align:right;font-weight:700">${(d.total || 0).toFixed(2)}</td></tr></tfoot>
     </table>
-    ${inv && inv.dueDate ? `<div style="background:#fff7ed;border:1px solid #f97316;border-radius:6px;padding:8px;margin-bottom:10px;font-size:12px"><strong>Due Date: ${inv.dueDate}</strong> | Balance: ${currency ? '' : '₹'}${(d.total||0).toFixed(2)}</div>` : ''}
+    ${inv && inv.dueDate ? `<div style="background:#fff7ed;border:1px solid #f97316;border-radius:6px;padding:8px;margin-bottom:10px;font-size:12px"><strong>Due Date: ${inv.dueDate}</strong> | Balance: ${currency ? '' : '₹'}${(d.total || 0).toFixed(2)}</div>` : ''}
     <div style="margin-top:24px;display:flex;justify-content:space-between">
         <div style="text-align:center;width:45%"><div style="border-top:1px solid #333;padding-top:4px;font-size:11px">Delivery Person Signature</div></div>
         <div style="text-align:center;width:45%"><div style="border-top:1px solid #333;padding-top:4px;font-size:11px">Customer Signature</div></div>
@@ -16710,13 +16732,13 @@ async function printDeliverySlip(id) {
 
     const iframe = document.createElement('iframe');
     iframe.style.cssText = 'flex:1;border:none;width:100%;height:100%';
-    iframe.onload = function() {
+    iframe.onload = function () {
         const printBtn = document.getElementById('del-slip-print-btn');
         if (printBtn) {
             printBtn.disabled = false;
             printBtn.style.background = '#f97316';
             printBtn.style.cursor = 'pointer';
-            printBtn.onclick = function() { iframe.contentWindow.print(); };
+            printBtn.onclick = function () { iframe.contentWindow.print(); };
         }
     };
     overlay.appendChild(iframe);
@@ -16846,10 +16868,10 @@ async function renderDeliveryDetailPage() {
         : d.status === 'Undelivered'
             ? `<button class="btn btn-primary btn-sm" onclick="reDispatchOrder('${d.id}')"> Re-Dispatch</button>
                ${d.invoiceNo ? `<button class="btn btn-outline btn-sm" style="border-color:var(--danger);color:var(--danger)" onclick="cancelDeliveryInvoice('${d.id}')">✕ Cancel Inv.</button>` : ''}`
-        : d.status === 'Returned'
-            ? `<button class="btn btn-primary btn-sm" onclick="reDispatchOrder('${d.id}')"> Re-Dispatch</button>
+            : d.status === 'Returned'
+                ? `<button class="btn btn-primary btn-sm" onclick="reDispatchOrder('${d.id}')"> Re-Dispatch</button>
                ${d.invoiceNo ? `<button class="btn btn-outline btn-sm" style="border-color:var(--danger);color:var(--danger)" onclick="cancelDeliveryInvoice('${d.id}')">✕ Cancel Inv.</button>` : ''}`
-            : '';
+                : '';
 
     pageTitle.textContent = `Delivery — ${d.orderNo}`;
     pageContent.innerHTML = `
@@ -16868,10 +16890,10 @@ async function renderDeliveryDetailPage() {
             ${d.deliveredAt ? `<div><span style="color:var(--text-muted);font-size:0.75rem">Delivered</span><br><strong style="color:var(--success)">${d.deliveredAt}</strong></div>` : ''}
             ${d.undeliveredReason ? `<div style="grid-column:span 2"><span style="color:var(--text-muted);font-size:0.75rem">Return Reason</span><br><strong style="color:var(--danger)">${escapeHtml(d.undeliveredReason)}</strong></div>` : ''}
             ${d.codCollected
-                ? `<div style="grid-column:span 2"><span class="badge badge-success" style="font-size:0.72rem">${msIcon('payments', '', 'font-size:0.95rem;vertical-align:-3px')} Cash Received${d.cashReceivedBy ? ` - by ${escapeHtml(d.cashReceivedBy)}` : ' at Delivery'}${d.cashReceivedAt ? ` on ${d.cashReceivedAt}` : ''}</span></div>`
-                : ''}
+            ? `<div style="grid-column:span 2"><span class="badge badge-success" style="font-size:0.72rem">${msIcon('payments', '', 'font-size:0.95rem;vertical-align:-3px')} Cash Received${d.cashReceivedBy ? ` - by ${escapeHtml(d.cashReceivedBy)}` : ' at Delivery'}${d.cashReceivedAt ? ` on ${d.cashReceivedAt}` : ''}</span></div>`
+            : ''}
             ${d.adminApprovedBy
-                ? `<div style="grid-column:span 2;background:rgba(245,158,11,0.1);border:1px solid var(--warning);border-radius:6px;padding:8px 10px">
+            ? `<div style="grid-column:span 2;background:rgba(245,158,11,0.1);border:1px solid var(--warning);border-radius:6px;padding:8px 10px">
                     <span style="font-size:0.72rem;color:var(--warning);font-weight:700">${msIcon('warning', '', 'font-size:0.95rem;vertical-align:-3px')} Admin Override - Payment Pending</span><br>
                     <span style="font-size:0.8rem">Approved by <strong>${escapeHtml(d.adminApprovedBy)}</strong></span>
                     ${!d.codCollected && canEdit() ? `
@@ -16888,7 +16910,7 @@ async function renderDeliveryDetailPage() {
                     <div id="cashrcv-status" style="display:none;margin-top:6px;font-size:0.8rem;font-weight:600;color:var(--success)"></div>
                     ` : ''}
                   </div>`
-                : ''}
+            : ''}
         </div>
         ${pkgHtml}
         ${itemsHtml}
@@ -16987,7 +17009,7 @@ async function markDelivered(id) {
                         <div style="font-size:0.72rem;color:var(--text-muted);text-align:center">${co.upi}</div>`;
                 }
                 document.body.removeChild(qrDiv);
-            } catch(e) {
+            } catch (e) {
                 qrImgHtml = `<div style="font-size:0.82rem;color:var(--warning);padding:8px">UPI: ${co.upi} | Amount: ₹${amt.toFixed(2)}</div>`;
             }
         } else if (!co.upi) {
@@ -17703,28 +17725,32 @@ async function confirmBulkDispatch() {
                 // Skip if already dispatched (non-cancelled delivery exists)
                 const alreadyExists = dels.some(d => d.orderNo === o.orderNo && d.status !== 'Cancelled');
                 if (alreadyExists) continue;
-                delData = { orderId: o.id, orderNo: o.orderNo, partyName: o.partyName, partyId: o.partyId,
+                delData = {
+                    orderId: o.id, orderNo: o.orderNo, partyName: o.partyName, partyId: o.partyId,
                     invoiceNo: o.invoiceNo || '', deliveryPerson: person, status: 'Dispatched',
                     dispatchedAt: today(), total: o.total, items: o.packedItems || o.items,
                     packageNumbers: o.packageNumbers || [],
                     boxNumbers: o.boxNumbers || [],
                     crateNumbers: o.crateNumbers || [],
                     boxCount: o.boxCount || 0,
-                    crateCount: o.crateCount || 0 };
+                    crateCount: o.crateCount || 0
+                };
             } else {
                 const inv = invoices.find(x => x.id === r.id);
                 if (!inv) continue;
                 // Skip if already dispatched
                 const alreadyExists = dels.some(d => d.invoiceNo === inv.invoiceNo && d.status !== 'Cancelled');
                 if (alreadyExists) continue;
-                delData = { orderId: inv.id, orderNo: inv.invoiceNo, partyName: inv.partyName,
+                delData = {
+                    orderId: inv.id, orderNo: inv.invoiceNo, partyName: inv.partyName,
                     partyId: inv.partyId, invoiceNo: inv.invoiceNo, deliveryPerson: person,
                     status: 'Dispatched', dispatchedAt: today(), total: inv.total, items: inv.items,
                     packageNumbers: inv.packageNumbers || [],
                     boxNumbers: inv.boxNumbers || [],
                     crateNumbers: inv.crateNumbers || [],
                     boxCount: inv.boxCount || 0,
-                    crateCount: inv.crateCount || 0 };
+                    crateCount: inv.crateCount || 0
+                };
             }
             await DB.rawInsert('delivery', delData);
             dispatched++;
@@ -17807,7 +17833,7 @@ async function cancelDeliveryInvoice(id) {
             <ul style="font-size:0.83rem;margin:0;padding-left:18px;line-height:2;color:var(--text-primary)">
                 <li>Mark Invoice <strong>${escapeHtml(d.invoiceNo || '')}</strong> as <strong style="color:var(--danger)">CANCELLED</strong></li>
                 <li><strong>Restore stock</strong> for all items in this invoice</li>
-                <li><strong>Reverse party balance</strong> (₹${(d.total||0).toLocaleString('en-IN')} will be deducted from ${escapeHtml(d.partyName)}'s ledger)</li>
+                <li><strong>Reverse party balance</strong> (₹${(d.total || 0).toLocaleString('en-IN')} will be deducted from ${escapeHtml(d.partyName)}'s ledger)</li>
                 <li>Reverse all <strong>party ledger entries</strong> for this invoice</li>
                 <li>Release any <strong>allocated payments</strong> tied to this invoice</li>
                 <li>Mark this delivery record as <strong>Cancelled</strong></li>
@@ -18003,7 +18029,7 @@ async function showReport(type) {
     if (type === 'item-ledger') {
         const stockLedger = await DB.getAll('stock_ledger');
         window._rItemLedger = stockLedger.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
-        
+
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px">
             <div class="card-header" style="padding-bottom:0;border-bottom:none">
@@ -18028,12 +18054,12 @@ async function showReport(type) {
         </div></div>
         <div id="r-il-out"></div>`;
 
-        window.renderItemLedgerRpt = function() {
+        window.renderItemLedgerRpt = function () {
             const itemFlt = ($('r-il-item').value || '').toLowerCase();
             const typeFlt = $('r-il-type').value;
 
             let html = '<div class="table-wrapper"><table class="data-table" id="tbl-item-ledger"><thead><tr><th>Posting Date</th><th>Entry Type</th><th>Document No.</th><th>Item Name</th><th>Qty</th><th>Remaining Qty</th><th>Reason / Location</th><th>User ID</th></tr></thead><tbody>';
-            
+
             let count = 0;
             // The entries are already sorted by date descending (newest first)
             for (const entry of window._rItemLedger) {
@@ -18047,14 +18073,14 @@ async function showReport(type) {
 
                 count++;
                 if (count > 500 && !itemFlt) {
-                     // Limit to 500 if no search text to prevent browser lag
-                     html += `<tr><td colspan="8" style="text-align:center;color:var(--text-muted)">Showing latest 500 entries. Type a specific item to see more.</td></tr>`;
-                     break;
+                    // Limit to 500 if no search text to prevent browser lag
+                    html += `<tr><td colspan="8" style="text-align:center;color:var(--text-muted)">Showing latest 500 entries. Type a specific item to see more.</td></tr>`;
+                    break;
                 }
 
-                const qtySpan = entry.qty > 0 
-                                ? `<span style="color:var(--success);font-weight:600">+${entry.qty}</span>` 
-                                : (entry.qty < 0 ? `<span style="color:var(--danger);font-weight:600">${entry.qty}</span>` : '0');
+                const qtySpan = entry.qty > 0
+                    ? `<span style="color:var(--success);font-weight:600">+${entry.qty}</span>`
+                    : (entry.qty < 0 ? `<span style="color:var(--danger);font-weight:600">${entry.qty}</span>` : '0');
 
                 html += `<tr>
                     <td style="white-space:nowrap">${fmtDate(entry.date) || '-'}</td>
@@ -18069,16 +18095,16 @@ async function showReport(type) {
             }
             if (count === 0) html += `<tr><td colspan="8" style="text-align:center">No ledger entries found.</td></tr>`;
             html += '</tbody></table></div>';
-            
+
             $('r-il-out').innerHTML = html;
         };
         renderItemLedgerRpt();
     }
 
     if (type === 'gps-tracking') {
-        const logs = (await DB.getAll('gps_logs')).sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp));
+        const logs = (await DB.getAll('gps_logs')).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
         const users = [...new Set(logs.map(l => l.user_name))].filter(Boolean).sort();
-        
+
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px">
             <div class="card-header" style="padding-bottom:0;border-bottom:none">
@@ -18099,22 +18125,22 @@ async function showReport(type) {
         </div></div>
         <div id="r-gps-out"></div>`;
 
-        window.renderGpsRpt = function() {
+        window.renderGpsRpt = function () {
             const dateFlt = $('r-gps-date').value;
             const userFlt = $('r-gps-user').value;
 
             let html = '<div class="table-wrapper"><table class="data-table" id="tbl-gps"><thead><tr><th>Timestamp</th><th>Salesman</th><th>Action Type</th><th>Reference No.</th><th>Location (Lat, Lng)</th><th>Map View</th></tr></thead><tbody>';
             let count = 0;
-            
+
             for (const log of logs) {
                 const logDate = log.timestamp ? log.timestamp.substring(0, 10) : '';
                 if (dateFlt && logDate !== dateFlt) continue;
                 if (userFlt && log.user_name !== userFlt) continue;
-                
+
                 count++;
                 const mapLink = `https://www.google.com/maps?q=${log.lat},${log.lng}`;
                 html += `<tr>
-                    <td style="white-space:nowrap">${fmtDate(log.timestamp)} <span style="font-size:0.75rem;color:var(--text-muted);margin-left:4px">${new Date(log.timestamp).toLocaleTimeString([], {timeStyle:'short'})}</span></td>
+                    <td style="white-space:nowrap">${fmtDate(log.timestamp)} <span style="font-size:0.75rem;color:var(--text-muted);margin-left:4px">${new Date(log.timestamp).toLocaleTimeString([], { timeStyle: 'short' })}</span></td>
                     <td style="font-weight:600">${escapeHtml(log.user_name || '-')}</td>
                     <td><span class="badge badge-info">${escapeHtml(log.action || '-')}</span></td>
                     <td style="font-family:monospace;font-size:0.85rem">${escapeHtml(log.reference_id || '-')}</td>
@@ -18874,22 +18900,22 @@ function renderZeroSalesRpt() {
             </tr></thead>
             <tbody>
             ${dormant.map((p, idx) => {
-                const lastDate = lastSaleMap[p.id];
-                const daysInactive = lastDate
-                    ? Math.floor((new Date() - new Date(lastDate)) / 86400000)
-                    : '—';
-                const urgency = typeof daysInactive === 'number'
-                    ? (daysInactive > 30 ? 'color:#dc2626;font-weight:700' : daysInactive > 14 ? 'color:#d97706;font-weight:600' : '')
-                    : 'color:#7c3aed;font-weight:700';
-                const assignedLabel = p.followupAssignedTo
-                    ? `<span class="badge badge-info" style="font-size:0.72rem">${escapeHtml(p.followupAssignedTo)}</span>`
-                    : '<span style="color:var(--text-muted);font-size:0.78rem">—</span>';
-                return `<tr>
+        const lastDate = lastSaleMap[p.id];
+        const daysInactive = lastDate
+            ? Math.floor((new Date() - new Date(lastDate)) / 86400000)
+            : '—';
+        const urgency = typeof daysInactive === 'number'
+            ? (daysInactive > 30 ? 'color:#dc2626;font-weight:700' : daysInactive > 14 ? 'color:#d97706;font-weight:600' : '')
+            : 'color:#7c3aed;font-weight:700';
+        const assignedLabel = p.followupAssignedTo
+            ? `<span class="badge badge-info" style="font-size:0.72rem">${escapeHtml(p.followupAssignedTo)}</span>`
+            : '<span style="color:var(--text-muted);font-size:0.78rem">—</span>';
+        return `<tr>
                     <td style="text-align:center;color:var(--text-muted)">${idx + 1}</td>
                     <td style="font-weight:700">${escapeHtml(p.name)}</td>
                     <td>${escapeHtml(p.phone || '—')}</td>
                     <td style="font-size:0.8rem;color:var(--text-muted)">${escapeHtml((p.address || '') + (p.city ? ', ' + p.city : ''))}</td>
-                    <td style="text-align:right;font-weight:600;${(p.balance||0)>0?'color:#16a34a':''}">${currency(p.balance || 0)}</td>
+                    <td style="text-align:right;font-weight:600;${(p.balance || 0) > 0 ? 'color:#16a34a' : ''}">${currency(p.balance || 0)}</td>
                     <td>${lastDate ? fmtDate(lastDate) : '<span style="color:#7c3aed;font-size:0.78rem">Never</span>'}</td>
                     <td style="text-align:center;${urgency}">${typeof daysInactive === 'number' ? daysInactive + 'd' : daysInactive}</td>
                     <td>${assignedLabel}</td>
@@ -18901,13 +18927,13 @@ function renderZeroSalesRpt() {
                             ${p.phone ? `<a class="btn-icon" href="tel:${escapeHtml(p.phone)}" title="Call Customer" style="color:var(--success)">
                                 <span class="material-symbols-outlined" style="font-size:1.1rem">call</span>
                             </a>` : ''}
-                            ${p.phone ? `<a class="btn-icon" href="https://wa.me/91${escapeHtml(p.phone.replace(/\D/g,''))}" target="_blank" title="WhatsApp" style="color:#25D366">
+                            ${p.phone ? `<a class="btn-icon" href="https://wa.me/91${escapeHtml(p.phone.replace(/\D/g, ''))}" target="_blank" title="WhatsApp" style="color:#25D366">
                                 <span class="material-symbols-outlined" style="font-size:1.1rem">chat</span>
                             </a>` : ''}
                         </div>
                     </td>
                 </tr>`;
-            }).join('')}
+    }).join('')}
             </tbody>
         </table>
         </div>
@@ -18918,7 +18944,7 @@ function openZeroSalesAssign(partyId, partyName) {
     const salesUsers = window._zsUsers || [];
     const party = (window._zsParties || []).find(p => p.id === partyId) || {};
     openModal(`Assign Follow-up — ${partyName}`,
-    `<div style="margin-bottom:14px;padding:10px 14px;background:var(--bg-primary);border-radius:8px;border-left:3px solid var(--primary)">
+        `<div style="margin-bottom:14px;padding:10px 14px;background:var(--bg-primary);border-radius:8px;border-left:3px solid var(--primary)">
         <div style="font-size:0.78rem;color:var(--text-muted)">Customer</div>
         <div style="font-weight:700;font-size:1rem">${escapeHtml(partyName)}</div>
         ${party.phone ? `<div style="font-size:0.82rem;color:var(--text-muted);margin-top:2px">${escapeHtml(party.phone)}</div>` : ''}
@@ -18940,7 +18966,7 @@ function openZeroSalesAssign(partyId, partyName) {
         <label>Note (optional)</label>
         <textarea id="zs-assign-note" rows="2" placeholder="e.g. Call to confirm order, push Maggi scheme..." style="width:100%;resize:vertical">${escapeHtml(party.followupNote || '')}</textarea>
     </div>`,
-    `<button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+        `<button class="btn btn-outline" onclick="closeModal()">Cancel</button>
      <button class="btn btn-primary" onclick="saveZeroSalesAssign('${partyId}')">Assign</button>`
     );
 }
@@ -19086,19 +19112,19 @@ function renderPaymentRpt() {
             </tr></thead>
             <tbody>
             ${rows.map(p => {
-                const allocKeys = p.allocations ? Object.keys(p.allocations) : [];
-                const isMulti = allocKeys.length > 1;
-                const refCell = allocKeys.length > 0
-                    ? allocKeys.map(inv => {
-                        const link = `<a href="#" onclick="viewInvoiceByNo('${inv}');return false" style="color:var(--primary);text-decoration:underline">${escapeHtml(getInvoiceDisplayNo(inv) || inv)}</a>`;
-                        return isMulti ? `${link} <span style="color:var(--text-muted);font-size:0.8rem">${currency(p.allocations[inv])}</span>` : link;
-                      }).join('<br>')
-                    : (p.invoiceNo && p.invoiceNo !== 'Multi/Disc' && p.invoiceNo !== 'Advance'
-                        ? `<a href="#" onclick="viewInvoiceByNo('${p.invoiceNo}');return false" style="color:var(--primary);text-decoration:underline">${escapeHtml(getInvoiceDisplayNo(p.invoiceNo) || p.invoiceNo)}</a>`
-                        : `<span style="color:var(--text-muted)">${p.invoiceNo || p.note || '-'}</span>`);
-                return `<tr>
+        const allocKeys = p.allocations ? Object.keys(p.allocations) : [];
+        const isMulti = allocKeys.length > 1;
+        const refCell = allocKeys.length > 0
+            ? allocKeys.map(inv => {
+                const link = `<a href="#" onclick="viewInvoiceByNo('${inv}');return false" style="color:var(--primary);text-decoration:underline">${escapeHtml(getInvoiceDisplayNo(inv) || inv)}</a>`;
+                return isMulti ? `${link} <span style="color:var(--text-muted);font-size:0.8rem">${currency(p.allocations[inv])}</span>` : link;
+            }).join('<br>')
+            : (p.invoiceNo && p.invoiceNo !== 'Multi/Disc' && p.invoiceNo !== 'Advance'
+                ? `<a href="#" onclick="viewInvoiceByNo('${p.invoiceNo}');return false" style="color:var(--primary);text-decoration:underline">${escapeHtml(getInvoiceDisplayNo(p.invoiceNo) || p.invoiceNo)}</a>`
+                : `<span style="color:var(--text-muted)">${p.invoiceNo || p.note || '-'}</span>`);
+        return `<tr>
                 <td>${fmtDate(p.date)}</td>
-                <td style="font-family:monospace;font-weight:600;color:var(--primary);font-size:0.82rem">${escapeHtml(p.payNo || p.receiptNo || p.id?.substring(0,8) || '-')}</td>
+                <td style="font-family:monospace;font-weight:600;color:var(--primary);font-size:0.82rem">${escapeHtml(p.payNo || p.receiptNo || p.id?.substring(0, 8) || '-')}</td>
                 <td>${escapeHtml(p.partyName || '-')}</td>
                 <td><span class="badge ${p.type === 'in' ? 'badge-success' : 'badge-danger'}">${p.type === 'in' ? 'Pay In' : 'Pay Out'}</span></td>
                 <td><span class="badge badge-info">${escapeHtml(p.mode || '-')}</span></td>
@@ -19108,12 +19134,13 @@ function renderPaymentRpt() {
                 <td class="${p.type === 'in' ? 'amount-green' : 'amount-red'}" style="text-align:right;font-weight:700">${currency(p.totalReduction || p.amount)}</td>
                 <td style="font-size:0.82rem">${escapeHtml(getUserDisplayName(getPaymentCollectorValue(p), users) || '-')}</td>
                 <td style="font-size:0.8rem;color:var(--text-muted)">${escapeHtml(p.notes || p.note || '-')}</td>
-            </tr>`;}).join('')}
+            </tr>`;
+    }).join('')}
             <tr style="font-weight:800;background:rgba(249,115,22,0.04);border-top:2px solid var(--border)">
                 <td colspan="6" style="text-align:right;font-size:0.85rem;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted)">Grand Total</td>
-                <td style="text-align:right">${currency(rows.reduce((s,p)=>s+(p.amount||0),0))}</td>
-                <td style="text-align:right;color:var(--danger)">${currency(rows.reduce((s,p)=>s+(p.discount||0),0))}</td>
-                <td style="text-align:right;font-size:1rem">${currency(rows.reduce((s,p)=>s+(p.totalReduction||p.amount||0),0))}</td>
+                <td style="text-align:right">${currency(rows.reduce((s, p) => s + (p.amount || 0), 0))}</td>
+                <td style="text-align:right;color:var(--danger)">${currency(rows.reduce((s, p) => s + (p.discount || 0), 0))}</td>
+                <td style="text-align:right;font-size:1rem">${currency(rows.reduce((s, p) => s + (p.totalReduction || p.amount || 0), 0))}</td>
                 <td colspan="2"></td>
             </tr>
             </tbody>
@@ -19425,8 +19452,8 @@ function renderPurchaseIndentReport(el, inventory, invoices, categories) {
             const id = li.itemId || li.item_id;
             if (!id) return;
             const qty = li.packedQty !== undefined ? li.packedQty
-                      : li.packed_qty !== undefined ? li.packed_qty
-                      : (li.qty || 0);
+                : li.packed_qty !== undefined ? li.packed_qty
+                    : (li.qty || 0);
             salesMap[id] = (salesMap[id] || 0) + qty;
             salesCountMap[id] = (salesCountMap[id] || 0) + 1;
         }));
@@ -19523,12 +19550,12 @@ function renderIndentRpt() {
             <td style="font-weight:600">${escapeHtml(i.name || '')}</td>
             <td style="font-size:0.82rem;color:var(--text-muted)">${escapeHtml(i.category || '-')}</td>
             <td style="font-size:0.82rem">${escapeHtml(i.unit || 'Pcs')}</td>
-            <td style="text-align:right;font-weight:600;color:${(i.stock||0)<=0?'var(--danger)':(i.stock||0)<=(i.lowStockAlert||5)?'var(--warning)':'inherit'}">${(+i.stock||0).toFixed(2)}</td>
-            <td style="text-align:right;color:var(--text-muted);font-size:0.82rem">${+(i.lowStockAlert||5)}</td>
+            <td style="text-align:right;font-weight:600;color:${(i.stock || 0) <= 0 ? 'var(--danger)' : (i.stock || 0) <= (i.lowStockAlert || 5) ? 'var(--warning)' : 'inherit'}">${(+i.stock || 0).toFixed(2)}</td>
+            <td style="text-align:right;color:var(--text-muted);font-size:0.82rem">${+(i.lowStockAlert || 5)}</td>
             <td style="text-align:right">${i.sold30d > 0 ? i.sold30d.toFixed(2) : '<span style="color:var(--text-muted);font-size:0.8rem">—</span>'}</td>
             <td style="text-align:right;font-size:0.82rem;color:var(--text-muted)">${i.dailyRate > 0 ? i.dailyRate.toFixed(2) : '—'}</td>
             <td style="text-align:center"><span style="background:${i.statusColor};color:#fff;font-size:0.7rem;padding:2px 7px;border-radius:20px;white-space:nowrap;font-weight:600">${i.status}</span></td>
-            <td style="text-align:right;font-weight:700;color:${i.suggestQty>0?'var(--primary)':'var(--text-muted)'}">${i.suggestQty > 0 ? i.suggestQty.toFixed(2) : '—'}</td>
+            <td style="text-align:right;font-weight:700;color:${i.suggestQty > 0 ? 'var(--primary)' : 'var(--text-muted)'}">${i.suggestQty > 0 ? i.suggestQty.toFixed(2) : '—'}</td>
             <td style="text-align:right;font-size:0.82rem">${currency(i.purchasePrice || 0)}</td>
             <td style="text-align:right;font-weight:600">${estCost > 0 ? currency(estCost) : '—'}</td>
         </tr>`;
@@ -19642,7 +19669,7 @@ function renderOutstandingRpt() {
         const ageColor = daysDue === null ? 'var(--text-muted)' : daysDue <= 30 ? '#22c55e' : daysDue <= 60 ? '#f59e0b' : '#ef4444';
         const dirColor = p.balance < 0 ? 'var(--success)' : 'var(--danger)';
         rows.push(`<tr style="cursor:pointer;font-weight:500" onclick="openDedicatedPartyLedger('${p.id}')">
-            <td><span style="font-weight:700">${escapeHtml(p.name)}</span><br><span style="font-size:0.75rem;color:var(--text-muted)">${p.phone || ''}${p.group ? ' · '+escapeHtml(p.group) : ''}${p.area ? ' · '+escapeHtml(p.area) : ''}</span></td>
+            <td><span style="font-weight:700">${escapeHtml(p.name)}</span><br><span style="font-size:0.75rem;color:var(--text-muted)">${p.phone || ''}${p.group ? ' · ' + escapeHtml(p.group) : ''}${p.area ? ' · ' + escapeHtml(p.area) : ''}</span></td>
             <td><span class="badge ${p.type === 'Customer' ? 'badge-success' : 'badge-info'}">${p.type}</span></td>
             <td style="font-size:0.82rem">${pending.length}</td>
             <td style="font-size:0.82rem;color:var(--text-muted)">${lastPay ? fmtDate(lastPay.date) : '<span style="color:var(--danger)">Never</span>'}</td>
@@ -20226,20 +20253,20 @@ async function generateUserPaymentReport() {
                         <tr><th style="min-width:90px">Date</th><th style="min-width:100px">Voucher No</th><th style="min-width:100px">Mode</th><th style="min-width:150px">Allocated Invoices</th><th style="min-width:150px">Party</th><th style="min-width:120px">Collected By</th><th style="min-width:110px;text-align:right">Amt Received</th><th style="min-width:100px;text-align:right">Discount</th><th style="min-width:120px;text-align:right">Total Payment</th></tr>
                     </thead>
                     <tbody>${payments.map(p => {
-                        const allocKeys = p.allocations ? Object.keys(p.allocations) : [];
-                        const isMulti = allocKeys.length > 1;
-                        const refCell = allocKeys.length > 0
-                            ? allocKeys.map(inv => {
-                                const link = `<a href="#" onclick="viewInvoiceByNo('${inv}');return false" style="color:var(--primary);text-decoration:underline">${escapeHtml(getInvoiceDisplayNo(inv) || inv)}</a>`;
-                                return isMulti ? `${link} <span style="color:var(--text-muted);font-size:0.8rem">${currency(p.allocations[inv])}</span>` : link;
-                              }).join('<br>')
-                            : (p.invoiceNo && p.invoiceNo !== 'Multi/Disc' && p.invoiceNo !== 'Advance'
-                                ? `<a href="#" onclick="viewInvoiceByNo('${p.invoiceNo}');return false" style="color:var(--primary);text-decoration:underline">${escapeHtml(getInvoiceDisplayNo(p.invoiceNo) || p.invoiceNo)}</a>`
-                                : `<span style="color:var(--text-muted)">${p.invoiceNo || p.note || '-'}</span>`);
-                        return `
+        const allocKeys = p.allocations ? Object.keys(p.allocations) : [];
+        const isMulti = allocKeys.length > 1;
+        const refCell = allocKeys.length > 0
+            ? allocKeys.map(inv => {
+                const link = `<a href="#" onclick="viewInvoiceByNo('${inv}');return false" style="color:var(--primary);text-decoration:underline">${escapeHtml(getInvoiceDisplayNo(inv) || inv)}</a>`;
+                return isMulti ? `${link} <span style="color:var(--text-muted);font-size:0.8rem">${currency(p.allocations[inv])}</span>` : link;
+            }).join('<br>')
+            : (p.invoiceNo && p.invoiceNo !== 'Multi/Disc' && p.invoiceNo !== 'Advance'
+                ? `<a href="#" onclick="viewInvoiceByNo('${p.invoiceNo}');return false" style="color:var(--primary);text-decoration:underline">${escapeHtml(getInvoiceDisplayNo(p.invoiceNo) || p.invoiceNo)}</a>`
+                : `<span style="color:var(--text-muted)">${p.invoiceNo || p.note || '-'}</span>`);
+        return `
                         <tr>
                             <td>${fmtDate(p.date)}</td>
-                            <td style="font-family:monospace;font-weight:600;color:var(--primary)">${escapeHtml(p.payNo || p.id?.substring(0,8) || '-')}</td>
+                            <td style="font-family:monospace;font-weight:600;color:var(--primary)">${escapeHtml(p.payNo || p.id?.substring(0, 8) || '-')}</td>
                             <td><span class="badge badge-info">${p.mode || 'Cash'}</span></td>
                             <td>${refCell}</td>
                             <td style="font-weight:600">${escapeHtml(p.partyName)}</td>
@@ -20248,11 +20275,11 @@ async function generateUserPaymentReport() {
                             <td style="text-align:right;color:var(--danger)">${p.discount > 0 ? currency(p.discount) : '-'}</td>
                             <td class="amount-green" style="text-align:right;font-weight:700">${currency(p.totalReduction || p.amount)}</td>
                         </tr>`;
-                    }).join('') || '<tr><td colspan="9"><div class="empty-state"><span class="empty-icon"></span><p>No payments collected in this range</p></div></td></tr>'}
+    }).join('') || '<tr><td colspan="9"><div class="empty-state"><span class="empty-icon"></span><p>No payments collected in this range</p></div></td></tr>'}
                     ${payments.length ? `<tr style="font-weight:800;background:rgba(249,115,22,0.04);border-top:2px solid var(--border)">
                         <td colspan="6" style="text-align:right;font-size:0.85rem;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted)">Grand Total</td>
-                        <td class="amount-green" style="text-align:right">${currency(payments.reduce((s,p)=>s+(p.amount||0),0))}</td>
-                        <td style="text-align:right;color:var(--danger)">${currency(payments.reduce((s,p)=>s+(p.discount||0),0))}</td>
+                        <td class="amount-green" style="text-align:right">${currency(payments.reduce((s, p) => s + (p.amount || 0), 0))}</td>
+                        <td style="text-align:right;color:var(--danger)">${currency(payments.reduce((s, p) => s + (p.discount || 0), 0))}</td>
                         <td class="amount-green" style="text-align:right;font-size:1rem">${currency(totalCollected)}</td>
                     </tr>` : ''}
                     </tbody>
@@ -20270,7 +20297,7 @@ function renderPackers() {
     const isMobile = window.innerWidth < 768;
     const mobileCards = packers.length ? packers.map(p => `
         <div class="card" style="margin-bottom:8px;display:flex;align-items:center;gap:12px;padding:12px 14px">
-            <div style="width:40px;height:40px;border-radius:50%;background:var(--bg-secondary);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:1.2rem;font-weight:700;color:var(--accent)">${(p.name||'?')[0].toUpperCase()}</div>
+            <div style="width:40px;height:40px;border-radius:50%;background:var(--bg-secondary);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:1.2rem;font-weight:700;color:var(--accent)">${(p.name || '?')[0].toUpperCase()}</div>
             <div style="flex:1;min-width:0">
                 <div style="font-weight:700">${escapeHtml(p.name)}</div>
                 ${p.phone ? `<a href="tel:${p.phone}" style="font-size:0.82rem;color:var(--success)">${p.phone}</a>` : '<span style="font-size:0.82rem;color:var(--text-muted)">No phone</span>'}
@@ -20336,7 +20363,7 @@ function renderDeliveryPersons() {
     const isMobile = window.innerWidth < 768;
     const mobileCards = persons.length ? persons.map(p => `
         <div class="card" style="margin-bottom:8px;display:flex;align-items:center;gap:12px;padding:12px 14px">
-            <div style="width:40px;height:40px;border-radius:50%;background:var(--bg-secondary);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:1.2rem;font-weight:700;color:var(--accent)">${(p.name||'?')[0].toUpperCase()}</div>
+            <div style="width:40px;height:40px;border-radius:50%;background:var(--bg-secondary);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:1.2rem;font-weight:700;color:var(--accent)">${(p.name || '?')[0].toUpperCase()}</div>
             <div style="flex:1;min-width:0">
                 <div style="font-weight:700">${escapeHtml(p.name)}</div>
                 ${p.phone ? `<a href="tel:${p.phone}" style="font-size:0.82rem;color:var(--success)">${p.phone}</a>` : ''}
@@ -20448,7 +20475,7 @@ function renderUsers() {
             const override = getUserOverrideSummary(u);
             return `<div class="card" style="margin-bottom:8px;padding:12px 14px">
                 <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
-                    <div style="width:40px;height:40px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-size:1.1rem;font-weight:700;color:#fff;flex-shrink:0">${(u.name||'?')[0].toUpperCase()}</div>
+                    <div style="width:40px;height:40px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-size:1.1rem;font-weight:700;color:#fff;flex-shrink:0">${(u.name || '?')[0].toUpperCase()}</div>
                     <div style="flex:1;min-width:0">
                         <div style="font-weight:700">${escapeHtml(u.name)}</div>
                         <div style="font-size:0.78rem;font-family:monospace;color:var(--accent)">${escapeHtml(u.userId || u.name)}</div>
@@ -21587,14 +21614,14 @@ async function executeSmartReset() {
             'db_stock_ledger', 'db_party_ledger', 'db_delivery'
         ];
         for (const k of idbEntryKeys) {
-            await DB.idb.set(k, []).catch(() => {});
+            await DB.idb.set(k, []).catch(() => { });
             // Also wipe the in-memory cache
             const tableKey = DB.mapTable(k.replace(/^db_/, ''));
             if (DB.cache[tableKey]) DB.cache[tableKey] = [];
         }
         // Reset party balances in memory too
         if (DB.cache['parties']) DB.cache['parties'].forEach(p => p.balance = 0);
-        await DB.idb.set('db_parties', DB.cache['parties'] || []).catch(() => {});
+        await DB.idb.set('db_parties', DB.cache['parties'] || []).catch(() => { });
 
         // Reset inventory stock/batches in memory too, so the UI cannot revive stale negative values.
         const inventoryCache = (DB.cache['inventory'] || DB.get('db_inventory') || []).map(item => ({
@@ -21604,7 +21631,7 @@ async function executeSmartReset() {
         }));
         DB.cache['inventory'] = inventoryCache;
         DB.cache['db_inventory'] = inventoryCache;
-        await DB.idb.set('db_inventory', inventoryCache).catch(() => {});
+        await DB.idb.set('db_inventory', inventoryCache).catch(() => { });
         localStorage.removeItem('db_inventory');
 
         if (DB.cache['no_series']) {
@@ -21614,7 +21641,7 @@ async function executeSmartReset() {
                     : row
             );
             DB.cache['no_series'] = updatedSeries;
-            await DB.idb.set('db_no_series', updatedSeries).catch(() => {});
+            await DB.idb.set('db_no_series', updatedSeries).catch(() => { });
         }
 
         if (window._resetOption === 'all') {
@@ -21722,7 +21749,7 @@ function openDedicatedPartyLedger(partyId) {
 
 function _buildLedgerMobileCards(ledger, partyId) {
     if (!ledger.length) return '<div class="empty-state" style="padding:40px"><div class="empty-icon"></div><p>No transactions recorded yet.</p></div>';
-    const cards = ledger.slice().reverse().map(function(e) {
+    const cards = ledger.slice().reverse().map(function (e) {
         const et = e.type || e.entryType || '-';
         const dn = e.docNo || e.documentNo || '';
         const rs = e.notes || e.reason || '';
@@ -21750,15 +21777,15 @@ function _buildLedgerMobileCards(ledger, partyId) {
             + '<span class="ledg-ref" style="display:none">' + (dn || '-') + '</span>'
             + '<span class="ledg-reason" style="display:none">' + (rs || '-') + '</span>'
             + '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px">'
-            +   '<div style="flex:1;min-width:0;padding-right:8px">'
-            +     '<div style="font-size:0.72rem;color:var(--text-muted)">' + fmtDate(e.date) + ' &middot; <span style="font-weight:600;color:var(--text-primary)">' + et + '</span></div>'
-            +     dnHtml
-            +   '</div>'
-            +   '<div style="font-weight:800;font-size:1rem;color:' + amtColor + '">' + amtSign + currency(Math.abs(e.amount)) + '</div>'
+            + '<div style="flex:1;min-width:0;padding-right:8px">'
+            + '<div style="font-size:0.72rem;color:var(--text-muted)">' + fmtDate(e.date) + ' &middot; <span style="font-weight:600;color:var(--text-primary)">' + et + '</span></div>'
+            + dnHtml
+            + '</div>'
+            + '<div style="font-weight:800;font-size:1rem;color:' + amtColor + '">' + amtSign + currency(Math.abs(e.amount)) + '</div>'
             + '</div>'
             + '<div style="display:flex;justify-content:space-between;align-items:center;font-size:0.78rem">'
-            +   '<span style="color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60%">' + rsShort + '</span>'
-            +   '<span style="color:var(--text-secondary);font-weight:600">Bal: ' + balHtml + '</span>'
+            + '<span style="color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60%">' + rsShort + '</span>'
+            + '<span style="color:var(--text-secondary);font-weight:600">Bal: ' + balHtml + '</span>'
             + '</div>'
             + actHtml
             + '</div>';
@@ -22499,10 +22526,10 @@ function scrollCatalogToTop() {
     // Scroll ALL possible scrollable containers to top
     // page-content is the real scroll container on mobile
     const pc = document.getElementById('page-content');
-    if (pc) { try { pc.scrollTo({ top: 0, behavior: 'smooth' }); } catch(e) { pc.scrollTop = 0; } }
+    if (pc) { try { pc.scrollTo({ top: 0, behavior: 'smooth' }); } catch (e) { pc.scrollTop = 0; } }
     const mc = document.querySelector('.main-content');
-    if (mc) { try { mc.scrollTo({ top: 0, behavior: 'smooth' }); } catch(e) { mc.scrollTop = 0; } }
-    try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch(e) { document.documentElement.scrollTop = 0; }
+    if (mc) { try { mc.scrollTo({ top: 0, behavior: 'smooth' }); } catch (e) { mc.scrollTop = 0; } }
+    try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch (e) { document.documentElement.scrollTop = 0; }
     setTimeout(() => updateCatalogTopButtonVisibility(), 400);
 }
 
@@ -22525,13 +22552,13 @@ function updateCatalogTopButtonVisibility() {
 function updateCatalogStickyFilter() {
     const stickyFilter = document.getElementById('catalog-sticky-filter');
     if (!stickyFilter) return;
-    
+
     const movPillsEl = document.getElementById('catalog-movement-pills');
     const catPillsEl = document.getElementById('catalog-pills');
     const subPillsEl = document.getElementById('catalog-subcat-pills');
-    
+
     stickyFilter.innerHTML = '';
-    
+
     if (catPillsEl && catPillsEl.innerHTML.trim() !== '') {
         const catClone = catPillsEl.cloneNode(true);
         catClone.removeAttribute('id');
@@ -22542,7 +22569,7 @@ function updateCatalogStickyFilter() {
         });
         stickyFilter.appendChild(catClone);
     }
-    
+
     if (subPillsEl && subPillsEl.innerHTML.trim() !== '') {
         const subClone = subPillsEl.cloneNode(true);
         subClone.removeAttribute('id');
@@ -22553,7 +22580,7 @@ function updateCatalogStickyFilter() {
         });
         stickyFilter.appendChild(subClone);
     }
-    
+
     if (movPillsEl && movPillsEl.innerHTML.trim() !== '') {
         const movClone = movPillsEl.cloneNode(true);
         movClone.removeAttribute('id');
@@ -22612,7 +22639,7 @@ function bindCatalogStickyFilter() {
             const delta = _catalogLastScrollY - y;
             const isScrollingUp = delta > 5 && y > 200;
             const isScrollingDown = delta < -5;
-            
+
             if (isScrollingUp) {
                 stickyFilter.classList.add('visible');
             } else if (isScrollingDown || y <= 100) {
@@ -22782,8 +22809,8 @@ async function renderCatalogCardsNative(items) {
         <article class="catalog-native-card ${isLow ? 'is-low' : ''}">
             <button class="catalog-native-media" onclick="viewCatalogItem('${i.id}')">
                 ${(i.imageUrl || i.photo)
-                    ? `<img src="${i.imageUrl || i.photo}" alt="${escapeHtml(i.name)}">`
-                    : `<span>${escapeHtml((i.name || '?').charAt(0).toUpperCase())}</span>`}
+                ? `<img src="${i.imageUrl || i.photo}" alt="${escapeHtml(i.name)}">`
+                : `<span>${escapeHtml((i.name || '?').charAt(0).toUpperCase())}</span>`}
             </button>
             <div class="catalog-native-body">
                 <div class="catalog-native-name">${escapeHtml(i.name)}</div>
@@ -22810,7 +22837,7 @@ async function renderCatalogCardsNative(items) {
                         <button class="catalog-qty-btn" onclick="updateCartQty('${i.id}',1,'${ce.unit}')">+</button>
                         <small>${escapeHtml(ce.unit)}</small>
                     </div>`).join('')}
-                    ${i.secUom ? `<button class="catalog-add-btn" onclick="addToCatalogCart('${i.id}')" style="margin-top:6px">+ More</button>` : '' }
+                    ${i.secUom ? `<button class="catalog-add-btn" onclick="addToCatalogCart('${i.id}')" style="margin-top:6px">+ More</button>` : ''}
                 </div>` : `<button class="catalog-add-btn" onclick="addToCatalogCart('${i.id}')">+ Add</button>`}
             </div>
         </article>`;
@@ -23326,7 +23353,7 @@ async function migrateBatches() {
         }
         await DB.refreshTables(['inventory']);
         showToast(`Migration complete! Updated ${count} items.`, 'success');
-    } catch(err) {
+    } catch (err) {
         showToast("Error executing migration", 'error');
     }
 }
@@ -24255,7 +24282,7 @@ async function renderStaffMaster() {
         ${staff.length ? staff.map(s => `
         <div class="card" style="margin-bottom:8px;padding:0;opacity:${s.status === 'inactive' ? '0.65' : '1'}">
             <div style="display:flex;align-items:center;gap:10px;padding:10px 12px">
-                <div style="width:42px;height:42px;border-radius:50%;background:var(--bg-secondary);display:flex;align-items:center;justify-content:center;font-size:1.1rem;font-weight:700;color:var(--accent);flex-shrink:0">${(s.name||'?')[0].toUpperCase()}</div>
+                <div style="width:42px;height:42px;border-radius:50%;background:var(--bg-secondary);display:flex;align-items:center;justify-content:center;font-size:1.1rem;font-weight:700;color:var(--accent);flex-shrink:0">${(s.name || '?')[0].toUpperCase()}</div>
                 <div style="flex:1;min-width:0">
                     <div style="font-weight:700">${escapeHtml(s.name)}</div>
                     <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:2px">
@@ -24811,8 +24838,8 @@ async function renderHRPayroll() {
             </div>
             <div style="display:flex;gap:6px;flex-wrap:wrap">
                 ${!r.paid
-                ? `<button class="btn btn-primary btn-sm" onclick="markSalaryPaid('${r.s.id}','${escapeHtml(r.s.name)}','${selMonth}',${r.s.monthly_salary || 0},${workingDays},${r.daysEff},${r.earned})">Mark Paid</button>`
-                : `<button class="btn btn-outline btn-sm" onclick="viewPaySlip('${r.s.id}','${selMonth}')">Pay Slip</button><button class="btn btn-warning btn-sm" onclick="resetSalaryPaid('${r.s.id}','${escapeHtml(r.s.name)}','${selMonth}')">Recalc</button>`}
+            ? `<button class="btn btn-primary btn-sm" onclick="markSalaryPaid('${r.s.id}','${escapeHtml(r.s.name)}','${selMonth}',${r.s.monthly_salary || 0},${workingDays},${r.daysEff},${r.earned})">Mark Paid</button>`
+            : `<button class="btn btn-outline btn-sm" onclick="viewPaySlip('${r.s.id}','${selMonth}')">Pay Slip</button><button class="btn btn-warning btn-sm" onclick="resetSalaryPaid('${r.s.id}','${escapeHtml(r.s.name)}','${selMonth}')">Recalc</button>`}
                 <button class="btn btn-outline btn-sm" onclick="openStaffAdvance('${r.s.id}','${escapeHtml(r.s.name)}')">+Advance</button>
             </div>
         </div>`).join('') : '<div class="empty-state"><p>No active staff</p></div>'}
@@ -24821,9 +24848,9 @@ async function renderHRPayroll() {
     <h4 style="margin-bottom:10px;font-size:0.9rem">Advance Records</h4>
     <div style="margin-bottom:20px">
         ${allAdvRecs.length ? allAdvRecs.map(a => {
-            const bal = Math.max(0, (a.amount || 0) - (a.deducted || 0));
-            const statusColor = bal === 0 ? '#22c55e' : bal < (a.amount || 0) ? '#f59e0b' : '#ef4444';
-            return `<div class="card" style="margin-bottom:8px;padding:12px 14px;display:flex;align-items:center;gap:10px">
+                const bal = Math.max(0, (a.amount || 0) - (a.deducted || 0));
+                const statusColor = bal === 0 ? '#22c55e' : bal < (a.amount || 0) ? '#f59e0b' : '#ef4444';
+                return `<div class="card" style="margin-bottom:8px;padding:12px 14px;display:flex;align-items:center;gap:10px">
                 <div style="flex:1;min-width:0">
                     <div style="font-weight:700;font-size:0.88rem">${escapeHtml(a.staff_name || '')}</div>
                     <div style="font-size:0.72rem;color:var(--text-muted)">${fmtDate(a.date)} · ${a.month || ''}</div>
@@ -24835,7 +24862,7 @@ async function renderHRPayroll() {
                     ${(a.deducted || 0) <= 0 ? `<button class="btn-icon" onclick="deleteAdvance('${a.id}')" style="color:var(--danger)"><span class="material-symbols-outlined" style="font-size:1rem">delete</span></button>` : ''}
                 </div>
             </div>`;
-        }).join('') : '<div style="text-align:center;color:var(--text-muted);padding:16px">No advance records</div>'}
+            }).join('') : '<div style="text-align:center;color:var(--text-muted);padding:16px">No advance records</div>'}
     </div>` : `
     <div class="card" style="margin-bottom:20px"><div class="card-body">
     <div style="font-weight:700;margin-bottom:12px">Salary Sheet  ${selMonth}</div>
@@ -24854,17 +24881,17 @@ async function renderHRPayroll() {
             </td>
             <td style="text-align:right">
                 ${!r.paid && r.advPending > 0
-            ? `<input type="number" id="deduct-${r.s.id}" value="${r.toDeduct}" min="0" max="${r.advPending}" step="1" class="form-control" style="width:90px;text-align:right;padding:4px 6px;font-size:0.85rem;color:#ef4444;font-weight:600" oninput="updateNetPayable('${r.s.id}',${r.earned})">`
-            : (r.toDeduct > 0 ? `<span style="color:#ef4444;font-weight:600">- ${currency(r.toDeduct)}</span>` : '<span style="color:var(--text-muted)">-</span>')}
+                    ? `<input type="number" id="deduct-${r.s.id}" value="${r.toDeduct}" min="0" max="${r.advPending}" step="1" class="form-control" style="width:90px;text-align:right;padding:4px 6px;font-size:0.85rem;color:#ef4444;font-weight:600" oninput="updateNetPayable('${r.s.id}',${r.earned})">`
+                    : (r.toDeduct > 0 ? `<span style="color:#ef4444;font-weight:600">- ${currency(r.toDeduct)}</span>` : '<span style="color:var(--text-muted)">-</span>')}
             </td>
             <td style="text-align:right;font-weight:800;color:var(--accent);font-size:1rem"><span id="net-${r.s.id}">${currency(r.net)}</span></td>
             <td><span class="badge ${r.paid ? 'badge-success' : 'badge-warning'}">${r.paid ? 'Paid' : 'Pending'}</span></td>
             <td><div class="action-btns" style="gap:4px">
                 ${!r.paid
-            ? `<button class="btn btn-primary btn-sm" onclick="markSalaryPaid('${r.s.id}','${escapeHtml(r.s.name)}','${selMonth}',${r.s.monthly_salary || 0},${workingDays},${r.daysEff},${r.earned})">Mark Paid</button>`
-            : `<button class="btn btn-outline btn-sm" onclick="viewPaySlip('${r.s.id}','${selMonth}')"> Pay Slip</button>
+                    ? `<button class="btn btn-primary btn-sm" onclick="markSalaryPaid('${r.s.id}','${escapeHtml(r.s.name)}','${selMonth}',${r.s.monthly_salary || 0},${workingDays},${r.daysEff},${r.earned})">Mark Paid</button>`
+                    : `<button class="btn btn-outline btn-sm" onclick="viewPaySlip('${r.s.id}','${selMonth}')"> Pay Slip</button>
                        <button class="btn btn-warning btn-sm" onclick="resetSalaryPaid('${r.s.id}','${escapeHtml(r.s.name)}','${selMonth}')"> Recalc</button>`
-        }
+                }
                 <button class="btn btn-outline btn-sm" onclick="openStaffAdvance('${r.s.id}','${escapeHtml(r.s.name)}')">+Advance</button>
             </div></td>
         </tr>`).join('') : '<tr><td colspan="11"><div class="empty-state"><p>No active staff</p></div></td></tr>'}
@@ -24878,9 +24905,9 @@ async function renderHRPayroll() {
         <thead><tr><th>Staff</th><th>Date</th><th style="text-align:right">Given</th><th style="text-align:right">Deducted</th><th style="text-align:right">Balance</th><th>Notes</th><th>Action</th></tr></thead>
         <tbody>
         ${allAdvRecs.length ? allAdvRecs.map(a => {
-            const bal = Math.max(0, (a.amount || 0) - (a.deducted || 0));
-            const statusColor = bal === 0 ? '#22c55e' : bal < (a.amount || 0) ? '#f59e0b' : '#ef4444';
-            return `<tr>
+                    const bal = Math.max(0, (a.amount || 0) - (a.deducted || 0));
+                    const statusColor = bal === 0 ? '#22c55e' : bal < (a.amount || 0) ? '#f59e0b' : '#ef4444';
+                    return `<tr>
                 <td style="font-weight:600">${escapeHtml(a.staff_name || '')}</td>
                 <td>${fmtDate(a.date)}<div style="font-size:0.72rem;color:var(--text-muted)">${a.month || ''}</div></td>
                 <td style="text-align:right;font-weight:700;color:#ef4444">${currency(a.amount || 0)}</td>
@@ -24889,7 +24916,7 @@ async function renderHRPayroll() {
                 <td style="color:var(--text-muted);font-size:0.85rem">${escapeHtml(a.notes || '-')}</td>
                 <td>${(a.deducted || 0) <= 0 ? `<button class="btn-icon" onclick="deleteAdvance('${a.id}')" title="Delete" style="color:var(--danger)"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>` : ''}</td>
             </tr>`;
-        }).join('') : '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:20px">No advance records</td></tr>'}
+                }).join('') : '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:20px">No advance records</td></tr>'}
         </tbody>
     </table></div>
     </div></div>`}`;
@@ -24937,7 +24964,7 @@ async function viewPaySlip(staffId, month) {
             Paid on: <b>${fmtDate(rec.paid_date)}</b> &nbsp;|&nbsp; By: <b>${escapeHtml(rec.paid_by || '-')}</b>
         </div>
     </div>`,
-    `<button class="btn btn-outline" onclick="window.print()"> Print</button>
+        `<button class="btn btn-outline" onclick="window.print()"> Print</button>
      <button class="btn btn-primary" onclick="closeModal()">Close</button>`);
 }
 async function openStaffAdvance(staffId, staffName) {
@@ -25221,7 +25248,7 @@ async function handleVyaparImportFile(inputEl) {
 function _parseVyaparImportFile(file) {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
-        reader.onload = function(e) {
+        reader.onload = function (e) {
             try {
                 const wb = XLSX.read(e.target.result, { type: 'array', cellDates: true });
                 const ws = wb.Sheets[wb.SheetNames[0]];
@@ -25257,18 +25284,18 @@ function _parseVyaparImportFile(file) {
                         dateVal = get(row, 'date');
                         if (/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4}$/.test(dateVal)) {
                             const parts = dateVal.split(/[\/\-]/);
-                            dateVal = `${parts[2]}-${parts[1].padStart(2,'0')}-${parts[0].padStart(2,'0')}`;
+                            dateVal = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
                         }
                     }
 
                     rows.push({
-                        customerId:   get(row, 'customer_id', 'customerid', 'party_code', 'partycode', 'cust_id'),
+                        customerId: get(row, 'customer_id', 'customerid', 'party_code', 'partycode', 'cust_id'),
                         customerName: get(row, 'customer_name', 'customername', 'party_name', 'partyname', 'party', 'name'),
-                        date:         dateVal || today(),
-                        amount:       parseFloat(get(row, 'amount', 'amt', 'total', 'received') || '0') || 0,
-                        invoiceNo:    get(row, 'invoice_no', 'invoiceno', 'invoice', 'bill_no', 'billno', 'vyapar_invoice_no', 'ref_no'),
-                        mode:         get(row, 'mode', 'payment_mode', 'paymentmode', 'pay_mode', 'method') || 'Cash',
-                        userName:     get(row, 'user_name', 'username', 'collected_by', 'salesman', 'user', 'collector') || currentUser.name,
+                        date: dateVal || today(),
+                        amount: parseFloat(get(row, 'amount', 'amt', 'total', 'received') || '0') || 0,
+                        invoiceNo: get(row, 'invoice_no', 'invoiceno', 'invoice', 'bill_no', 'billno', 'vyapar_invoice_no', 'ref_no'),
+                        mode: get(row, 'mode', 'payment_mode', 'paymentmode', 'pay_mode', 'method') || 'Cash',
+                        userName: get(row, 'user_name', 'username', 'collected_by', 'salesman', 'user', 'collector') || currentUser.name,
                     });
                 }
                 resolve(rows);
@@ -25335,7 +25362,7 @@ function renderVyaparImportTable(rows, parties, invoices) {
                 <select class="vi-party-sel form-control" style="font-size:0.78rem;padding:4px 6px;width:100%" data-idx="${idx}" onchange="onVyaparImportPartyChange(${idx})">
                     <option value="">— Select Party —</option>${partyOpts}
                 </select>
-                ${!r.party ? `<div style="font-size:0.68rem;color:var(--danger);margin-top:2px;white-space:nowrap">Not found: "${escapeHtml((r.customerName || r.customerId).substring(0,20))}"</div>` : ''}
+                ${!r.party ? `<div style="font-size:0.68rem;color:var(--danger);margin-top:2px;white-space:nowrap">Not found: "${escapeHtml((r.customerName || r.customerId).substring(0, 20))}"</div>` : ''}
             </td>
             <td style="padding:6px;white-space:nowrap">
                 <input type="date" class="vi-date form-control" value="${r.date}" style="font-size:0.78rem;padding:4px 6px;min-width:120px" data-idx="${idx}">
@@ -25347,7 +25374,7 @@ function renderVyaparImportTable(rows, parties, invoices) {
                 <select class="vi-inv-sel form-control" style="font-size:0.78rem;padding:4px 6px;width:100%" data-idx="${idx}" id="vi-inv-sel-${idx}">
                     <option value="">Advance / No Invoice</option>${invOpts}
                 </select>
-                ${r.invoiceNo && !r.invoice ? `<div style="font-size:0.68rem;color:var(--warning,#f59e0b);margin-top:2px;white-space:nowrap">Not found: "${escapeHtml(r.invoiceNo.substring(0,20))}"</div>` : ''}
+                ${r.invoiceNo && !r.invoice ? `<div style="font-size:0.68rem;color:var(--warning,#f59e0b);margin-top:2px;white-space:nowrap">Not found: "${escapeHtml(r.invoiceNo.substring(0, 20))}"</div>` : ''}
             </td>
             <td style="padding:6px;min-width:130px">
                 <select class="vi-mode-sel form-control" style="font-size:0.78rem;padding:4px 6px;width:100%" data-idx="${idx}">${modeOpts}</select>
