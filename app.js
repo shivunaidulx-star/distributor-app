@@ -720,19 +720,21 @@ function escapeHtml(str) {
 let _isSaving = false;
 window._saveAndNew = false; // set true by "Save & New" buttons
 window._printAndNew = false; // set true by "Print & New" buttons
+function setSaveGuardButtons(disabled) {
+    document.querySelectorAll('.modal-footer .btn-primary, .modal-actions .btn-primary, .sales-doc-footer .btn, .sales-doc-footer-actions .btn').forEach(b => {
+        b.disabled = disabled;
+        b.style.opacity = disabled ? '0.65' : '';
+    });
+}
 function beginSave(btnSelector) {
     if (_isSaving) return false;
     _isSaving = true;
-    document.querySelectorAll('.modal-footer .btn-primary, .modal-actions .btn-primary').forEach(b => {
-        b.disabled = true; b.style.opacity = '0.65';
-    });
+    setSaveGuardButtons(true);
     return true;
 }
 function endSave() {
     _isSaving = false;
-    document.querySelectorAll('.modal-footer .btn-primary, .modal-actions .btn-primary').forEach(b => {
-        b.disabled = false; b.style.opacity = '';
-    });
+    setSaveGuardButtons(false);
 }
 
 // --- UOM dropdown helper ---
@@ -978,7 +980,7 @@ const ROLE_NAME_MAP = {
 };
 const CUSTOMER_PORTAL_ENABLED = false; // Feature kept in codebase for future relaunch, disabled for current live release.
 function getAppVersion() {
-    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v129';
+    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v133';
 }
 
 const PAGE_LABELS = {
@@ -1176,6 +1178,56 @@ function setPageChromeMode(mode = 'default') {
 function isCompactMobileView() {
     return window.innerWidth <= 768;
 }
+const BOOT_FALLBACK_DELAY_MS = 12000;
+function setBootStatus(title, detail, options = {}) {
+    const {
+        hideSpinner = false,
+        loadingTitle = title,
+        loadingDetail = detail
+    } = options;
+    const errorUI = $('boot-error-ui');
+    const titleEl = $('boot-error-title');
+    const detailEl = $('boot-error-detail');
+    const spinner = document.querySelector('#app-loading .spinner');
+    const loadingTexts = document.querySelectorAll('#app-loading p');
+    if (titleEl) titleEl.textContent = title || 'Startup is taking longer than expected';
+    if (detailEl) detailEl.textContent = detail || 'The app is still trying to connect to local cache and services.';
+    if (errorUI) errorUI.classList.remove('hidden');
+    if (spinner) spinner.style.display = hideSpinner ? 'none' : '';
+    if (loadingTexts[0]) loadingTexts[0].textContent = loadingTitle || 'Loading Prakash Traders...';
+    if (loadingTexts[1]) loadingTexts[1].textContent = loadingDetail || 'Initializing database & workspace';
+}
+function resetBootStatus() {
+    const errorUI = $('boot-error-ui');
+    const spinner = document.querySelector('#app-loading .spinner');
+    if (errorUI) errorUI.classList.add('hidden');
+    if (spinner) spinner.style.display = '';
+}
+
+window.addEventListener('error', event => {
+    const loadingEl = $('app-loading');
+    if (!loadingEl || loadingEl.classList.contains('hidden')) return;
+    const detail = event?.error?.message || event?.message || 'An unexpected script error interrupted startup.';
+    setBootStatus('Boot Interrupted', `Startup stopped with: ${detail}`, {
+        hideSpinner: true,
+        loadingTitle: 'Boot Interrupted',
+        loadingDetail: 'Use Reload first, then Hard Refresh if the app still stalls'
+    });
+});
+
+window.addEventListener('unhandledrejection', event => {
+    const loadingEl = $('app-loading');
+    if (!loadingEl || loadingEl.classList.contains('hidden')) return;
+    const reason = event?.reason;
+    const detail = typeof reason === 'string'
+        ? reason
+        : reason?.message || 'An unresolved startup promise interrupted boot.';
+    setBootStatus('Boot Interrupted', `Startup stopped with: ${detail}`, {
+        hideSpinner: true,
+        loadingTitle: 'Boot Interrupted',
+        loadingDetail: 'Use Reload first, then Hard Refresh if the app still stalls'
+    });
+});
 const loginScreen = $('login-screen');
 const setupWizard = $('setup-wizard');
 const appEl = $('app');
@@ -1513,10 +1565,22 @@ function setupPullToRefresh() {
 async function initApp() {
     const loadingEl = $('app-loading');
     const sidebar = $('sidebar');
+    const bootTimeout = setTimeout(() => {
+        setBootStatus(
+            'Startup is taking longer than expected',
+            'The app is still trying to load local data or contact required services. You can reload, hard refresh, or wait a little longer.',
+            {
+                hideSpinner: false,
+                loadingTitle: 'Still starting Prakash Traders...',
+                loadingDetail: 'Waiting for database, cache, or network dependencies'
+            }
+        );
+    }, BOOT_FALLBACK_DELAY_MS);
 
     try {
         // Customer portal is disabled in the live release for now; keep the future code dormant.
         if (CUSTOMER_PORTAL_ENABLED && cpRestoreSession()) {
+            clearTimeout(bootTimeout);
             if (loadingEl) loadingEl.classList.add('hidden');
             return;
         }
@@ -1551,17 +1615,24 @@ async function initApp() {
         }, true);
 
         // Success: hide loading
+        clearTimeout(bootTimeout);
+        resetBootStatus();
         if (loadingEl) loadingEl.classList.add('hidden');
 
     } catch (err) {
+        clearTimeout(bootTimeout);
         console.error('Boot Error:', err);
-        const errorUI = $('boot-error-ui');
-        if (errorUI) errorUI.classList.remove('hidden');
-        // Keep loading spinner visible but show the error UI
-        const spinner = document.querySelector('#app-loading .spinner');
-        if (spinner) spinner.style.display = 'none';
-        const loadingText = document.querySelector('#app-loading p');
-        if (loadingText) loadingText.textContent = 'Boot Interrupted';
+        setBootStatus(
+            'Boot Interrupted',
+            err && err.message
+                ? `Startup stopped with: ${err.message}`
+                : 'The app could not finish booting. This usually means the local cache, CDN scripts, or database connection did not complete.',
+            {
+                hideSpinner: true,
+                loadingTitle: 'Boot Interrupted',
+                loadingDetail: 'Use Reload first, then Hard Refresh if the app still stalls'
+            }
+        );
     }
 }
 
@@ -1677,13 +1748,14 @@ function initSearchDropdown(inputId, items, onSelect) {
         renderItems(inp.value);
         const isMobileView = window.innerWidth <= 768;
         const maxHeight = isPriorityMobileDropdown && isMobileView
-            ? Math.max(180, Math.min(Math.round(window.innerHeight * 0.34), 280))
-            : 220;
+            ? Math.max(180, Math.min(Math.round(window.innerHeight * 0.40), 320))
+            : 240;
         dd.style.maxHeight = maxHeight + 'px';
         dd.classList.add('open');
+        wrapper.classList.add('has-open-dropdown');
         // Keep extra gap only on larger layouts; on mobile it creates dead space above the keyboard.
         if (isMobileView) {
-            wrapper.style.marginBottom = isPriorityMobileDropdown ? '8px' : '6px';
+            wrapper.style.marginBottom = '0px';
         } else {
             const h = Math.min(maxHeight, (dd._filtered || []).length * 56 + 20);
             wrapper.style.marginBottom = h + 'px';
@@ -1693,6 +1765,7 @@ function initSearchDropdown(inputId, items, onSelect) {
     function closeDD() {
         dd.classList.remove('open');
         highlightIdx = -1;
+        wrapper.classList.remove('has-open-dropdown');
         wrapper.style.marginBottom = '0px';
     }
 
@@ -1709,7 +1782,7 @@ function initSearchDropdown(inputId, items, onSelect) {
     inp.addEventListener('focus', () => {
         setTimeout(() => {
             inp.scrollIntoView({
-                block: window.innerWidth <= 768 ? 'end' : 'nearest',
+                block: window.innerWidth <= 768 ? 'center' : 'nearest',
                 behavior: 'smooth'
             });
         }, 100);
@@ -1757,7 +1830,16 @@ function initSearchDropdown(inputId, items, onSelect) {
 
     inp.addEventListener('blur', () => { setTimeout(closeDD, 200); }, sig);
 
-    return { openDD, closeDD, renderItems };
+    function clear() {
+        inp.value = '';
+        inp.dataset.selectedId = '';
+        inp.dataset.selectedValue = '';
+        dd.innerHTML = '';
+        dd._filtered = [];
+        closeDD();
+    }
+
+    return { openDD, closeDD, renderItems, clear };
 }
 
 function renderSOItemSubModal(categories) {
@@ -1909,9 +1991,11 @@ function renderSOItemSubModal(categories) {
             <div class="doc-item-sheet-card">
                 <div class="doc-input-shell doc-input-shell-focus so-item-search-group" style="margin-bottom:12px">
                     <label>Item Name</label>
-                    <input id="f-so-item-input" class="so-item-search-input search-dropdown-mobile-priority" placeholder="Search item or code">
+                    <div class="search-dropdown-wrapper">
+                        <input id="f-so-item-input" class="so-item-search-input search-dropdown-mobile-priority" placeholder="Search item or code">
+                    </div>
                 </div>
-                <div class="doc-field-grid doc-field-grid-2" style="margin-bottom:12px">
+                <div class="doc-field-grid doc-field-grid-compact-3" style="margin-bottom:10px">
                     <div class="doc-input-shell">
                         <label>Quantity</label>
                         <input type="number" id="f-so-qty" value="1" min="1">
@@ -1920,15 +2004,15 @@ function renderSOItemSubModal(categories) {
                         <label>Unit</label>
                         <select id="f-so-uom" onchange="onSOUomChange()"><option value="">Select Unit</option></select>
                     </div>
-                </div>
-                <div class="doc-input-shell" style="margin-bottom:12px">
-                    <label>MRP</label>
-                    <input type="number" id="f-so-mrp" value="" readonly placeholder="MRP">
-                </div>
-                <div class="doc-field-grid doc-field-grid-2" style="margin-bottom:12px">
                     <div class="doc-input-shell">
                         <label>Rate (Price / Unit)</label>
                         <input type="number" id="f-so-price" value="" min="0" step="0.01" placeholder="Listed">
+                    </div>
+                </div>
+                <div class="doc-field-grid doc-field-grid-2" style="margin-bottom:10px">
+                    <div class="doc-input-shell">
+                        <label>MRP</label>
+                        <input type="number" id="f-so-mrp" value="" readonly placeholder="MRP">
                     </div>
                     <div class="doc-input-shell">
                         <label>Tax Mode</label>
@@ -1977,9 +2061,11 @@ function renderInvoiceItemSubModal(categories, title = 'Add Items to Invoice') {
             <div class="doc-item-sheet-card">
                 <div class="doc-input-shell doc-input-shell-focus" style="margin-bottom:12px">
                     <label>Item Name</label>
-                    <input id="f-inv-item-input" class="search-dropdown-mobile-priority" placeholder="Search item or code">
+                    <div class="search-dropdown-wrapper">
+                        <input id="f-inv-item-input" class="search-dropdown-mobile-priority" placeholder="Search item or code">
+                    </div>
                 </div>
-                <div class="doc-field-grid doc-field-grid-2" style="margin-bottom:12px">
+                <div class="doc-field-grid doc-field-grid-compact-3" style="margin-bottom:10px">
                     <div class="doc-input-shell">
                         <label>Quantity</label>
                         <input type="number" id="f-inv-qty" value="1" min="1">
@@ -1988,15 +2074,15 @@ function renderInvoiceItemSubModal(categories, title = 'Add Items to Invoice') {
                         <label>Unit</label>
                         <select id="f-inv-uom" onchange="onInvUomChange()"><option value="">Select Unit</option></select>
                     </div>
-                </div>
-                <div class="doc-input-shell" style="margin-bottom:12px">
-                    <label>MRP</label>
-                    <input type="number" id="f-inv-mrp" value="" readonly placeholder="MRP">
-                </div>
-                <div class="doc-field-grid doc-field-grid-2" style="margin-bottom:12px">
                     <div class="doc-input-shell">
                         <label>Rate (Price / Unit)</label>
                         <input type="number" id="f-inv-price" value="" min="0" step="0.01" placeholder="Listed">
+                    </div>
+                </div>
+                <div class="doc-field-grid doc-field-grid-2" style="margin-bottom:10px">
+                    <div class="doc-input-shell">
+                        <label>MRP</label>
+                        <input type="number" id="f-inv-mrp" value="" readonly placeholder="MRP">
                     </div>
                     <div class="doc-input-shell">
                         <label>Tax Mode</label>
@@ -3750,19 +3836,35 @@ async function buildAdminCommandCenter(model) {
                     <span>Customize</span>
                 </button>
             </div>
-            <div class="admin-dash-actions-grid">
-                ${getQuickActionKeys(currentUser?.role || 'Admin').map(key => {
-                    const action = ALL_QUICK_ACTIONS.find(x => x.key === key);
-                    if (!action) return '';
-                    const meta = quickActionMeta[key] || { desc: 'Open the workspace and take action fast.', accent: 'var(--primary)' };
-                    return `<button class="admin-dash-action-card" onclick="${action.fn}" style="--action-accent:${meta.accent}">
-                        <span class="admin-dash-action-glow"></span>
-                        <span class="admin-dash-action-icon material-symbols-outlined">${action.icon}</span>
-                        <strong class="admin-dash-action-title">${action.label}</strong>
-                        <span class="admin-dash-action-copy">${meta.desc}</span>
-                        <span class="admin-dash-action-arrow material-symbols-outlined">north_east</span>
-                    </button>`;
-                }).join('')}
+            <div class="admin-dash-action-groups">
+                ${(() => {
+                    const userKeys = getQuickActionKeys(currentUser?.role || 'Admin');
+                    const actions = userKeys.map(key => ({ key, ...ALL_QUICK_ACTIONS.find(x => x.key === key), meta: quickActionMeta[key] || { desc: '', accent: 'var(--primary)' }})).filter(x => x.label);
+                    
+                    const groups = [
+                        { title: 'Sales & Invoicing', keys: ['new-sale', 'payment-in', 'salesorders', 'invoices'] },
+                        { title: 'Inventory & Operations', keys: ['catalog', 'inventory', 'delivery'] },
+                        { title: 'Management', keys: ['parties', 'payments', 'expenses', 'reports'] }
+                    ];
+
+                    return groups.map(g => {
+                        const groupActions = actions.filter(a => g.keys.includes(a.key));
+                        if (!groupActions.length) return '';
+                        return `
+                        <div class="admin-dash-action-group">
+                            <h4 class="admin-dash-group-title">${g.title}</h4>
+                            <div class="admin-dash-actions-grid-new">
+                                ${groupActions.map(a => {
+                                    const isPrimary = a.key === 'new-sale' || a.key === 'payment-in';
+                                    return `<button class="admin-dash-action-card-new ${isPrimary ? 'primary-action' : ''}" onclick="${a.fn}" title="${a.meta.desc}" style="--action-accent:${a.meta.accent}">
+                                        <span class="admin-dash-action-icon-new material-symbols-outlined">${a.icon}</span>
+                                        <strong class="admin-dash-action-title-new">${a.label}</strong>
+                                    </button>`;
+                                }).join('')}
+                            </div>
+                        </div>`;
+                    }).join('');
+                })()}
             </div>
         </section>
 
@@ -8077,7 +8179,9 @@ function renderSalesOrderFormShell(config) {
                 </div>
                 <div class="doc-input-shell doc-input-shell-focus">
                     <label>Customer Name *</label>
-                    <input id="f-so-party" class="search-dropdown-mobile-priority" value="${escapeHtml(partyName || '')}" data-selected-id="${escapeHtml(partyId || '')}" placeholder="Search customer or type new name">
+                    <div class="search-dropdown-wrapper">
+                        <input id="f-so-party" class="search-dropdown-mobile-priority" value="${escapeHtml(partyName || '')}" data-selected-id="${escapeHtml(partyId || '')}" placeholder="Search customer or type new name">
+                    </div>
                 </div>
             </section>
 
@@ -8233,12 +8337,15 @@ function onSOUomChange() {
     setDocItemMeta('so', item);
 }
 function addSOLine() {
-    const sel = $('f-so-item-input'); if (!sel || !sel.value) return;
+    const sel = $('f-so-item-input'); if (!sel || !sel.value) return false;
 
     const match = sel.value.match(/^(.*) \[Avail:/);
     let itemName = match ? match[1].trim() : sel.value.trim();
     const itemObj = DB.get('db_inventory').find(i => i.name.toLowerCase() === itemName.toLowerCase() || (i.itemCode || '').toLowerCase() === itemName.toLowerCase());
-    if (!itemObj) return alert("Invalid item");
+    if (!itemObj) {
+        alert("Invalid item");
+        return false;
+    }
 
     const qty = +$('f-so-qty').value || 1;
     const itemId = itemObj.id;
@@ -8266,7 +8373,7 @@ function addSOLine() {
     const co = DB.getObj('db_company') || {};
     if (totalPrimaryQty > avail && !co.allowNegativeStock) {
         alert(`Cannot add ${qty} ${unit}. Only ${avail} ${primaryUnit} available in stock after existing reservations.`);
-        return;
+        return false;
     }
 
     // Check volume pricing based on total primary quantity
@@ -8291,23 +8398,48 @@ function addSOLine() {
 
     // Use custom price if entered, otherwise use unit listed price
     const customPrice = $('f-so-price').value;
+    const hasCustomPrice = customPrice !== '';
     const price = customPrice !== '' ? +customPrice : unitListedPrice;
 
-    // Add the new line with listedPrice for comparison
     const roundedPrice = +price.toFixed(2);
     const itemGstRate = +(itemObj.gstRate || 0);
-    const lineAmount = +(qty * roundedPrice).toFixed(2);
-    const lineBase = itemGstRate > 0 ? +(lineAmount / (1 + itemGstRate / 100)).toFixed(2) : lineAmount;
-    const lineTax = +(lineAmount - lineBase).toFixed(2);
-    soItems.push({
-        itemId, name: itemObj.name, qty, price: roundedPrice,
-        listedPrice: +unitListedPrice.toFixed(2),
-        purchasePrice: +unitPurchasePrice.toFixed(2),
-        discountAmt: 0, discountPct: 0,
-        amount: lineAmount, unit, primaryQty,
-        gstRate: itemGstRate, baseAmount: lineBase, taxAmount: lineTax,
-        hsn: itemObj.hsn || ''
-    });
+    const defaultLinePrice = +unitListedPrice.toFixed(2);
+    const matchingLine = soItems.find(li =>
+        li.itemId === itemId &&
+        (li.unit || primaryUnit) === unit &&
+        +((li.discountAmt || 0)).toFixed(2) === 0 &&
+        +((li.discountPct || 0)).toFixed(2) === 0 &&
+        (
+            (!hasCustomPrice && Math.abs((li.price || 0) - (li.listedPrice || li.price || 0)) < 0.001) ||
+            (hasCustomPrice && Math.abs((li.price || 0) - roundedPrice) < 0.001)
+        )
+    );
+
+    if (matchingLine) {
+        const existingPrimaryQty = getLinePrimaryQty(matchingLine);
+        matchingLine.qty = +((matchingLine.qty || 0) + qty).toFixed(4);
+        matchingLine.primaryQty = +(existingPrimaryQty + primaryQty).toFixed(4);
+        matchingLine.purchasePrice = +unitPurchasePrice.toFixed(2);
+        matchingLine.gstRate = itemGstRate;
+        matchingLine.hsn = itemObj.hsn || matchingLine.hsn || '';
+        if (hasCustomPrice) matchingLine.price = roundedPrice;
+        matchingLine.amount = +(((matchingLine.qty || 0) * matchingLine.price) - (matchingLine.discountAmt || 0)).toFixed(2);
+        matchingLine.baseAmount = itemGstRate > 0 ? +(matchingLine.amount / (1 + itemGstRate / 100)).toFixed(2) : matchingLine.amount;
+        matchingLine.taxAmount = +(matchingLine.amount - matchingLine.baseAmount).toFixed(2);
+    } else {
+        const lineAmount = +(qty * roundedPrice).toFixed(2);
+        const lineBase = itemGstRate > 0 ? +(lineAmount / (1 + itemGstRate / 100)).toFixed(2) : lineAmount;
+        const lineTax = +(lineAmount - lineBase).toFixed(2);
+        soItems.push({
+            itemId, name: itemObj.name, qty, price: roundedPrice,
+            listedPrice: defaultLinePrice,
+            purchasePrice: +unitPurchasePrice.toFixed(2),
+            discountAmt: 0, discountPct: 0,
+            amount: lineAmount, unit, primaryQty,
+            gstRate: itemGstRate, baseAmount: lineBase, taxAmount: lineTax,
+            hsn: itemObj.hsn || ''
+        });
+    }
 
     // Retroactively update existing lines for the same item if the price tier changed
     soItems.forEach(li => {
@@ -8320,21 +8452,22 @@ function addSOLine() {
             // If the price was NOT manually overridden, update it to new volume tier
             if (Math.abs(li.price - li.listedPrice) < 0.001) {
                 li.price = +(lineUnitListedPrice.toFixed(2));
-                li.amount = +(li.qty * li.price).toFixed(2);
+                li.amount = +(((li.qty || 0) * li.price) - (li.discountAmt || 0)).toFixed(2);
             }
             li.listedPrice = +(lineUnitListedPrice.toFixed(2));
+            li.baseAmount = itemGstRate > 0 ? +(li.amount / (1 + itemGstRate / 100)).toFixed(2) : li.amount;
+            li.taxAmount = +(li.amount - li.baseAmount).toFixed(2);
         }
     });
 
-    showToast('Item added to order', 'success');
+    showToast(matchingLine ? 'Item quantity updated in order' : 'Item added to order', 'success');
     renderSOLines();
     if (window._soItemDropdown) window._soItemDropdown.clear();
     resetDocItemPicker('so');
+    return true;
 }
 function addSOLineAndClose() {
-    const before = soItems.length;
-    addSOLine();
-    if (soItems.length > before) closeSoItemSubModal();
+    if (addSOLine()) closeSoItemSubModal();
 }
 function removeSOLine(i) { soItems.splice(i, 1); renderSOLines(); }
 function updateSOLine(idx, field, value) {
@@ -8617,7 +8750,9 @@ async function saveSalesOrder(id) {
         await logSalesmanAction(editId ? 'Edited Order' : 'Created Order', savedOrderNo);
 
         const andNew = window._saveAndNew; window._saveAndNew = false;
-        closeModal();
+        const modalOverlay = $('modal-overlay');
+        if (modalOverlay && !modalOverlay.classList.contains('hidden')) closeModal();
+        else endSave();
         if (window._catalogOrderMode) {
             window._catalogOrderMode = false;
             catalogCart = [];
@@ -9544,6 +9679,7 @@ async function saveDirectPurchaseInvoice() {
 
         await Promise.all(ops);
         poItems = [];
+        endSave();
         await navigateTo('purchaseorders');
         showToast(`Purchase Invoice ${invNo} saved! Stock updated.`, 'success');
     } catch (e) {
@@ -9629,7 +9765,7 @@ async function savePurchaseOrder() {
     if (!poItems.length) { endSave(); return alert('Add items'); }
     const parties = await DB.getAll('parties');
     const party = parties.find(p => String(p.id) === String(partyId));
-    if (!party) return alert('Supplier not found. Please re-select from the dropdown.');
+    if (!party) { endSave(); return alert('Supplier not found. Please re-select from the dropdown.'); }
 
     const po = {
         poNo: await nextNumber('PO-'),
@@ -10483,13 +10619,16 @@ async function onInvUomChange() {
 }
 
 async function addInvoiceLine() {
-    const sel = $('f-inv-item-input'); if (!sel || !sel.value) return;
+    const sel = $('f-inv-item-input'); if (!sel || !sel.value) return false;
 
     const match = sel.value.match(/^(.*) \[Avail:/);
     let itemName = match ? match[1].trim() : sel.value.trim();
     const inventory = await DB.getAll('inventory');
     const itemObj = inventory.find(i => i.name.toLowerCase() === itemName.toLowerCase() || (i.itemCode || '').toLowerCase() === itemName.toLowerCase());
-    if (!itemObj) return alert("Invalid item");
+    if (!itemObj) {
+        alert("Invalid item");
+        return false;
+    }
 
     const type = $('f-inv-type').value;
     const qty = +$('f-inv-qty').value || 1;
@@ -10516,7 +10655,7 @@ async function addInvoiceLine() {
         const co = DB.getObj('db_company') || {};
         if (totalPrimaryQty > avail && !co.allowNegativeStock) {
             alert(`Cannot add ${qty} ${unit}. Only ${avail} ${primaryUnit} available in stock after existing reservations.`);
-            return;
+            return false;
         }
 
         let baseListedPrice = +(itemObj.salePrice || 0);
@@ -10544,24 +10683,55 @@ async function addInvoiceLine() {
 
     // Use custom price if entered, otherwise use unit listed price
     const customPrice = $('f-inv-price').value;
+    const hasCustomPrice = customPrice !== '';
     const price = customPrice !== '' ? +customPrice : unitListedPrice;
 
     const itemGstRate = +(itemObj.gstRate || 0);
-    const lineAmount = qty * price;
-    const lineBase = itemGstRate > 0 ? +(lineAmount / (1 + itemGstRate / 100)).toFixed(2) : lineAmount;
-    const lineTax = +(lineAmount - lineBase).toFixed(2);
-    invoiceItems.push({
-        itemId, name: itemObj.name, qty, price,
-        listedPrice: +unitListedPrice.toFixed(2),
-        purchasePrice: +unitPurchasePrice.toFixed(2),
-        discountAmt: 0, discountPct: 0,
-        amount: lineAmount, unit, primaryQty, gstRate: itemGstRate,
-        primaryUnit,
-        secUom,
-        secUomRatio: secRatio,
-        baseAmount: lineBase, taxAmount: lineTax,
-        hsn: itemObj.hsn || '', mrp: itemObj.mrp || itemObj.salePrice || price
-    });
+    const roundedPrice = +(+price).toFixed(2);
+    const defaultLinePrice = +unitListedPrice.toFixed(2);
+    const matchingLine = invoiceItems.find(li =>
+        li.itemId === itemId &&
+        (li.unit || primaryUnit) === unit &&
+        +((li.discountAmt || 0)).toFixed(2) === 0 &&
+        +((li.discountPct || 0)).toFixed(2) === 0 &&
+        (
+            (!hasCustomPrice && Math.abs((li.price || 0) - (li.listedPrice || li.price || 0)) < 0.001) ||
+            (hasCustomPrice && Math.abs((li.price || 0) - roundedPrice) < 0.001)
+        )
+    );
+
+    if (matchingLine) {
+        const existingPrimaryQty = getLinePrimaryQty(matchingLine);
+        matchingLine.qty = +((matchingLine.qty || 0) + qty).toFixed(4);
+        matchingLine.primaryQty = +(existingPrimaryQty + primaryQty).toFixed(4);
+        matchingLine.purchasePrice = +unitPurchasePrice.toFixed(2);
+        matchingLine.gstRate = itemGstRate;
+        matchingLine.primaryUnit = primaryUnit;
+        matchingLine.secUom = secUom;
+        matchingLine.secUomRatio = secRatio;
+        matchingLine.hsn = itemObj.hsn || matchingLine.hsn || '';
+        matchingLine.mrp = itemObj.mrp || itemObj.salePrice || roundedPrice;
+        if (hasCustomPrice) matchingLine.price = roundedPrice;
+        matchingLine.amount = +(((matchingLine.qty || 0) * matchingLine.price) - (matchingLine.discountAmt || 0)).toFixed(2);
+        matchingLine.baseAmount = itemGstRate > 0 ? +(matchingLine.amount / (1 + itemGstRate / 100)).toFixed(2) : matchingLine.amount;
+        matchingLine.taxAmount = +(matchingLine.amount - matchingLine.baseAmount).toFixed(2);
+    } else {
+        const lineAmount = +(qty * roundedPrice).toFixed(2);
+        const lineBase = itemGstRate > 0 ? +(lineAmount / (1 + itemGstRate / 100)).toFixed(2) : lineAmount;
+        const lineTax = +(lineAmount - lineBase).toFixed(2);
+        invoiceItems.push({
+            itemId, name: itemObj.name, qty, price: roundedPrice,
+            listedPrice: defaultLinePrice,
+            purchasePrice: +unitPurchasePrice.toFixed(2),
+            discountAmt: 0, discountPct: 0,
+            amount: lineAmount, unit, primaryQty, gstRate: itemGstRate,
+            primaryUnit,
+            secUom,
+            secUomRatio: secRatio,
+            baseAmount: lineBase, taxAmount: lineTax,
+            hsn: itemObj.hsn || '', mrp: itemObj.mrp || itemObj.salePrice || roundedPrice
+        });
+    }
 
     // Sync GST% field from item rates  if all items share one rate, show it; else leave as-is
     const activeRates = [...new Set(invoiceItems.map(li => li.gstRate || 0).filter(r => r > 0))];
@@ -10583,22 +10753,23 @@ async function addInvoiceLine() {
                 // If the price was NOT manually overridden, update it to new volume tier
                 if (Math.abs(li.price - li.listedPrice) < 0.001) {
                     li.price = +(lineUnitListedPrice.toFixed(2));
-                    li.amount = li.qty * li.price;
+                    li.amount = +(((li.qty || 0) * li.price) - (li.discountAmt || 0)).toFixed(2);
                 }
                 li.listedPrice = +(lineUnitListedPrice.toFixed(2));
+                li.baseAmount = itemGstRate > 0 ? +(li.amount / (1 + itemGstRate / 100)).toFixed(2) : li.amount;
+                li.taxAmount = +(li.amount - li.baseAmount).toFixed(2);
             }
         });
     }
 
-    showToast('Item added to invoice', 'success');
+    showToast(matchingLine ? 'Item quantity updated in invoice' : 'Item added to invoice', 'success');
     renderInvoiceLines();
     if (window._invItemDropdown) window._invItemDropdown.clear();
     resetDocItemPicker('inv');
+    return true;
 }
 async function addInvoiceLineAndClose() {
-    const before = invoiceItems.length;
-    await addInvoiceLine();
-    if (invoiceItems.length > before) closeInvItemSubModal();
+    if (await addInvoiceLine()) closeInvItemSubModal();
 }
 function removeInvoiceLine(idx) {
     invoiceItems.splice(idx, 1);
@@ -10979,6 +11150,7 @@ async function saveInvoice(id) {
         window._printAndNew = false;
 
         await DB.refreshTables(['invoices', 'inventory', 'parties', 'sales_orders', 'party_ledger', 'stock_ledger', 'expenses']);
+        endSave();
         showToast(`Invoice ${invNo} saved!`, 'success');
 
         if (andPrint && savedInv && savedInv.id) {
@@ -11290,21 +11462,27 @@ function renderInvoiceFormShell(config) {
                         <input type="date" id="f-inv-due-date" value="${escapeHtml(dueDate || '')}" placeholder="Select party...">
                     </div>
                 </div>
-                <div class="sales-doc-grid sales-doc-grid-2">
-                    <div class="doc-input-shell">
-                        <label>Delivery Date</label>
-                        <input type="date" id="f-inv-delivery-date" value="${escapeHtml(deliveryDate || today())}" onchange="this.dataset.manuallySet='1'">
+                <details class="sales-doc-details">
+                    <summary>Advanced Details</summary>
+                    <div class="sales-doc-details-body">
+                        <p class="sales-doc-details-note">Show delivery, crate, and external invoice references only when needed.</p>
+                        <div class="sales-doc-grid ${type === 'sale' ? 'sales-doc-grid-3' : 'sales-doc-grid-2'}">
+                            <div class="doc-input-shell">
+                                <label>Delivery Date</label>
+                                <input type="date" id="f-inv-delivery-date" value="${escapeHtml(deliveryDate || today())}" onchange="this.dataset.manuallySet='1'">
+                            </div>
+                            <div class="doc-input-shell">
+                                <label>Box / Crate No.</label>
+                                <input type="text" id="f-inv-box-no" value="${escapeHtml(boxNo || '')}" placeholder="B-001, C-05">
+                            </div>
+                            ${type === 'sale' ? `
+                            <div class="doc-input-shell">
+                                <label>Vyapar Invoice No.</label>
+                                <input id="f-vyapar-inv-no" value="${escapeHtml(vyaparInvoiceNo || 'Auto')}" placeholder="Auto-assigned">
+                            </div>` : ''}
+                        </div>
                     </div>
-                    <div class="doc-input-shell">
-                        <label>Box / Crate No.</label>
-                        <input type="text" id="f-inv-box-no" value="${escapeHtml(boxNo || '')}" placeholder="B-001, C-05">
-                    </div>
-                </div>
-                ${type === 'sale' ? `
-                <div class="doc-input-shell">
-                    <label>Vyapar Invoice No.</label>
-                    <input id="f-vyapar-inv-no" value="${escapeHtml(vyaparInvoiceNo || 'Auto')}" placeholder="Auto-assigned">
-                </div>` : ''}
+                </details>
             </section>
 
             <section class="sales-doc-panel">
@@ -11322,7 +11500,9 @@ function renderInvoiceFormShell(config) {
                 </div>` : `
                 <div class="doc-input-shell doc-input-shell-focus">
                     <label>${escapeHtml(partyLabel)} *</label>
-                    <input id="f-inv-party" class="search-dropdown-mobile-priority" value="${escapeHtml(partyName || '')}" data-selected-id="${escapeHtml(partyId || '')}" placeholder="Search name or mobile">
+                    <div class="search-dropdown-wrapper">
+                        <input id="f-inv-party" class="search-dropdown-mobile-priority" value="${escapeHtml(partyName || '')}" data-selected-id="${escapeHtml(partyId || '')}" placeholder="Search name or mobile">
+                    </div>
                 </div>`}
             </section>
 
@@ -11778,6 +11958,7 @@ async function saveEditedInvoice(id) {
         await Promise.all([...affectedItemIds].map(itemId => recalculateStockLedger(itemId)));
 
         await DB.refreshTables(['invoices', 'inventory', 'parties', 'expenses', 'stock_ledger', 'party_ledger']);
+        endSave();
         showToast(`Invoice ${inv.invoiceNo} updated successfully!`, 'success');
         navigateTo('invoices');
     } catch (err) {
