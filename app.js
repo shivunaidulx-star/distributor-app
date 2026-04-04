@@ -65,18 +65,54 @@ const DB = {
         }
     },
 
-    async loadCacheFromIDB() {
+    _hydrateIdbCache(key, val) {
+        if (typeof val === 'undefined') return null;
+        this.cache[key] = val;
+        this.cache[this.mapTable(key.replace(/^db_/, ''))] = val;
+        return val;
+    },
+
+    async loadCacheFromIDB(keys = null) {
         try {
             await this.idb.init();
-            const keys = ['db_users', 'db_categories', 'db_uom', 'db_company', 'db_tax_settings', 'db_parties', 'db_inventory', 'db_sales_orders', 'db_invoices', 'db_payments', 'db_expenses', 'db_party_ledger', 'db_stock_ledger', 'db_packers', 'db_delivery_persons', 'db_delivery'];
-            await Promise.all(keys.map(async k => {
+            const cacheKeys = Array.isArray(keys) && keys.length
+                ? keys
+                : ['db_users', 'db_categories', 'db_uom', 'db_company', 'db_tax_settings', 'db_parties', 'db_inventory', 'db_sales_orders', 'db_invoices', 'db_payments', 'db_expenses', 'db_packers', 'db_delivery_persons', 'db_delivery'];
+            await Promise.all(cacheKeys.map(async k => {
                 const val = await this.idb.get(k);
-                if (val) {
-                    this.cache[k] = val;
-                    this.cache[this.mapTable(k.replace(/^db_/, ''))] = val;
-                }
+                if (val) this._hydrateIdbCache(k, val);
             }));
         } catch (e) { console.error('IDB load error', e); }
+    },
+
+    async loadTableFromIDB(table) {
+        const actualTable = this.mapTable(table.replace(/^db_/, ''));
+        const cacheKey = 'db_' + actualTable;
+        if (this.cache[actualTable]) return this.cache[actualTable];
+        try {
+            await this.idb.init();
+            const val = await this.idb.get(cacheKey);
+            if (!val) return null;
+            return this._hydrateIdbCache(cacheKey, val);
+        } catch (e) {
+            console.warn(`IDB fallback load error (${actualTable}):`, e.message);
+            return null;
+        }
+    },
+
+    buildFetchQuery(table) {
+        const actualTable = this.mapTable(table);
+        let query = supabaseClient.from(actualTable).select('*');
+        if (actualTable === 'party_ledger' || actualTable === 'stock_ledger') {
+            const cutoff = new Date();
+            cutoff.setMonth(cutoff.getMonth() - 6);
+            query = query.gte('date', cutoff.toISOString().split('T')[0]).order('date', { ascending: false });
+        } else if (actualTable === 'gps_logs') {
+            const cutoff = new Date();
+            cutoff.setDate(cutoff.getDate() - 7);
+            query = query.gte('timestamp', cutoff.toISOString()).order('timestamp', { ascending: false }).limit(500);
+        }
+        return query;
     },
 
     // Hybrid ls helper (now backed by in-memory + optional IDB persistence)
@@ -105,16 +141,14 @@ const DB = {
             }
         }
     },
-    async refresh() {
+    async refresh(options = {}) {
+        const { nonBlockingBoot = false } = options;
         // Core tables needed for Login & Dashboard basic structure
         const coreTables = ['users', 'categories', 'uom'];
         // Batch 1: high-priority tables needed for first page render
         const batch1 = ['parties', 'inventory', 'sales_orders', 'invoices', 'payments'];
         // Batch 2: lower-priority tables loaded after a short delay
         const batch2 = ['expenses', 'packers', 'delivery_persons', 'delivery'];
-        // Ledger tables: load with date filter (last 6 months) to avoid huge payloads
-        const ledgerCutoff = new Date(); ledgerCutoff.setMonth(ledgerCutoff.getMonth() - 6);
-        const ledgerDateFrom = ledgerCutoff.toISOString().split('T')[0];
 
         // Mark last refresh time
         this.cache._lastRefresh = Date.now();
@@ -122,21 +156,32 @@ const DB = {
         // 1. Pre-load local cache from IndexedDB so offline mode responds instantly
         await this.loadCacheFromIDB();
 
-        // 2. Load settings and core tables FIRST - block the boot sequence for these
-        try {
-            const [settings, ...coreResults] = await Promise.all([
-                this.loadSettings(),
-                ...coreTables.map(t => supabaseClient.from(t).select('*'))
-            ]);
-            coreResults.forEach((res, i) => {
-                if (res.error) console.error(`Core table load error (${coreTables[i]}):`, res.error);
-                else {
-                    const camelData = this._toCamel(res.data || []);
-                    this.cache[coreTables[i]] = camelData;
-                    this.idb.set('db_' + coreTables[i], camelData).catch(console.error);
+        const withT = (q, ms = 20000) => Promise.race([q, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]);
+        const loadCoreAndSettings = async () => {
+            try {
+                await withT(this.loadSettings(), 10000);
+            } catch (e) {
+                console.warn('Settings refresh skipped:', e.message);
+            }
+            const coreResults = await Promise.allSettled(coreTables.map(t => withT(this.buildFetchQuery(t), 12000)));
+            coreResults.forEach((result, i) => {
+                if (result.status === 'rejected') {
+                    console.warn(`Core table load timeout/error (${coreTables[i]}):`, result.reason?.message || result.reason);
+                    return;
                 }
+                const res = result.value;
+                if (res.error) {
+                    console.error(`Core table load error (${coreTables[i]}):`, res.error);
+                    return;
+                }
+                const camelData = this._toCamel(res.data || []);
+                this.cache[coreTables[i]] = camelData;
+                this.idb.set('db_' + coreTables[i], camelData).catch(console.error);
             });
-        } catch (e) { console.error('Core Refresh Error:', e); }
+        };
+
+        if (nonBlockingBoot) loadCoreAndSettings().catch(e => console.warn('Deferred core refresh failed:', e.message));
+        else await loadCoreAndSettings();
 
         const _bgLoad = (actualTable, query) => {
             Promise.resolve(query).then(res => {
@@ -171,21 +216,18 @@ const DB = {
             });
         };
 
-        // Helper: wrap query with 20s timeout to prevent hanging
-        const withT = (q) => Promise.race([q, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 20000))]);
-
         // 3. Batch 1: fire immediately (most-needed tables)
-        batch1.forEach(t => _bgLoad(this.mapTable(t), withT(supabaseClient.from(this.mapTable(t)).select('*'))));
+        batch1.forEach(t => _bgLoad(this.mapTable(t), withT(this.buildFetchQuery(t))));
 
         // 4. Batch 2: fire after 2s delay so batch1 gets bandwidth priority
         setTimeout(() => {
-            batch2.forEach(t => _bgLoad(this.mapTable(t), withT(supabaseClient.from(this.mapTable(t)).select('*'))));
+            batch2.forEach(t => _bgLoad(this.mapTable(t), withT(this.buildFetchQuery(t))));
         }, 2000);
 
         // 5. Ledger tables: load last 6 months only (unbounded = very slow on large data)
         setTimeout(() => {
-            _bgLoad('party_ledger', withT(supabaseClient.from('party_ledger').select('*').gte('date', ledgerDateFrom).order('date', { ascending: false })));
-            _bgLoad('stock_ledger', withT(supabaseClient.from('stock_ledger').select('*').gte('date', ledgerDateFrom).order('date', { ascending: false })));
+            _bgLoad('party_ledger', withT(this.buildFetchQuery('party_ledger')));
+            _bgLoad('stock_ledger', withT(this.buildFetchQuery('stock_ledger')));
         }, 4000);
 
         // gps_logs: NOT auto-loaded — fetch on demand in GPS admin view only
@@ -234,7 +276,7 @@ const DB = {
             return Promise.race([promise, t]);
         };
         const results = await Promise.allSettled(
-            tableList.map(t => withTimeout(supabaseClient.from(this.mapTable(t)).select('*')))
+            tableList.map(t => withTimeout(this.buildFetchQuery(t)))
         );
         let allSuccess = true;
         results.forEach((result, i) => {
@@ -349,18 +391,12 @@ const DB = {
         const actualTable = this.mapTable(table);
         // Return from cache if available (populated by background refresh)
         if (this.cache[actualTable] && this.cache[actualTable].length > 0) return this.cache[actualTable];
-        // For large ledger/log tables use date filter to avoid fetching all-time data
-        let query = supabaseClient.from(actualTable).select('*');
-        if (actualTable === 'party_ledger' || actualTable === 'stock_ledger') {
-            const cutoff = new Date(); cutoff.setMonth(cutoff.getMonth() - 6);
-            query = query.gte('date', cutoff.toISOString().split('T')[0]).order('date', { ascending: false });
-        } else if (actualTable === 'gps_logs') {
-            const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 7);
-            query = query.gte('timestamp', cutoff.toISOString()).order('timestamp', { ascending: false }).limit(500);
-        }
+        const query = this.buildFetchQuery(actualTable);
         const { data, error } = await query;
         if (error) {
             console.warn(`Offline or Error fetching ${actualTable}. Falling back to IDB Cache.`);
+            const idbFallback = await this.loadTableFromIDB(actualTable);
+            if (Array.isArray(idbFallback)) return idbFallback;
             return this.get(actualTable) || [];
         }
         const camelData = this._toCamel(data) || [];
@@ -980,7 +1016,7 @@ const ROLE_NAME_MAP = {
 };
 const CUSTOMER_PORTAL_ENABLED = false; // Feature kept in codebase for future relaunch, disabled for current live release.
 function getAppVersion() {
-    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v144';
+    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v145';
 }
 
 const PAGE_LABELS = {
@@ -1186,13 +1222,32 @@ function getSalesDocLayoutToggleInnerHtml() {
 
 function syncSalesDocLayoutModeUi() {
     const meta = getSalesDocLayoutModeMeta();
-    const shouldCompact = document.body.classList.contains('sales-doc-page-open') && meta.compact;
-    document.body.classList.toggle('sales-doc-compact-mode', shouldCompact);
-    document.querySelectorAll('.sales-doc-view-toggle').forEach(btn => {
+    const shouldCompact = document.body.classList.contains('sales-doc-page-open') && window.innerWidth < 1100 && meta.compact;
+    const isDesktopSalesDoc = document.body.classList.contains('sales-doc-page-open') && window.innerWidth >= 1100;
+    const sidebar = $('sidebar');
+    const mainContent = document.querySelector('.main-content');
+    document.body.classList.toggle('sales-doc-desktop-open', isDesktopSalesDoc);
+    if (sidebar) {
+        if (isDesktopSalesDoc) {
+            sidebar.classList.remove('open');
+            sidebar.style.display = 'none';
+        } else {
+            sidebar.style.display = '';
+        }
+    }
+    if (mainContent) {
+        mainContent.style.marginLeft = isDesktopSalesDoc ? '0' : '';
+        mainContent.style.width = isDesktopSalesDoc ? '100%' : '';
+    }
+    document.body.classList.remove('sales-doc-compact-mode');
+    document.querySelectorAll('.sales-doc-view-toggle, .sales-doc-panel-toggle').forEach(btn => {
         btn.innerHTML = getSalesDocLayoutToggleInnerHtml();
         btn.setAttribute('aria-label', `${meta.label} sales fields`);
         btn.setAttribute('title', `${meta.label} sales fields`);
         btn.dataset.layout = meta.compact ? 'compact' : 'expanded';
+    });
+    document.querySelectorAll('[data-sales-doc-details-panel]').forEach(panel => {
+        panel.classList.toggle('is-collapsed', shouldCompact);
     });
 }
 
@@ -1211,14 +1266,19 @@ function toggleSalesDocLayoutMode() {
 }
 
 function renderSalesDocHeaderActions(tagText) {
-    const meta = getSalesDocLayoutModeMeta();
     return `
             <div class="sales-doc-header-actions">
                 <div class="sales-doc-header-tag">${escapeHtml(tagText || '')}</div>
-                <button type="button" class="sales-doc-view-toggle" onclick="toggleSalesDocLayoutMode()" aria-label="${meta.label} sales fields" title="${meta.label} sales fields">
-                    ${getSalesDocLayoutToggleInnerHtml()}
-                </button>
             </div>`;
+}
+
+function renderSalesDocPanelToggle(sectionLabel) {
+    const meta = getSalesDocLayoutModeMeta();
+    const label = sectionLabel || 'details';
+    return `
+        <button type="button" class="sales-doc-panel-toggle sales-doc-view-toggle" onclick="toggleSalesDocLayoutMode()" aria-label="${meta.label} ${escapeHtml(label)}" title="${meta.label} ${escapeHtml(label)}">
+            ${getSalesDocLayoutToggleInnerHtml()}
+        </button>`;
 }
 
 function setDocFormMode(isOpen) {
@@ -1651,7 +1711,7 @@ async function initApp() {
             return;
         }
 
-        await DB.refresh(); // Populate cache (core only) immediately
+        await DB.refresh({ nonBlockingBoot: true }); // Warm boot from IDB immediately; finish cloud refresh in background
 
         // Check for main app session
         if (dmRestoreSession()) {
@@ -1668,6 +1728,7 @@ async function initApp() {
         if (logoutBtn) logoutBtn.addEventListener('click', (e) => { e.preventDefault(); logout(); });
         $('sidebar-close').addEventListener('click', () => sidebar.classList.remove('open'));
         $('sidebar-toggle').addEventListener('click', () => sidebar.classList.toggle('open'));
+        window.addEventListener('resize', syncSalesDocLayoutModeUi, { passive: true });
         $('modal-close').addEventListener('click', closeModal);
         $('modal-overlay').addEventListener('click', e => { if (e.target === $('modal-overlay')) closeModal(); });
         document.querySelectorAll('.nav-item').forEach(item => {
@@ -8571,6 +8632,7 @@ function renderSalesOrderFormShell(config) {
         cancelAction,
         primaryAction
     } = config;
+    const orderDetailsCompact = window.innerWidth < 1100 && isSalesDocCompactMode();
     return `
     <div class="sales-doc-shell">
         ${editId ? `<input type="hidden" id="f-so-edit-id" value="${editId}">` : ''}
@@ -8583,12 +8645,13 @@ function renderSalesOrderFormShell(config) {
             ${renderSalesDocHeaderActions(orderNo)}
         </div>
         <div class="sales-doc-body">
-            <section class="sales-doc-panel">
+            <section class="sales-doc-panel ${orderDetailsCompact ? 'is-collapsed' : ''}" data-sales-doc-details-panel="so">
                 <div class="sales-doc-section-head">
                     <div>
                         <h3>Order Details</h3>
                         <p>Keep the essentials visible on one mobile screen.</p>
                     </div>
+                    ${renderSalesDocPanelToggle('order details')}
                 </div>
                 <div class="sales-doc-grid sales-doc-grid-2">
                     <div class="doc-input-shell">
@@ -9402,7 +9465,8 @@ function renderSOLines() {
     if (!el) return;
     if (!window._soExpandedLines) window._soExpandedLines = new Set();
 
-    const forceExpanded = isCompactMobileView();
+    const isDenseDesktop = window.innerWidth >= 1100;
+    const forceExpanded = isCompactMobileView() || isDenseDesktop;
     el.innerHTML = soItems.map((li, i) => {
         const edited = li.listedPrice !== undefined && Math.abs(li.price - li.listedPrice) > 0.01;
         const borderClass = li._priceAlert ? 'is-alert' : edited ? 'is-edited' : '';
@@ -9416,11 +9480,12 @@ function renderSOLines() {
             edited ? `Listed ${currency(li.listedPrice)}` : ''
         ].filter(Boolean);
         return `
-        <div class="sales-line-card ${borderClass}">
+        <div class="sales-line-card ${borderClass}${isDenseDesktop ? ' is-dense' : ''}">
             <div class="sales-line-head" onclick="${forceExpanded ? '' : `toggleSOLine(${i})`}">
                 <div class="sales-line-index">${i + 1}</div>
                 <div class="sales-line-copy">
                     <div class="sales-line-name">${escapeHtml(li.name)}</div>
+                    ${!isDenseDesktop ? `
                     ${renderCompactMetricRow({
             qtyInputHtml: `<input type="number" class="doc-line-compact-input" value="${li.qty}" min="1" inputmode="decimal" onchange="updateSOLine(${i},'qty',this.value)" onclick="event.stopPropagation()" onfocus="event.stopPropagation()">`,
             uom: li.unit || 'Pcs',
@@ -9429,7 +9494,7 @@ function renderSOLines() {
             extraClass: 'sales-line-compact-grid'
         })}
                     ${summaryBits.length ? `<div class="sales-line-summary-note">${escapeHtml(summaryBits.join(' | '))}</div>` : ''}
-                    ${li._priceAlert ? `<div class="sales-line-summary-note is-alert">Below purchase price ${currency(li.purchasePrice)}</div>` : ''}
+                    ${li._priceAlert ? `<div class="sales-line-summary-note is-alert">Below purchase price ${currency(li.purchasePrice)}</div>` : ''}` : ''}
                 </div>
                 <button class="sales-line-delete" onclick="event.stopPropagation();removeSOLine(${i})">${msIcon('delete')}</button>
             </div>
@@ -9457,7 +9522,7 @@ function renderSOLines() {
                         <strong>${currency(li.amount)}</strong>
                     </div>
                 </div>
-                ${li.gstRate ? `<div class="sales-line-note">Base ${currency(li.baseAmount || li.amount)} + GST ${li.gstRate}%: ${currency(li.taxAmount || 0)}</div>` : ''}
+                ${!isDenseDesktop && li.gstRate ? `<div class="sales-line-note">Base ${currency(li.baseAmount || li.amount)} + GST ${li.gstRate}%: ${currency(li.taxAmount || 0)}</div>` : ''}
                 ${li._priceAlert ? `<div class="sales-line-note sales-line-note-danger">Selling below purchase price (${currency(li.purchasePrice)})</div>` : ''}
             </div>` : ''}
         </div>`;
@@ -11640,8 +11705,9 @@ async function saveInvoice(id) {
         window._saveAndNew = false;
         window._printAndNew = false;
 
-        await DB.refreshTables(['invoices', 'inventory', 'parties', 'sales_orders', 'party_ledger', 'stock_ledger', 'expenses']);
+        await DB.refreshTables(['invoices', 'inventory', 'parties', 'sales_orders', 'expenses']);
         endSave();
+        DB.refreshTables(['party_ledger', 'stock_ledger']).catch(err => console.warn('Deferred invoice ledger refresh failed:', err.message));
         showToast(`Invoice ${invNo} saved!`, 'success');
 
         if (andPrint && savedInv && savedInv.id) {
@@ -11917,6 +11983,7 @@ function renderInvoiceFormShell(config) {
         showSaveAndNew,
         bannerHtml
     } = config;
+    const invoiceDetailsCompact = window.innerWidth < 1100 && isSalesDocCompactMode();
     return `
     <div class="sales-doc-shell invoice-doc-shell">
         <div class="sales-doc-header">
@@ -11932,12 +11999,13 @@ function renderInvoiceFormShell(config) {
             <input type="hidden" id="f-inv-from-order" value="">
             <input type="hidden" id="f-inv-type" value="${escapeHtml(type)}">
 
-            <section class="sales-doc-panel">
+            <section class="sales-doc-panel ${invoiceDetailsCompact ? 'is-collapsed' : ''}" data-sales-doc-details-panel="inv">
                 <div class="sales-doc-section-head">
                     <div>
                         <h3>Invoice Details</h3>
                         <p>Minimal, fast, and stable on mobile screens.</p>
                     </div>
+                    ${renderSalesDocPanelToggle('invoice details')}
                 </div>
                 <div class="sales-doc-grid sales-doc-grid-3">
                     <div class="doc-input-shell">
@@ -12058,6 +12126,7 @@ function renderInvoiceFormShell(config) {
 function renderInvoiceLines() {
     const el = $('inv-lines-list');
     if (!el) return;
+    const isDenseDesktop = window.innerWidth >= 1100;
     el.innerHTML = invoiceItems.map((li, i) => {
         const edited = li.listedPrice !== undefined && Math.abs(li.price - li.listedPrice) > 0.01;
         const borderClass = li._priceAlert ? 'is-alert' : edited ? 'is-edited' : '';
@@ -12067,11 +12136,12 @@ function renderInvoiceLines() {
             edited ? `Listed ${currency(li.listedPrice)}` : ''
         ].filter(Boolean);
         return `
-        <div class="sales-line-card ${borderClass}">
+        <div class="sales-line-card ${borderClass}${isDenseDesktop ? ' is-dense' : ''}">
             <div class="sales-line-head">
                 <div class="sales-line-index">${i + 1}</div>
                 <div class="sales-line-copy">
                     <div class="sales-line-name">${escapeHtml(li.name)}</div>
+                    ${!isDenseDesktop ? `
                     ${renderCompactMetricRow({
             qtyInputHtml: `<input type="number" class="doc-line-compact-input" value="${li.qty}" min="0.001" step="any" inputmode="decimal" onchange="updateInvoiceLine(${i},'qty',this.value)">`,
             uom: li.unit || 'Pcs',
@@ -12080,7 +12150,7 @@ function renderInvoiceLines() {
             extraClass: 'sales-line-compact-grid'
         })}
                     ${summaryBits.length ? `<div class="sales-line-summary-note">${escapeHtml(summaryBits.join(' | '))}</div>` : ''}
-                    ${li._priceAlert ? `<div class="sales-line-summary-note is-alert">Below purchase price ${currency(li.purchasePrice)}</div>` : ''}
+                    ${li._priceAlert ? `<div class="sales-line-summary-note is-alert">Below purchase price ${currency(li.purchasePrice)}</div>` : ''}` : ''}
                 </div>
                 <button class="sales-line-delete" onclick="removeInvoiceLine(${i})">${msIcon('delete')}</button>
             </div>
@@ -12107,7 +12177,7 @@ function renderInvoiceLines() {
                         <strong>${currency(li.amount)}</strong>
                     </div>
                 </div>
-                ${li.gstRate ? `<div class="sales-line-note">Base ${currency(li.baseAmount || li.amount)} + GST ${li.gstRate}%: ${currency(li.taxAmount || 0)}</div>` : ''}
+                ${!isDenseDesktop && li.gstRate ? `<div class="sales-line-note">Base ${currency(li.baseAmount || li.amount)} + GST ${li.gstRate}%: ${currency(li.taxAmount || 0)}</div>` : ''}
                 ${li._priceAlert ? `<div class="sales-line-note sales-line-note-danger">Selling below purchase price (${currency(li.purchasePrice)})</div>` : ''}
             </div>
         </div>`;
@@ -12492,8 +12562,9 @@ async function saveEditedInvoice(id) {
         for (const li of persistedItems) { if (li.itemId) affectedItemIds.add(li.itemId); }
         await Promise.all([...affectedItemIds].map(itemId => recalculateStockLedger(itemId)));
 
-        await DB.refreshTables(['invoices', 'inventory', 'parties', 'expenses', 'stock_ledger', 'party_ledger']);
+        await DB.refreshTables(['invoices', 'inventory', 'parties', 'expenses']);
         endSave();
+        DB.refreshTables(['stock_ledger', 'party_ledger']).catch(err => console.warn('Deferred edited-invoice ledger refresh failed:', err.message));
         showToast(`Invoice ${inv.invoiceNo} updated successfully!`, 'success');
         navigateTo('invoices');
     } catch (err) {

@@ -5835,6 +5835,9 @@ body.catalog-page-open .omnibox-container {
 .sales-doc-view-toggle span {
     line-height: 1;
 }
+.sales-doc-panel-toggle {
+    flex-shrink: 0;
+}
 .sales-doc-body {
     width: min(100%, 780px);
     margin: 0 auto;
@@ -5867,6 +5870,90 @@ body.catalog-page-open .omnibox-container {
     margin: 2px 0 0;
     font-size: 0.74rem;
     color: var(--text-muted);
+}
+.sales-doc-panel.is-collapsed {
+    padding: 10px;
+    border-radius: 16px;
+}
+.sales-doc-panel.is-collapsed .sales-doc-section-head {
+    gap: 8px;
+    margin-bottom: 8px;
+}
+.sales-doc-panel.is-collapsed .sales-doc-section-head h3 {
+    font-size: 0.84rem;
+}
+.sales-doc-panel.is-collapsed .sales-doc-section-head p {
+    font-size: 0.68rem;
+}
+.sales-doc-panel.is-collapsed .sales-doc-grid,
+.sales-doc-panel.is-collapsed .doc-field-grid {
+    gap: 6px;
+    margin-bottom: 6px;
+}
+.sales-doc-panel.is-collapsed .sales-doc-grid:last-child,
+.sales-doc-panel.is-collapsed .doc-field-grid:last-child {
+    margin-bottom: 0;
+}
+.sales-doc-panel.is-collapsed .doc-input-shell {
+    gap: 2px;
+    padding: 5px 8px;
+    border-radius: 12px;
+}
+.sales-doc-panel.is-collapsed .doc-input-shell label {
+    font-size: 0.68rem;
+}
+.sales-doc-panel.is-collapsed .doc-input-shell input,
+.sales-doc-panel.is-collapsed .doc-input-shell select,
+.sales-doc-panel.is-collapsed .doc-input-shell textarea {
+    min-height: 18px;
+    font-size: 0.88rem;
+    line-height: 1.15;
+}
+.sales-doc-panel.is-collapsed .doc-input-shell textarea {
+    min-height: 54px;
+}
+.sales-doc-panel.is-collapsed .sales-doc-details summary {
+    padding: 8px 10px;
+    font-size: 0.74rem;
+}
+.sales-doc-panel.is-collapsed .sales-doc-details-note {
+    font-size: 0.7rem;
+}
+@media (min-width: 1100px) {
+    body.sales-doc-page-open .sidebar {
+        display: none !important;
+    }
+    body.sales-doc-page-open .main-content {
+        margin-left: 0 !important;
+        width: 100% !important;
+    }
+    body.sales-doc-page-open .page-content,
+    body.sales-doc-page-open #page-content,
+    body.sales-doc-page-open .sales-doc-shell {
+        width: 100% !important;
+        max-width: none !important;
+    }
+    body.sales-doc-page-open .sales-doc-header {
+        padding: 14px 24px;
+    }
+    body.sales-doc-page-open .sales-doc-body {
+        width: 100% !important;
+        max-width: none !important;
+        margin: 0 !important;
+        padding: 18px 24px calc(104px + env(safe-area-inset-bottom));
+    }
+    body.sales-doc-page-open .sales-doc-footer {
+        padding-left: 24px;
+        padding-right: 24px;
+    }
+    body.sales-doc-page-open .sales-doc-footer-actions {
+        width: 100% !important;
+        max-width: none !important;
+        margin: 0 !important;
+    }
+    .sales-doc-panel-toggle {
+        display: none !important;
+    }
 }
 .sales-doc-grid {
     display: grid;
