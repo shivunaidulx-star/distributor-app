@@ -906,6 +906,11 @@ table { border-collapse: collapse; width: 100%; }
 .badge-danger { background: var(--danger-soft); color: var(--danger); }
 .badge-warning { background: var(--warning-soft); color: var(--warning); }
 .badge-info { background: var(--info-soft); color: var(--info); }
+.badge-delivered {
+    background: #dcfce7;
+    color: #166534;
+    border: 1px solid #86efac;
+}
 
 .amount-green { color: var(--success); font-weight: 600; }
 .amount-red { color: var(--danger); font-weight: 600; }
@@ -3758,7 +3763,7 @@ body.modal-open .bottom-nav { display: none !important; }
 .admin-dash-panel-head h3,
 .admin-dash-spotlight-head h3 {
     font-size: 1.04rem;
-    font-weight: 800;
+    font-weight: 900;
     letter-spacing: -0.02em;
 }
 .admin-dash-panel-eyebrow {
@@ -3813,13 +3818,13 @@ body.modal-open .bottom-nav { display: none !important; }
     gap: 12px;
 }
 .admin-dash-command-radar .admin-dash-panel-eyebrow {
-    color: rgba(255,247,237,0.72);
+    color: rgba(15,23,42,0.68);
 }
 .admin-dash-command-radar-head h3 {
     font-size: 1.08rem;
-    font-weight: 800;
+    font-weight: 900;
     letter-spacing: -0.02em;
-    color: #fffdf8;
+    color: var(--text-primary);
 }
 .admin-dash-command-radar-badge {
     min-width: 104px;
@@ -3849,12 +3854,17 @@ body.modal-open .bottom-nav { display: none !important; }
     margin-top: 12px;
     font-size: 0.84rem;
     line-height: 1.6;
-    color: rgba(255,247,237,0.82);
+    color: rgba(15,23,42,0.74);
 }
 .admin-dash-command-radar-list {
     display: grid;
     gap: 10px;
     margin-top: 16px;
+    max-height: 430px;
+    overflow-y: auto;
+    padding-right: 4px;
+    scrollbar-width: thin;
+    overscroll-behavior: contain;
 }
 .admin-dash-command-radar-list .admin-dash-radar-item {
     border-color: rgba(255,255,255,0.14);
@@ -3876,14 +3886,46 @@ body.modal-open .bottom-nav { display: none !important; }
 }
 .admin-dash-command-radar-list .admin-dash-radar-title strong,
 .admin-dash-command-radar-list .admin-dash-radar-top b {
-    color: #fffdf8;
+    color: var(--text-primary);
+    font-weight: 900;
 }
 .admin-dash-command-radar-list .admin-dash-radar-title span:last-child,
 .admin-dash-command-radar-list .admin-dash-radar-meta small {
-    color: rgba(255,247,237,0.74);
+    color: rgba(15,23,42,0.64);
 }
 .admin-dash-command-radar-list .admin-dash-radar-meter {
     background: rgba(255,255,255,0.10);
+}
+.admin-dash-command-radar-side {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 8px;
+}
+.admin-dash-command-radar-controls {
+    display: flex;
+    gap: 6px;
+}
+.admin-dash-scroll-btn {
+    width: 32px;
+    height: 32px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 10px;
+    border: 1px solid rgba(15,23,42,0.12);
+    background: rgba(255,255,255,0.88);
+    color: var(--text-primary);
+    box-shadow: 0 6px 18px rgba(15,23,42,0.08);
+    transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+.admin-dash-scroll-btn:hover {
+    transform: translateY(-1px);
+    border-color: rgba(249,115,22,0.22);
+    box-shadow: 0 10px 18px rgba(15,23,42,0.10);
+}
+.admin-dash-scroll-btn .material-symbols-outlined {
+    font-size: 1.1rem;
 }
 .admin-dash-meter {
     position: relative;
