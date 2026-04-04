@@ -980,7 +980,7 @@ const ROLE_NAME_MAP = {
 };
 const CUSTOMER_PORTAL_ENABLED = false; // Feature kept in codebase for future relaunch, disabled for current live release.
 function getAppVersion() {
-    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v143';
+    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v144';
 }
 
 const PAGE_LABELS = {
@@ -1153,10 +1153,74 @@ function getLegacyExtraPermsFromAllowKeys(allowKeys) {
 let currentUser = null;
 let currentPage = 'dashboard';
 let currentLedgerPartyId = null;
+let salesDocLayoutModeCache = null;
 
 // --- DOM Refs ---
 const $ = id => document.getElementById(id);
 const msIcon = (name, className = '', style = '') => `<span class="material-symbols-outlined${className ? ' ' + className : ''}"${style ? ` style="${style}"` : ''}>${name}</span>`;
+const SALES_DOC_LAYOUT_STORAGE_KEY = 'salesDocLayoutMode';
+
+function isSalesDocCompactMode() {
+    if (salesDocLayoutModeCache !== null) return salesDocLayoutModeCache === 'compact';
+    try {
+        salesDocLayoutModeCache = localStorage.getItem(SALES_DOC_LAYOUT_STORAGE_KEY) === 'expanded' ? 'expanded' : 'compact';
+    } catch (err) {
+        salesDocLayoutModeCache = 'compact';
+    }
+    return salesDocLayoutModeCache === 'compact';
+}
+
+function getSalesDocLayoutModeMeta() {
+    const compact = isSalesDocCompactMode();
+    return {
+        compact,
+        label: compact ? 'Maximize' : 'Minimize',
+        icon: compact ? 'open_in_full' : 'close_fullscreen'
+    };
+}
+
+function getSalesDocLayoutToggleInnerHtml() {
+    const meta = getSalesDocLayoutModeMeta();
+    return `${msIcon(meta.icon, '', 'font-size:1rem')}<span>${meta.label}</span>`;
+}
+
+function syncSalesDocLayoutModeUi() {
+    const meta = getSalesDocLayoutModeMeta();
+    const shouldCompact = document.body.classList.contains('sales-doc-page-open') && meta.compact;
+    document.body.classList.toggle('sales-doc-compact-mode', shouldCompact);
+    document.querySelectorAll('.sales-doc-view-toggle').forEach(btn => {
+        btn.innerHTML = getSalesDocLayoutToggleInnerHtml();
+        btn.setAttribute('aria-label', `${meta.label} sales fields`);
+        btn.setAttribute('title', `${meta.label} sales fields`);
+        btn.dataset.layout = meta.compact ? 'compact' : 'expanded';
+    });
+}
+
+function setSalesDocLayoutMode(compact) {
+    salesDocLayoutModeCache = compact ? 'compact' : 'expanded';
+    try {
+        localStorage.setItem(SALES_DOC_LAYOUT_STORAGE_KEY, salesDocLayoutModeCache);
+    } catch (err) {
+        // Keep the in-memory fallback when storage is unavailable.
+    }
+    syncSalesDocLayoutModeUi();
+}
+
+function toggleSalesDocLayoutMode() {
+    setSalesDocLayoutMode(!isSalesDocCompactMode());
+}
+
+function renderSalesDocHeaderActions(tagText) {
+    const meta = getSalesDocLayoutModeMeta();
+    return `
+            <div class="sales-doc-header-actions">
+                <div class="sales-doc-header-tag">${escapeHtml(tagText || '')}</div>
+                <button type="button" class="sales-doc-view-toggle" onclick="toggleSalesDocLayoutMode()" aria-label="${meta.label} sales fields" title="${meta.label} sales fields">
+                    ${getSalesDocLayoutToggleInnerHtml()}
+                </button>
+            </div>`;
+}
+
 function setDocFormMode(isOpen) {
     document.body.classList.toggle('doc-form-open', !!isOpen);
 }
@@ -1166,7 +1230,7 @@ function setDashboardSingleViewMode(isOpen) {
     if (host) host.classList.toggle('dashboard-single-view-host', !!isOpen);
 }
 function setPageChromeMode(mode = 'default') {
-    document.body.classList.remove('sales-doc-page-open', 'catalog-page-open');
+    document.body.classList.remove('sales-doc-page-open', 'catalog-page-open', 'sales-doc-compact-mode');
     setDocFormMode(false);
     setDashboardSingleViewMode(false);
     if (mode === 'sales-doc') {
@@ -1180,6 +1244,7 @@ function setPageChromeMode(mode = 'default') {
         const sf = document.getElementById('catalog-sticky-filter');
         if (sf) sf.classList.remove('visible');
     }
+    syncSalesDocLayoutModeUi();
 }
 function isCompactMobileView() {
     return window.innerWidth <= 768;
@@ -1883,10 +1948,10 @@ function attachMobileKeyboardScrollFix(inputEl) {
             const scrollTarget = inputEl.closest('.sales-doc-field, .doc-input-shell, .form-group, .search-dropdown-wrapper') || inputEl;
             scrollTarget.scrollIntoView({
                 behavior: 'smooth',
-                block: insideSalesDoc ? 'center' : 'nearest',
+                block: 'start',
                 inline: 'nearest'
             });
-        }, 300);
+        }, 150);
     }, sig);
 
     inputEl.addEventListener('blur', () => {
@@ -8515,7 +8580,7 @@ function renderSalesOrderFormShell(config) {
                 <h2>${escapeHtml(title)}</h2>
                 <p>${escapeHtml(subtitle)}</p>
             </div>
-            <div class="sales-doc-header-tag">${escapeHtml(orderNo)}</div>
+            ${renderSalesDocHeaderActions(orderNo)}
         </div>
         <div class="sales-doc-body">
             <section class="sales-doc-panel">
@@ -11860,7 +11925,7 @@ function renderInvoiceFormShell(config) {
                 <h2>${escapeHtml(title)}</h2>
                 <p>${escapeHtml(subtitle)}</p>
             </div>
-            <div class="sales-doc-header-tag">${escapeHtml(invoiceNo)}</div>
+            ${renderSalesDocHeaderActions(invoiceNo)}
         </div>
         <div class="sales-doc-body">
             ${bannerHtml || ''}

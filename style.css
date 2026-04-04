@@ -281,6 +281,7 @@ table { border-collapse: collapse; width: 100%; }
    ============================================ */
 .form-group {
     margin-bottom: 18px;
+    scroll-margin-top: calc(var(--topbar-height) + 10px);
 }
 
 .form-group label {
@@ -5800,6 +5801,13 @@ body.catalog-page-open .omnibox-container {
     font-size: 0.74rem;
     color: var(--text-muted);
 }
+.sales-doc-header-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+    flex-shrink: 0;
+}
 .sales-doc-header-tag {
     padding: 7px 10px;
     border-radius: 999px;
@@ -5808,6 +5816,24 @@ body.catalog-page-open .omnibox-container {
     font-size: 0.74rem;
     font-weight: 800;
     white-space: nowrap;
+}
+.sales-doc-view-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 34px;
+    padding: 0 11px;
+    border-radius: 999px;
+    border: 1px solid rgba(59,130,246,0.18);
+    background: rgba(59,130,246,0.08);
+    color: #1d4ed8;
+    font-size: 0.74rem;
+    font-weight: 800;
+    white-space: nowrap;
+}
+.sales-doc-view-toggle span {
+    line-height: 1;
 }
 .sales-doc-body {
     width: min(100%, 780px);
@@ -5998,6 +6024,7 @@ body.catalog-page-open .omnibox-container {
     border-radius: 14px;
     background: #fff;
     border: 1px solid rgba(0,0,0,0.1);
+    scroll-margin-top: calc(var(--topbar-height) + 10px);
 }
 .doc-input-shell-focus {
     border-color: rgba(59,130,246,0.45);
@@ -6020,10 +6047,158 @@ body.catalog-page-open .omnibox-container {
     font-size: 0.96rem;
     line-height: 1.25;
     box-shadow: none !important;
+    width: 100%;
 }
 .doc-input-shell textarea {
     resize: vertical;
     min-height: 64px;
+}
+.sales-doc-page-open.sales-doc-compact-mode .sales-doc-header {
+    gap: 10px;
+    padding: 10px 12px;
+}
+.sales-doc-page-open.sales-doc-compact-mode .sales-doc-back {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+}
+.sales-doc-page-open.sales-doc-compact-mode .sales-doc-header-copy h2 {
+    font-size: 0.94rem;
+}
+.sales-doc-page-open.sales-doc-compact-mode .sales-doc-header-copy p {
+    font-size: 0.68rem;
+}
+.sales-doc-page-open.sales-doc-compact-mode .sales-doc-header-tag {
+    padding: 6px 9px;
+    font-size: 0.7rem;
+}
+.sales-doc-page-open.sales-doc-compact-mode .sales-doc-view-toggle {
+    min-height: 32px;
+    padding: 0 10px;
+    font-size: 0.72rem;
+}
+.sales-doc-page-open.sales-doc-compact-mode .sales-doc-body {
+    width: min(100%, 720px);
+    padding: 8px 10px calc(96px + env(safe-area-inset-bottom));
+}
+.sales-doc-page-open.sales-doc-compact-mode .sales-doc-panel {
+    padding: 10px;
+    border-radius: 16px;
+    margin-bottom: 8px;
+}
+.sales-doc-page-open.sales-doc-compact-mode .sales-doc-section-head {
+    gap: 8px;
+    margin-bottom: 8px;
+}
+.sales-doc-page-open.sales-doc-compact-mode .sales-doc-section-head h3 {
+    font-size: 0.84rem;
+}
+.sales-doc-page-open.sales-doc-compact-mode .sales-doc-section-head p {
+    font-size: 0.68rem;
+}
+.sales-doc-page-open.sales-doc-compact-mode .sales-doc-grid,
+.sales-doc-page-open.sales-doc-compact-mode .doc-field-grid {
+    gap: 6px;
+    margin-bottom: 6px;
+}
+.sales-doc-page-open.sales-doc-compact-mode .sales-doc-grid:last-child,
+.sales-doc-page-open.sales-doc-compact-mode .doc-field-grid:last-child {
+    margin-bottom: 0;
+}
+.sales-doc-page-open.sales-doc-compact-mode .doc-input-shell {
+    gap: 2px;
+    padding: 5px 8px;
+    border-radius: 12px;
+}
+.sales-doc-page-open.sales-doc-compact-mode .doc-input-shell label {
+    font-size: 0.68rem;
+}
+.sales-doc-page-open.sales-doc-compact-mode .doc-input-shell input,
+.sales-doc-page-open.sales-doc-compact-mode .doc-input-shell select,
+.sales-doc-page-open.sales-doc-compact-mode .doc-input-shell textarea {
+    min-height: 18px;
+    font-size: 0.88rem;
+    line-height: 1.15;
+}
+.sales-doc-page-open.sales-doc-compact-mode .doc-input-shell textarea {
+    min-height: 54px;
+}
+.sales-doc-page-open.sales-doc-compact-mode .sales-doc-inline-btn {
+    min-height: 34px;
+    padding: 7px 10px;
+    font-size: 0.78rem;
+}
+.sales-doc-page-open.sales-doc-compact-mode .sales-doc-details summary {
+    padding: 8px 10px;
+    font-size: 0.74rem;
+}
+.sales-doc-page-open.sales-doc-compact-mode .sales-doc-details-note {
+    font-size: 0.7rem;
+}
+.sales-doc-page-open.sales-doc-compact-mode .sales-doc-footer-actions .btn {
+    min-height: 38px;
+    font-size: 0.84rem;
+}
+.sales-doc-page-open.sales-doc-compact-mode .sales-line-list {
+    gap: 8px;
+}
+.sales-doc-page-open.sales-doc-compact-mode .sales-line-card {
+    border-radius: 18px;
+}
+.sales-doc-page-open.sales-doc-compact-mode .sales-line-head {
+    gap: 8px;
+    padding: 12px 12px 10px;
+}
+.sales-doc-page-open.sales-doc-compact-mode .sales-line-copy {
+    gap: 6px;
+}
+.sales-doc-page-open.sales-doc-compact-mode .sales-line-name {
+    font-size: 0.88rem;
+}
+.sales-doc-page-open.sales-doc-compact-mode .sales-line-meta,
+.sales-doc-page-open.sales-doc-compact-mode .sales-line-summary-note,
+.sales-doc-page-open.sales-doc-compact-mode .sales-line-summary span {
+    font-size: 0.68rem;
+}
+.sales-doc-page-open.sales-doc-compact-mode .sales-line-summary strong {
+    font-size: 0.9rem;
+}
+.sales-doc-page-open.sales-doc-compact-mode .sales-line-delete {
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
+}
+.sales-doc-page-open.sales-doc-compact-mode .sales-line-editor {
+    padding: 0 12px 12px;
+}
+.sales-doc-page-open.sales-doc-compact-mode .sales-line-grid {
+    gap: 8px;
+    padding-top: 10px;
+}
+.sales-doc-page-open.sales-doc-compact-mode .sales-line-field {
+    gap: 5px;
+}
+.sales-doc-page-open.sales-doc-compact-mode .sales-line-field span,
+.sales-doc-page-open.sales-doc-compact-mode .sales-line-amount span {
+    font-size: 0.68rem;
+}
+.sales-doc-page-open.sales-doc-compact-mode .sales-line-field input {
+    min-height: 38px;
+    padding: 8px 10px;
+    border-radius: 12px;
+    font-size: 0.88rem;
+}
+.sales-doc-page-open.sales-doc-compact-mode .sales-line-amount {
+    gap: 4px;
+    padding: 8px 10px;
+    border-radius: 12px;
+}
+.sales-doc-page-open.sales-doc-compact-mode .sales-line-amount strong {
+    font-size: 0.94rem;
+}
+.sales-doc-page-open.sales-doc-compact-mode .sales-line-note {
+    margin-top: 8px;
+    font-size: 0.72rem;
 }
 .doc-input-shell input:focus,
 .doc-input-shell select:focus,
@@ -6357,8 +6532,16 @@ body.catalog-page-open .omnibox-container {
     .sales-doc-header-copy h2 {
         font-size: 1rem;
     }
+    .sales-doc-header-actions {
+        gap: 4px;
+    }
     .sales-doc-header-tag {
         display: none;
+    }
+    .sales-doc-view-toggle {
+        min-height: 32px;
+        padding: 0 10px;
+        font-size: 0.72rem;
     }
     .sales-doc-body {
         padding: 10px 10px calc(104px + env(safe-area-inset-bottom));
