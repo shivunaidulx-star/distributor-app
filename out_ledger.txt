@@ -1,0 +1,36 @@
+5827: 
+5828: function createStockLedgerInsert({
+7758:             const adjDate = dateStr && /^\d{4}-\d{2}-\d{2}$/.test(dateStr) ? dateStr : today();
+7759:             pendingStockImports.push({ item, actualQty, adjDate, entryType: isIncrease ? 'Positive Adj' : 'Negative Adj', reason: (reason || 'Excel Import') + ' (imported)' });
+10164:                 itemName: item.name,
+10165:                 entryType: 'Purchase',
+11623:             if (invType === 'sale' && reservedReleaseQty > 0) {
+11624:                 ops.push(createStockLedgerInsert({
+11627:                     itemName: item.name,
+11628:                     entryType: 'Reserved Release',
+11635:             }
+11636:             ops.push(createStockLedgerInsert({
+11639:                 itemName: item.name,
+11640:                 entryType: invType === 'sale' ? (sourceOrder ? 'Consumed' : 'Sale') : 'Purchase',
+12458:                 date: inv.date, itemId: item.id, itemName: item.name,
+12459:                 entryType: 'Invoice Edit Reversal', qty: reverseQty,
+12487:             ops.push(DB.rawUpdate('inventory', item.id, itemUpdateNew));
+12488:             ops.push(createStockLedgerInsert({
+12491:                 itemName: item.name,
+12492:                 entryType: inv.fromOrder ? 'Consumed' : 'Sale',
+12723:             await DB.update('inventory', item.id, itemUpdate);
+12724:             await createStockLedgerInsert({
+12727:                 itemName: item.name,
+12728:                 entryType: inv.type === 'sale'
+12737:             if (inv.type === 'sale' && reservedRollbackQty > 0 && sourceOrder) {
+12738:                 await createStockLedgerInsert({
+12741:                     itemName: item.name,
+12742:                     entryType: 'Reserved Hold',
+17011:                 if (reservedReleaseQty > 0) {
+17012:                     ops.push(createStockLedgerInsert({
+17015:                         itemName: item.name,
+17016:                         entryType: 'Reserved Release',
+17023:                 }
+17024:                 ops.push(createStockLedgerInsert({
+17027:                     itemName: item.name,
+17028:                     entryType: 'Consumed',

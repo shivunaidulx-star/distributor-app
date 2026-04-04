@@ -1,0 +1,9 @@
+892: .badge {
+904: .badge-success { background: var(--success-soft); color: var(--success); }
+905: .badge-danger { background: var(--danger-soft); color: var(--danger); }
+906: .badge-warning { background: var(--warning-soft); color: var(--warning); }
+907: .badge-info { background: var(--info-soft); color: var(--info); }
+908: .badge-delivered {
+2471: .catalog-card-meta .badge { font-size: 0.58rem !important; padding: 1px 5px; }
+2780: .badge:hover { transform: scale(1.08); }
+3053: .badge { font-size: 0.68rem; padding: 2px 6px; }

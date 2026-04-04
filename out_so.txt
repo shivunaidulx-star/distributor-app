@@ -1,0 +1,12 @@
+1956: <h3>Add Items to Sale Order</h3>
+2023: <h3>Add Items to Sale Order</h3>
+3402: return `<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 6px;border-bottom:1px sol
+8220: <button class="btn btn-primary btn-sm" onclick="openSalesOrderModal()" style="white-space:nowrap;padding:7px 14px;flex-s
+8278: return `<div data-so-id="${o.id}" style="background:var(--bg-card);border:1px solid var(--border);${isUrgent ? 'border-l
+8297: <button class="btn btn-outline btn-sm" style="padding:4px 8px;font-size:0.75rem;border-radius:6px" onclick="duplicateSal
+8298: ${(o.status === 'pending' || (o.status === 'approved' && !o.packed && !o.invoiceNo)) && isApprover ? `<button class="btn
+8465: <button class="btn-icon" onclick="navigateTo('salesorders')" style="font-size:1rem;padding:4px 10px;display:inline-flex;
+9294: <button class="btn-icon" onclick="navigateTo('salesorders')" style="font-size:1rem;padding:4px 10px;display:inline-flex;
+9382: <button class="btn-icon" onclick="navigateTo('salesorders')" style="font-size:1rem;padding:4px 10px;display:inline-flex;
+9537: title: 'Sale Order',
+24186: title: 'Sale Order',

@@ -1,0 +1,99 @@
+7435: async function renderStockLedger(itemId) {
+7436:     _stockLedgerItemId = itemId;
+7437:     const [items, ledger] = await Promise.all([
+7438:         DB.getAll('inventory'),
+7439:         DB.getAll('stock_ledger')
+7440:     ]);
+7441:     const item = items.find(x => x.id === itemId);
+7442:     if (!item) { navigateTo('inventory'); return; }
+7443: 
+7444:     const itemLedger = filterVisibleStockLedgerEntries(
+7445:         ledger.filter(e => e.itemId === itemId)
+7446:     );
+7447: 
+7448:     pageContent.innerHTML = `
+7449:         <div class="section-toolbar">
+7450:             <h3 style="font-size:1rem;display:flex;align-items:center;gap:10px">
+7451:                 <button class="btn-icon" onclick="navigateTo('inventory')" title="Back to Inventory" style="font-size:1.2rem;padding:4px 8px">← Back</button>
+7452:                 Stock Ledger: ${escapeHtml(item.name)}
+7453:             </h3>
+7454:             <div class="filter-group">
+7455:                 <button class="btn btn-outline btn-sm" onclick="exportStockLedgerCSV('${itemId}')">Export</button>
+7456:             </div>
+7457:         </div>
+7458:         <div class="card" style="margin-bottom:15px">
+7459:             <div class="card-body" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+7460:                 <div>
+7461:                     <span style="font-size:0.9rem;color:var(--text-muted)">${item.category || ''} ${item.itemCode ? '| Code: ' + item.itemCode : ''}</span>
+7462:                 </div>
+7463:                 <div style="text-align:right">
+7464:                     <div style="font-size:0.8rem;color:var(--text-muted)">Current Stock</div>
+7465:                     <div style="font-size:1.4rem;font-weight:700;color:${item.stock <= (item.lowStockAlert || 5) ? 'var(--danger)' : 'var(--success)'}">${item.stock} ${item.unit || 'Pcs'}</div>
+7466:                 </div>
+7467:             </div>
+7468:         </div>
+7469:         <div class="card" style="margin-bottom:15px">
+7470:             <div class="card-body" style="display:flex;gap:10px;flex-wrap:wrap;padding:12px">
+7471:                 <input type="date" id="sl-filter-from" class="search-box" style="width:auto" onchange="filterStockLedger()" title="From Date">
+7472:                 <input type="date" id="sl-filter-to" class="search-box" style="width:auto" onchange="filterStockLedger()" title="To Date">
+7473:                 <select id="sl-filter-type" class="search-box" style="width:auto" onchange="filterStockLedger()">
+7474:                     <option value="">All Types</option>
+7475:                     <option value="Purchase">Purchase</option>
+7476:                     <option value="Sale">Sale</option>
+7477:                     <option value="Consumed">Consumed</option>
+7478:                     <option value="Reserved">Reserved</option>
+7479:                     <option value="Adjustment">Adjustment</option>
+7480:                     <option value="Opening">Opening</option>
+7481:                     <option value="Return">Return</option>
+7482:                 </select>
+7483:                 <button class="btn btn-outline" onclick="document.getElementById('sl-filter-from').value='';document.getElementById('sl-filter-to').value='';document.getElementById('sl-filter-type').value='';filterStockLedger()">Clear</button>
+7484:             </div>
+7485:         </div>
+7486:         <div class="card">
+7487:             <div class="card-body" style="padding:0" id="sl-content">
+7488:                 ${renderStockLedgerRows(itemLedger)}
+7489:             </div>
+7490:         </div>
+7491:     `;
+7492:     window._stockLedgerAll = itemLedger;
+7493: }
+7495: function renderStockLedgerRows(entries) {
+7496:     if (!entries.length) return '<div class="empty-state" style="padding:40px"><div class="empty-icon"></div><p>No ledger entries found.</p></div>';
+7497:     const isMobile = window.innerWidth < 768;
+7498:     if (isMobile) {
+7499:         return `<div style="padding:8px">${entries.slice().reverse().map(e => `
+7500:             <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:8px">
+7501:                 <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px">
+7502:                     <div>
+7503:                         <div style="font-weight:600;font-size:0.9rem">${fmtDate(e.date)}</div>
+7504:                         <span class="badge ${e.qty > 0 ? 'badge-success' : 'badge-danger'}" style="font-size:0.72rem;margin-top:2px">${e.entryType || '-'}</span>
+7505:                     </div>
+7506:                     <div style="text-align:right">
+7507:                         <div style="font-weight:800;font-size:1rem;color:${e.qty > 0 ? 'var(--success)' : 'var(--danger)'}">${e.qty > 0 ? '+' : ''}${e.qty}</div>
+7508:                         <div style="font-size:0.75rem;color:var(--text-muted)">Bal: <strong>${e.runningStock}</strong></div>
+7509:                     </div>
+7510:                 </div>
+7511:                 ${e.documentNo ? `<div style="font-size:0.75rem;color:var(--text-muted)">Doc: ${e.documentNo}</div>` : ''}
+7512:                 ${e.reason ? `<div style="font-size:0.75rem;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(e.reason)}</div>` : ''}
+7513:             </div>`).join('')}</div>`;
+7514:     }
+7515:     return `<div class="table-wrapper" style="max-height:600px;overflow-y:auto">
+7516:         <table class="data-table">
+7517:             <thead style="position:sticky;top:0;background:var(--bg-body);z-index:10;box-shadow:0 1px 2px rgba(0,0,0,0.05)">
+7518:                 <tr><th>Date</th><th>Entry Type</th><th>Doc No</th><th>Qty In</th><th>Qty Out</th><th>Running Stock</th><th>Reason</th><th>By</th></tr>
+7519:             </thead>
+7520:             <tbody id="sl-tbody">
+7521:                 ${entries.slice().reverse().map(e => `<tr>
+7522:                     <td style="white-space:nowrap">${fmtDate(e.date)}</td>
+7523:                     <td><span class="badge ${e.qty > 0 ? 'badge-success' : 'badge-danger'}" style="white-space:nowrap">${e.entryType || '-'}</span></td>
+7524:                     <td style="font-size:0.82rem;color:var(--text-muted)">${e.documentNo || '-'}</td>
+7525:                     <td style="font-weight:700;color:var(--success);text-align:center">${e.qty > 0 ? e.qty : '-'}</td>
+7526:                     <td style="font-weight:700;color:var(--danger);text-align:center">${e.qty < 0 ? Math.abs(e.qty) : '-'}</td>
+7527:                     <td style="font-weight:600;text-align:center">${e.runningStock}</td>
+7528:                     <td style="font-size:0.82rem;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(e.reason || '')}">${e.reason ? escapeHtml(e.reason) : '-'}</td>
+7529:                     <td style="font-size:0.78rem">${e.createdBy || '-'}</td>
+7530:                 </tr>`).join('')}
+7531:             </tbody>
+7532:         </table>
+7533:     </div>`;
+7534: }

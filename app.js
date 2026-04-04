@@ -1745,12 +1745,12 @@ function initSearchDropdown(inputId, items, onSelect) {
                                 ${it.code ? `<span class="search-dropdown-title-code">[${escapeHtml(it.code)}]</span>` : ''}
                             </div>
                             ${renderCompactMetricRow({
-                                qtyValue,
-                                uom: it.uom || it.unit || 'Pcs',
-                                priceText: currency(displayPrice),
-                                amountText: currency(amountValue),
-                                extraClass: 'search-dropdown-detail-grid'
-                            })}
+                        qtyValue,
+                        uom: it.uom || it.unit || 'Pcs',
+                        priceText: currency(displayPrice),
+                        amountText: currency(amountValue),
+                        extraClass: 'search-dropdown-detail-grid'
+                    })}
                         </div>
                     </div>`;
                 }
@@ -1894,127 +1894,7 @@ function attachMobileKeyboardScrollFix(inputEl) {
     }, sig);
 }
 
-function renderSOItemSubModal(categories) {
-    return `
-    <div id="so-item-sub-modal" class="sub-modal">
-        <div class="sub-modal-header">
-            <h3>Add Item to Order</h3>
-            <button class="btn-icon" onclick="closeSoItemSubModal()"><span class="material-symbols-outlined">close</span></button>
-        </div>
-        <div class="sub-modal-body so-item-sub-body">
-            <div class="so-item-filter-grid">
-                <div class="form-group" style="margin-bottom:0">
-                    <label>Category</label>
-                    <select id="f-so-cat-filter" onchange="onSOCatFilterChange()">
-                        <option value="">All Categories</option>
-                        ${categories.map(c => `<option value="${c.name}">${c.name}</option>`).join('')}
-                    </select>
-                </div>
-                <div class="form-group" style="margin-bottom:0">
-                    <label>Sub-Category</label>
-                    <select id="f-so-subcat-filter" onchange="onSOSubcatFilterChange()">
-                        <option value="">All Sub-Categories</option>
-                    </select>
-                </div>
-            </div>
-            <div class="inv-item-entry so-item-entry-card" style="background:var(--bg-input);padding:12px;border-radius:12px;margin-bottom:12px;border:1px solid var(--border)">
-                <div class="form-group so-item-search-group" style="margin-bottom:10px">
-                    <label style="font-size:0.78rem">Search & Select Item</label>
-                    <input id="f-so-item-input" class="so-item-search-input search-dropdown-mobile-priority" placeholder="Type item name or code" style="background:#fff">
-                </div>
-                <div class="so-item-secondary-grid">
-                    <div class="form-group" style="margin-bottom:0">
-                        <label style="font-size:0.75rem">Qty</label>
-                        <input type="number" id="f-so-qty" value="1" min="1" style="background:#fff">
-                    </div>
-                    <div class="form-group" style="margin-bottom:0">
-                        <label style="font-size:0.75rem">UOM</label>
-                        <select id="f-so-uom" onchange="onSOUomChange()" style="background:#fff"><option value="">--</option></select>
-                    </div>
-                </div>
-                <div class="so-item-tertiary-grid">
-                    <div class="form-group" style="margin-bottom:0">
-                        <label style="font-size:0.75rem">Price ₹</label>
-                        <input type="number" id="f-so-price" value="" min="0" step="0.01" placeholder="Listed" style="background:#fff">
-                    </div>
-                    <button class="btn btn-primary so-item-add-btn" onclick="addSOLine()">
-                        <span class="material-symbols-outlined" style="font-size:1.1rem">add</span>
-                        <span>Add Item</span>
-                    </button>
-                </div>
-            </div>
-            <button class="btn btn-outline btn-block" onclick="closeSoItemSubModal()" style="margin-top:10px">Done Adding</button>
-        </div>
-    </div>`;
-}
 
-// Helper to build item list for search dropdown
-function renderSOItemSubModal(categories) {
-    return `
-    <div id="so-item-sub-modal" class="sub-modal doc-item-modal">
-        <div class="sub-modal-header doc-item-modal-header">
-            <button class="btn-icon" onclick="closeSoItemSubModal()">${msIcon('arrow_back', '', 'font-size:1.2rem')}</button>
-            <h3>Add Items to Sale Order</h3>
-            <button class="btn-icon" onclick="closeSoItemSubModal()">${msIcon('close', '', 'font-size:1.2rem')}</button>
-        </div>
-        <div class="sub-modal-body so-item-sub-body doc-item-modal-body">
-            <div class="doc-field-grid doc-field-grid-2 doc-item-filter-block">
-                <div class="doc-input-shell">
-                    <label>Category</label>
-                    <select id="f-so-cat-filter" onchange="onSOCatFilterChange()">
-                        <option value="">All Categories</option>
-                        ${categories.map(c => `<option value="${c.name}">${c.name}</option>`).join('')}
-                    </select>
-                </div>
-                <div class="doc-input-shell">
-                    <label>Sub-Category</label>
-                    <select id="f-so-subcat-filter" onchange="onSOSubcatFilterChange()">
-                        <option value="">All Sub-Categories</option>
-                    </select>
-                </div>
-            </div>
-            <div class="doc-item-sheet-card">
-                <div class="doc-input-shell doc-input-shell-focus so-item-search-group" style="margin-bottom:12px">
-                    <label>Item Name</label>
-                    <input id="f-so-item-input" class="so-item-search-input search-dropdown-mobile-priority" placeholder="e.g. Chocolate Cake">
-                </div>
-                <div class="doc-field-grid doc-field-grid-2" style="margin-bottom:12px">
-                    <div class="doc-input-shell">
-                        <label>Quantity</label>
-                        <input type="number" id="f-so-qty" value="1" min="1">
-                    </div>
-                    <div class="doc-input-shell">
-                        <label>Unit</label>
-                        <select id="f-so-uom" onchange="onSOUomChange()"><option value="">Select Unit</option></select>
-                    </div>
-                </div>
-                <div class="doc-input-shell" style="margin-bottom:12px">
-                    <label>MRP</label>
-                    <input type="number" id="f-so-mrp" value="" readonly placeholder="MRP">
-                </div>
-                <div class="doc-field-grid doc-field-grid-2" style="margin-bottom:12px">
-                    <div class="doc-input-shell">
-                        <label>Rate (Price / Unit)</label>
-                        <input type="number" id="f-so-price" value="" min="0" step="0.01" placeholder="Listed">
-                    </div>
-                    <div class="doc-input-shell">
-                        <label>Tax Mode</label>
-                        <select id="f-so-tax-mode" disabled>
-                            <option value="inclusive">With Tax</option>
-                        </select>
-                    </div>
-                </div>
-            </div>
-        </div>
-        <div class="doc-item-modal-actions">
-            <button class="btn btn-outline" onclick="closeSoItemSubModal()">Done Adding</button>
-            <button class="btn btn-primary so-item-add-btn" onclick="addSOLine()">
-                ${msIcon('add', '', 'font-size:1.1rem')}
-                <span>Add Item</span>
-            </button>
-        </div>
-    </div>`;
-}
 
 function renderSOItemSubModal(categories) {
     return `
@@ -3754,7 +3634,7 @@ async function buildAdminCommandCenter(model) {
                                 ? `${overrideFollowUpCount} delivered COD invoices still need payment follow-up.`
                                 : pendingCheques
                                     ? `${pendingCheques} cheque receipts still need clearance tracking.`
-                                : '';
+                                    : '';
     const salesCompareHtml = salesDiff !== null
         ? `<span class="admin-dash-trend ${salesDiff >= 0 ? 'up' : 'down'}">${salesDiff >= 0 ? '+' : '-'}${Math.abs(salesDiff)}% vs last month</span>`
         : `<span class="admin-dash-trend neutral">Last month: ${currency(lmSales)}</span>`;
@@ -4049,12 +3929,12 @@ async function buildAdminCommandCenter(model) {
 
                 <div class="admin-dash-single-actions">
                     ${dashboardActions.map(action => {
-            const isPrimary = action.key === 'new-sale' || action.key === 'payment-in';
-            return `<button type="button" class="admin-dash-single-action ${isPrimary ? 'primary' : ''}" onclick="${action.fn}" title="${action.meta.desc}">
+        const isPrimary = action.key === 'new-sale' || action.key === 'payment-in';
+        return `<button type="button" class="admin-dash-single-action ${isPrimary ? 'primary' : ''}" onclick="${action.fn}" title="${action.meta.desc}">
                                 <span class="material-symbols-outlined">${action.icon}</span>
                                 <strong>${action.label}</strong>
                             </button>`;
-        }).join('')}
+    }).join('')}
                 </div>
             </section>
 
@@ -5911,7 +5791,12 @@ function filterVisibleStockLedgerEntries(entries = []) {
     const latestEditedEntryByGroup = new Map();
 
     ordered.forEach((entry, index) => {
-        if (isInvoiceEditReversalEntry(entry)) hidden.add(index);
+        const type = (entry.entryType || '').toLowerCase();
+        const isReversal = type.includes('edit reversal') || type.includes('reversal');
+        const isDispatch = type.includes('dispatched');
+        
+        if (isReversal || isDispatch) hidden.add(index);
+
         if (isEditedInvoiceRepostEntry(entry)) {
             latestEditedEntryByGroup.set(getLedgerEntryGroupKey(entry), index);
         }
@@ -5920,7 +5805,7 @@ function filterVisibleStockLedgerEntries(entries = []) {
     latestEditedEntryByGroup.forEach((latestIndex, groupKey) => {
         ordered.forEach((entry, index) => {
             if (getLedgerEntryGroupKey(entry) !== groupKey || index === latestIndex) return;
-            if (isInvoiceEditReversalEntry(entry) || isInvoiceConsumptionEntry(entry) || isEditedInvoiceRepostEntry(entry)) {
+            if (isInvoiceConsumptionEntry(entry) || isEditedInvoiceRepostEntry(entry)) {
                 hidden.add(index);
             }
         });
@@ -9472,12 +9357,12 @@ function renderSOLines() {
                 <div class="sales-line-copy">
                     <div class="sales-line-name">${escapeHtml(li.name)}</div>
                     ${renderCompactMetricRow({
-                        qtyInputHtml: `<input type="number" class="doc-line-compact-input" value="${li.qty}" min="1" inputmode="decimal" onchange="updateSOLine(${i},'qty',this.value)" onclick="event.stopPropagation()" onfocus="event.stopPropagation()">`,
-                        uom: li.unit || 'Pcs',
-                        priceText: currency(li.price),
-                        amountText: currency(li.amount),
-                        extraClass: 'sales-line-compact-grid'
-                    })}
+            qtyInputHtml: `<input type="number" class="doc-line-compact-input" value="${li.qty}" min="1" inputmode="decimal" onchange="updateSOLine(${i},'qty',this.value)" onclick="event.stopPropagation()" onfocus="event.stopPropagation()">`,
+            uom: li.unit || 'Pcs',
+            priceText: currency(li.price),
+            amountText: currency(li.amount),
+            extraClass: 'sales-line-compact-grid'
+        })}
                     ${summaryBits.length ? `<div class="sales-line-summary-note">${escapeHtml(summaryBits.join(' | '))}</div>` : ''}
                     ${li._priceAlert ? `<div class="sales-line-summary-note is-alert">Below purchase price ${currency(li.purchasePrice)}</div>` : ''}
                 </div>
@@ -11626,7 +11511,7 @@ async function saveInvoice(id) {
                     date: dateVal,
                     itemId: item.id,
                     itemName: item.name,
-                    entryType: 'Reserved Release',
+                    entryType: 'Reservation Cleared',
                     qty: 0,
                     runningStock: newStock,
                     documentNo: invNo,
@@ -12123,12 +12008,12 @@ function renderInvoiceLines() {
                 <div class="sales-line-copy">
                     <div class="sales-line-name">${escapeHtml(li.name)}</div>
                     ${renderCompactMetricRow({
-                        qtyInputHtml: `<input type="number" class="doc-line-compact-input" value="${li.qty}" min="0.001" step="any" inputmode="decimal" onchange="updateInvoiceLine(${i},'qty',this.value)">`,
-                        uom: li.unit || 'Pcs',
-                        priceText: currency(li.price),
-                        amountText: currency(li.amount),
-                        extraClass: 'sales-line-compact-grid'
-                    })}
+            qtyInputHtml: `<input type="number" class="doc-line-compact-input" value="${li.qty}" min="0.001" step="any" inputmode="decimal" onchange="updateInvoiceLine(${i},'qty',this.value)">`,
+            uom: li.unit || 'Pcs',
+            priceText: currency(li.price),
+            amountText: currency(li.amount),
+            extraClass: 'sales-line-compact-grid'
+        })}
                     ${summaryBits.length ? `<div class="sales-line-summary-note">${escapeHtml(summaryBits.join(' | '))}</div>` : ''}
                     ${li._priceAlert ? `<div class="sales-line-summary-note is-alert">Below purchase price ${currency(li.purchasePrice)}</div>` : ''}
                 </div>
@@ -12727,12 +12612,12 @@ async function executeCancelInvoice(id, { skipNav = false } = {}) {
                 itemId: item.id,
                 itemName: item.name,
                 entryType: inv.type === 'sale'
-                    ? (sourceOrder ? 'Consumed Reversal' : 'Sale Return')
+                    ? (sourceOrder ? 'Cancelled - Consumption Reversed' : 'Sale Return')
                     : 'Purchase Return',
                 qty: qtyChange,
                 runningStock: newStock,
                 documentNo: inv.invoiceNo,
-                reason: sourceOrder ? 'Invoice Cancelled - Consumed rollback' : 'Invoice Cancelled',
+                reason: sourceOrder ? 'Invoice Cancelled - Consumption Reversed' : 'Invoice Cancelled',
                 createdBy: currentUser.userId
             });
             if (inv.type === 'sale' && reservedRollbackQty > 0 && sourceOrder) {
@@ -12740,7 +12625,7 @@ async function executeCancelInvoice(id, { skipNav = false } = {}) {
                     date: today(),
                     itemId: item.id,
                     itemName: item.name,
-                    entryType: 'Reserved Hold',
+                    entryType: 'Reserved',
                     qty: 0,
                     runningStock: newStock,
                     documentNo: inv.invoiceNo,
@@ -15550,13 +15435,13 @@ function renderPacking() {
                     <td style="font-weight:600">${o.orderNo}</td><td>${o.partyName}</td><td>${o.packedBy || '-'}</td>
                     <td style="font-size:0.8rem">${o.packingDurationMins !== undefined ? o.packingDurationMins + ' min' : '-'}</td>
                     <td style="font-size:0.8rem">${(() => {
-                        const pkg = getPackageRecordData(o);
-                        const boxLabel = pkg.boxCount ? `${pkg.boxCount} Boxes` : '-';
-                        const sharedBox = pkg.boxNumbers[0] || '';
-                        const crateLabel = pkg.crateNumbers.length ? ` | Crates: ${pkg.crateNumbers.join(', ')}` : '';
-                        const detail = sharedBox ? `${sharedBox}${crateLabel}` : (pkg.packageNumbers.join(', ') || '');
-                        return boxLabel === '-' ? '-' : `${boxLabel}<br><span style="color:var(--text-muted);font-size:0.75rem">${escapeHtml(detail)}</span>`;
-                    })()}</td>
+                const pkg = getPackageRecordData(o);
+                const boxLabel = pkg.boxCount ? `${pkg.boxCount} Boxes` : '-';
+                const sharedBox = pkg.boxNumbers[0] || '';
+                const crateLabel = pkg.crateNumbers.length ? ` | Crates: ${pkg.crateNumbers.join(', ')}` : '';
+                const detail = sharedBox ? `${sharedBox}${crateLabel}` : (pkg.packageNumbers.join(', ') || '');
+                return boxLabel === '-' ? '-' : `${boxLabel}<br><span style="color:var(--text-muted);font-size:0.75rem">${escapeHtml(detail)}</span>`;
+            })()}</td>
                     <td class="amount-green">${currency(o.packedTotal || o.total)}</td>
                     <td>${isAdmin ? `<button class="btn btn-outline btn-sm" onclick="generateInvoiceFromPacked('${o.id}')"> Generate</button>` : '<span class="badge badge-warning">Awaiting Admin</span>'}</td>
                 </tr>`).join('')}</tbody></table>
@@ -15573,17 +15458,17 @@ function renderPacking() {
             <div class="table-wrapper">
                 <table class="data-table"><thead><tr><th>Order #</th><th>Party</th><th>Packer</th><th>Time</th><th>Boxes</th><th>Crates</th><th>Invoice</th><th>Total</th></tr></thead>
                 <tbody>${filteredHistory.length ? filteredHistory.map(o => {
-            const { boxNumbers: boxes, crateNumbers: crates } = getPackageRecordData(o);
-            const boxDisplay = boxes.length ? boxes.map(n => `<span class="badge badge-outline" style="font-size:0.72rem;margin:1px">${escapeHtml(n)}</span>`).join(' ') : '-';
-            const crateDisplay = crates.length ? crates.map(n => `<span class="badge badge-outline" style="font-size:0.72rem;margin:1px;border-color:var(--warning);color:var(--warning)">${escapeHtml(n)}</span>`).join(' ') : '-';
-            return `<tr>
+                const { boxNumbers: boxes, crateNumbers: crates } = getPackageRecordData(o);
+                const boxDisplay = boxes.length ? boxes.map(n => `<span class="badge badge-outline" style="font-size:0.72rem;margin:1px">${escapeHtml(n)}</span>`).join(' ') : '-';
+                const crateDisplay = crates.length ? crates.map(n => `<span class="badge badge-outline" style="font-size:0.72rem;margin:1px;border-color:var(--warning);color:var(--warning)">${escapeHtml(n)}</span>`).join(' ') : '-';
+                return `<tr>
                     <td style="font-weight:600">${o.orderNo}</td><td>${o.partyName}</td><td>${o.packedBy || '-'}</td>
                     <td style="font-size:0.8rem">${o.packingDurationMins !== undefined ? o.packingDurationMins + ' min' : '-'}</td>
                     <td style="font-size:0.8rem">${boxDisplay}</td>
                     <td style="font-size:0.8rem">${crateDisplay}</td>
                     <td><span class="badge badge-success">${o.invoiceNo || '-'}</span></td><td class="amount-green">${currency(o.total)}</td>
                 </tr>`;
-        }).join('') : '<tr><td colspan="8" class="empty-state"><p>No packed history for selected range</p></td></tr>'}</tbody></table>
+            }).join('') : '<tr><td colspan="8" class="empty-state"><p>No packed history for selected range</p></td></tr>'}</tbody></table>
             </div>
         </div></div>`;
     }
@@ -17804,79 +17689,6 @@ async function markDelivered(id) {
         const adminOptions = adminUsers.map(u => `<option value="${escapeHtml(u.name)}" data-userid="${escapeHtml(u.userId || u.name)}">${escapeHtml(u.name)} (${u.role})</option>`).join('');
         codHtml = `
         <div style="background:#fff7ed;border:2px solid #f97316;border-radius:10px;padding:14px;margin-bottom:16px">
-    try {
-        await supabaseClient.from('activity_logs').insert({
-            action: 'COD_CASH_RECEIVED',
-            details: `Delivery ${deliveryId} — cash received confirmed by ${adminName}`,
-            user_name: currentUser ? currentUser.name : 'Unknown',
-            created_at: new Date().toISOString()
-        });
-    } catch (e) { /* non-blocking */ }
-}
-
-async function markDelivered(id) {
-    const dels = DB.cache['delivery'] || [];
-    const d = dels.find(x => x.id === id);
-    if (!d) return;
-
-    // Check COD — party paymentTerms === 'COD'  OR  invoice dueDate ≤ today (due at/before delivery)
-    const [parties, invoices, payments, allUsers] = await Promise.all([
-        DB.cache['parties'] ? Promise.resolve(DB.cache['parties']) : DB.getAll('parties'),
-        DB.cache['invoices'] ? Promise.resolve(DB.cache['invoices']) : DB.getAll('invoices'),
-        DB.cache['payments'] ? Promise.resolve(DB.cache['payments']) : DB.getAll('payments'),
-        DB.getAll('users')
-    ]);
-    const adminUsers = allUsers.filter(u => u.role === 'Admin' || u.role === 'Manager');
-    const party = parties.find(p => String(p.id) === String(d.partyId));
-    const inv = d.invoiceNo ? invoices.find(i => i.invoiceNo === d.invoiceNo) : null;
-
-    const isPartyTermsCOD = party && (party.paymentTerms || '').toUpperCase() === 'COD';
-    const isDueTodayOrOverdue = inv && inv.dueDate && inv.dueDate <= today();
-    const isCOD = isPartyTermsCOD || isDueTodayOrOverdue;
-
-    // Calculate balance due (total minus already-paid)
-    let balanceDue = d.total || 0;
-    if (inv) {
-        const paid = payments
-            .filter(p => p.invoiceNo === inv.invoiceNo || (p.allocations && p.allocations[inv.invoiceNo]))
-            .reduce((s, p) => s + (p.invoiceNo === inv.invoiceNo ? p.amount : +(p.allocations[inv.invoiceNo] || 0)), 0);
-        balanceDue = Math.max(0, (inv.total || d.total || 0) - paid);
-    }
-
-    const co = DB.ls.getObj('db_company') || {};
-    const amt = balanceDue;
-
-    // COD reason label
-    const codReason = isPartyTermsCOD ? 'COD Party' : `Due ${fmtDate(inv.dueDate)}`;
-
-    // Build COD section with cash collect + QR option
-    let codHtml = '';
-    if (isCOD && amt > 0) {
-        let qrImgHtml = '';
-        if (co.upi && typeof QRCode !== 'undefined' && amt > 0) {
-            const upiStr = `upi://pay?pa=${co.upi}&pn=${encodeURIComponent(co.name || '')}&am=${amt.toFixed(2)}&cu=INR&tn=${encodeURIComponent((d.invoiceNo || d.orderNo || '') + ' - ' + (d.partyName || ''))}`;
-            try {
-                const qrDiv = document.createElement('div');
-                document.body.appendChild(qrDiv);
-                new QRCode(qrDiv, { text: upiStr, width: 180, height: 180, correctLevel: QRCode.CorrectLevel.M });
-                await new Promise(r => setTimeout(r, 100)); // let QR render
-                const obj = qrDiv.querySelector('canvas') || qrDiv.querySelector('img');
-                if (obj) {
-                    const src = obj.toDataURL ? obj.toDataURL() : obj.src;
-                    qrImgHtml = `<img src="${src}" alt="UPI QR" style="display:block;margin:8px auto;border:1px solid var(--border);border-radius:8px;padding:8px;background:#fff;width:170px">
-                        <div style="font-size:0.78rem;color:var(--text-muted);text-align:center;margin-top:2px">Scan with any UPI App</div>
-                        <div style="font-size:0.72rem;color:var(--text-muted);text-align:center">${co.upi}</div>`;
-                }
-                document.body.removeChild(qrDiv);
-            } catch (e) {
-                qrImgHtml = `<div style="font-size:0.82rem;color:var(--warning);padding:8px">UPI: ${co.upi} | Amount: ₹${amt.toFixed(2)}</div>`;
-            }
-        } else if (!co.upi) {
-            qrImgHtml = `<div style="font-size:0.82rem;color:var(--warning);background:rgba(245,158,11,0.1);padding:8px;border-radius:6px;margin-top:8px">Set UPI ID in Company Setup to show QR code</div>`;
-        }
-        const adminOptions = adminUsers.map(u => `<option value="${escapeHtml(u.name)}" data-userid="${escapeHtml(u.userId || u.name)}">${escapeHtml(u.name)} (${u.role})</option>`).join('');
-        codHtml = `
-        <div style="background:#fff7ed;border:2px solid #f97316;border-radius:10px;padding:14px;margin-bottom:16px">
             <div style="font-size:1rem;font-weight:700;color:#ea580c;margin-bottom:4px">${msIcon('warning', '', 'font-size:1rem;vertical-align:-3px')} Collect Payment Before Delivering</div>
             <div style="font-size:0.75rem;color:#ea580c;margin-bottom:10px;font-weight:600">${codReason}</div>
             <div style="font-size:0.9rem;margin-bottom:12px">Balance Due: <strong style="font-size:1.15rem;color:var(--danger)">${currency(amt)}</strong> from <strong>${escapeHtml(d.partyName)}</strong></div>
@@ -18035,7 +17847,7 @@ async function verifyAdminDeliveryOverride() {
     }
 }
 
-window.requestDeliveryOverrideAjax = async function(id) {
+window.requestDeliveryOverrideAjax = async function (id) {
     const adminSelect = $('del-req-admin-select');
     if (!adminSelect || !adminSelect.value) return alert('Select an admin to request approval.');
     const adminName = adminSelect.value;
@@ -18050,14 +17862,14 @@ window.requestDeliveryOverrideAjax = async function(id) {
         });
         showToast('Approval requested!', 'success');
         closeModal();
-        await renderDelivery(); 
-    } catch(err) {
+        await renderDelivery();
+    } catch (err) {
         if (btn) { btn.textContent = 'Request Approval to Deliver'; btn.disabled = false; }
         alert('Error: ' + err);
     }
 };
 
-window.approveDeliveryOverrideAjax = async function(id) {
+window.approveDeliveryOverrideAjax = async function (id) {
     const dueDateInput = $('del-admin-due-date');
     if (!dueDateInput || !dueDateInput.value) return alert('Select new due date.');
     const newDate = dueDateInput.value;
@@ -18073,8 +17885,8 @@ window.approveDeliveryOverrideAjax = async function(id) {
         });
         showToast('Override approved. Driver can now mark as delivered.', 'success');
         closeModal();
-        await renderDelivery(); 
-    } catch(err) {
+        await renderDelivery();
+    } catch (err) {
         if (btn) { btn.textContent = 'Approve Override'; btn.disabled = false; }
         alert('Error: ' + err);
     }

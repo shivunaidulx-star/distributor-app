@@ -1,0 +1,10 @@
+5904: function filterVisibleStockLedgerEntries(entries = []) {
+5905:     const ordered = entries.slice().sort((a, b) =>
+7394:     const itemLedger = filterVisibleStockLedgerEntries(ledger.filter(e => e.itemId === itemId));
+7395:     const rows = itemLedger.slice().reverse();
+7444:     const itemLedger = filterVisibleStockLedgerEntries(
+7445:         ledger.filter(e => e.itemId === itemId)
+7552:     const entries = filterVisibleStockLedgerEntries(
+7553:         ledger.filter(e => e.itemId === itemId)
+18999:         window._rItemLedger = filterVisibleStockLedgerEntries(stockLedger).sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+19000: 

@@ -6087,7 +6087,7 @@ body.catalog-page-open .omnibox-container {
     position: fixed !important;
     inset: 0 !important;
     background: linear-gradient(180deg, #f8f9fc 0%, #ffffff 100%) !important;
-    z-index: 1300 !important;
+    z-index: 10100 !important;
     height: 100vh !important;
     height: 100dvh !important;
     overflow-y: auto;
@@ -6127,7 +6127,7 @@ body.catalog-page-open .omnibox-container {
 .doc-item-modal-actions {
     position: sticky;
     bottom: 0;
-    z-index: 1350;
+    z-index: 10150;
     display: flex;
     gap: 10px;
     margin-top: auto;
@@ -6461,6 +6461,7 @@ body.catalog-page-open .omnibox-container {
         white-space: normal;
         display: -webkit-box;
         -webkit-line-clamp: 2;
+        line-clamp: 2;
         -webkit-box-orient: vertical;
     }
     .sales-line-meta {

@@ -1,0 +1,2229 @@
+﻿diff --git a/app.js b/app.js
+index 7c859a7..a678ab2 100644
+--- a/app.js
++++ b/app.js
+@@ -625,7 +625,7 @@ const ColumnManager = {
+             { key: 'location', label: 'Location', visible: true },
+             { key: 'phone', label: 'Phone', visible: true },
+             { key: 'person', label: 'Person', visible: true },
+-            { key: 'packages', label: 'Packages', visible: false },
++            { key: 'packages', label: 'Boxes / Crates No', visible: false },
+             { key: 'status', label: 'Status', visible: true }, // Γ£à ADD
+             { key: 'reason', label: 'Reason', visible: false },
+             { key: 'actions', label: 'Actions', required: true },
+@@ -980,7 +980,7 @@ const ROLE_NAME_MAP = {
+ };
+ const CUSTOMER_PORTAL_ENABLED = false; // Feature kept in codebase for future relaunch, disabled for current live release.
+ function getAppVersion() {
+-    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v137';
++    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v143';
+ }
+ 
+ const PAGE_LABELS = {
+@@ -2550,6 +2550,10 @@ const ADMIN_HOME_TILE_GROUPS = {
+         items: [
+             { key: 'pending-approvals', label: 'Pending approvals', note: 'Sales orders waiting for approval' },
+             { key: 'ready-for-packing', label: 'Ready for packing', note: 'Approved orders waiting for warehouse action' },
++            { key: 'packed-pending-invoice', label: 'Packed pending invoice', note: 'Packed orders waiting for invoice generation' },
++            { key: 'ready-to-dispatch', label: 'Ready to dispatch', note: 'Packed invoices waiting for dispatch' },
++            { key: 'deliveries-in-transit', label: 'Deliveries in transit', note: 'Dispatched orders currently on the road' },
++            { key: 'delivered-without-payment', label: 'COD payment follow-up', note: 'Delivered COD invoices still awaiting payment' },
+             { key: 'delivery-exceptions', label: 'Delivery exceptions', note: 'Undelivered or returned dispatches' },
+             { key: 'pending-cheques', label: 'Pending cheques', note: 'Cheque receipts still pending clearance' },
+             { key: 'low-stock', label: 'Low stock SKUs', note: 'Items already below stock threshold' }
+@@ -2562,6 +2566,10 @@ const ADMIN_HOME_TILE_GROUPS = {
+         items: [
+             { key: 'pending-approvals', label: 'Pending approvals', note: 'Sales orders waiting for a decision' },
+             { key: 'ready-for-packing', label: 'Ready for packing', note: 'Approved orders waiting for warehouse action' },
++            { key: 'packed-pending-invoice', label: 'Packed pending invoice', note: 'Packed orders waiting for invoice generation' },
++            { key: 'ready-to-dispatch', label: 'Ready to dispatch', note: 'Packed invoices waiting for dispatch' },
++            { key: 'deliveries-in-transit', label: 'Deliveries in transit', note: 'Dispatched orders currently on the road' },
++            { key: 'delivered-without-payment', label: 'COD payment follow-up', note: 'Delivered COD invoices still awaiting payment' },
+             { key: 'delivery-exceptions', label: 'Delivery exceptions', note: 'Undelivered or returned dispatches' },
+             { key: 'pending-cheques', label: 'Pending cheques', note: 'Cheque receipts still pending clearance' },
+             { key: 'low-stock', label: 'Low stock SKUs', note: 'Items already below replenishment threshold' }
+@@ -2589,9 +2597,9 @@ const ADMIN_HOME_TILE_GROUPS = {
+     }
+ };
+ const ADMIN_HOME_DEFAULT_PREFS = {
+-    signals: ['pending-approvals', 'ready-for-packing', 'delivery-exceptions', 'pending-cheques', 'low-stock'],
++    signals: ['pending-approvals', 'ready-for-packing', 'packed-pending-invoice', 'ready-to-dispatch', 'deliveries-in-transit', 'delivery-exceptions', 'pending-cheques', 'low-stock'],
+     hiddenSignals: ['low-stock'],
+-    radar: ['pending-approvals', 'ready-for-packing', 'delivery-exceptions', 'pending-cheques', 'low-stock'],
++    radar: ['pending-approvals', 'ready-for-packing', 'packed-pending-invoice', 'ready-to-dispatch', 'deliveries-in-transit', 'delivered-without-payment', 'delivery-exceptions', 'pending-cheques', 'low-stock'],
+     hiddenRadar: ['low-stock'],
+     glances: ['receivable', 'collection-efficiency'],
+     hiddenGlances: [],
+@@ -2951,6 +2959,122 @@ function today() {
+     const offset = d.getTimezoneOffset() * 60000;
+     return new Date(d.getTime() - offset).toISOString().split('T')[0];
+ }
++function buildInvoicePaidMap(payments = []) {
++    const paidMap = {};
++    (payments || []).forEach(payment => {
++        if (payment.allocations) {
++            Object.entries(payment.allocations).forEach(([invoiceNo, amount]) => {
++                paidMap[invoiceNo] = (paidMap[invoiceNo] || 0) + Number(amount || 0);
++            });
++            return;
++        }
++        if (payment.invoiceNo) {
++            paidMap[payment.invoiceNo] = (paidMap[payment.invoiceNo] || 0)
++                + Number(payment.amount || 0)
++                + Number(payment.discount || 0);
++        }
++    });
++    return paidMap;
++}
++function getInvoiceOutstandingAmount(invoice, paidMap = {}) {
++    if (!invoice || invoice.status === 'cancelled') return 0;
++    return Math.max(0, +(((invoice.total || 0) - (paidMap[invoice.invoiceNo] || 0)).toFixed(2)));
++}
++function getDueStatusMeta(dueDate, referenceDate = today()) {
++    if (!dueDate) {
++        return {
++            state: 'unscheduled',
++            label: 'Due date pending',
++            days: null,
++            isOverdue: false,
++            tone: 'var(--warning)'
++        };
++    }
++    const dueMs = new Date(dueDate).setHours(0, 0, 0, 0);
++    const refMs = new Date(referenceDate).setHours(0, 0, 0, 0);
++    const dayDelta = Math.floor((dueMs - refMs) / 86400000);
++    if (dayDelta < 0) {
++        return {
++            state: 'overdue',
++            label: `${Math.abs(dayDelta)}d overdue`,
++            days: dayDelta,
++            isOverdue: true,
++            tone: 'var(--danger)'
++        };
++    }
++    if (dayDelta === 0) {
++        return {
++            state: 'due-today',
++            label: 'Due today',
++            days: dayDelta,
++            isOverdue: false,
++            tone: '#f97316'
++        };
++    }
++    return {
++        state: 'due',
++        label: `Due in ${dayDelta}d`,
++        days: dayDelta,
++        isOverdue: false,
++        tone: 'var(--success)'
++    };
++}
++function getDeliveredWithoutPaymentFollowUp(deliveries = [], invoices = [], payments = []) {
++    const paidMap = buildInvoicePaidMap(payments);
++    return (deliveries || [])
++        .filter(delivery => delivery.status === 'Delivered' && delivery.adminApprovedBy && delivery.invoiceNo)
++        .map(delivery => {
++            const invoice = (invoices || []).find(inv => inv.invoiceNo === delivery.invoiceNo);
++            if (!invoice || invoice.status === 'cancelled') return null;
++            const balance = getInvoiceOutstandingAmount(invoice, paidMap);
++            if (balance <= 0.01) return null;
++            const dueDate = invoice.dueDate || delivery.adminApprovalDueDate || delivery.deliveredAt || invoice.date || '';
++            return {
++                deliveryId: delivery.id,
++                orderNo: delivery.orderNo || '',
++                partyName: delivery.partyName || invoice.partyName || '',
++                invoiceId: invoice.id,
++                invoiceNo: invoice.invoiceNo,
++                balance,
++                paid: paidMap[invoice.invoiceNo] || 0,
++                total: invoice.total || delivery.total || 0,
++                dueDate,
++                approvedBy: delivery.adminApprovedBy,
++                approvedAt: delivery.adminApprovedAt || delivery.deliveredAt || '',
++                dueMeta: getDueStatusMeta(dueDate)
++            };
++        })
++        .filter(Boolean)
++        .sort((a, b) => {
++            const left = a.dueDate || '9999-12-31';
++            const right = b.dueDate || '9999-12-31';
++            return left.localeCompare(right);
++        });
++}
++function summarizeDeliveredWithoutPaymentFollowUp(entries = []) {
++    const overdueCount = entries.filter(entry => entry.dueMeta.state === 'overdue').length;
++    const dueCount = entries.filter(entry => entry.dueMeta.state === 'due' || entry.dueMeta.state === 'due-today').length;
++    const dueTodayCount = entries.filter(entry => entry.dueMeta.state === 'due-today').length;
++    const unscheduledCount = entries.filter(entry => entry.dueMeta.state === 'unscheduled').length;
++    const totalOutstanding = entries.reduce((sum, entry) => sum + (entry.balance || 0), 0);
++    let note = 'Delivered COD invoices awaiting collection';
++    if (entries.length) {
++        const parts = [];
++        if (overdueCount) parts.push(`${overdueCount} overdue`);
++        if (dueCount) parts.push(`${dueCount} due by revised date`);
++        if (unscheduledCount) parts.push(`${unscheduledCount} without due date`);
++        note = parts.join(', ') || 'Delivered COD invoices awaiting collection';
++    }
++    return {
++        count: entries.length,
++        overdueCount,
++        dueCount,
++        dueTodayCount,
++        unscheduledCount,
++        totalOutstanding,
++        note
++    };
++}
+ function currentMonthStart(baseDate = null) {
+     const d = baseDate ? new Date(baseDate) : new Date();
+     d.setDate(1);
+@@ -3359,6 +3483,11 @@ async function renderDashboard() {
+     const pendingSO = salesOrders.filter(o => o.status === 'pending').length;
+     const hasCancelledInvoice = (o) => o.invoiceCancelled || invoices.some(i => i.fromOrder === o.orderNo && i.status === 'cancelled');
+     const approvedUnpacked = salesOrders.filter(o => o.status === 'approved' && !o.packed && !hasCancelledInvoice(o) && !o.cannotComplete).length;
++    const packedPendingInvoiceCount = salesOrders.filter(o => o.packed && !o.invoiceNo && !o.invoiceCancelled).length;
++    const readyToDispatchCount = getReadyToDispatchEntries(dels, salesOrders, invoices).length;
++    const inTransitCount = dels.filter(d => d.status === 'Dispatched').length;
++    const deliveredWithoutPaymentEntries = getDeliveredWithoutPaymentFollowUp(dels, invoices, payments);
++    const deliveredWithoutPaymentSummary = summarizeDeliveredWithoutPaymentFollowUp(deliveredWithoutPaymentEntries);
+     const undeliveredCount = dels.filter(d => d.status === 'Undelivered' || d.status === 'Returned').length;
+     const lowStock = inventory.filter(i => i.stock <= (i.lowStockAlert || 5)).length;
+     updateNavBadges(inventory);
+@@ -3421,6 +3550,10 @@ async function renderDashboard() {
+         inventory,
+         pendingSO,
+         approvedUnpacked,
++        packedPendingInvoiceCount,
++        readyToDispatchCount,
++        inTransitCount,
++        deliveredWithoutPaymentSummary,
+         undeliveredCount,
+         lowStock,
+         pendingCheques,
+@@ -3577,6 +3710,10 @@ async function buildAdminCommandCenter(model) {
+         inventory,
+         pendingSO,
+         approvedUnpacked,
++        packedPendingInvoiceCount,
++        readyToDispatchCount,
++        inTransitCount,
++        deliveredWithoutPaymentSummary,
+         undeliveredCount,
+         lowStock,
+         pendingCheques,
+@@ -3597,17 +3734,27 @@ async function buildAdminCommandCenter(model) {
+     const companyLabel = company?.name || 'Prakash Traders';
+     const todayLabel = new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'short' });
+     const monthlyCollectionPct = tmSales > 0 ? Math.min(100, Math.round((tmPayIn / tmSales) * 100)) : (tmPayIn > 0 ? 100 : 0);
+-    const operationalPressure = pendingSO + approvedUnpacked + undeliveredCount + pendingCheques;
++    const overrideFollowUpCount = deliveredWithoutPaymentSummary?.count || 0;
++    const overrideFollowUpNote = deliveredWithoutPaymentSummary?.note || 'Delivered COD invoices awaiting collection';
++    const operationalPressure = pendingSO + approvedUnpacked + packedPendingInvoiceCount + readyToDispatchCount + inTransitCount + overrideFollowUpCount + undeliveredCount + pendingCheques;
+     const pressureTone = operationalPressure >= 24 ? 'high' : operationalPressure >= 10 ? 'busy' : operationalPressure > 0 ? 'steady' : 'calm';
+     const focusNote = pendingSO
+         ? `${pendingSO} sales orders are waiting for approval.`
+-        : approvedUnpacked
+-            ? `${approvedUnpacked} approved orders are ready for packing.`
+-            : undeliveredCount
+-                ? `${undeliveredCount} delivery exceptions need follow-up.`
+-                : pendingCheques
+-                    ? `${pendingCheques} cheque receipts still need clearance tracking.`
+-                    : '';
++        : undeliveredCount
++            ? `${undeliveredCount} delivery exceptions need follow-up.`
++            : approvedUnpacked
++                ? `${approvedUnpacked} approved orders are ready for packing.`
++                : packedPendingInvoiceCount
++                    ? `${packedPendingInvoiceCount} packed orders are waiting for invoice generation.`
++                    : readyToDispatchCount
++                        ? `${readyToDispatchCount} packed invoices are ready to dispatch.`
++                        : inTransitCount
++                            ? `${inTransitCount} deliveries are currently in transit.`
++                            : overrideFollowUpCount
++                                ? `${overrideFollowUpCount} delivered COD invoices still need payment follow-up.`
++                                : pendingCheques
++                                    ? `${pendingCheques} cheque receipts still need clearance tracking.`
++                                : '';
+     const salesCompareHtml = salesDiff !== null
+         ? `<span class="admin-dash-trend ${salesDiff >= 0 ? 'up' : 'down'}">${salesDiff >= 0 ? '+' : '-'}${Math.abs(salesDiff)}% vs last month</span>`
+         : `<span class="admin-dash-trend neutral">Last month: ${currency(lmSales)}</span>`;
+@@ -3634,6 +3781,10 @@ async function buildAdminCommandCenter(model) {
+     const workflowCards = {
+         'pending-approvals': { key: 'pending-approvals', label: 'Pending approvals', count: pendingSO, note: 'Sales orders waiting for a decision', color: '#f59e0b', fn: "navigateTo('salesorders')", icon: 'hourglass_top' },
+         'ready-for-packing': { key: 'ready-for-packing', label: 'Ready for packing', count: approvedUnpacked, note: 'Approved orders waiting for warehouse action', color: '#60a5fa', fn: "navigateTo('packing')", icon: 'inventory_2' },
++        'packed-pending-invoice': { key: 'packed-pending-invoice', label: 'Packed pending invoice', count: packedPendingInvoiceCount, note: 'Packed orders waiting for invoice generation', color: '#6366f1', fn: "navigateTo('packing')", icon: 'receipt_long' },
++        'ready-to-dispatch': { key: 'ready-to-dispatch', label: 'Ready to dispatch', count: readyToDispatchCount, note: 'Packed invoices waiting for dispatch', color: '#f97316', fn: "navigateTo('delivery')", icon: 'move_to_inbox' },
++        'deliveries-in-transit': { key: 'deliveries-in-transit', label: 'Deliveries in transit', count: inTransitCount, note: 'Dispatched orders currently on the road', color: '#38bdf8', fn: "navigateTo('delivery')", icon: 'local_shipping' },
++        'delivered-without-payment': { key: 'delivered-without-payment', label: 'COD payment follow-up', count: overrideFollowUpCount, note: overrideFollowUpNote, color: '#fb7185', fn: 'openDeliveredWithoutPaymentFollowUpModal()', icon: 'event_upcoming' },
+         'delivery-exceptions': { key: 'delivery-exceptions', label: 'Delivery exceptions', count: undeliveredCount, note: 'Undelivered or returned dispatches', color: '#f87171', fn: "navigateTo('delivery')", icon: 'local_shipping' },
+         'pending-cheques': { key: 'pending-cheques', label: 'Pending cheques', count: pendingCheques, note: 'Cheque receipts still pending clearance', color: '#fbbf24', fn: "navigateTo('reports');setTimeout(()=>showReport('chequeregister'),200)", icon: 'account_balance' },
+         'low-stock': { key: 'low-stock', label: 'Low stock SKUs', count: lowStock, note: 'Items already below replenishment threshold', color: '#fb7185', fn: "navigateTo('inventory')", icon: 'warning' }
+@@ -3685,8 +3836,7 @@ async function buildAdminCommandCenter(model) {
+     const hiddenMetrics = new Set(homePrefs.hiddenMetrics || []);
+     const visibleSignals = (homePrefs.signals || [])
+         .map(key => workflowCards[key])
+-        .filter(item => item && !hiddenSignals.has(item.key) && item.count > 0)
+-        .slice(0, 4);
++        .filter(item => item && !hiddenSignals.has(item.key) && item.count > 0);
+     const visibleRadarItems = (homePrefs.radar || [])
+         .map(key => workflowCards[key])
+         .filter(item => item && !hiddenRadar.has(item.key));
+@@ -3942,9 +4092,19 @@ async function buildAdminCommandCenter(model) {
+                             <span class="admin-dash-panel-eyebrow">Operational radar</span>
+                             <h3>${hottestRadar && hottestRadar.count > 0 ? hottestRadar.label : 'Queues under control'}</h3>
+                         </div>
+-                        <div class="admin-dash-command-radar-badge">
+-                            <span>Open queues</span>
+-                            <strong>${activeRadarCount}</strong>
++                        <div class="admin-dash-command-radar-side">
++                            <div class="admin-dash-command-radar-badge">
++                                <span>Open queues</span>
++                                <strong>${activeRadarCount}</strong>
++                            </div>
++                            <div class="admin-dash-command-radar-controls">
++                                <button type="button" class="admin-dash-scroll-btn" onclick="scrollDashboardRadar(this,'up')" aria-label="Scroll operational radar up">
++                                    <span class="material-symbols-outlined">keyboard_arrow_up</span>
++                                </button>
++                                <button type="button" class="admin-dash-scroll-btn" onclick="scrollDashboardRadar(this,'down')" aria-label="Scroll operational radar down">
++                                    <span class="material-symbols-outlined">keyboard_arrow_down</span>
++                                </button>
++                            </div>
+                         </div>
+                     </div>
+                     <p class="admin-dash-command-radar-copy">${hottestRadar && hottestRadar.count > 0 ? `${hottestRadar.count} ${hottestRadar.count === 1 ? 'queue needs' : 'queues need'} attention first.` : 'All operational queues are currently clear.'}</p>
+@@ -3981,6 +4141,89 @@ async function buildAdminCommandCenter(model) {
+     </div>`;
+ }
+ 
++function scrollDashboardRadar(trigger, direction) {
++    const radar = trigger && trigger.closest ? trigger.closest('.admin-dash-command-radar') : null;
++    const list = radar ? radar.querySelector('.admin-dash-command-radar-list') : null;
++    if (!list) return;
++    const delta = Math.max(140, Math.round(list.clientHeight * 0.55));
++    list.scrollBy({ top: direction === 'up' ? -delta : delta, behavior: 'smooth' });
++}
++async function openDeliveredWithoutPaymentFollowUpModal() {
++    const [deliveries, invoices, payments] = await Promise.all([
++        DB.getAll('delivery'),
++        DB.getAll('invoices'),
++        DB.getAll('payments')
++    ]);
++    const entries = getDeliveredWithoutPaymentFollowUp(deliveries, invoices, payments);
++    const summary = summarizeDeliveredWithoutPaymentFollowUp(entries);
++    if (!entries.length) {
++        openModal('COD Payment Follow-up', `
++            <div class="empty-state" style="padding:28px 16px">
++                <div class="empty-icon">${msIcon('task_alt')}</div>
++                <p>No delivered COD invoice is waiting for payment right now.</p>
++            </div>`);
++        return;
++    }
++
++    const rowsHtml = entries.map(entry => {
++        const invoiceLabel = getInvoiceDisplayNo(entry.invoiceNo) || entry.invoiceNo;
++        const dueTone = entry.dueMeta.tone;
++        const badgeBg = entry.dueMeta.state === 'overdue'
++            ? 'rgba(239,68,68,0.12)'
++            : entry.dueMeta.state === 'due-today'
++                ? 'rgba(249,115,22,0.12)'
++                : 'rgba(34,197,94,0.12)';
++        const invoiceIdArg = JSON.stringify(entry.invoiceId);
++        const invoiceNoArg = JSON.stringify(entry.invoiceNo);
++        const deliveryIdArg = JSON.stringify(entry.deliveryId);
++        return `
++            <div style="border:1px solid var(--border);border-radius:12px;padding:12px;background:var(--bg-card)">
++                <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:8px">
++                    <div>
++                        <div style="font-size:0.92rem;font-weight:800;color:var(--text-primary)">${escapeHtml(entry.partyName)}</div>
++                        <div style="font-size:0.78rem;color:var(--text-muted);margin-top:2px">${escapeHtml(invoiceLabel)}${entry.orderNo ? ` | ${escapeHtml(entry.orderNo)}` : ''}</div>
++                    </div>
++                    <span style="padding:4px 8px;border-radius:999px;font-size:0.72rem;font-weight:800;background:${badgeBg};color:${dueTone};white-space:nowrap">${escapeHtml(entry.dueMeta.label)}</span>
++                </div>
++                <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 12px;font-size:0.8rem;margin-bottom:10px">
++                    <div><span style="color:var(--text-muted)">Due date</span><br><strong>${fmtDate(entry.dueDate)}</strong></div>
++                    <div><span style="color:var(--text-muted)">Balance</span><br><strong style="color:var(--danger)">${currency(entry.balance)}</strong></div>
++                    <div><span style="color:var(--text-muted)">Approved by</span><br><strong>${escapeHtml(entry.approvedBy || '-')}</strong></div>
++                    <div><span style="color:var(--text-muted)">Collected</span><br><strong>${currency(entry.paid)}</strong></div>
++                </div>
++                <div style="display:flex;flex-wrap:wrap;gap:8px">
++                    <button class="btn btn-outline btn-sm" onclick="closeModal();viewInvoiceByNo(${invoiceNoArg})">Open Invoice</button>
++                    <button class="btn btn-primary btn-sm" onclick="closeModal();openReceivePaymentForInvoice(${invoiceIdArg})">Receive Payment</button>
++                    <button class="btn btn-outline btn-sm" onclick="closeModal();viewDeliveryDetail(${deliveryIdArg})">Delivery</button>
++                </div>
++            </div>`;
++    }).join('');
++
++    openModal('COD Payment Follow-up', `
++        <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:14px">
++            <div style="padding:10px 12px;border-radius:10px;background:rgba(249,115,22,0.08);border:1px solid rgba(249,115,22,0.18)">
++                <div style="font-size:0.72rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">Invoices</div>
++                <div style="font-size:1.05rem;font-weight:800;color:var(--text-primary)">${summary.count}</div>
++            </div>
++            <div style="padding:10px 12px;border-radius:10px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.18)">
++                <div style="font-size:0.72rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">Overdue</div>
++                <div style="font-size:1.05rem;font-weight:800;color:var(--danger)">${summary.overdueCount}</div>
++            </div>
++            <div style="padding:10px 12px;border-radius:10px;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.18)">
++                <div style="font-size:0.72rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">Due</div>
++                <div style="font-size:1.05rem;font-weight:800;color:var(--success)">${summary.dueCount}</div>
++            </div>
++            <div style="padding:10px 12px;border-radius:10px;background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.18)">
++                <div style="font-size:0.72rem;color:var(--text-muted);font-weight:700;text-transform:uppercase">Outstanding</div>
++                <div style="font-size:1.05rem;font-weight:800;color:var(--text-primary)">${currency(summary.totalOutstanding)}</div>
++            </div>
++        </div>
++        <div style="font-size:0.82rem;color:var(--text-muted);margin-bottom:12px">${escapeHtml(summary.note)}. These invoices stay here until the balance becomes zero.</div>
++        <div style="display:flex;flex-direction:column;gap:10px;max-height:min(60vh,520px);overflow:auto;padding-right:2px">
++            ${rowsHtml}
++        </div>`);
++}
++
+ function toggleDashPeriodMenu() {
+     const menu = document.getElementById('dash-period-menu');
+     if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+@@ -5521,17 +5764,198 @@ function getABCAnalysis(items) {
+ // =============================================
+ //  STOCK COMPUTATION UTILITIES
+ // =============================================
+-function getAvailableStock(item) {
+-    const orders = DB.get('db_salesorders');   // sync
+-    let reserved = 0;
+-    (orders || []).forEach(o => {
+-        if ((o.status === 'pending' || o.status === 'approved') && !o.packed) {
+-            (o.items || []).forEach(li => {
+-                if (li.itemId === item.id) reserved += Number(li.qty);
+-            });
++function isSalesOrderHoldingReservation(order) {
++    if (!order) return false;
++    const status = String(order.status || '').toLowerCase();
++    if (!['pending', 'approved'].includes(status)) return false;
++    if (status === 'rejected' || status === 'cancelled') return false;
++    return !(order.invoiceNo || order.invoice_no);
++}
++
++function buildOpenOrderReservedMap(orders = null) {
++    const source = Array.isArray(orders)
++        ? orders
++        : (DB.get('db_salesorders') || DB.get('db_sales_orders') || DB.cache['sales_orders'] || []);
++    const reservedMap = {};
++    (source || []).forEach(o => {
++        if (!isSalesOrderHoldingReservation(o)) return;
++        (o.items || []).forEach(li => {
++            const itemId = getLineItemId(li);
++            if (!itemId) return;
++            reservedMap[itemId] = +((reservedMap[itemId] || 0) + getLinePrimaryQty(li)).toFixed(4);
++        });
++    });
++    return reservedMap;
++}
++
++function getPersistedReservedQty(item) {
++    return +((item?.reservedQty ?? item?.reserved_qty) || 0);
++}
++
++function inventorySupportsReservedQty(items = []) {
++    return Array.isArray(items) && items.some(item => item && ('reservedQty' in item || 'reserved_qty' in item));
++}
++
++function getEffectiveReservedQty(item, orderReservedMap = null) {
++    const derivedReserved = +((orderReservedMap || buildOpenOrderReservedMap())?.[item?.id] || 0);
++    return +Math.max(getPersistedReservedQty(item), derivedReserved).toFixed(4);
++}
++
++function getAvailableStock(item, orderReservedMap = null) {
++    const stock = +(item?.stock || 0);
++    const reserved = getEffectiveReservedQty(item, orderReservedMap);
++    return { stock, reserved, available: +(stock - reserved).toFixed(4) };
++}
++
++function takeQtyFromMap(qtyMap, itemId, qtyNeeded) {
++    const key = String(itemId || '');
++    const available = +(qtyMap.get(key) || 0);
++    const taken = Math.min(available, +(qtyNeeded || 0));
++    if (taken <= 0) return 0;
++    const remaining = +((available - taken).toFixed(4));
++    if (remaining > 0.0001) qtyMap.set(key, remaining);
++    else qtyMap.delete(key);
++    return +taken.toFixed(4);
++}
++
++function applyReservedQtyDelta(item, itemUpdate, deltaQty, supportsReservedQty = false) {
++    if (!supportsReservedQty) return getPersistedReservedQty(item);
++    const nextReserved = Math.max(0, +((getPersistedReservedQty(item) || 0) + (+deltaQty || 0)).toFixed(4));
++    item.reservedQty = nextReserved;
++    itemUpdate.reservedQty = nextReserved;
++    return nextReserved;
++}
++
++function createStockLedgerInsert({
++    date = today(),
++    itemId,
++    itemName,
++    entryType,
++    qty = 0,
++    runningStock = 0,
++    documentNo = '',
++    reason = '',
++    createdBy = currentUser ? (currentUser.userId || currentUser.name || 'System') : 'System'
++} = {}) {
++    return DB.rawInsert('stock_ledger', {
++        date,
++        itemId,
++        itemName,
++        entryType,
++        qty,
++        runningStock,
++        documentNo,
++        reason,
++        createdBy
++    });
++}
++
++function normalizeInvoiceLineForCompare(line = {}) {
++    return {
++        itemId: String(getLineItemId(line) || ''),
++        qty: +getLinePrimaryQty(line).toFixed(4),
++        unit: String(line.unit || ''),
++        price: +(+line.price || 0).toFixed(2),
++        amount: +(+line.amount || 0).toFixed(2),
++        discountAmt: +(+line.discountAmt || 0).toFixed(2),
++        discountPct: +(+line.discountPct || 0).toFixed(2),
++        mrp: line.mrp ?? null
++    };
++}
++
++function areInvoiceLineSetsEqual(a = [], b = []) {
++    const normalize = lines => (lines || [])
++        .map(normalizeInvoiceLineForCompare)
++        .sort((x, y) =>
++            String(x.itemId).localeCompare(String(y.itemId))
++            || String(x.unit).localeCompare(String(y.unit))
++            || (x.qty - y.qty)
++            || (x.price - y.price)
++            || (x.amount - y.amount)
++        );
++    return JSON.stringify(normalize(a)) === JSON.stringify(normalize(b));
++}
++
++function getLedgerDocumentNo(entry) {
++    return entry?.documentNo || entry?.document_no || '';
++}
++
++function getLedgerEntryType(entry) {
++    return entry?.entryType || entry?.entry_type || '';
++}
++
++function getLedgerEntryGroupKey(entry) {
++    return `${entry?.itemId || entry?.item_id || ''}::${getLedgerDocumentNo(entry)}`;
++}
++
++function isInvoiceEditReversalEntry(entry) {
++    return getLedgerEntryType(entry) === 'Invoice Edit Reversal';
++}
++
++function isEditedInvoiceRepostEntry(entry) {
++    return /Edited Invoice/i.test(entry?.reason || '');
++}
++
++function isInvoiceConsumptionEntry(entry) {
++    const qty = +(entry?.qty || 0);
++    const entryType = getLedgerEntryType(entry);
++    return qty < 0 && (entryType === 'Sale' || entryType === 'Consumed');
++}
++
++function filterVisibleStockLedgerEntries(entries = []) {
++    const ordered = entries.slice().sort((a, b) =>
++        new Date(a.date || 0) - new Date(b.date || 0)
++        || String(a.id || '').localeCompare(String(b.id || ''))
++    );
++    const hidden = new Set();
++    const latestEditedEntryByGroup = new Map();
++
++    ordered.forEach((entry, index) => {
++        if (isInvoiceEditReversalEntry(entry)) hidden.add(index);
++        if (isEditedInvoiceRepostEntry(entry)) {
++            latestEditedEntryByGroup.set(getLedgerEntryGroupKey(entry), index);
++        }
++    });
++
++    latestEditedEntryByGroup.forEach((latestIndex, groupKey) => {
++        ordered.forEach((entry, index) => {
++            if (getLedgerEntryGroupKey(entry) !== groupKey || index === latestIndex) return;
++            if (isInvoiceEditReversalEntry(entry) || isInvoiceConsumptionEntry(entry) || isEditedInvoiceRepostEntry(entry)) {
++                hidden.add(index);
++            }
++        });
++    });
++
++    return ordered.filter((_, index) => !hidden.has(index));
++}
++
++function getDeliveryStatusRank(status) {
++    const ranks = { Delivered: 5, Dispatched: 4, Returned: 3, Undelivered: 3, Cancelled: 1 };
++    return ranks[status] || 0;
++}
++
++function buildInvoiceDeliveryStatusMap(deliveries = []) {
++    const map = {};
++    (deliveries || []).forEach(delivery => {
++        const invoiceNo = delivery?.invoiceNo || '';
++        if (!invoiceNo) return;
++        const current = map[invoiceNo];
++        const currentRank = current ? getDeliveryStatusRank(current.status) : -1;
++        const nextRank = getDeliveryStatusRank(delivery.status);
++        const currentDate = String(current?.deliveredAt || current?.dispatchedAt || current?.date || '');
++        const nextDate = String(delivery?.deliveredAt || delivery?.dispatchedAt || delivery?.date || '');
++        if (!current || nextRank > currentRank || (nextRank === currentRank && nextDate >= currentDate)) {
++            map[invoiceNo] = delivery;
+         }
+     });
+-    return { stock: item.stock, reserved, available: (item.stock || 0) - reserved };
++    return map;
++}
++
++function getInvoiceDeliveredBadgeHtml(invoice, deliveryStatusMap = null) {
++    const activeMap = deliveryStatusMap || window._invoiceDeliveryStatusMap || {};
++    const linkedDelivery = activeMap[invoice?.invoiceNo || ''];
++    if (!linkedDelivery || linkedDelivery.status !== 'Delivered' || invoice?.status === 'cancelled') return '';
++    return '<span class="badge badge-delivered">Delivered</span>';
+ }
+ 
+ // =============================================
+@@ -5633,15 +6057,11 @@ async function renderInventory() {
+     const totalValue = items.reduce((s, i) => s + (i.stock * i.purchasePrice), 0);
+     const lowStock = items.filter(i => i.stock <= (i.lowStockAlert || 5)).length;
+     const totalStock = items.reduce((s, i) => s + i.stock, 0);
+-    // Pre-calculate reserved stock to avoid O(N^2) in the loop if we can
++    // Keep orders reserved until they are invoiced, not merely packed.
++    const derivedReservedMap = buildOpenOrderReservedMap(salesOrders);
+     const reservedMap = {};
+-    salesOrders.forEach(o => {
+-        if ((o.status === 'pending' || o.status === 'approved') && !o.packed) {
+-            o.items.forEach(li => {
+-                const lid = li.itemId || li.item_id;
+-                if (lid) reservedMap[lid] = (reservedMap[lid] || 0) + Number(li.qty);
+-            });
+-        }
++    items.forEach(item => {
++        reservedMap[item.id] = getEffectiveReservedQty(item, derivedReservedMap);
+     });
+ 
+     // Expose reservedMap globally so filterInvTable can use it during search
+@@ -6052,13 +6472,14 @@ function validateSaleLinesBeforePost(inventory, lines, { existingLines = [] } =
+ 
+     const requestedQty = sumPrimaryQtyByItem(lines);
+     const existingQty = sumPrimaryQtyByItem(existingLines);
++    const orderReservedMap = buildOpenOrderReservedMap();
+ 
+     for (const [itemId, qtyNeeded] of requestedQty.entries()) {
+         const item = inventory.find(x => String(x.id) === String(itemId));
+         if (!item) {
+             return { ok: false, message: `Item ${itemId} is missing from inventory.` };
+         }
+-        const stockInfo = getAvailableStock(item);
++        const stockInfo = getAvailableStock(item, orderReservedMap);
+         const reusableQty = existingQty.get(String(itemId)) || 0;
+         let availableQty = (stockInfo.available || 0) + reusableQty;
+         if (item.batches && item.batches.length) {
+@@ -6971,7 +7392,7 @@ async function _viewItemLedgerLegacy(itemId) {
+     ]);
+     const item = items.find(x => x.id === itemId);
+     if (!item) return;
+-    const itemLedger = ledger.filter(e => e.itemId === itemId);
++    const itemLedger = filterVisibleStockLedgerEntries(ledger.filter(e => e.itemId === itemId));
+     const rows = itemLedger.slice().reverse();
+ 
+     function extractMrp(e) {
+@@ -7021,9 +7442,9 @@ async function renderStockLedger(itemId) {
+     const item = items.find(x => x.id === itemId);
+     if (!item) { navigateTo('inventory'); return; }
+ 
+-    const itemLedger = ledger
+-        .filter(e => e.itemId === itemId)
+-        .sort((a, b) => new Date(a.date) - new Date(b.date) || String(a.id).localeCompare(String(b.id)));
++    const itemLedger = filterVisibleStockLedgerEntries(
++        ledger.filter(e => e.itemId === itemId)
++    );
+ 
+     pageContent.innerHTML = `
+         <div class="section-toolbar">
+@@ -7054,6 +7475,8 @@ async function renderStockLedger(itemId) {
+                     <option value="">All Types</option>
+                     <option value="Purchase">Purchase</option>
+                     <option value="Sale">Sale</option>
++                    <option value="Consumed">Consumed</option>
++                    <option value="Reserved">Reserved</option>
+                     <option value="Adjustment">Adjustment</option>
+                     <option value="Opening">Opening</option>
+                     <option value="Return">Return</option>
+@@ -7127,7 +7550,9 @@ function filterStockLedger() {
+ async function exportStockLedgerCSV(itemId) {
+     const [items, ledger] = await Promise.all([DB.getAll('inventory'), DB.getAll('stock_ledger')]);
+     const item = items.find(x => x.id === itemId);
+-    const entries = ledger.filter(e => e.itemId === itemId).sort((a, b) => new Date(a.date) - new Date(b.date));
++    const entries = filterVisibleStockLedgerEntries(
++        ledger.filter(e => e.itemId === itemId)
++    );
+     if (!entries.length) return alert('No entries to export');
+     let csv = 'Date,Entry Type,Doc No,Qty,Running Stock,Reason,Created By\n';
+     entries.forEach(e => {
+@@ -9963,7 +10388,7 @@ async function deletePO(id) {
+ // =============================================
+ let invoiceItems = [];
+ async function renderInvoices() {
+-    const [invoices, payments] = await Promise.all([DB.getAll('invoices'), DB.getAll('payments')]);
++    const [invoices, payments, deliveries] = await Promise.all([DB.getAll('invoices'), DB.getAll('payments'), DB.getAll('delivery')]);
+ 
+     // Build payments map: invoiceNo ΓåÆ paid amount
+     const pm = {};
+@@ -9975,6 +10400,7 @@ async function renderInvoices() {
+         }
+     });
+     window._invPaymentsMap = pm;
++    window._invoiceDeliveryStatusMap = buildInvoiceDeliveryStatusMap(deliveries);
+ 
+     const visibleInvoices = currentUser.role === 'Salesman'
+         ? invoices.filter(i => i.assignedTo === currentUser.name)
+@@ -10110,12 +10536,13 @@ function renderInvoiceRows(invs) {
+     return invs.map(i => {
+         const displayNo = getInvoiceDisplayNo(i);
+         const showInternalNo = i.vyaparInvoiceNo && normalizeIdentityValue(i.vyaparInvoiceNo) !== normalizeIdentityValue(i.invoiceNo);
++        const deliveredBadge = getInvoiceDeliveredBadgeHtml(i);
+         const cellMap = {
+             date: `<td style="min-width:90px">${fmtDate(i.date)}</td>`,
+             invoiceNo: `<td style="min-width:140px;white-space:nowrap;font-weight:600;text-decoration:${i.status === 'cancelled' ? 'line-through' : 'none'}">${escapeHtml(displayNo || i.invoiceNo || '')}${showInternalNo ? `<br><span style="font-size:0.7rem;font-weight:500;color:var(--text-muted)">Sys: ${escapeHtml(i.invoiceNo)}</span>` : ''}${i.assignedTo ? `<br><span style="font-size:0.68rem;color:var(--info);font-weight:600"> ${escapeHtml(i.assignedTo)}${i.handoverDate ? '  ' + fmtDate(i.handoverDate) : ''}</span>` : ''}</td>`,
+             party: `<td style="min-width:150px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(i.partyName)}</td>`,
+             type: `<td style="min-width:80px"><span class="badge ${i.type === 'sale' ? 'badge-success' : 'badge-info'}">${i.type}</span></td>`,
+-            status: `<td style="min-width:90px">${i.status === 'cancelled' ? '<span class="badge badge-danger">Cancelled</span>' : i.status === 'draft' ? '<span class="badge badge-warning">Draft</span>' : '<span class="badge badge-success">Posted</span>'}</td>`,
++            status: `<td style="min-width:150px;white-space:nowrap">${i.status === 'cancelled' ? '<span class="badge badge-danger">Cancelled</span>' : i.status === 'draft' ? '<span class="badge badge-warning">Draft</span>' : '<span class="badge badge-success">Posted</span>'}${deliveredBadge ? ` ${deliveredBadge}` : ''}</td>`,
+             items: `<td style="min-width:50px;text-align:center">${(i.items || []).length}</td>`,
+             total: `<td style="min-width:100px;text-align:right" class="${i.type === 'sale' ? 'amount-green' : 'amount-red'}">${currency(i.total)}</td>`,
+             outstanding: (() => {
+@@ -10151,6 +10578,7 @@ function renderInvoiceCards(invs) {
+         const balance = Math.max(0, i.total - paid);
+         const isPaid = balance <= 0 || i.status === 'cancelled';
+         const isCancelled = i.status === 'cancelled';
++        const deliveredBadge = getInvoiceDeliveredBadgeHtml(i);
+         const badgeStyle = isCancelled
+             ? 'background:#fee2e2;color:#dc2626;'
+             : isPaid
+@@ -10165,6 +10593,7 @@ function renderInvoiceCards(invs) {
+                 <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0">
+                     <span style="font-weight:700;font-size:0.95rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(i.partyName)}</span>
+                     <span style="font-size:0.68rem;font-weight:700;padding:2px 7px;border-radius:20px;white-space:nowrap;${badgeStyle}">${badgeLabel}</span>
++                    ${deliveredBadge}
+                 </div>
+                 <span style="font-size:0.75rem;color:var(--text-muted);white-space:nowrap;margin-left:8px">${i.type === 'sale' ? 'Sale' : 'Purchase'} #${escapeHtml(displayNo || i.invoiceNo)}</span>
+             </div>
+@@ -11137,6 +11566,9 @@ async function saveInvoice(id) {
+         const orders = await DB.getAll('sales_orders');
+         const company = DB.getObj('db_company') || {};
+         const persistedItems = invoiceItems.map(li => ({ ...li, primaryQty: getLinePrimaryQty(li) }));
++        const sourceOrder = fromOrderId ? orders.find(o => String(o.id) === String(fromOrderId)) : null;
++        const reservedQtySupported = inventorySupportsReservedQty(inventory);
++        const orderReservedQtyMap = sourceOrder ? sumPrimaryQtyByItem(sourceOrder.items || []) : new Map();
+         if (invType === 'sale') {
+             const validation = validateSaleLinesBeforePost(inventory, persistedItems);
+             if (!validation.ok) {
+@@ -11154,6 +11586,9 @@ async function saveInvoice(id) {
+             const qtyChange = invType === 'sale' ? -primaryQty : primaryQty;
+             const newStock = (item.stock || 0) + qtyChange;
+             const itemUpdate = { stock: newStock };
++            const reservedReleaseQty = invType === 'sale' && sourceOrder
++                ? takeQtyFromMap(orderReservedQtyMap, item.id, primaryQty)
++                : 0;
+             if (invType === 'sale') {
+                 if (!company.allowNegativeStock && newStock < -0.0001) {
+                     throw new Error(`Insufficient stock for ${item.name}.`);
+@@ -11170,6 +11605,9 @@ async function saveInvoice(id) {
+                     }
+                     li.batchAllocations = batchResult.allocations || [];
+                 }
++                if (reservedReleaseQty > 0) {
++                    applyReservedQtyDelta(item, itemUpdate, -reservedReleaseQty, reservedQtySupported);
++                }
+             } else {
+                 const batchResult = applyPurchaseLineToBatches(item, li, { dateVal });
+                 if (batchResult.updatedBatches) {
+@@ -11183,11 +11621,30 @@ async function saveInvoice(id) {
+             }
+             item.stock = newStock;
+             ops.push(DB.rawUpdate('inventory', item.id, itemUpdate));
+-            ops.push(DB.rawInsert('stock_ledger', {
+-                date: dateVal, itemId: item.id, itemName: item.name,
+-                entryType: invType === 'sale' ? 'Sale' : 'Purchase',
+-                qty: qtyChange, runningStock: newStock, documentNo: invNo,
+-                reason: invType === 'sale' ? 'Sale Invoice' : 'Purchase Invoice',
++            if (invType === 'sale' && reservedReleaseQty > 0) {
++                ops.push(createStockLedgerInsert({
++                    date: dateVal,
++                    itemId: item.id,
++                    itemName: item.name,
++                    entryType: 'Reserved Release',
++                    qty: 0,
++                    runningStock: newStock,
++                    documentNo: invNo,
++                    reason: `- Reserved ${reservedReleaseQty} moved from SO ${sourceOrder.orderNo} to invoice`,
++                    createdBy: currentUser.userId
++                }));
++            }
++            ops.push(createStockLedgerInsert({
++                date: dateVal,
++                itemId: item.id,
++                itemName: item.name,
++                entryType: invType === 'sale' ? (sourceOrder ? 'Consumed' : 'Sale') : 'Purchase',
++                qty: qtyChange,
++                runningStock: newStock,
++                documentNo: invNo,
++                reason: invType === 'sale'
++                    ? (sourceOrder ? `Consumed from reserved stock for SO ${sourceOrder.orderNo}` : 'Sale Invoice')
++                    : 'Purchase Invoice',
+                 createdBy: currentUser.userId
+             }));
+         }
+@@ -11218,7 +11675,7 @@ async function saveInvoice(id) {
+             subtotal: sub, gst: gst,
+             round_off: roundoff, total: total, discount_pct: discPct, discount_amt: discAmt,
+             status: 'posted', created_by: currentUser.userId,
+-            vyapar_invoice_no: vyaparInvNo, from_order: fromOrderId ? (orders.find(o => o.id === fromOrderId)?.orderNo || '') : null
++            vyapar_invoice_no: vyaparInvNo, from_order: sourceOrder ? sourceOrder.orderNo : null
+         };
+         invData.items = persistedItems;
+ 
+@@ -11947,9 +12404,39 @@ async function saveEditedInvoice(id) {
+         const discPct = +($('f-inv-disc-pct')?.value || 0);
+         const discAmt = +($('f-inv-disc-amt')?.value || 0);
+         const roundOff = +($('f-inv-roundoff')?.value || 0);
++        const dueDate = $('f-inv-due-date')?.value || null;
++        const deliveryDate = $('f-inv-delivery-date')?.value || null;
++        const boxNo = $('f-inv-box-no')?.value || null;
+         const sub = persistedItems.reduce((s, li) => s + li.amount, 0);
+         const newTotal = Math.max(0, +(sub + roundOff - discAmt).toFixed(2));
+         const oldTotal = inv.total;
++        const metadataOnlyEdit =
++            areInvoiceLineSetsEqual(inv.items || [], persistedItems) &&
++            Math.abs(newTotal - oldTotal) <= 0.001 &&
++            +(inv.gst || 0) === gst &&
++            +((inv.discountPct ?? inv.discount_pct ?? 0) || 0) === discPct &&
++            +((inv.discountAmt ?? inv.discount_amt ?? 0) || 0) === discAmt &&
++            +((inv.roundOff ?? inv.round_off ?? 0) || 0) === roundOff;
++
++        if (metadataOnlyEdit) {
++            await DB.rawUpdate('invoices', id, {
++                due_date: dueDate,
++                delivery_date: deliveryDate,
++                box_no: boxNo,
++                items: persistedItems,
++                subtotal: sub,
++                gst,
++                discount_pct: discPct,
++                discount_amt: discAmt,
++                round_off: roundOff,
++                total: newTotal
++            });
++            await DB.refreshTables(['invoices']);
++            endSave();
++            showToast(`Invoice ${inv.invoiceNo} updated successfully!`, 'success');
++            navigateTo('invoices');
++            return;
++        }
+ 
+         const ops = [];
+ 
+@@ -11999,11 +12486,16 @@ async function saveEditedInvoice(id) {
+                 li.batchAllocations = batchResult.allocations || [];
+             }
+             ops.push(DB.rawUpdate('inventory', item.id, itemUpdateNew));
+-            ops.push(DB.rawInsert('stock_ledger', {
+-                date: inv.date, itemId: item.id, itemName: item.name,
+-                entryType: 'Sale', qty: -primaryQty,
+-                runningStock: item.stock, documentNo: inv.invoiceNo,
+-                reason: `Edited Invoice ${inv.invoiceNo}`, createdBy: currentUser.userId
++            ops.push(createStockLedgerInsert({
++                date: inv.date,
++                itemId: item.id,
++                itemName: item.name,
++                entryType: inv.fromOrder ? 'Consumed' : 'Sale',
++                qty: -primaryQty,
++                runningStock: item.stock,
++                documentNo: inv.invoiceNo,
++                reason: `Edited Invoice ${inv.invoiceNo}`,
++                createdBy: currentUser.userId
+             }));
+         }
+ 
+@@ -12037,7 +12529,10 @@ async function saveEditedInvoice(id) {
+         ops.push(DB.rawUpdate('invoices', id, {
+             items: persistedItems,
+             subtotal: sub, gst, discount_pct: discPct, discount_amt: discAmt,
+-            round_off: roundOff, total: newTotal
++            round_off: roundOff, total: newTotal,
++            due_date: dueDate,
++            delivery_date: deliveryDate,
++            box_no: boxNo
+         }));
+ 
+         await Promise.all(ops);
+@@ -12159,8 +12654,8 @@ async function executeCancelInvoice(id, { skipNav = false } = {}) {
+         const existingLedger = await DB.getAll('stock_ledger');
+         const alreadyRestored = existingLedger.some(e =>
+             e.documentNo === inv.invoiceNo &&
+-            (e.entryType === 'Sale Return' || e.entryType === 'Purchase Return') &&
+-            e.reason === 'Invoice Cancelled'
++            (e.entryType === 'Sale Return' || e.entryType === 'Purchase Return' || e.entryType === 'Consumed Reversal') &&
++            String(e.reason || '').includes('Invoice Cancelled')
+         );
+         if (alreadyRestored) {
+             await DB.update('invoices', id, { status: 'cancelled' });
+@@ -12179,12 +12674,21 @@ async function executeCancelInvoice(id, { skipNav = false } = {}) {
+ 
+         const inventory = await DB.getAll('inventory');
+         const company = DB.getObj('db_company') || {};
++        const reservedQtySupported = inventorySupportsReservedQty(inventory);
++        const orders = inv.type === 'sale' && inv.fromOrder ? await DB.getAll('salesorders') : [];
++        const sourceOrder = inv.type === 'sale' && inv.fromOrder
++            ? orders.find(o => o.orderNo === inv.fromOrder)
++            : null;
++        const rollbackReservedQtyMap = sourceOrder
++            ? sumPrimaryQtyByItem(sourceOrder.items || inv.items || [])
++            : new Map();
+         const affectedItemIds = new Set();
+         for (const li of (inv.items || [])) {
+             const item = inventory.find(x => x.id === li.itemId);
+             if (!item) throw new Error(`Item not found during cancellation: ${li.name || li.itemId}`);
+ 
+             const effectiveQty = getLinePrimaryQty(li);
++            const reservedRollbackQty = sourceOrder ? takeQtyFromMap(rollbackReservedQtyMap, item.id, effectiveQty) : 0;
+             const qtyChange = inv.type === 'sale' ? effectiveQty : -effectiveQty;
+             const newStock = (item.stock || 0) + qtyChange;
+             const itemUpdate = { stock: newStock };
+@@ -12212,10 +12716,38 @@ async function executeCancelInvoice(id, { skipNav = false } = {}) {
+                 }
+             }
+ 
++            if (inv.type === 'sale' && reservedRollbackQty > 0) {
++                applyReservedQtyDelta(item, itemUpdate, reservedRollbackQty, reservedQtySupported);
++            }
+             item.stock = newStock;
+             affectedItemIds.add(item.id);
+             await DB.update('inventory', item.id, itemUpdate);
+-            await addLedgerEntry(item.id, item.name, inv.type === 'sale' ? 'Sale Return' : 'Purchase Return', qtyChange, inv.invoiceNo, 'Invoice Cancelled');
++            await createStockLedgerInsert({
++                date: today(),
++                itemId: item.id,
++                itemName: item.name,
++                entryType: inv.type === 'sale'
++                    ? (sourceOrder ? 'Consumed Reversal' : 'Sale Return')
++                    : 'Purchase Return',
++                qty: qtyChange,
++                runningStock: newStock,
++                documentNo: inv.invoiceNo,
++                reason: sourceOrder ? 'Invoice Cancelled - Consumed rollback' : 'Invoice Cancelled',
++                createdBy: currentUser.userId
++            });
++            if (inv.type === 'sale' && reservedRollbackQty > 0 && sourceOrder) {
++                await createStockLedgerInsert({
++                    date: today(),
++                    itemId: item.id,
++                    itemName: item.name,
++                    entryType: 'Reserved Hold',
++                    qty: 0,
++                    runningStock: newStock,
++                    documentNo: inv.invoiceNo,
++                    reason: `Invoice Cancelled + Reserved ${reservedRollbackQty} restored for SO ${sourceOrder.orderNo}`,
++                    createdBy: currentUser.userId
++                });
++            }
+         }
+ 
+         const parties = await DB.getAll('parties');
+@@ -12237,8 +12769,7 @@ async function executeCancelInvoice(id, { skipNav = false } = {}) {
+         }
+ 
+         if (inv.type === 'sale' && inv.fromOrder) {
+-            const orders = await DB.getAll('salesorders');
+-            const order = orders.find(o => o.orderNo === inv.fromOrder);
++            const order = sourceOrder;
+             if (order) {
+                 const resetOrder = {
+                     invoiceCancelled: true,
+@@ -15018,7 +15549,14 @@ function renderPacking() {
+                     ${isAdmin ? `<td><input type="checkbox" class="chk-packed-order" value="${o.id}"></td>` : ''}
+                     <td style="font-weight:600">${o.orderNo}</td><td>${o.partyName}</td><td>${o.packedBy || '-'}</td>
+                     <td style="font-size:0.8rem">${o.packingDurationMins !== undefined ? o.packingDurationMins + ' min' : '-'}</td>
+-                    <td style="font-size:0.8rem">${o.boxCount ? o.boxCount + ' Boxes<br><span style="color:var(--text-muted);font-size:0.75rem">' + (o.packageNumbers || []).join() + '</span>' : '-'}</td>
++                    <td style="font-size:0.8rem">${(() => {
++                        const pkg = getPackageRecordData(o);
++                        const boxLabel = pkg.boxCount ? `${pkg.boxCount} Boxes` : '-';
++                        const sharedBox = pkg.boxNumbers[0] || '';
++                        const crateLabel = pkg.crateNumbers.length ? ` | Crates: ${pkg.crateNumbers.join(', ')}` : '';
++                        const detail = sharedBox ? `${sharedBox}${crateLabel}` : (pkg.packageNumbers.join(', ') || '');
++                        return boxLabel === '-' ? '-' : `${boxLabel}<br><span style="color:var(--text-muted);font-size:0.75rem">${escapeHtml(detail)}</span>`;
++                    })()}</td>
+                     <td class="amount-green">${currency(o.packedTotal || o.total)}</td>
+                     <td>${isAdmin ? `<button class="btn btn-outline btn-sm" onclick="generateInvoiceFromPacked('${o.id}')"> Generate</button>` : '<span class="badge badge-warning">Awaiting Admin</span>'}</td>
+                 </tr>`).join('')}</tbody></table>
+@@ -15035,11 +15573,7 @@ function renderPacking() {
+             <div class="table-wrapper">
+                 <table class="data-table"><thead><tr><th>Order #</th><th>Party</th><th>Packer</th><th>Time</th><th>Boxes</th><th>Crates</th><th>Invoice</th><th>Total</th></tr></thead>
+                 <tbody>${filteredHistory.length ? filteredHistory.map(o => {
+-            const pkgs = o.packageNumbers || [];
+-            const bc = o.boxCount || 0;
+-            const cc = o.crateCount || 0;
+-            const boxes = o.boxNumbers || (bc > 0 ? pkgs.slice(0, bc) : []);
+-            const crates = o.crateNumbers || (cc > 0 ? pkgs.slice(bc, bc + cc) : []);
++            const { boxNumbers: boxes, crateNumbers: crates } = getPackageRecordData(o);
+             const boxDisplay = boxes.length ? boxes.map(n => `<span class="badge badge-outline" style="font-size:0.72rem;margin:1px">${escapeHtml(n)}</span>`).join(' ') : '-';
+             const crateDisplay = crates.length ? crates.map(n => `<span class="badge badge-outline" style="font-size:0.72rem;margin:1px;border-color:var(--warning);color:var(--warning)">${escapeHtml(n)}</span>`).join(' ') : '-';
+             return `<tr>
+@@ -15132,11 +15666,7 @@ function renderPackedNoInvoiceCards(orders, isAdmin) {
+ function renderPackedHistoryCards(orders) {
+     if (!orders.length) return '<div style="text-align:center;padding:20px;color:var(--text-muted)">No history</div>';
+     return orders.map(o => {
+-        const pkgs = o.packageNumbers || [];
+-        const bc = o.boxCount || 0;
+-        const cc = o.crateCount || 0;
+-        const boxes = o.boxNumbers || (bc > 0 ? pkgs.slice(0, bc) : []);
+-        const crates = o.crateNumbers || (cc > 0 ? pkgs.slice(bc, bc + cc) : []);
++        const { boxNumbers: boxes, crateNumbers: crates } = getPackageRecordData(o);
+         const boxDisplay = boxes.length ? boxes.map(n => `<span class="badge badge-outline" style="font-size:0.65rem;margin:1px;padding:2px 4px">${escapeHtml(n)}</span>`).join(' ') : '-';
+         const crateDisplay = crates.length ? crates.map(n => `<span class="badge badge-outline" style="font-size:0.65rem;margin:1px;padding:2px 4px;border-color:var(--warning);color:var(--warning)">${escapeHtml(n)}</span>`).join(' ') : '-';
+         return `
+@@ -15950,6 +16480,113 @@ function completePacking(orderId) {
+     navigateTo('packagedetails');
+ }
+ 
++function normalizePackageNumberList(value) {
++    if (Array.isArray(value)) return value.map(v => String(v ?? '').trim()).filter(Boolean);
++    if (typeof value === 'string') {
++        const raw = value.trim();
++        if (!raw) return [];
++        try {
++            const parsed = JSON.parse(raw);
++            if (Array.isArray(parsed)) return normalizePackageNumberList(parsed);
++        } catch (e) { }
++        return raw.split(',').map(v => v.trim()).filter(Boolean);
++    }
++    if (value && typeof value === 'object') {
++        if (Array.isArray(value.all)) return normalizePackageNumberList(value.all);
++        const boxes = normalizePackageNumberList(value.boxes);
++        const crates = normalizePackageNumberList(value.crates);
++        return [...boxes, ...crates];
++    }
++    return [];
++}
++
++function getCachedSalesOrderById(orderId) {
++    if (!orderId) return null;
++    const orders = DB.cache['salesorders'] || DB.cache['db_salesorders'] || DB.cache['sales_orders'] || [];
++    return orders.find(o => o.id === orderId) || null;
++}
++
++function getPackageRecordData(record, fallbackRecord = null) {
++    const source = record || {};
++    const fallback = fallbackRecord || null;
++
++    let packageNumbers = normalizePackageNumberList(source.packageNumbers);
++    let boxNumbers = normalizePackageNumberList(source.boxNumbers);
++    let crateNumbers = normalizePackageNumberList(source.crateNumbers);
++    let boxCount = Math.max(0, +(source.boxCount || 0) || 0);
++    let crateCount = Math.max(0, +(source.crateCount || 0) || 0);
++
++    if (fallback) {
++        const fallbackPackages = normalizePackageNumberList(fallback.packageNumbers);
++        const fallbackBoxes = normalizePackageNumberList(fallback.boxNumbers);
++        const fallbackCrates = normalizePackageNumberList(fallback.crateNumbers);
++        const fallbackBoxCount = Math.max(0, +(fallback.boxCount || 0) || 0);
++        const fallbackCrateCount = Math.max(0, +(fallback.crateCount || 0) || 0);
++
++        if (!packageNumbers.length && fallbackPackages.length) packageNumbers = fallbackPackages.slice();
++        if (!boxCount && fallbackBoxCount) boxCount = fallbackBoxCount;
++        if (!crateCount && fallbackCrateCount) crateCount = fallbackCrateCount;
++        if (!boxNumbers.length && fallbackBoxes.length) boxNumbers = fallbackBoxes.slice();
++        if (!crateNumbers.length && fallbackCrates.length) crateNumbers = fallbackCrates.slice();
++    }
++
++    if (!boxNumbers.length && boxCount > 0 && packageNumbers.length) boxNumbers = packageNumbers.slice(0, boxCount);
++    if (!crateNumbers.length && crateCount > 0 && packageNumbers.length) crateNumbers = packageNumbers.slice(boxCount, boxCount + crateCount);
++    if (!boxCount && boxNumbers.length) boxCount = boxNumbers.length;
++    if (!crateCount && crateNumbers.length) crateCount = crateNumbers.length;
++    if (!packageNumbers.length) packageNumbers = [...boxNumbers, ...crateNumbers];
++
++    return { packageNumbers, boxNumbers, crateNumbers, boxCount, crateCount };
++}
++
++function getPackageSummary(record, fallbackRecord = null) {
++    const pkg = getPackageRecordData(record, fallbackRecord);
++    const uniqueBoxNumbers = [...new Set(pkg.boxNumbers.map(num => String(num || '').trim()).filter(Boolean))];
++    const uniqueCrateNumbers = [...new Set(pkg.crateNumbers.map(num => String(num || '').trim()).filter(Boolean))];
++    const uniquePackageNumbers = [...new Set(pkg.packageNumbers.map(num => String(num || '').trim()).filter(Boolean))];
++    const boxTotal = pkg.boxCount || pkg.boxNumbers.length;
++    const crateTotal = pkg.crateCount || pkg.crateNumbers.length;
++    const totalPackages = boxTotal + crateTotal || pkg.packageNumbers.length || uniquePackageNumbers.length;
++    const lines = [];
++
++    if (totalPackages) lines.push(`Total Packages: ${totalPackages}`);
++
++    if (boxTotal) {
++        const parts = [`Total Boxes: ${boxTotal}`];
++        if (uniqueBoxNumbers.length) parts.push(`Box No: ${uniqueBoxNumbers.join(', ')}`);
++        lines.push(parts.join(' | '));
++    }
++
++    if (crateTotal) {
++        const parts = [`Total Crates: ${crateTotal}`];
++        if (uniqueCrateNumbers.length) parts.push(`Crate No: ${uniqueCrateNumbers.join(', ')}`);
++        lines.push(parts.join(' | '));
++    }
++
++    if (!lines.length && uniquePackageNumbers.length) lines.push(uniquePackageNumbers.join(', '));
++
++    return {
++        ...pkg,
++        uniqueBoxNumbers,
++        uniqueCrateNumbers,
++        uniquePackageNumbers,
++        totalPackages,
++        lines,
++        text: lines.join(' | ')
++    };
++}
++
++function renderPackageSummaryHtml(record, fallbackRecord = null, lineStyle = '') {
++    const summary = getPackageSummary(record, fallbackRecord);
++    if (!summary.lines.length) return '-';
++    const styleAttr = lineStyle ? ` style="${lineStyle}"` : '';
++    return summary.lines.map(line => `<div${styleAttr}>${escapeHtml(line)}</div>`).join('');
++}
++
++function getPackageRegistryNumbers(record, fallbackRecord = null) {
++    return [...new Set(getPackageRecordData(record, fallbackRecord).packageNumbers)];
++}
++
+ function renderPackageDetailsPage() {
+     const s = window._pkgState;
+     if (!s) { navigateTo('packing'); return; }
+@@ -15976,14 +16613,13 @@ function renderPackageDetailsPage() {
+ 
+         <div id="pkg-box-section">
+             <div class="form-group">
+-                <label style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+-                    <span>\ud83d\udce6 Box Numbers</span>
+-                    <button type="button" class="btn btn-outline btn-sm" onclick="addPkgInputRow('box')" style="padding:4px 8px;font-size:0.8rem">+ Add Box</button>
++                <label style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:8px">
++                    <span>\ud83d\udce6 Box Number</span>
++                    <span style="font-size:0.76rem;color:var(--text-muted);font-weight:500">Same number will be used for all boxes in this order</span>
+                 </label>
+                 <div id="pkg-box-container">
+-                    <div class="pkg-input-row" style="display:flex;gap:8px;margin-bottom:8px">
+-                        <input type="text" class="f-box-number-input form-control" value="" placeholder="Box number (required)" required style="flex:1">
+-                        <button type="button" class="btn-icon" onclick="removePkgInputRow(this,'box')" style="color:var(--danger)">\ud83d\uddd1\ufe0f</button>
++                    <div class="pkg-input-row" style="display:flex;gap:8px;margin-bottom:8px;align-items:center">
++                        <input type="text" id="f-pkg-shared-box-number" class="f-box-number-input form-control" value="" placeholder="Box number (used for all boxes)" required style="flex:1">
+                     </div>
+                 </div>
+             </div>
+@@ -15999,7 +16635,7 @@ function renderPackageDetailsPage() {
+             </div>
+         </div>
+ 
+-        <small style="color:var(--text-muted);display:block;margin-top:4px">Each input represents one physical box or crate. Numbers must be unique for today across all users.</small>
++        <small style="color:var(--text-muted);display:block;margin-top:4px">The box number is shared across all boxes for this order. Crate numbers stay separate and package numbers must remain unique across other orders for today.</small>
+ 
+         <input type="hidden" id="f-pkg-orderId" value="${orderId}">
+         <input type="hidden" id="f-pkg-packer" value="${escapeHtml(packer)}">
+@@ -16024,6 +16660,22 @@ function onPkgCountChange() {
+ }
+ 
+ function syncPkgInputRows(type, count) {
++    if (type === 'box') {
++        const container = $('pkg-box-container'); if (!container) return;
++        const currentValue = (container.querySelector('.f-box-number-input') || {}).value || '';
++        container.innerHTML = '';
++        if (count < 1) return;
++        const row = document.createElement('div');
++        row.className = 'pkg-input-row';
++        row.style.cssText = 'display:flex;gap:8px;margin-bottom:8px;align-items:center';
++        row.innerHTML = `<input type="text" id="f-pkg-shared-box-number" class="f-box-number-input form-control" value="${escapeHtml(currentValue)}" placeholder="Box number (used for all ${count} box${count === 1 ? '' : 'es'})" required style="flex:1">`;
++        container.appendChild(row);
++        const note = document.createElement('div');
++        note.style.cssText = 'font-size:0.78rem;color:var(--text-muted);margin-top:2px';
++        note.textContent = `This number will be applied to all ${count} box${count === 1 ? '' : 'es'} in this order.`;
++        container.appendChild(note);
++        return;
++    }
+     const containerId = type === 'box' ? 'pkg-box-container' : 'pkg-crate-container';
+     const container = $(containerId); if (!container) return;
+     const className = type === 'box' ? 'f-box-number-input' : 'f-crate-number-input';
+@@ -16048,10 +16700,17 @@ function syncPkgInputRows(type, count) {
+ function addPkgInputRow(type) {
+     const countId = type === 'box' ? 'f-pkg-totalBoxes' : 'f-pkg-totalCrates';
+     const el = $(countId); if (el) el.value = (+el.value || 0) + 1;
+-    syncPkgInputRows(type, +el.value);
++    if (type === 'box') onPkgCountChange();
++    else syncPkgInputRows(type, +el.value);
+ }
+ 
+ function removePkgInputRow(btn, type) {
++    if (type === 'box') {
++        const el = $('f-pkg-totalBoxes');
++        if (el) el.value = Math.max(0, (+el.value || 1) - 1);
++        onPkgCountChange();
++        return;
++    }
+     const containerId = type === 'box' ? 'pkg-box-container' : 'pkg-crate-container';
+     const container = $(containerId); if (!container) return;
+     btn.parentElement.remove();
+@@ -16071,26 +16730,25 @@ async function finalizePacking() {
+ 
+     const boxInputs = Array.from(document.querySelectorAll('.f-box-number-input'));
+     const crateInputs = Array.from(document.querySelectorAll('.f-crate-number-input'));
++    const sharedBoxNumber = totalBoxes > 0 ? ((boxInputs[0] || {}).value || '').trim() : '';
+ 
+-    // Mandatory: if boxes > 1 or crates > 1, ALL numbers must be filled
+     if (totalBoxes > 0) {
+-        const emptyBox = boxInputs.find(inp => !inp.value.trim());
+-        if (emptyBox) return alert('Box number is mandatory for each box. Please fill all box numbers.');
++        if (!sharedBoxNumber) return alert('Box number is mandatory. It will be used for all boxes in this order.');
+     }
+     if (totalCrates > 0) {
+         const emptyCrate = crateInputs.find(inp => !inp.value.trim());
+         if (emptyCrate) return alert('Crate number is mandatory for each crate. Please fill all crate numbers.');
+     }
+ 
+-    const boxNumbers = boxInputs.map(inp => inp.value.trim()).filter(s => s);
++    const boxNumbers = totalBoxes > 0 ? Array.from({ length: totalBoxes }, () => sharedBoxNumber) : [];
+     const crateNumbers = crateInputs.map(inp => inp.value.trim()).filter(s => s);
+     const allPkgNumbers = [...boxNumbers, ...crateNumbers];
++    const duplicateCheckNumbers = [...(sharedBoxNumber ? [sharedBoxNumber] : []), ...crateNumbers];
++    const uniquePkgNumbers = [...new Set(duplicateCheckNumbers)];
+ 
+-    // Check for duplicates within form
+     const seen = new Set();
+-    for (const p of allPkgNumbers) { if (seen.has(p)) return alert(`Duplicate package number "${p}" in this form!`); seen.add(p); }
++    for (const p of duplicateCheckNumbers) { if (seen.has(p)) return alert(`Duplicate package number "${p}" in this form!`); seen.add(p); }
+ 
+-    // Cross-user same-day duplicate validation: compare against all orders packed today
+     const todayDate = new Date().toISOString().split('T')[0]; // "YYYY-MM-DD"
+     const orders = DB.cache['sales_orders'] || DB.cache['db_salesorders'] || [];
+     let duplicateError = '';
+@@ -16098,8 +16756,8 @@ async function finalizePacking() {
+         if (so.id === orderId || !so.packedAt) continue;
+         const packedDate = so.packedAt.substring(0, 10);
+         if (packedDate !== todayDate) continue;
+-        const usedNums = [...(so.boxNumbers || []), ...(so.crateNumbers || []), ...(so.packageNumbers || [])];
+-        for (const num of allPkgNumbers) {
++        const usedNums = getPackageRegistryNumbers(so);
++        for (const num of uniquePkgNumbers) {
+             if (usedNums.includes(num)) { duplicateError = `Package number "${num}" already used in order ${so.orderNo} today!`; break; }
+         }
+         if (duplicateError) break;
+@@ -16171,7 +16829,8 @@ async function generateInvoiceFromPacked(orderId) {
+         window._invPreFillPartyId = party ? party.id : null;
+         window._invPreFillPartyName = party ? party.name : null;
+         window._invFromOrderId = orderId;
+-        window._invBoxNo = (o.packageNumbers && o.packageNumbers.length) ? o.packageNumbers.join(', ') : null;
++        const pkg = getPackageRecordData(o);
++        window._invBoxNo = [...new Set([...(pkg.boxNumbers[0] ? [pkg.boxNumbers[0]] : []), ...pkg.crateNumbers])].join(', ') || null;
+         window._invGstRate = activeRates.length === 1 ? activeRates[0] : (activeRates.length === 0 ? 0 : null);
+         openInvoiceModal('sale', true);
+     } catch (err) {
+@@ -16275,6 +16934,7 @@ async function confirmBulkInvoices() {
+         const [orders, parties, inventory] = await Promise.all([
+             DB.getAll('salesorders'), DB.getAll('parties'), DB.getAll('inventory')
+         ]);
++        const reservedQtySupported = inventorySupportsReservedQty(inventory);
+ 
+         let successCount = 0;
+         let skippedCount = 0;
+@@ -16322,6 +16982,7 @@ async function confirmBulkInvoices() {
+             const sub = invoiceItems.reduce((s, li) => s + li.amount, 0);
+             const roundoff = +(Math.round(sub) - sub).toFixed(2);
+             const total = sub + roundoff;
++            const orderReservedQtyMap = sumPrimaryQtyByItem(o.items || []);
+ 
+             const ops = [];
+             for (const li of invoiceItems) {
+@@ -16330,6 +16991,7 @@ async function confirmBulkInvoices() {
+                 const primaryQty = getLinePrimaryQty(li);
+                 const newStock = (item.stock || 0) - primaryQty;
+                 const itemUpdate = { stock: newStock };
++                const reservedReleaseQty = takeQtyFromMap(orderReservedQtyMap, item.id, primaryQty);
+                 if (item.batches && item.batches.length) {
+                     const { updatedBatches, priceSync, allocations, remaining } = deductBatchQtyFifo(item, primaryQty);
+                     if (remaining > 0.0001 && !DB.getObj('db_company').allowNegativeStock) {
+@@ -16342,9 +17004,35 @@ async function confirmBulkInvoices() {
+                     }
+                     li.batchAllocations = allocations || [];
+                 }
++                if (reservedReleaseQty > 0) {
++                    applyReservedQtyDelta(item, itemUpdate, -reservedReleaseQty, reservedQtySupported);
++                }
+                 item.stock = newStock;
+                 ops.push(DB.rawUpdate('inventory', item.id, itemUpdate));
+-                ops.push(DB.rawInsert('stock_ledger', { date: today(), itemId: item.id, itemName: item.name, entryType: 'Sale', qty: -primaryQty, runningStock: newStock, documentNo: r.invNo, reason: 'Sale Invoice', createdBy: currentUser.name }));
++                if (reservedReleaseQty > 0) {
++                    ops.push(createStockLedgerInsert({
++                        date: today(),
++                        itemId: item.id,
++                        itemName: item.name,
++                        entryType: 'Reserved Release',
++                        qty: 0,
++                        runningStock: newStock,
++                        documentNo: r.invNo,
++                        reason: `- Reserved ${reservedReleaseQty} moved from SO ${o.orderNo} to invoice`,
++                        createdBy: currentUser.name
++                    }));
++                }
++                ops.push(createStockLedgerInsert({
++                    date: today(),
++                    itemId: item.id,
++                    itemName: item.name,
++                    entryType: 'Consumed',
++                    qty: -primaryQty,
++                    runningStock: newStock,
++                    documentNo: r.invNo,
++                    reason: `Consumed from reserved stock for SO ${o.orderNo}`,
++                    createdBy: currentUser.name
++                }));
+             }
+ 
+             if (party) {
+@@ -16392,6 +17080,43 @@ const UNDELIVERED_REASONS = [
+     'Other'
+ ];
+ 
++function getReadyToDispatchEntries(dels = [], allOrders = [], allInvoices = []) {
++    const readyFromOrders = allOrders.filter(o =>
++        o.packed &&
++        o.invoiceNo &&
++        !dels.some(d => d.orderNo === o.orderNo && d.status !== 'Cancelled')
++    );
++    const directInvoices = allInvoices.filter(i =>
++        i.type === 'sale' &&
++        i.status !== 'cancelled' &&
++        !i.fromOrder &&
++        !dels.some(d => d.invoiceNo === i.invoiceNo && d.status !== 'Cancelled')
++    );
++
++    return [
++        ...readyFromOrders.map(o => ({
++            source: 'order',
++            id: o.id,
++            orderNo: o.orderNo,
++            invoiceNo: o.invoiceNo,
++            partyName: o.partyName,
++            partyId: o.partyId,
++            total: o.total,
++            items: o.packedItems || o.items
++        })),
++        ...directInvoices.map(i => ({
++            source: 'invoice',
++            id: i.id,
++            orderNo: i.invoiceNo,
++            invoiceNo: i.invoiceNo,
++            partyName: i.partyName,
++            partyId: i.partyId,
++            total: i.total,
++            items: i.items
++        }))
++    ];
++}
++
+ async function renderDelivery() {
+     let [dels, allOrders, allInvoices, allParties] = await Promise.all([
+         DB.getAll('delivery'),
+@@ -16410,16 +17135,7 @@ async function renderDelivery() {
+     const undelivered = dels.filter(d => d.status === 'Undelivered');
+     const returned = dels.filter(d => d.status === 'Returned');
+     const cancelled = dels.filter(d => d.status === 'Cancelled');
+-
+-    // Get packed orders that haven't been dispatched yet
+-    const readyFromOrders = allOrders.filter(o => o.packed && o.invoiceNo && !dels.some(d => d.orderNo === o.orderNo && d.status !== 'Cancelled'));
+-    // Get direct sale invoices (not from orders) that haven't been dispatched
+-    const directInvoices = allInvoices.filter(i => i.type === 'sale' && i.status !== 'cancelled' && !i.fromOrder && !dels.some(d => d.invoiceNo === i.invoiceNo && d.status !== 'Cancelled'));
+-
+-    const readyToDispatch = [
+-        ...readyFromOrders.map(o => ({ source: 'order', id: o.id, orderNo: o.orderNo, invoiceNo: o.invoiceNo, partyName: o.partyName, partyId: o.partyId, total: o.total, items: o.packedItems || o.items })),
+-        ...directInvoices.map(i => ({ source: 'invoice', id: i.id, orderNo: i.invoiceNo, invoiceNo: i.invoiceNo, partyName: i.partyName, partyId: i.partyId, total: i.total, items: i.items }))
+-    ];
++    const readyToDispatch = getReadyToDispatchEntries(dels, allOrders, allInvoices);
+ 
+     const isMobile = window.innerWidth < 768;
+ 
+@@ -16585,22 +17301,9 @@ function renderDelRows(dels, parties) {
+     const cols = ColumnManager.get('delivery').filter(c => c.visible);
+     return dels.map(d => {
+         const party = (parties || []).find(p => String(p.id) === String(d.partyId));
+-        const statusBadge = d.status === 'Delivered' ? 'badge-success' : d.status === 'Returned' ? 'badge-danger' : d.status === 'Cancelled' ? 'badge-danger' : 'badge-warning';
+-        const pkgNums = d.packageNumbers || [];
+-        let bc = d.boxCount || 0;
+-        let cc = d.crateCount || 0;
+-        let boxes = d.boxNumbers || [];
+-        let crates = d.crateNumbers || [];
+-        // Fallback: look up from linked sales order if delivery has no package data
+-        if (!pkgNums.length && !boxes.length && !crates.length && d.orderId) {
+-            const so = (DB.cache['salesorders'] || DB.cache['db_salesorders'] || []).find(o => o.id === d.orderId);
+-            if (so) { bc = so.boxCount || 0; cc = so.crateCount || 0; boxes = so.boxNumbers || []; crates = so.crateNumbers || []; }
+-        }
+-        if (!boxes.length && bc > 0) boxes = pkgNums.slice(0, bc);
+-        if (!crates.length && cc > 0) crates = pkgNums.slice(bc, bc + cc);
+-        const boxDisp = boxes.length ? boxes.map(n => `<span class="badge badge-outline" style="font-size:0.68rem">${n}</span>`).join(' ') : '-';
+-        const crateDisp = crates.length ? crates.map(n => `<span class="badge badge-outline" style="font-size:0.68rem;border-color:var(--warning);color:var(--warning)">${n}</span>`).join(' ') : '-';
+-        const pkgDisplay = `<div>Boxes: ${boxDisp}</div><div style="margin-top:2px">Crates: ${crateDisp}</div>`;
++        const statusBadge = d.status === 'Delivered' ? 'badge-success' : d.status === 'Dispatched' ? 'badge-info' : d.status === 'Returned' ? 'badge-danger' : d.status === 'Cancelled' ? 'badge-danger' : 'badge-warning';
++        const linkedOrder = getCachedSalesOrderById(d.orderId);
++        const pkgDisplay = renderPackageSummaryHtml(d, linkedOrder, 'font-size:0.74rem;line-height:1.35');
+         const gpsBtn = party && party.lat && party.lng ? `<button class="btn-icon" onclick="openPartyMap('${party.lat}','${party.lng}','${escapeHtml(d.partyName)}')" title="Navigate" style="font-size:0.8rem"><span class="material-symbols-outlined" style="font-size:1.1rem">map</span></button>` : '';
+         const actions = `<div class="action-btns">
+             <button class="btn-icon" onclick="viewDeliveryDetail('${d.id}')" title="View Detail"><span class="material-symbols-outlined" style="font-size:1.1rem">visibility</span></button>
+@@ -16650,7 +17353,7 @@ function renderDelRows(dels, parties) {
+                    </a>`
+                 : '<span style="color:var(--text-muted);font-size:0.82rem">-</span>'}</td>`,
+             person: personCell,
+-            packages: `<td style="max-width:180px">${pkgDisplay}</td>`,
++            packages: `<td style="max-width:220px">${pkgDisplay}</td>`,
+             status: `<td><span class="badge ${statusBadge}">${d.status}</span></td>`,
+             reason: `<td style="font-size:0.82rem;color:var(--text-muted)">${escapeHtml(d.undeliveredReason || '-')}</td>`,
+             actions: `<td>${actions}</td>`,
+@@ -16728,19 +17431,11 @@ async function printDeliverySlip(id) {
+     const items = d.items || [];
+ 
+     // Package info
+-    let pkgs = d.packageNumbers || [];
+-    let bc = d.boxCount || 0, cc = d.crateCount || 0;
+-    let boxes = d.boxNumbers || [], crates = d.crateNumbers || [];
+-    if (!pkgs.length && !boxes.length && !crates.length && d.orderId) {
+-        const so = (DB.cache['salesorders'] || []).find(o => o.id === d.orderId);
+-        if (so) { bc = so.boxCount || 0; cc = so.crateCount || 0; boxes = so.boxNumbers || []; crates = so.crateNumbers || []; }
+-    }
+-    if (!boxes.length && bc > 0) boxes = pkgs.slice(0, bc);
+-    if (!crates.length && cc > 0) crates = pkgs.slice(bc, bc + cc);
+-    const pkgStr = [
+-        boxes.length ? 'Boxes: ' + boxes.join(', ') : '',
+-        crates.length ? 'Crates: ' + crates.join(', ') : ''
+-    ].filter(Boolean).join(' | ') || '-';
++    const linkedOrder = getCachedSalesOrderById(d.orderId);
++    const packageSummary = getPackageSummary(d, linkedOrder);
++    const pkgStr = packageSummary.lines.length
++        ? packageSummary.lines.map(line => `<div>${escapeHtml(line)}</div>`).join('')
++        : '-';
+ 
+     const itemRows = items.map(li => {
+         const invItem = inventory.find(x => x.id === li.itemId || x.name === li.name);
+@@ -16825,17 +17520,25 @@ function viewDeliveryDetail(id) {
+ async function renderDeliveryDetailPage() {
+     const id = window._viewDeliveryId;
+     if (!id) { navigateTo('delivery'); return; }
+-    const [dels, allParties, inventory, , allUsers] = await Promise.all([
++    const [dels, allParties, inventory, , allUsers, allInvoices, allPayments] = await Promise.all([
+         DB.getAll('delivery'),
+         DB.getAll('parties'),
+         DB.getAll('inventory'),
+         DB.getAll('salesorders'),  // ensure cache is populated for package fallback
+-        DB.getAll('users')
++        DB.getAll('users'),
++        DB.getAll('invoices'),
++        DB.getAll('payments')
+     ]);
+     const adminUsers = allUsers.filter(u => u.role === 'Admin' || u.role === 'Manager');
+     const d = dels.find(x => x.id === id);
+     if (!d) { navigateTo('delivery'); return; }
+     const party = allParties.find(p => p.id === d.partyId);
++    const inv = d.invoiceNo ? allInvoices.find(i => i.invoiceNo === d.invoiceNo) : null;
++    const paidMap = buildInvoicePaidMap(allPayments);
++    const overrideBalance = inv ? getInvoiceOutstandingAmount(inv, paidMap) : Math.max(0, d.total || 0);
++    const overrideDueDate = inv?.dueDate || d.adminApprovalDueDate || '';
++    const overrideDueMeta = getDueStatusMeta(overrideDueDate);
++    const overrideSettled = !!d.adminApprovedBy && overrideBalance <= 0.01;
+ 
+     const statusColor = d.status === 'Delivered' ? 'var(--success)' : d.status === 'Returned' ? 'var(--danger)' : 'var(--warning)';
+ 
+@@ -16908,28 +17611,49 @@ async function renderDeliveryDetailPage() {
+         </div>`;
+ 
+     // Package data: try delivery record first, then fallback to sales order
+-    let pkgs = d.packageNumbers || [];
+-    let dbc = d.boxCount || 0;
+-    let dcc = d.crateCount || 0;
+-    let dBoxes = d.boxNumbers || [];
+-    let dCrates = d.crateNumbers || [];
+-    if (!pkgs.length && !dBoxes.length && !dCrates.length && d.orderId) {
+-        const orders = DB.cache['salesorders'] || DB.cache['db_salesorders'] || [];
+-        const linkedOrder = orders.find(o => o.id === d.orderId);
+-        if (linkedOrder) {
+-            pkgs = linkedOrder.packageNumbers || [];
+-            dbc = linkedOrder.boxCount || 0;
+-            dcc = linkedOrder.crateCount || 0;
+-            dBoxes = linkedOrder.boxNumbers || [];
+-            dCrates = linkedOrder.crateNumbers || [];
+-        }
+-    }
+-    if (!dBoxes.length && dbc > 0) dBoxes = pkgs.slice(0, dbc);
+-    if (!dCrates.length && dcc > 0) dCrates = pkgs.slice(dbc, dbc + dcc);
+-    const pkgHtml = (dBoxes.length || dCrates.length) ? `<div style="margin-bottom:12px;display:flex;gap:16px;flex-wrap:wrap">
+-        ${dBoxes.length ? `<div><span style="font-size:0.78rem;color:var(--text-muted)">Boxes: </span>${dBoxes.map(n => `<span class="badge badge-outline" style="font-size:0.7rem">${escapeHtml(n)}</span>`).join(' ')}</div>` : ''}
+-        ${dCrates.length ? `<div><span style="font-size:0.78rem;color:var(--text-muted)">Crates: </span>${dCrates.map(n => `<span class="badge badge-outline" style="font-size:0.7rem;border-color:var(--warning);color:var(--warning)">${escapeHtml(n)}</span>`).join(' ')}</div>` : ''}
++    const linkedOrderForDetail = getCachedSalesOrderById(d.orderId);
++    const packageSummary = getPackageSummary(d, linkedOrderForDetail);
++    const pkgHtml = packageSummary.lines.length ? `<div style="margin-bottom:12px;padding:10px 12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;display:flex;flex-direction:column;gap:4px">
++        ${packageSummary.lines.map(line => `<div style="font-size:0.82rem;color:var(--text-primary)">${escapeHtml(line)}</div>`).join('')}
+     </div>` : '';
++    const overrideApprovalHtml = d.adminApprovedBy
++        ? (() => {
++            const statusBg = overrideSettled
++                ? 'rgba(34,197,94,0.12)'
++                : overrideDueMeta.state === 'overdue'
++                    ? 'rgba(239,68,68,0.12)'
++                    : 'rgba(245,158,11,0.12)';
++            const statusTone = overrideSettled ? 'var(--success)' : overrideDueMeta.tone;
++            return `<div style="grid-column:span 2;background:${statusBg};border:1px solid ${statusTone};border-radius:6px;padding:8px 10px">
++                    <span style="font-size:0.72rem;color:${statusTone};font-weight:700">${msIcon(overrideSettled ? 'task_alt' : 'warning', '', 'font-size:0.95rem;vertical-align:-3px')} ${overrideSettled ? 'COD Follow-up Settled' : 'Approved Delivery Without Payment'}</span><br>
++                    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:8px;font-size:0.8rem">
++                        <div><span style="color:var(--text-muted)">Approved by</span><br><strong>${escapeHtml(d.adminApprovedBy)}</strong></div>
++                        <div><span style="color:var(--text-muted)">Due status</span><br><strong style="color:${statusTone}">${overrideSettled ? 'Settled' : escapeHtml(overrideDueMeta.label)}</strong></div>
++                        <div><span style="color:var(--text-muted)">Revised due date</span><br><strong>${fmtDate(overrideDueDate)}</strong></div>
++                        <div><span style="color:var(--text-muted)">Pending balance</span><br><strong style="color:${overrideSettled ? 'var(--success)' : 'var(--danger)'}">${overrideSettled ? 'Cleared' : currency(overrideBalance)}</strong></div>
++                    </div>
++                    ${d.adminApprovedAt ? `<div style="font-size:0.75rem;color:var(--text-muted);margin-top:6px">Approved on ${fmtDate(d.adminApprovedAt)}</div>` : ''}
++                    ${d.codCollected && !overrideSettled ? `<div style="font-size:0.75rem;color:#92400e;margin-top:6px">Cash was marked as received. Add or match the receipt in Payments to clear this invoice balance.</div>` : ''}
++                    ${!overrideSettled && canEdit() ? `
++                    <hr style="border-color:rgba(245,158,11,0.25);margin:8px 0">
++                    <div style="font-size:0.75rem;font-weight:700;color:#92400e;margin-bottom:6px">Confirm cash collection</div>
++                    <div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;align-items:end">
++                        <div>
++                            <label style="font-size:0.72rem;color:var(--text-muted);font-weight:600">Admin / Manager</label>
++                            <select id="del-cashrcv-admin" style="width:100%;padding:5px 7px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text-primary);font-size:0.82rem">
++                                <option value="">ΓÇö Select Admin ΓÇö</option>
++                                ${adminUsers.map(u => `<option value="${escapeHtml(u.name)}">${escapeHtml(u.name)} (${u.role})</option>`).join('')}
++                            </select>
++                        </div>
++                        <button class="btn btn-sm" onclick="adminMarkCashReceived('${d.id}')" style="background:var(--success);color:#fff;border:none;font-weight:600;white-space:nowrap">${msIcon('payments', '', 'font-size:0.95rem;vertical-align:-3px')} Confirm Cash Received</button>
++                    </div>
++                    <div style="font-size:0.72rem;color:var(--text-muted);margin-top:6px">Recorded payments will keep reducing this balance until it is fully settled.</div>
++                    <div id="cashrcv-status" style="display:none;margin-top:6px;font-size:0.8rem;font-weight:600;color:var(--success)"></div>
++                    ` : ''}
++                  </div>`;
++        })()
++        : '';
++    const detailSummaryHtml = `${overrideApprovalHtml}${pkgHtml}`;
+ 
+     const actionHtml = d.status === 'Dispatched'
+         ? `<button class="btn btn-primary" onclick="markDelivered('${d.id}')"> Mark Delivered</button>
+@@ -16961,7 +17685,7 @@ async function renderDeliveryDetailPage() {
+             ${d.codCollected
+             ? `<div style="grid-column:span 2"><span class="badge badge-success" style="font-size:0.72rem">${msIcon('payments', '', 'font-size:0.95rem;vertical-align:-3px')} Cash Received${d.cashReceivedBy ? ` - by ${escapeHtml(d.cashReceivedBy)}` : ' at Delivery'}${d.cashReceivedAt ? ` on ${d.cashReceivedAt}` : ''}</span></div>`
+             : ''}
+-            ${d.adminApprovedBy
++            ${false && d.adminApprovedBy
+             ? `<div style="grid-column:span 2;background:rgba(245,158,11,0.1);border:1px solid var(--warning);border-radius:6px;padding:8px 10px">
+                     <span style="font-size:0.72rem;color:var(--warning);font-weight:700">${msIcon('warning', '', 'font-size:0.95rem;vertical-align:-3px')} Admin Override - Payment Pending</span><br>
+                     <span style="font-size:0.8rem">Approved by <strong>${escapeHtml(d.adminApprovedBy)}</strong></span>
+@@ -16981,7 +17705,7 @@ async function renderDeliveryDetailPage() {
+                   </div>`
+             : ''}
+         </div>
+-        ${pkgHtml}
++        ${detailSummaryHtml}
+         ${itemsHtml}
+         ${locationHtml}
+         <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">
+@@ -16994,25 +17718,18 @@ async function renderDeliveryDetailPage() {
+ 
+ async function adminMarkCashReceived(deliveryId) {
+     const adminName = ($('del-cashrcv-admin') || {}).value;
+-    const pin = ($('del-cashrcv-pin') || {}).value?.trim();
+     const statusEl = $('cashrcv-status');
+-    const pinEl = $('del-cashrcv-pin');
+     if (!adminName) return alert('Select an Admin or Manager.');
+-    if (!pin) return alert('Enter the admin PIN.');
+     const users = await DB.getAll('users');
+     const adminUser = users.find(u => u.name === adminName && (u.role === 'Admin' || u.role === 'Manager'));
+-    if (!adminUser || adminUser.pin !== pin) {
+-        if (pinEl) { pinEl.style.borderColor = 'var(--danger)'; pinEl.value = ''; }
+-        return alert('Incorrect PIN. Please try again.');
+-    }
++    if (!adminUser) return alert('Selected admin was not found.');
+     await DB.update('delivery', deliveryId, {
+         codCollected: true,
+         cashReceivedBy: adminName,
+         cashReceivedAt: today()
+     });
+     if (statusEl) { statusEl.style.display = 'block'; statusEl.textContent = `Cash received confirmed by ${adminName}`; }
+-    if (pinEl) pinEl.style.borderColor = 'var(--success)';
+-    document.querySelectorAll('#del-cashrcv-admin, #del-cashrcv-pin, [onclick*="adminMarkCashReceived"]').forEach(el => { el.disabled = true; el.style.opacity = '0.5'; });
++    document.querySelectorAll('#del-cashrcv-admin, [onclick*="adminMarkCashReceived"]').forEach(el => { el.disabled = true; el.style.opacity = '0.5'; });
+     showToast(`Cash received confirmed by ${adminName}`, 'success');
+     try {
+         await supabaseClient.from('activity_logs').insert({
+@@ -17024,6 +17741,79 @@ async function adminMarkCashReceived(deliveryId) {
+     } catch (e) { /* non-blocking */ }
+ }
+ 
++async function markDelivered(id) {
++    const dels = DB.cache['delivery'] || [];
++    const d = dels.find(x => x.id === id);
++    if (!d) return;
++
++    // Check COD ΓÇö party paymentTerms === 'COD'  OR  invoice dueDate Γëñ today (due at/before delivery)
++    const [parties, invoices, payments, allUsers] = await Promise.all([
++        DB.cache['parties'] ? Promise.resolve(DB.cache['parties']) : DB.getAll('parties'),
++        DB.cache['invoices'] ? Promise.resolve(DB.cache['invoices']) : DB.getAll('invoices'),
++        DB.cache['payments'] ? Promise.resolve(DB.cache['payments']) : DB.getAll('payments'),
++        DB.getAll('users')
++    ]);
++    const adminUsers = allUsers.filter(u => u.role === 'Admin' || u.role === 'Manager');
++    const party = parties.find(p => String(p.id) === String(d.partyId));
++    const inv = d.invoiceNo ? invoices.find(i => i.invoiceNo === d.invoiceNo) : null;
++
++    const isPartyTermsCOD = party && (party.paymentTerms || '').toUpperCase() === 'COD';
++    const isDueTodayOrOverdue = inv && inv.dueDate && inv.dueDate <= today();
++    const isCOD = isPartyTermsCOD || isDueTodayOrOverdue;
++
++    // Calculate balance due (total minus already-paid)
++    let balanceDue = d.total || 0;
++    if (inv) {
++        const paid = payments
++            .filter(p => p.invoiceNo === inv.invoiceNo || (p.allocations && p.allocations[inv.invoiceNo]))
++            .reduce((s, p) => s + (p.invoiceNo === inv.invoiceNo ? p.amount : +(p.allocations[inv.invoiceNo] || 0)), 0);
++        balanceDue = Math.max(0, (inv.total || d.total || 0) - paid);
++    }
++
++    const co = DB.ls.getObj('db_company') || {};
++    const amt = balanceDue;
++
++    // COD reason label
++    const codReason = isPartyTermsCOD ? 'COD Party' : `Due ${fmtDate(inv.dueDate)}`;
++
++    // Build COD section with cash collect + QR option
++    let codHtml = '';
++    if (isCOD && amt > 0) {
++        let qrImgHtml = '';
++        if (co.upi && typeof QRCode !== 'undefined' && amt > 0) {
++            const upiStr = `upi://pay?pa=${co.upi}&pn=${encodeURIComponent(co.name || '')}&am=${amt.toFixed(2)}&cu=INR&tn=${encodeURIComponent((d.invoiceNo || d.orderNo || '') + ' - ' + (d.partyName || ''))}`;
++            try {
++                const qrDiv = document.createElement('div');
++                document.body.appendChild(qrDiv);
++                new QRCode(qrDiv, { text: upiStr, width: 180, height: 180, correctLevel: QRCode.CorrectLevel.M });
++                await new Promise(r => setTimeout(r, 100)); // let QR render
++                const obj = qrDiv.querySelector('canvas') || qrDiv.querySelector('img');
++                if (obj) {
++                    const src = obj.toDataURL ? obj.toDataURL() : obj.src;
++                    qrImgHtml = `<img src="${src}" alt="UPI QR" style="display:block;margin:8px auto;border:1px solid var(--border);border-radius:8px;padding:8px;background:#fff;width:170px">
++                        <div style="font-size:0.78rem;color:var(--text-muted);text-align:center;margin-top:2px">Scan with any UPI App</div>
++                        <div style="font-size:0.72rem;color:var(--text-muted);text-align:center">${co.upi}</div>`;
++                }
++                document.body.removeChild(qrDiv);
++            } catch (e) {
++                qrImgHtml = `<div style="font-size:0.82rem;color:var(--warning);padding:8px">UPI: ${co.upi} | Amount: Γé╣${amt.toFixed(2)}</div>`;
++            }
++        } else if (!co.upi) {
++            qrImgHtml = `<div style="font-size:0.82rem;color:var(--warning);background:rgba(245,158,11,0.1);padding:8px;border-radius:6px;margin-top:8px">Set UPI ID in Company Setup to show QR code</div>`;
++        }
++        const adminOptions = adminUsers.map(u => `<option value="${escapeHtml(u.name)}" data-userid="${escapeHtml(u.userId || u.name)}">${escapeHtml(u.name)} (${u.role})</option>`).join('');
++        codHtml = `
++        <div style="background:#fff7ed;border:2px solid #f97316;border-radius:10px;padding:14px;margin-bottom:16px">
++    try {
++        await supabaseClient.from('activity_logs').insert({
++            action: 'COD_CASH_RECEIVED',
++            details: `Delivery ${deliveryId} ΓÇö cash received confirmed by ${adminName}`,
++            user_name: currentUser ? currentUser.name : 'Unknown',
++            created_at: new Date().toISOString()
++        });
++    } catch (e) { /* non-blocking */ }
++}
++
+ async function markDelivered(id) {
+     const dels = DB.cache['delivery'] || [];
+     const d = dels.find(x => x.id === id);
+@@ -17096,25 +17886,58 @@ async function markDelivered(id) {
+             </div>
+             <div id="del-qr-box" style="display:none;text-align:center;margin-top:8px">${qrImgHtml}</div>
+             <hr style="border-color:rgba(249,115,22,0.25);margin:10px 0">
+-            <div style="font-size:0.78rem;font-weight:700;color:#92400e;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.04em">${msIcon('lock_open', '', 'font-size:1rem;vertical-align:-3px')} Admin Override - Deliver Without Payment</div>
+-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+-                <div>
+-                    <label style="font-size:0.72rem;color:var(--text-muted);font-weight:600">Admin / Manager</label>
+-                    <select id="del-admin-select" style="width:100%;padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text-primary);font-size:0.85rem">
+-                        <option value="">ΓÇö Select ΓÇö</option>
+-                        ${adminOptions}
+-                    </select>
+-                </div>
+-                <div>
+-                    <label style="font-size:0.72rem;color:var(--text-muted);font-weight:600">Admin PIN</label>
+-                    <input type="password" id="del-admin-pin" placeholder="Enter PIN" style="width:100%;padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text-primary);font-size:0.85rem;box-sizing:border-box">
+-                </div>
+-            </div>
+-            <button class="btn btn-sm" id="del-admin-approve-btn" onclick="verifyAdminDeliveryOverride()" style="background:#92400e;color:#fff;border:none;width:100%">${msIcon('verified_user', '', 'font-size:1rem;vertical-align:-3px')} Approve Delivery Without Payment</button>
+-            <div id="del-admin-status" style="display:none;margin-top:8px;font-size:0.82rem;font-weight:600;color:var(--success)"></div>
++            ${(() => {
++                const isCurrentAdmin = typeof currentUser !== 'undefined' && currentUser && (currentUser.role === 'Admin' || currentUser.role === 'Manager');
++                if (d.adminApprovedBy) {
++                    return `<div style="background:rgba(34,197,94,0.1);border:1px solid var(--success);border-radius:8px;padding:10px;margin-bottom:8px">
++                        <div style="font-size:0.75rem;color:var(--success);font-weight:700">${msIcon('verified_user', '', 'font-size:1rem;vertical-align:-3px')} Override Approved</div>
++                        <div style="font-size:0.8rem;margin-top:4px">Approved by <strong>${escapeHtml(d.adminApprovedBy)}</strong>.<br>Revised Due Date: <strong>${fmtDate(d.adminApprovalDueDate)}</strong></div>
++                    </div>`;
++                } else if (d.paymentApprovalRequested) {
++                    if (isCurrentAdmin) {
++                        return `<div style="background:rgba(99,102,241,0.1);border:1px solid #6366f1;border-radius:8px;padding:10px;margin-bottom:8px">
++                            <div style="font-size:0.78rem;font-weight:700;color:#4f46e5;margin-bottom:8px">${msIcon('pending_actions', '', 'font-size:1rem;vertical-align:-3px')} Driver Requested Approval</div>
++                            <div style="font-size:0.8rem;margin-bottom:8px">Requested from: <strong>${escapeHtml(d.paymentApprovalRequestedTo || 'Admin')}</strong></div>
++                            <label style="font-size:0.72rem;color:var(--text-muted);font-weight:600">New Due Date</label>
++                            <input type="date" id="del-admin-due-date" value="${escapeHtml(inv?.dueDate || today())}" style="width:100%;padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text-primary);font-size:0.85rem;box-sizing:border-box;margin-bottom:8px">
++                            <button class="btn btn-sm" onclick="approveDeliveryOverrideAjax('${id}')" style="background:#4f46e5;color:#fff;border:none;width:100%">${msIcon('verified_user', '', 'font-size:1rem;vertical-align:-3px')} Approve Override</button>
++                        </div>`;
++                    } else {
++                        return `<div style="background:rgba(245,158,11,0.1);border:1px solid var(--warning);border-radius:8px;padding:10px;margin-bottom:8px">
++                            <div style="font-size:0.78rem;font-weight:700;color:#92400e;margin-bottom:4px">${msIcon('hourglass_top', '', 'font-size:1rem;vertical-align:-3px')} Approval Pending</div>
++                            <div style="font-size:0.8rem">You have requested approval from <strong>${escapeHtml(d.paymentApprovalRequestedTo)}</strong>.</div>
++                            <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">Please wait for them to approve before marking as delivered.</div>
++                        </div>`;
++                    }
++                } else {
++                    if (isCurrentAdmin) {
++                        return `<div style="font-size:0.78rem;font-weight:700;color:#92400e;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.04em">${msIcon('admin_panel_settings', '', 'font-size:1rem;vertical-align:-3px')} Admin Direct Approval</div>
++                        <div style="margin-bottom:8px">
++                            <label style="font-size:0.72rem;color:var(--text-muted);font-weight:600">New Due Date</label>
++                            <input type="date" id="del-admin-due-date" value="${escapeHtml(inv?.dueDate || today())}" style="width:100%;padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text-primary);font-size:0.85rem;box-sizing:border-box">
++                            <input type="hidden" id="del-admin-select" value="${escapeHtml(currentUser.name)}">
++                        </div>
++                        <div style="font-size:0.74rem;color:#92400e;margin-bottom:8px">Admin can revise the invoice due date before allowing delivery without payment.</div>
++                        <button class="btn btn-sm" id="del-admin-approve-btn" onclick="verifyAdminDeliveryOverride()" style="background:#92400e;color:#fff;border:none;width:100%">${msIcon('verified_user', '', 'font-size:1rem;vertical-align:-3px')} Approve With New Due Date</button>
++                        <div id="del-admin-status" style="display:none;margin-top:8px;font-size:0.82rem;font-weight:600;color:var(--success)"></div>`;
++                    } else {
++                        return `<div style="font-size:0.78rem;font-weight:700;color:#ea580c;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.04em">${msIcon('event_upcoming', '', 'font-size:1rem;vertical-align:-3px')} Request Approval Workflow</div>
++                        <div style="margin-bottom:8px">
++                            <label style="font-size:0.72rem;color:var(--text-muted);font-weight:600">Admin / Manager</label>
++                            <select id="del-req-admin-select" style="width:100%;padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text-primary);font-size:0.85rem">
++                                <option value="">ΓÇö Select ΓÇö</option>
++                                ${adminOptions}
++                            </select>
++                        </div>
++                        <div style="font-size:0.74rem;color:#ea580c;margin-bottom:8px">Driver requests admin for delivery without payment.</div>
++                        <button class="btn btn-sm" onclick="requestDeliveryOverrideAjax('${id}')" style="background:#fff;border:1.5px solid #f97316;color:#ea580c;width:100%">${msIcon('send', '', 'font-size:1rem;vertical-align:-3px')} Request Approval to Deliver</button>`;
++                    }
++                }
++            })()}
+         </div>
+         <input type="hidden" id="f-del-cod-collected" value="0">
+-        <input type="hidden" id="f-del-admin-approved" value="">
++        <input type="hidden" id="f-del-admin-approved" value="${escapeHtml(d.adminApprovedBy || '')}">
++        <input type="hidden" id="f-del-admin-due-approved" value="${escapeHtml(d.adminApprovalDueDate || '')}">
+         <input type="hidden" id="f-del-delivery-id" value="${id}">`;
+     }
+ 
+@@ -17189,34 +18012,74 @@ function toggleDelCashCollected() {
+ }
+ async function verifyAdminDeliveryOverride() {
+     const selectEl = $('del-admin-select');
+-    const pinEl = $('del-admin-pin');
++    const dueDateEl = $('del-admin-due-date');
+     const statusEl = $('del-admin-status');
+     const approveBtn = $('del-admin-approve-btn');
+-    if (!selectEl || !pinEl) return;
++    if (!selectEl || !dueDateEl) return;
+     const adminName = selectEl.value;
+-    const pin = pinEl.value.trim();
++    const newDueDate = dueDateEl.value;
+     if (!adminName) return alert('Select an Admin or Manager to approve.');
+-    if (!pin) return alert('Enter the admin PIN.');
+-    const users = await DB.getAll('users');
+-    const adminUser = users.find(u => u.name === adminName && (u.role === 'Admin' || u.role === 'Manager'));
+-    if (!adminUser || adminUser.pin !== pin) {
+-        pinEl.style.borderColor = 'var(--danger)';
+-        pinEl.value = '';
+-        return alert('Incorrect PIN. Please try again.');
+-    }
+-    // PIN verified ΓÇö set approval
++    if (!newDueDate) return alert('Select the revised due date before approving.');
++    // Store approval details for final delivery confirmation
+     const approvedEl = $('f-del-admin-approved');
++    const approvedDueEl = $('f-del-admin-due-approved');
+     if (approvedEl) approvedEl.value = adminName;
+-    pinEl.style.borderColor = 'var(--success)';
++    if (approvedDueEl) approvedDueEl.value = newDueDate;
++    dueDateEl.style.borderColor = 'var(--success)';
+     selectEl.disabled = true;
+-    pinEl.disabled = true;
++    dueDateEl.disabled = true;
+     if (approveBtn) { approveBtn.disabled = true; approveBtn.style.opacity = '0.5'; }
+     if (statusEl) {
+         statusEl.style.display = 'block';
+-        statusEl.textContent = `Approved by ${adminName} - delivery permitted without payment`;
++        statusEl.textContent = `Approved by ${adminName} - revised due date ${fmtDate(newDueDate)}`;
+     }
+ }
+ 
++window.requestDeliveryOverrideAjax = async function(id) {
++    const adminSelect = $('del-req-admin-select');
++    if (!adminSelect || !adminSelect.value) return alert('Select an admin to request approval.');
++    const adminName = adminSelect.value;
++    const btn = event.currentTarget || document.activeElement;
++    if (btn) { btn.textContent = 'Requesting...'; btn.disabled = true; }
++    try {
++        await DB.update('delivery', id, {
++            paymentApprovalRequested: true,
++            paymentApprovalRequestedTo: adminName,
++            paymentApprovalRequestedAt: today(),
++            paymentApprovalRequestedBy: (typeof currentUser !== 'undefined' && currentUser ? currentUser.name : 'Unknown')
++        });
++        showToast('Approval requested!', 'success');
++        closeModal();
++        await renderDelivery(); 
++    } catch(err) {
++        if (btn) { btn.textContent = 'Request Approval to Deliver'; btn.disabled = false; }
++        alert('Error: ' + err);
++    }
++};
++
++window.approveDeliveryOverrideAjax = async function(id) {
++    const dueDateInput = $('del-admin-due-date');
++    if (!dueDateInput || !dueDateInput.value) return alert('Select new due date.');
++    const newDate = dueDateInput.value;
++    const btn = event.currentTarget || document.activeElement;
++    if (btn) { btn.textContent = 'Approving...'; btn.disabled = true; }
++    try {
++        await DB.update('delivery', id, {
++            paymentApprovalRequested: false,
++            adminApprovedBy: (typeof currentUser !== 'undefined' && currentUser ? currentUser.name : 'Admin'),
++            adminApprovalDueDate: newDate,
++            adminApprovedAt: today(),
++            adminApprovalNote: 'Approval granted for delivery without payment.'
++        });
++        showToast('Override approved. Driver can now mark as delivered.', 'success');
++        closeModal();
++        await renderDelivery(); 
++    } catch(err) {
++        if (btn) { btn.textContent = 'Approve Override'; btn.disabled = false; }
++        alert('Error: ' + err);
++    }
++};
++
+ async function confirmMarkDelivered(id) {
+     const location = ($('f-del-location') || {}).value.trim();
+     const lat = parseFloat(($('f-del-lat') || {}).value || '');
+@@ -17225,18 +18088,39 @@ async function confirmMarkDelivered(id) {
+     const codCollected = codEl ? codEl.value === '1' : false;
+     const adminApprovedEl = $('f-del-admin-approved');
+     const adminApprovedBy = adminApprovedEl ? adminApprovedEl.value.trim() : '';
++    const adminApprovedDueEl = $('f-del-admin-due-approved');
++    const adminApprovedDueDate = adminApprovedDueEl ? adminApprovedDueEl.value.trim() : '';
+     if (codEl && !codCollected && !adminApprovedBy) {
+         return alert('Payment not confirmed.\nEither mark cash as collected, or get Admin approval to deliver without payment.');
+     }
++    if (adminApprovedBy && !adminApprovedDueDate) {
++        return alert('Approval is missing the revised due date.');
++    }
+     const update = { status: 'Delivered', deliveredAt: today() };
+     if (location) update.deliveryLocation = location;
+     if (!isNaN(lat) && !isNaN(lng)) { update.deliveryLat = lat; update.deliveryLng = lng; }
+     if (codCollected) update.codCollected = true;
+     if (adminApprovedBy) {
+         update.adminApprovedBy = adminApprovedBy;
+-        update.adminApprovalNote = 'Delivered without payment collection';
++        update.adminApprovedAt = today();
++        update.adminApprovalDueDate = adminApprovedDueDate;
++        update.adminApprovalNote = `Delivered without payment collection. Revised due date ${adminApprovedDueDate}`;
++    }
++    const deliveryCache = DB.cache['delivery'] || [];
++    const currentDelivery = deliveryCache.find(x => x.id === id);
++    const invoiceCache = DB.cache['invoices'] || [];
++    const linkedInvoice = currentDelivery?.invoiceNo ? invoiceCache.find(inv => inv.invoiceNo === currentDelivery.invoiceNo) : null;
++    const saveOps = [DB.update('delivery', id, update)];
++    if (adminApprovedBy && linkedInvoice) {
++        saveOps.push(DB.update('invoices', linkedInvoice.id, {
++            dueDate: adminApprovedDueDate,
++            paymentFollowUpApprovedBy: adminApprovedBy,
++            paymentFollowUpApprovedAt: today(),
++            paymentFollowUpOriginalDueDate: linkedInvoice.paymentFollowUpOriginalDueDate || linkedInvoice.dueDate || null,
++            paymentFollowUpSource: 'delivery-override'
++        }));
+     }
+-    await DB.update('delivery', id, update);
++    await Promise.all(saveOps);
+     // Notify all logged-in admins about override
+     if (adminApprovedBy) {
+         const dels = DB.cache['delivery'] || [];
+@@ -17251,11 +18135,11 @@ async function confirmMarkDelivered(id) {
+                 created_at: new Date().toISOString()
+             });
+         } catch (e) { /* non-blocking */ }
+-        showToast(`Delivery approved by ${adminApprovedBy} - payment pending for ${partyRef}`, 'warning', 6000);
++        showToast(`Delivery approved by ${adminApprovedBy} - payment due on ${fmtDate(adminApprovedDueDate)} for ${partyRef}`, 'warning', 6000);
+     }
+     closeModal();
+     await renderDelivery();
+-    showToast(codCollected ? 'Delivery confirmed! Cash collected.' : adminApprovedBy ? `Delivery confirmed (Admin override: ${adminApprovedBy})` : 'Delivery confirmed!', 'success');
++    showToast(codCollected ? 'Delivery confirmed! Cash collected.' : adminApprovedBy ? `Delivery confirmed. Due date moved to ${fmtDate(adminApprovedDueDate)}.` : 'Delivery confirmed!', 'success');
+ }
+ async function openQuickGpsUpdate(partyId, returnId, returnSource) {
+     if (!partyId) return alert('No party linked to this record.');
+@@ -17431,29 +18315,14 @@ async function printDeliveryRouteSheet() {
+                 ? `<span style="color:#34a853;font-size:0.78rem"> ${p.address || p.city || ''} ${d._legDistance !== undefined && d._legDistance !== null ? `(Leg: ${d._legDistance.toFixed(1)} km)` : ''}</span>`
+                 : `<span style="color:#f59e0b;font-size:0.78rem"> No GPS  Manual seq: <input type="number" value="${seq}" style="width:40px;border:1px solid #ddd;border-radius:3px;padding:1px 3px;text-align:center" onchange="this.closest('tr').querySelector('.seq-num').textContent=this.value"></span>`;
+             const phone = p ? (p.phone || '-') : '-';
++            const linkedOrder = getCachedSalesOrderById(d.orderId);
++            const packageSummaryHtml = renderPackageSummaryHtml(d, linkedOrder, 'font-size:0.78rem;line-height:1.35');
+             return `<tr>
+                 <td style="text-align:center;font-weight:700;font-size:1rem" class="seq-num">${seq}</td>
+                 <td><strong>${d.orderNo || d.invoiceNo || '-'}</strong><br><span style="font-size:0.75rem;color:#666">${d.invoiceNo || ''}</span></td>
+                 <td><strong>${d.partyName}</strong><br>${gpsInfo}</td>
+                 <td>${phone !== '-' ? `<a href="tel:${phone}" style="color:#1a73e8">${phone}</a>` : '-'}</td>
+-                <td>${(() => {
+-                    let rpkgs = d.packageNumbers || [];
+-                    let rbc = d.boxCount || 0;
+-                    let rcc = d.crateCount || 0;
+-                    let rBoxes = d.boxNumbers || [];
+-                    let rCrates = d.crateNumbers || [];
+-                    // Fallback: look up from linked sales order
+-                    if (!rpkgs.length && !rBoxes.length && !rCrates.length && d.orderId) {
+-                        const so = (DB.cache['salesorders'] || DB.cache['db_salesorders'] || []).find(o => o.id === d.orderId);
+-                        if (so) { rbc = so.boxCount || 0; rcc = so.crateCount || 0; rBoxes = so.boxNumbers || []; rCrates = so.crateNumbers || []; rpkgs = so.packageNumbers || []; }
+-                    }
+-                    if (!rBoxes.length && rbc > 0) rBoxes = rpkgs.slice(0, rbc);
+-                    if (!rCrates.length && rcc > 0) rCrates = rpkgs.slice(rbc, rbc + rcc);
+-                    const parts = [];
+-                    if (rBoxes.length) parts.push('Boxes: ' + rBoxes.join(', '));
+-                    if (rCrates.length) parts.push('Crates: ' + rCrates.join(', '));
+-                    return parts.join('<br>') || rpkgs.join(', ') || '-';
+-                })()}</td>
++                <td>${packageSummaryHtml}</td>
+                 <td style="text-align:right">${(d.total || 0).toFixed(2)}</td>
+                 <td style="width:90px" class="no-print"><button onclick="moveRow(this,-1)" style="cursor:pointer;border:none;background:none;font-size:1rem" title="Move up">Γ¼å∩╕Å</button><button onclick="moveRow(this,1)" style="cursor:pointer;border:none;background:none;font-size:1rem" title="Move down">Γ¼ç∩╕Å</button></td>
+             </tr>`;
+@@ -17477,15 +18346,17 @@ async function printDeliveryRouteSheet() {
+             <th style="border:1px solid #ddd;padding:6px">Order</th>
+             <th style="border:1px solid #ddd;padding:6px">Party &amp; Location</th>
+             <th style="border:1px solid #ddd;padding:6px">Phone</th>
+-            <th style="border:1px solid #ddd;padding:6px">Boxes / Crates</th>
++            <th style="border:1px solid #ddd;padding:6px">Boxes / Crates No</th>
+             <th style="border:1px solid #ddd;padding:6px;text-align:right">Amount</th>
+             <th style="border:1px solid #ddd;padding:6px">Signature</th>
++            <th class="no-print" style="border:1px solid #ddd;padding:6px">Move</th>
+         </tr></thead>
+         <tbody>${rows.replace(/<td(?! style)/g, '<td style="border:1px solid #ddd;padding:5px"')}</tbody>
+         <tfoot><tr>
+             <td colspan="5" style="border:1px solid #ddd;padding:6px;text-align:right;font-weight:700">Total (${dlist.length} stops)</td>
+             <td style="border:1px solid #ddd;padding:6px;text-align:right;font-weight:700">${total.toFixed(2)}</td>
+             <td style="border:1px solid #ddd"></td>
++            <td class="no-print" style="border:1px solid #ddd"></td>
+         </tr></tfoot>
+         </table></div>`;
+     }).join('');
+@@ -17502,7 +18373,38 @@ async function printDeliveryRouteSheet() {
+         <button onclick="window.print()" style="padding:8px 20px;background:#f97316;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:1rem"> Print Route Sheet</button>
+         <button onclick="window.parent.document.getElementById('route-sheet-modal').remove()" style="padding:8px 20px;background:#6b7280;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:1rem">Γ£ò Close</button>
+     </div>
+-    <script>function moveRow(btn,dir){const row=btn.closest('tr');const tbody=row.parentNode;if(dir===-1&&row.previousElementSibling)tbody.insertBefore(row,row.previousElementSibling);if(dir===1&&row.nextElementSibling)tbody.insertBefore(row.nextElementSibling,row);Array.from(tbody.querySelectorAll('.seq-num')).forEach((el,i)=>el.textContent=i+1);}<\/script>
++    <script>
++    function setupRouteSheet(){
++        document.querySelectorAll('tbody tr').forEach(function(row){
++            const moveCell = row.querySelector('td.no-print');
++            if (!moveCell) return;
++            if (!moveCell.previousElementSibling || moveCell.previousElementSibling.className !== 'route-signature-cell') {
++                const signatureCell = document.createElement('td');
++                signatureCell.className = 'route-signature-cell';
++                signatureCell.style.width = '110px';
++                signatureCell.style.border = '1px solid #ddd';
++                signatureCell.style.padding = '5px';
++                moveCell.parentNode.insertBefore(signatureCell, moveCell);
++            }
++            moveCell.style.width = '96px';
++            moveCell.style.textAlign = 'center';
++            moveCell.style.whiteSpace = 'nowrap';
++            Array.from(moveCell.querySelectorAll('button')).forEach(function(btn, idx){
++                btn.type = 'button';
++                btn.textContent = idx === 0 ? 'Up' : 'Down';
++                btn.style.cursor = 'pointer';
++                btn.style.border = '1px solid #d1d5db';
++                btn.style.background = '#fff';
++                btn.style.borderRadius = '4px';
++                btn.style.padding = '3px 8px';
++                btn.style.fontSize = '0.72rem';
++                btn.style.marginRight = idx === 0 ? '4px' : '0';
++            });
++        });
++    }
++    function moveRow(btn,dir){const row=btn.closest('tr');const tbody=row.parentNode;if(dir===-1&&row.previousElementSibling)tbody.insertBefore(row,row.previousElementSibling);if(dir===1&&row.nextElementSibling)tbody.insertBefore(row.nextElementSibling,row);Array.from(tbody.querySelectorAll('.seq-num')).forEach((el,i)=>el.textContent=i+1);}
++    setupRouteSheet();
++    <\/script>
+     </body></html>`;
+ 
+     // Render into in-app iframe overlay (avoids window.open popup blocking on mobile)
+@@ -17555,19 +18457,20 @@ async function openDispatchModalUnified(id, source) {
+ }
+ async function dispatchOrderUnified(id, source) {
+     const person = $('f-del-person').value; if (!person) return alert('Select delivery person');
+-    let orderNo, partyName, partyId, invoiceNo, total, items, packageNumbers = [], invoiceDate = '';
++    let orderNo, partyName, partyId, invoiceNo, total, items, packageData = getPackageRecordData(null), invoiceDate = '';
+ 
+     if (source === 'order') {
+         const orders = await DB.getAll('salesorders');
+         const o = orders.find(x => x.id === id); if (!o) return;
+         orderNo = o.orderNo; partyName = o.partyName; partyId = o.partyId;
+         invoiceNo = o.invoiceNo || ''; total = o.total; items = o.packedItems || o.items;
+-        packageNumbers = o.packageNumbers || [];
++        packageData = getPackageRecordData(o);
+     } else {
+         const invoices = await DB.getAll('invoices');
+         const i = invoices.find(x => x.id === id); if (!i) return;
+         orderNo = i.invoiceNo; partyName = i.partyName; partyId = i.partyId;
+         invoiceNo = i.invoiceNo; total = i.total; items = i.items;
++        packageData = getPackageRecordData(i);
+     }
+ 
+     if (invoiceNo) {
+@@ -17578,31 +18481,18 @@ async function dispatchOrderUnified(id, source) {
+ 
+     const delData = {
+         orderId: id, orderNo, partyName, partyId, invoiceNo,
+-        invoiceDate, packageNumbers, deliveryPerson: person,
++        invoiceDate,
++        packageNumbers: packageData.packageNumbers,
++        boxNumbers: packageData.boxNumbers,
++        crateNumbers: packageData.crateNumbers,
++        boxCount: packageData.boxCount,
++        crateCount: packageData.crateCount,
++        deliveryPerson: person,
+         status: 'Dispatched', dispatchedAt: today(), total, items
+     };
+ 
+     await DB.insert('delivery', delData);
+ 
+-    // BUG 4: Add audit-trail stock ledger entries for each dispatched item
+-    if (Array.isArray(items)) {
+-        const inventory = await DB.getAll('inventory');
+-        for (const item of items) {
+-            const invItem = inventory.find(x => x.id === (item.itemId || item.id));
+-            await DB.rawInsert('stock_ledger', {
+-                date: today(),
+-                itemId: item.itemId || item.id,
+-                itemName: item.name || item.itemName || '',
+-                entryType: 'Dispatched',
+-                qty: 0,
+-                runningStock: invItem ? (invItem.stock || 0) : 0,
+-                documentNo: orderNo,
+-                reason: 'Dispatched to ' + partyName,
+-                createdBy: currentUser ? (currentUser.userId || '') : ''
+-            });
+-        }
+-    }
+-
+     closeModal();
+     await renderDelivery();
+     showToast(`${orderNo} dispatched with ${person}!`, 'success');
+@@ -17612,14 +18502,18 @@ async function dispatchOrder(orderId) {
+     const person = $('f-del-person').value; if (!person) return alert('Select delivery person');
+     const orders = await DB.getAll('salesorders');
+     const o = orders.find(x => x.id === orderId); if (!o) return;
++    const packageData = getPackageRecordData(o);
+ 
+     const delData = {
+         orderId: o.id, orderNo: o.orderNo, partyName: o.partyName,
+         partyId: o.partyId, invoiceNo: o.invoiceNo || '',
+         deliveryPerson: person, status: 'Dispatched',
+         dispatchedAt: today(), total: o.total, items: o.items,
+-        packageNumbers: o.packageNumbers || [], boxNumbers: o.boxNumbers || [],
+-        crateNumbers: o.crateNumbers || [], boxCount: o.boxCount || 0, crateCount: o.crateCount || 0
++        packageNumbers: packageData.packageNumbers,
++        boxNumbers: packageData.boxNumbers,
++        crateNumbers: packageData.crateNumbers,
++        boxCount: packageData.boxCount,
++        crateCount: packageData.crateCount
+     };
+ 
+     await DB.insert('delivery', delData);
+@@ -17794,15 +18688,16 @@ async function confirmBulkDispatch() {
+                 // Skip if already dispatched (non-cancelled delivery exists)
+                 const alreadyExists = dels.some(d => d.orderNo === o.orderNo && d.status !== 'Cancelled');
+                 if (alreadyExists) continue;
++                const packageData = getPackageRecordData(o);
+                 delData = {
+                     orderId: o.id, orderNo: o.orderNo, partyName: o.partyName, partyId: o.partyId,
+                     invoiceNo: o.invoiceNo || '', deliveryPerson: person, status: 'Dispatched',
+                     dispatchedAt: today(), total: o.total, items: o.packedItems || o.items,
+-                    packageNumbers: o.packageNumbers || [],
+-                    boxNumbers: o.boxNumbers || [],
+-                    crateNumbers: o.crateNumbers || [],
+-                    boxCount: o.boxCount || 0,
+-                    crateCount: o.crateCount || 0
++                    packageNumbers: packageData.packageNumbers,
++                    boxNumbers: packageData.boxNumbers,
++                    crateNumbers: packageData.crateNumbers,
++                    boxCount: packageData.boxCount,
++                    crateCount: packageData.crateCount
+                 };
+             } else {
+                 const inv = invoices.find(x => x.id === r.id);
+@@ -17810,15 +18705,16 @@ async function confirmBulkDispatch() {
+                 // Skip if already dispatched
+                 const alreadyExists = dels.some(d => d.invoiceNo === inv.invoiceNo && d.status !== 'Cancelled');
+                 if (alreadyExists) continue;
++                const packageData = getPackageRecordData(inv);
+                 delData = {
+                     orderId: inv.id, orderNo: inv.invoiceNo, partyName: inv.partyName,
+                     partyId: inv.partyId, invoiceNo: inv.invoiceNo, deliveryPerson: person,
+                     status: 'Dispatched', dispatchedAt: today(), total: inv.total, items: inv.items,
+-                    packageNumbers: inv.packageNumbers || [],
+-                    boxNumbers: inv.boxNumbers || [],
+-                    crateNumbers: inv.crateNumbers || [],
+-                    boxCount: inv.boxCount || 0,
+-                    crateCount: inv.crateCount || 0
++                    packageNumbers: packageData.packageNumbers,
++                    boxNumbers: packageData.boxNumbers,
++                    crateNumbers: packageData.crateNumbers,
++                    boxCount: packageData.boxCount,
++                    crateCount: packageData.crateCount
+                 };
+             }
+             await DB.rawInsert('delivery', delData);
+@@ -17868,13 +18764,17 @@ async function executeReDispatch(id) {
+         });
+ 
+         // Create new dispatch entry
++        const packageData = getPackageRecordData(d, getCachedSalesOrderById(d.orderId));
+         const newDel = {
+             orderId: d.orderId, orderNo: d.orderNo, partyName: d.partyName,
+             partyId: d.partyId, invoiceNo: d.invoiceNo, deliveryPerson: person,
+             status: 'Dispatched', dispatchedAt: today(), total: d.total,
+             items: d.items, reDispatchOf: d.id,
+-            packageNumbers: d.packageNumbers || [], boxNumbers: d.boxNumbers || [],
+-            crateNumbers: d.crateNumbers || [], boxCount: d.boxCount || 0, crateCount: d.crateCount || 0
++            packageNumbers: packageData.packageNumbers,
++            boxNumbers: packageData.boxNumbers,
++            crateNumbers: packageData.crateNumbers,
++            boxCount: packageData.boxCount,
++            crateCount: packageData.crateCount
+         };
+         await DB.insert('delivery', newDel);
+ 
+@@ -18097,7 +18997,7 @@ async function showReport(type) {
+ 
+     if (type === 'item-ledger') {
+         const stockLedger = await DB.getAll('stock_ledger');
+-        window._rItemLedger = stockLedger.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
++        window._rItemLedger = filterVisibleStockLedgerEntries(stockLedger).sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+ 
+         el.innerHTML = `
+         <div class="card" style="margin-bottom:14px">
+@@ -18112,6 +19012,8 @@ async function showReport(type) {
+                     <select id="r-il-type" onchange="renderItemLedgerRpt()">
+                         <option value="">All Types</option>
+                         <option value="Sale">Sale (-)</option>
++                        <option value="Consumed">Consumed (-)</option>
++                        <option value="Reserved">Reserved / Released</option>
+                         <option value="Purchase">Purchase (+)</option>
+                         <option value="Opening">Opening (+)</option>
+                         <option value="Manual Adjustment">Manual Adjustment (+/-)</option>
+@@ -18153,7 +19055,7 @@ async function showReport(type) {
+ 
+                 html += `<tr>
+                     <td style="white-space:nowrap">${fmtDate(entry.date) || '-'}</td>
+-                    <td><span class="badge ${entryType === 'Sale' ? 'badge-danger' : 'badge-success'}">${escapeHtml(entryType || '-')}</span></td>
++                    <td><span class="badge ${entry.qty < 0 ? 'badge-danger' : (entryType.includes('Reserved') ? 'badge-warning' : 'badge-success')}">${escapeHtml(entryType || '-')}</span></td>
+                     <td style="font-family:monospace;font-size:0.85rem">${escapeHtml(documentNo || '-')}</td>
+                     <td style="font-weight:600">${escapeHtml(itemName || '-')}</td>
+                     <td style="text-align:center">${qtySpan}</td>
+@@ -23047,12 +23949,10 @@ async function showReservedDetails(itemId) {
+     if (!item) return;
+ 
+     const orders = await DB.getAll('salesorders');
+-    const reservedOrders = orders.filter(o => {
+-        if ((o.status === 'pending' || o.status === 'approved') && !o.packed) {
+-            return (o.items || []).some(li => li.itemId === itemId);
+-        }
+-        return false;
+-    });
++    const reservedOrders = orders.filter(o =>
++        isSalesOrderHoldingReservation(o) &&
++        (o.items || []).some(li => getLineItemId(li) === itemId)
++    );
+ 
+     if (!reservedOrders.length) return alert('No active reservations found for this item.');
+ 
+@@ -24511,6 +25411,12 @@ async function renderAttendance() {
+     const monthRange = getMonthDateRange(selMonth);
+ 
+     const { data: staff } = await supabaseClient.from('staff').select('*').eq('status', 'active').order('name');
++    const allStaff = staff || [];
++    const requestedStaffFilter = window._attStaffFilter || '';
++    const selectedStaff = requestedStaffFilter ? allStaff.find(s => String(s.id) === String(requestedStaffFilter)) : null;
++    if (requestedStaffFilter && !selectedStaff) window._attStaffFilter = '';
++    const staffFilter = selectedStaff ? String(selectedStaff.id) : '';
++    const filteredStaff = staffFilter ? allStaff.filter(s => String(s.id) === staffFilter) : allStaff;
+ 
+     // Single-day data
+     const { data: attRecs } = await supabaseClient.from('attendance').select('*').eq('date', selDate);
+@@ -24551,6 +25457,11 @@ async function renderAttendance() {
+         <label style="font-size:0.82rem;color:var(--text-muted);margin:0">To</label>
+         <input type="date" id="att-to" value="${selTo}" class="form-control" style="width:150px">
+         <button class="btn btn-primary btn-sm" onclick="openRangeAttModal()">Mark Range</button>`;
++    const employeeFilter = `
++        <select class="form-control" style="min-width:190px" onchange="window._attStaffFilter=this.value;renderAttendance()">
++            <option value="">All Employees</option>
++            ${allStaff.map(s => `<option value="${s.id}" ${String(s.id) === staffFilter ? 'selected' : ''}>${escapeHtml(s.name)}${s.role ? ' - ' + escapeHtml(s.role) : ''}</option>`).join('')}
++        </select>`;
+ 
+     pageContent.innerHTML = `
+     <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:16px">
+@@ -24559,9 +25470,11 @@ async function renderAttendance() {
+             <button class="btn btn-sm ${rangeMode ? 'btn-primary' : 'btn-outline'}" style="border-radius:6px" onclick="window._attRangeMode=true;renderAttendance()">Date Range</button>
+         </div>
+         ${rangeMode ? rangeToolbar : singleToolbar}
++        ${allStaff.length ? employeeFilter : ''}
+     </div>
+ 
+-    ${!(staff && staff.length) ? '<div class="empty-state"><p>No active staff. <a href="#" onclick="navigateTo(\'staffmaster\')" style="color:var(--accent)">Add staff first</a></p></div>' : `
++    ${!allStaff.length ? '<div class="empty-state"><p>No active staff. <a href="#" onclick="navigateTo(\'staffmaster\')" style="color:var(--accent)">Add staff first</a></p></div>' : `
++    ${allStaff.length && !filteredStaff.length ? `<div class="empty-state"><p>No employee matches the current filter.</p></div>` : `
+ 
+     ${rangeMode ? `
+     <div class="card" style="margin-bottom:20px;background:rgba(99,102,241,0.06);border:1px solid rgba(99,102,241,0.2)">
+@@ -24574,7 +25487,7 @@ async function renderAttendance() {
+ 
+     ${window.innerWidth < 768 ? `
+     <div style="margin-bottom:20px">
+-        ${staff.map(s => {
++        ${filteredStaff.map(s => {
+         const cur = attMap[s.id];
+         const mo = monthMap[s.id] || { P: 0, A: 0, HD: 0, PL: 0, H: 0 };
+         let actionBtns;
+@@ -24602,7 +25515,7 @@ async function renderAttendance() {
+     <div class="table-wrapper"><table class="data-table">
+         <thead><tr><th>Staff</th><th>${rangeMode ? 'Bulk Range Action' : 'Mark Attendance'}</th><th style="text-align:center">This Month (${selMonth})</th></tr></thead>
+         <tbody>
+-        ${staff.map(s => {
++        ${filteredStaff.map(s => {
+         const cur = attMap[s.id];
+         const mo = monthMap[s.id] || { P: 0, A: 0, HD: 0, PL: 0, H: 0 };
+         const monthSummary = `<span style="font-size:0.8rem;color:var(--text-muted)">P:<b style="color:#22c55e">${mo.P}</b> A:<b style="color:#ef4444">${mo.A}</b> :<b style="color:#f59e0b">${mo.HD}</b> PL:<b style="color:#6366f1">${mo.PL}</b></span>`;
+@@ -24631,10 +25544,10 @@ async function renderAttendance() {
+     </table></div>
+     </div></div>`}
+ 
+-    <h4 style="margin-bottom:12px;font-size:0.95rem">Monthly Attendance  ${selMonth}</h4>
++    <h4 style="margin-bottom:12px;font-size:0.95rem">Monthly Attendance  ${selMonth}${selectedStaff ? ` - ${escapeHtml(selectedStaff.name)}` : ''}</h4>
+     <div class="card"><div class="card-body" style="overflow-x:auto">
+-        ${renderMonthCalendar(staff, monthRecords, selMonth)}
+-    </div></div>`}`;
++        ${renderMonthCalendar(filteredStaff, monthRecords, selMonth)}
++    </div></div>`}`}`;
+ }
+ 
+ //  Range mode helpers 
+@@ -24786,10 +25699,12 @@ async function markAttendance(staffId, staffName, date, status) {
+ async function markAllAttendance(status, date) {
+     const { data: staff, error: staffErr } = await supabaseClient.from('staff').select('id,name').eq('status', 'active');
+     if (staffErr) return alert('Error loading staff: ' + staffErr.message);
+-    if (!staff || !staff.length) return;
++    const staffFilter = window._attStaffFilter || '';
++    const targets = staffFilter ? (staff || []).filter(s => String(s.id) === String(staffFilter)) : (staff || []);
++    if (!targets.length) return;
+     try {
+-        await Promise.all(staff.map(s => saveAttendanceEntry(s.id, s.name, date, status)));
+-        showToast(`All marked as ${status}!`, 'success');
++        await Promise.all(targets.map(s => saveAttendanceEntry(s.id, s.name, date, status)));
++        showToast(`${targets.length === 1 ? targets[0].name : 'All employees'} marked as ${status}!`, 'success');
+         await renderAttendance();
+     } catch (err) {
+         alert('Error saving attendance: ' + err.message);

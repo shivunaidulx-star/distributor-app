@@ -1,0 +1,9 @@
+10389: async function renderInvoices() {
+11498: async function saveInvoice(id) {
+12624: function cancelInvoiceDirectly(id) {
+16794: async function generateInvoiceFromPacked(orderId) {
+18082: async function confirmMarkDelivered(id) {
+18457: async function dispatchOrderUnified(id, source) {
+18500: async function dispatchOrder(orderId) {
+18548: async function updateDeliveryStatus(id, status) {
+18788: async function cancelDeliveryInvoice(id) {

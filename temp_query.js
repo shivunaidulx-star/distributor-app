@@ -1,0 +1,1 @@
+const fs = require('fs'); const lines = fs.readFileSync('app.js', 'utf8').split('\n'); lines.forEach((l, i) => { if (/function (generateInvoice|saveInvoice|cancelInvoice|cancelDeliveryInvoice|renderInvoices|dispatchOrder|confirmMarkDelivered)/.test(l)) { console.log(i + ': ' + l.trim().substring(0, 80)); } });

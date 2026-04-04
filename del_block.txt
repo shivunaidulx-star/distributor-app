@@ -1,0 +1,74 @@
+
+async function markDelivered(id) {
+    const dels = DB.cache['delivery'] || [];
+    const d = dels.find(x => x.id === id);
+    if (!d) return;
+
+    // Check COD — party paymentTerms === 'COD'  OR  invoice dueDate ≤ today (due at/before delivery)
+    const [parties, invoices, payments, allUsers] = await Promise.all([
+        DB.cache['parties'] ? Promise.resolve(DB.cache['parties']) : DB.getAll('parties'),
+        DB.cache['invoices'] ? Promise.resolve(DB.cache['invoices']) : DB.getAll('invoices'),
+        DB.cache['payments'] ? Promise.resolve(DB.cache['payments']) : DB.getAll('payments'),
+        DB.getAll('users')
+    ]);
+    const adminUsers = allUsers.filter(u => u.role === 'Admin' || u.role === 'Manager');
+    const party = parties.find(p => String(p.id) === String(d.partyId));
+    const inv = d.invoiceNo ? invoices.find(i => i.invoiceNo === d.invoiceNo) : null;
+
+    const isPartyTermsCOD = party && (party.paymentTerms || '').toUpperCase() === 'COD';
+    const isDueTodayOrOverdue = inv && inv.dueDate && inv.dueDate <= today();
+    const isCOD = isPartyTermsCOD || isDueTodayOrOverdue;
+
+    // Calculate balance due (total minus already-paid)
+    let balanceDue = d.total || 0;
+    if (inv) {
+        const paid = payments
+            .filter(p => p.invoiceNo === inv.invoiceNo || (p.allocations && p.allocations[inv.invoiceNo]))
+            .reduce((s, p) => s + (p.invoiceNo === inv.invoiceNo ? p.amount : +(p.allocations[inv.invoiceNo] || 0)), 0);
+        balanceDue = Math.max(0, (inv.total || d.total || 0) - paid);
+    }
+
+    const co = DB.ls.getObj('db_company') || {};
+    const amt = balanceDue;
+
+    // COD reason label
+    const codReason = isPartyTermsCOD ? 'COD Party' : `Due ${fmtDate(inv.dueDate)}`;
+
+    // Build COD section with cash collect + QR option
+    let codHtml = '';
+    if (isCOD && amt > 0) {
+        let qrImgHtml = '';
+        if (co.upi && typeof QRCode !== 'undefined' && amt > 0) {
+            const upiStr = `upi://pay?pa=${co.upi}&pn=${encodeURIComponent(co.name || '')}&am=${amt.toFixed(2)}&cu=INR&tn=${encodeURIComponent((d.invoiceNo || d.orderNo || '') + ' - ' + (d.partyName || ''))}`;
+            try {
+                const qrDiv = document.createElement('div');
+                document.body.appendChild(qrDiv);
+                new QRCode(qrDiv, { text: upiStr, width: 180, height: 180, correctLevel: QRCode.CorrectLevel.M });
+                await new Promise(r => setTimeout(r, 100)); // let QR render
+                const obj = qrDiv.querySelector('canvas') || qrDiv.querySelector('img');
+                if (obj) {
+                    const src = obj.toDataURL ? obj.toDataURL() : obj.src;
+                    qrImgHtml = `<img src="${src}" alt="UPI QR" style="display:block;margin:8px auto;border:1px solid var(--border);border-radius:8px;padding:8px;background:#fff;width:170px">
+                        <div style="font-size:0.78rem;color:var(--text-muted);text-align:center;margin-top:2px">Scan with any UPI App</div>
+                        <div style="font-size:0.72rem;color:var(--text-muted);text-align:center">${co.upi}</div>`;
+                }
+                document.body.removeChild(qrDiv);
+            } catch (e) {
+                qrImgHtml = `<div style="font-size:0.82rem;color:var(--warning);padding:8px">UPI: ${co.upi} | Amount: ₹${amt.toFixed(2)}</div>`;
+            }
+        } else if (!co.upi) {
+            qrImgHtml = `<div style="font-size:0.82rem;color:var(--warning);background:rgba(245,158,11,0.1);padding:8px;border-radius:6px;margin-top:8px">Set UPI ID in Company Setup to show QR code</div>`;
+        }
+        const adminOptions = adminUsers.map(u => `<option value="${escapeHtml(u.name)}" data-userid="${escapeHtml(u.userId || u.name)}">${escapeHtml(u.name)} (${u.role})</option>`).join('');
+        codHtml = `
+        <div style="background:#fff7ed;border:2px solid #f97316;border-radius:10px;padding:14px;margin-bottom:16px">
+    try {
+        await supabaseClient.from('activity_logs').insert({
+            action: 'COD_CASH_RECEIVED',
+            details: `Delivery ${deliveryId} — cash received confirmed by ${adminName}`,
+            user_name: currentUser ? currentUser.name : 'Unknown',
+            created_at: new Date().toISOString()
+        });
+    } catch (e) { /* non-blocking */ }
+}
+

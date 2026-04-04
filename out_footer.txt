@@ -1,0 +1,5 @@
+723: document.querySelectorAll('.modal-footer .btn-primary, .modal-actions .btn-primary, .sales-doc-footer .btn, .sales-doc-f
+8724: <div class="sales-doc-footer sticky-action-bar">
+8725: <div class="sales-doc-footer-actions">
+12101: <div class="sales-doc-footer sticky-action-bar">
+12102: <div class="sales-doc-footer-actions">
