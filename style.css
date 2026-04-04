@@ -6509,9 +6509,10 @@ body.catalog-page-open .omnibox-container {
 }
 .sales-line-grid {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: minmax(60px,0.7fr) minmax(55px,0.6fr) minmax(80px,1fr) minmax(60px,0.7fr) minmax(70px,0.8fr);
     gap: 10px;
     padding-top: 12px;
+    align-items: end;
 }
 .sales-line-field {
     display: flex;
@@ -6519,7 +6520,7 @@ body.catalog-page-open .omnibox-container {
     gap: 6px;
 }
 .sales-line-field-wide {
-    grid-column: span 2;
+    grid-column: span 1;
 }
 .sales-line-field span,
 .sales-line-amount span {
@@ -6563,16 +6564,18 @@ body.catalog-page-open .omnibox-container {
 }
 .invoice-total-stack {
     display: flex;
-    flex-direction: column;
-    gap: 6px;
+    flex-wrap: wrap;
+    gap: 6px 16px;
     padding: 14px;
     border-radius: 18px;
     background: rgba(15,23,42,0.03);
     border: 1px dashed rgba(15,23,42,0.12);
+    align-items: center;
 }
 .invoice-total-stack span {
     font-size: 0.82rem;
     color: var(--text-secondary);
+    white-space: nowrap;
 }
 .invoice-total-stack .is-negative {
     color: var(--danger);
@@ -6580,7 +6583,8 @@ body.catalog-page-open .omnibox-container {
 .invoice-total-grand {
     font-size: 1.15rem;
     color: var(--accent);
-    margin-top: 4px;
+    margin-top: 0;
+    width: 100%;
 }
 
 /* catalog-native styles removed: classic catalog UI is used everywhere for mobile reliability. */
@@ -6641,7 +6645,7 @@ body.catalog-page-open .omnibox-container {
         padding: 12px;
     }
     .sales-line-grid {
-        grid-template-columns: 1fr 1fr;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
     }
     .doc-line-compact-grid {
         gap: 6px;
@@ -6787,8 +6791,10 @@ body.catalog-page-open .omnibox-container {
         line-height: 1.35;
     }
     .invoice-total-stack {
+        flex-direction: row;
+        flex-wrap: wrap;
         padding: 10px 12px;
-        gap: 4px;
+        gap: 4px 10px;
         border-radius: 14px;
     }
     .invoice-total-stack span {
@@ -6796,6 +6802,7 @@ body.catalog-page-open .omnibox-container {
     }
     .invoice-total-grand {
         font-size: 1rem;
+        width: 100%;
     }
 }
 
@@ -6805,5 +6812,9 @@ body.catalog-page-open .omnibox-container {
     }
     .sales-line-field-wide {
         grid-column: span 1;
+    }
+    .invoice-total-stack {
+        flex-direction: column;
+        gap: 4px;
     }
 }

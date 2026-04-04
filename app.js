@@ -38,29 +38,84 @@ const DB = {
     idb: {
         db: null,
         init() {
+            if (this.db) return Promise.resolve();
             return new Promise((resolve, reject) => {
-                const req = indexedDB.open('DistroDB', 1);
-                req.onupgradeneeded = e => {
-                    if (!e.target.result.objectStoreNames.contains('store')) e.target.result.createObjectStore('store');
-                };
-                req.onsuccess = e => { this.db = e.target.result; resolve(); };
-                req.onerror = () => reject(req.error);
+                let settled = false;
+                const timer = setTimeout(() => {
+                    if (!settled) {
+                        settled = true;
+                        console.warn('IDB open timed out after 1.5s');
+                        resolve(); // Resolve to allow app to continue in memory-only mode
+                    }
+                }, 1500);
+
+                try {
+                    const req = indexedDB.open('DistroDB', 1);
+                    req.onupgradeneeded = e => {
+                        if (!e.target.result.objectStoreNames.contains('store')) {
+                            e.target.result.createObjectStore('store');
+                        }
+                    };
+                    req.onsuccess = e => {
+                        if (!settled) {
+                            settled = true;
+                            clearTimeout(timer);
+                            this.db = e.target.result;
+                            resolve();
+                        }
+                    };
+                    req.onerror = () => {
+                        if (!settled) {
+                            settled = true;
+                            clearTimeout(timer);
+                            console.error('IDB open error:', req.error);
+                            resolve(); // Resolve to allow fallback
+                        }
+                    };
+                    req.onblocked = () => {
+                        console.warn('IDB open blocked by other tab');
+                        if (!settled) {
+                            settled = true;
+                            clearTimeout(timer);
+                            resolve();
+                        }
+                    };
+                } catch (e) {
+                    if (!settled) {
+                        settled = true;
+                        clearTimeout(timer);
+                        console.error('IDB init crash:', e);
+                        resolve();
+                    }
+                }
             });
         },
         async get(key) {
             if (!this.db) await this.init();
-            return new Promise((resolve, reject) => {
-                const req = this.db.transaction('store', 'readonly').objectStore('store').get(key);
-                req.onsuccess = () => resolve(req.result);
-                req.onerror = () => reject(req.error);
+            if (!this.db) return undefined; // IDB unavailable — memory-only mode
+            return new Promise((resolve) => {
+                try {
+                    const req = this.db.transaction('store', 'readonly').objectStore('store').get(key);
+                    req.onsuccess = () => resolve(req.result);
+                    req.onerror = () => { console.warn('IDB get error:', req.error); resolve(undefined); };
+                } catch (e) {
+                    console.warn('IDB get crash:', e.message);
+                    resolve(undefined);
+                }
             });
         },
         async set(key, val) {
             if (!this.db) await this.init();
-            return new Promise((resolve, reject) => {
-                const req = this.db.transaction('store', 'readwrite').objectStore('store').put(val, key);
-                req.onsuccess = () => resolve();
-                req.onerror = () => reject(req.error);
+            if (!this.db) return; // IDB unavailable — skip persistence
+            return new Promise((resolve) => {
+                try {
+                    const req = this.db.transaction('store', 'readwrite').objectStore('store').put(val, key);
+                    req.onsuccess = () => resolve();
+                    req.onerror = () => { console.warn('IDB set error:', req.error); resolve(); };
+                } catch (e) {
+                    console.warn('IDB set crash:', e.message);
+                    resolve();
+                }
             });
         }
     },
@@ -1487,11 +1542,11 @@ async function showLoginScreen() {
     if (co.name) $('login-company-name').textContent = co.name;
 
     const logoEl = document.querySelector('#login-screen .logo-icon');
-    if (logoEl) {
+    if (logoEl && (co.name || co.logo)) {
         if (co.logo) {
             logoEl.innerHTML = `<img src="${co.logo}" style="width:100%;height:100%;object-fit:cover;border-radius:12px">`;
         } else {
-            logoEl.textContent = co.name ? co.name.charAt(0).toUpperCase() : 'D';
+            logoEl.textContent = co.name.charAt(0).toUpperCase();
         }
     }
 }
@@ -1529,12 +1584,12 @@ async function doLoginSuccess(user, isRestore = false) {
     const co = DB.ls.getObj('db_company');
     $('sidebar-brand').textContent = co.name || 'Prakash Traders';
     const sidebarLogo = document.querySelector('#sidebar .logo-icon-sm');
-    if (sidebarLogo) {
+    if (sidebarLogo && (co.name || co.logo)) {
         if (co.logo) {
             sidebarLogo.innerHTML = `<img src="${co.logo}" style="width:100%;height:100%;object-fit:cover;border-radius:6px">`;
             sidebarLogo.style.background = 'transparent';
         } else {
-            sidebarLogo.textContent = (co.name || 'D').charAt(0).toUpperCase();
+            sidebarLogo.textContent = co.name.charAt(0).toUpperCase();
             sidebarLogo.style.background = 'linear-gradient(135deg, var(--primary), var(--secondary))';
         }
     }
@@ -2388,6 +2443,7 @@ function initSwipeActions() { /* placeholder for future swipe-to-delete/edit */ 
 // --- Navigation ---
 async function navigateTo(page, options = {}) {
     setPageChromeMode('default');
+    document.body.classList.remove('pay-form-open', 'sales-doc-page-open', 'catalog-page-open', 'modal-open');
     const isSilent = options.silent === true;
     if (!currentUser) return showLoginScreen();
     if (page === 'customerrequests' && !CUSTOMER_PORTAL_ENABLED) {
@@ -9485,7 +9541,7 @@ function renderSOLines() {
                 <div class="sales-line-index">${i + 1}</div>
                 <div class="sales-line-copy">
                     <div class="sales-line-name">${escapeHtml(li.name)}</div>
-                    ${!isDenseDesktop ? `
+                    ${!isDenseDesktop && !isExpanded ? `
                     ${renderCompactMetricRow({
             qtyInputHtml: `<input type="number" class="doc-line-compact-input" value="${li.qty}" min="1" inputmode="decimal" onchange="updateSOLine(${i},'qty',this.value)" onclick="event.stopPropagation()" onfocus="event.stopPropagation()">`,
             uom: li.unit || 'Pcs',
@@ -9509,7 +9565,7 @@ function renderSOLines() {
                         <span>Unit</span>
                         <input value="${escapeHtml(li.unit || 'Pcs')}" readonly>
                     </label>
-                    <label class="sales-line-field sales-line-field-wide">
+                    <label class="sales-line-field">
                         <span>Price ${edited ? `(listed ${currency(li.listedPrice)})` : ''}</span>
                         <input type="number" value="${(+li.price).toFixed(2)}" min="0" step="0.01" onchange="updateSOLine(${i},'price',this.value)">
                     </label>
@@ -12141,7 +12197,7 @@ function renderInvoiceLines() {
                 <div class="sales-line-index">${i + 1}</div>
                 <div class="sales-line-copy">
                     <div class="sales-line-name">${escapeHtml(li.name)}</div>
-                    ${!isDenseDesktop ? `
+                    ${!isDenseDesktop && false ? `
                     ${renderCompactMetricRow({
             qtyInputHtml: `<input type="number" class="doc-line-compact-input" value="${li.qty}" min="0.001" step="any" inputmode="decimal" onchange="updateInvoiceLine(${i},'qty',this.value)">`,
             uom: li.unit || 'Pcs',
@@ -12164,7 +12220,7 @@ function renderInvoiceLines() {
                         <span>Unit</span>
                         <input value="${escapeHtml(li.unit || 'Pcs')}" readonly>
                     </label>
-                    <label class="sales-line-field sales-line-field-wide">
+                    <label class="sales-line-field">
                         <span>Price ${edited ? `(listed ${currency(li.listedPrice)})` : ''}</span>
                         <input type="number" value="${(+li.price).toFixed(2)}" min="0" step="0.01" onchange="updateInvoiceLine(${i},'price',this.value)">
                     </label>
@@ -14512,6 +14568,9 @@ async function savePayment(id) {
         showToast(`Payment ${payRefNo} saved successfully!`, 'success');
         endSave(); // Reset saving flag after success
 
+        // Force background sync before rendering to show immediate results
+        await DB.refreshTables(['payments', 'parties', 'party_ledger', 'expenses']);
+
         if (andNew) {
             openPaymentModal();
         } else if (currentPage === 'payments') {
@@ -14519,8 +14578,6 @@ async function savePayment(id) {
         } else {
             // Navigate back to the current page (e.g., Dashboard) which closes the payment form
             navigateTo(currentPage);
-            // Refresh related caches in background
-            DB.refreshTables(['payments', 'parties', 'party_ledger', 'expenses']).catch(console.error);
         }
 
     } catch (err) {
@@ -14681,7 +14738,7 @@ async function saveDirectPayment() {
         } else if (currentPage === 'invoices') {
             await renderInvoices();
         } else {
-            DB.refreshTables(['payments', 'parties', 'party_ledger', 'expenses']).catch(console.error);
+            await DB.refreshTables(['payments', 'parties', 'party_ledger', 'expenses']);
         }
         showToast('Payment recorded successfully', 'success');
     } catch (err) {
