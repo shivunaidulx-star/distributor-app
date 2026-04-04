@@ -980,7 +980,7 @@ const ROLE_NAME_MAP = {
 };
 const CUSTOMER_PORTAL_ENABLED = false; // Feature kept in codebase for future relaunch, disabled for current live release.
 function getAppVersion() {
-    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v133';
+    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v137';
 }
 
 const PAGE_LABELS = {
@@ -1533,7 +1533,9 @@ window.addEventListener('wheel', function (e) {
 
 // 3. Block touch swipes starting from the left 20px edge (Chrome's drag-back zone)
 window.addEventListener('touchstart', function (e) {
-    if (e.touches[0].clientX < 20) {
+    const touch = e.touches && e.touches[0];
+    const interactiveTarget = e.target && e.target.closest && e.target.closest('button, a, input, select, textarea, label, .btn');
+    if (touch && touch.clientX < 20 && !interactiveTarget) {
         e.preventDefault();
     }
 }, { passive: false });
@@ -1552,21 +1554,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 function setupPullToRefresh() {
-    let touchStart = 0;
-    const content = $('page-content');
-    if (!content) return;
-
-    content.addEventListener('touchstart', e => {
-        if (content.scrollTop === 0) touchStart = e.touches[0].pageY;
-    }, { passive: true });
-
-    content.addEventListener('touchend', e => {
-        const touchEnd = e.changedTouches[0].pageY;
-        if (content.scrollTop === 0 && touchEnd - touchStart > 100) {
-            showToast('Refreshing...', 'info');
-            DB.refresh().then(() => navigateTo(currentPage));
-        }
-    }, { passive: true });
+    const scrollHost = document.querySelector('.main-content');
+    [document.documentElement, document.body, scrollHost].forEach(el => {
+        if (!el) return;
+        el.style.overscrollBehaviorY = el === scrollHost ? 'contain' : 'none';
+    });
+    if (!scrollHost) return;
+    scrollHost.style.touchAction = 'pan-y';
+    scrollHost.style.webkitOverflowScrolling = 'touch';
 }
 async function initApp() {
     const loadingEl = $('app-loading');
@@ -1738,6 +1733,27 @@ function initSearchDropdown(inputId, items, onSelect) {
                 const metaParts = [it.code ? `[${it.code}]` : '', it.category || '', it.subCategory || '', it.paymentTerms || '']
                     .filter(Boolean)
                     .join(' · ');
+                const isDenseItemRow = it.qty !== undefined || it.availableQty !== undefined || it.uom || it.unit || it.price !== undefined || it.amount !== undefined;
+                if (isDenseItemRow) {
+                    const qtyValue = it.qty !== undefined ? it.qty : (it.availableQty !== undefined ? it.availableQty : 1);
+                    const displayPrice = getDropdownItemDisplayPrice(it, inputId);
+                    const amountValue = it.amount !== undefined && it.amount !== null ? +it.amount : displayPrice;
+                    return `<div class="search-dropdown-item search-dropdown-item-dense" data-idx="${idx}" data-value="${it.value}">
+                        <div class="search-dropdown-item-main">
+                            <div class="search-dropdown-title-row">
+                                <span class="search-dropdown-title">${escapeHtml(it.label || '')}</span>
+                                ${it.code ? `<span class="search-dropdown-title-code">[${escapeHtml(it.code)}]</span>` : ''}
+                            </div>
+                            ${renderCompactMetricRow({
+                                qtyValue,
+                                uom: it.uom || it.unit || 'Pcs',
+                                priceText: currency(displayPrice),
+                                amountText: currency(amountValue),
+                                extraClass: 'search-dropdown-detail-grid'
+                            })}
+                        </div>
+                    </div>`;
+                }
                 return `<div class="search-dropdown-item" data-idx="${idx}" data-value="${it.value}">
                     <div class="search-dropdown-copy">
                         <span class="search-dropdown-title">${escapeHtml(it.label || '')}</span>
@@ -1820,14 +1836,18 @@ function initSearchDropdown(inputId, items, onSelect) {
         });
     }
 
-    dd.addEventListener('mousedown', (e) => {
-        e.preventDefault(); // prevent blur
+    dd.addEventListener('pointerdown', (e) => {
         const el = e.target.closest('.search-dropdown-item');
         if (el) {
+            e.preventDefault(); // prevent blur before selection
             const idx = parseInt(el.dataset.idx);
             const filtered = dd._filtered || [];
             if (filtered[idx]) selectItem(filtered[idx]);
         }
+    }, sig);
+
+    document.addEventListener('pointerdown', (e) => {
+        if (!wrapper.contains(e.target)) closeDD();
     }, sig);
 
     inp.addEventListener('blur', () => { setTimeout(closeDD, 200); }, sig);
@@ -1850,7 +1870,6 @@ function attachMobileKeyboardScrollFix(inputEl) {
 
     const ac = new AbortController();
     const sig = { signal: ac.signal };
-    const pageContent = $('page-content');
     inputEl._mobileKeyboardScrollAbortCtrl = ac;
 
     inputEl.addEventListener('focus', () => {
@@ -1858,33 +1877,20 @@ function attachMobileKeyboardScrollFix(inputEl) {
             inputEl._mobileKeyboardFocusCallback();
         }
         if (window.innerWidth > 768) return;
-        if (pageContent) {
-            inputEl._mobileKeyboardPrevPadding = pageContent.style.getPropertyValue('padding-bottom');
-            inputEl._mobileKeyboardPrevPaddingPriority = pageContent.style.getPropertyPriority('padding-bottom');
-            pageContent.style.setProperty('padding-bottom', 'max(60vh, 400px)', 'important');
-        }
+        const insideSalesDoc = document.body.classList.contains('sales-doc-page-open') || !!inputEl.closest('.sales-doc-shell, .doc-item-modal');
         clearTimeout(inputEl._mobileKeyboardScrollTimer);
         inputEl._mobileKeyboardScrollTimer = setTimeout(() => {
-            const scrollTarget = inputEl.closest('.sales-doc-field, .form-group, .search-dropdown-wrapper') || inputEl;
+            const scrollTarget = inputEl.closest('.sales-doc-field, .doc-input-shell, .form-group, .search-dropdown-wrapper') || inputEl;
             scrollTarget.scrollIntoView({
                 behavior: 'smooth',
-                block: 'start'
+                block: insideSalesDoc ? 'center' : 'nearest',
+                inline: 'nearest'
             });
         }, 300);
     }, sig);
 
     inputEl.addEventListener('blur', () => {
         clearTimeout(inputEl._mobileKeyboardScrollTimer);
-        if (!pageContent) return;
-        const prevPadding = inputEl._mobileKeyboardPrevPadding || '';
-        const prevPriority = inputEl._mobileKeyboardPrevPaddingPriority || '';
-        if (prevPadding) {
-            pageContent.style.setProperty('padding-bottom', prevPadding, prevPriority);
-        } else {
-            pageContent.style.removeProperty('padding-bottom');
-        }
-        delete inputEl._mobileKeyboardPrevPadding;
-        delete inputEl._mobileKeyboardPrevPaddingPriority;
     }, sig);
 }
 
@@ -2162,11 +2168,16 @@ function buildItemSearchList(inventoryItems) {
             code: i.itemCode || '',
             category: i.category || '',
             subCategory: i.subCategory || '',
+            qty: avail,
+            availableQty: avail,
             stockText: 'Avail: ' + avail + ' ' + (i.unit || 'Pcs'),
             searchText: (i.name + ' ' + (i.itemCode || '')),
             salePrice: i.salePrice,
             purchasePrice: i.purchasePrice,
+            price: +(i.salePrice ?? i.purchasePrice ?? 0),
+            amount: +(i.salePrice ?? i.purchasePrice ?? 0),
             mrp: i.mrp || i.salePrice || 0,
+            uom: i.unit || 'Pcs',
             unit: i.unit || 'Pcs',
             secUom: i.secUom || '',
             secUomRatio: i.secUomRatio || 0,
@@ -2174,6 +2185,44 @@ function buildItemSearchList(inventoryItems) {
             _raw: i
         };
     });
+}
+
+function getDropdownItemDisplayPrice(item, inputId = '') {
+    const fieldId = String(inputId || '');
+    const invoiceType = fieldId.includes('f-inv-') ? (($('f-inv-type') || {}).value || 'sale') : '';
+    if (fieldId.includes('f-po-') || fieldId.includes('f-di-') || (fieldId.includes('f-inv-') && invoiceType && invoiceType !== 'sale')) {
+        return +(item.purchasePrice ?? item.salePrice ?? item.price ?? 0);
+    }
+    return +(item.salePrice ?? item.purchasePrice ?? item.price ?? 0);
+}
+
+function renderCompactMetricRow({
+    qtyLabel = 'Qty',
+    qtyValue = '-',
+    qtyInputHtml = '',
+    uom = '-',
+    priceText = '-',
+    amountText = '-',
+    extraClass = ''
+} = {}) {
+    return `<div class="doc-line-compact-grid${extraClass ? ' ' + extraClass : ''}">
+        <div class="doc-line-compact-cell">
+            <span class="doc-line-compact-label">${escapeHtml(String(qtyLabel || 'Qty'))}</span>
+            ${qtyInputHtml || `<strong class="doc-line-compact-value">${escapeHtml(String(qtyValue ?? '-'))}</strong>`}
+        </div>
+        <div class="doc-line-compact-cell">
+            <span class="doc-line-compact-label">UOM</span>
+            <strong class="doc-line-compact-value">${escapeHtml(String(uom || '-'))}</strong>
+        </div>
+        <div class="doc-line-compact-cell">
+            <span class="doc-line-compact-label">Price</span>
+            <strong class="doc-line-compact-value">${escapeHtml(String(priceText || '-'))}</strong>
+        </div>
+        <div class="doc-line-compact-cell is-amount">
+            <span class="doc-line-compact-label">Amount</span>
+            <strong class="doc-line-compact-value">${escapeHtml(String(amountText || '-'))}</strong>
+        </div>
+    </div>`;
 }
 
 
@@ -8238,17 +8287,16 @@ function renderSalesOrderFormShell(config) {
                     <label>Notes</label>
                     <textarea id="f-so-notes" rows="3" placeholder="Optional notes...">${escapeHtml(notes || '')}</textarea>
                 </div>
+                <div id="so-total-display" class="invoice-total-stack">
+                    <strong class="invoice-total-grand">Total: ${currency(0)}</strong>
+                </div>
             </section>
         </div>
-        <div class="sales-doc-footer">
-            <div class="sales-doc-footer-main">
-                <span>Order Total</span>
-                <strong id="so-total-display">Total: ${currency(0)}</strong>
-            </div>
+        <div class="sales-doc-footer sticky-action-bar">
             <div class="sales-doc-footer-actions">
-                <button class="btn btn-outline" onclick="${cancelAction || `navigateTo('salesorders')`}">Cancel</button>
-                ${showSaveAndNew ? `<button class="btn btn-outline" onclick="window._saveAndNew=true;saveSalesOrder()">Save &amp; New</button>` : ''}
-                <button class="btn btn-primary" onclick="${primaryAction || 'saveSalesOrder()'}">${showSaveAndNew ? 'Save Order' : 'Save Changes'}</button>
+                <button type="button" class="btn btn-outline" onclick="${cancelAction || `navigateTo('salesorders')`}">Cancel</button>
+                ${showSaveAndNew ? `<button type="button" class="btn btn-outline" onclick="window._saveAndNew=true;saveSalesOrder()">Save &amp; New</button>` : ''}
+                <button type="button" class="btn btn-primary" onclick="${primaryAction || 'saveSalesOrder()'}">${showSaveAndNew ? 'Save Order' : 'Save Changes'}</button>
             </div>
         </div>
         ${renderSOItemSubModal(categories)}
@@ -8572,6 +8620,9 @@ window.updateSoTotal = function () {
 
     // Build GST breakdown from per-item rates
     const hasItemGst = soItems.some(li => (li.gstRate || 0) > 0);
+    const taxableAmt = hasItemGst
+        ? soItems.reduce((s, li) => s + (li.baseAmount || li.amount), 0)
+        : undefined;
     let gstLines = '';
     let totalTax = 0;
     if (hasItemGst) {
@@ -8581,20 +8632,18 @@ window.updateSoTotal = function () {
         });
         totalTax = Object.values(rateMap).reduce((s, v) => s + v, 0);
         gstLines = Object.entries(rateMap).sort((a, b) => +a[0] - +b[0])
-            .map(([r, amt]) => `<span style="color:var(--text-muted)">GST ${r}% <i>(Incl.)</i>: <b>${currency(amt)}</b></span>`).join('');
+            .map(([r, amt]) => `<span>GST ${r}% (Incl.): <b>${currency(amt)}</b></span>`).join('');
     }
 
     const el = $('so-total-display');
     if (el) {
         el.innerHTML = `
-        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;font-size:0.82rem;text-align:right;width:100%">
+            ${taxableAmt !== undefined ? `<span>Taxable Amount: <b>${currency(taxableAmt)}</b></span>` : ''}
             ${gstLines}
-            ${totalTax ? `<span style="color:var(--text-muted)">Total GST <i>(Included)</i>: <b>${currency(totalTax)}</b></span>` : ''}
-            <span style="color:var(--text-muted)${hasItemGst ? ';border-top:1px dashed var(--border);padding-top:3px;margin-top:2px;width:100%' : ''}">Subtotal: <b>${currency(subtotal)}</b></span>
-            ${totalDiscount ? `<span style="color:var(--danger)">Discount: <b>-${currency(totalDiscount)}</b></span>` : ''}
-            <span style="color:var(--text-muted);border-top:1px dashed var(--border);padding-top:3px;margin-top:2px;width:100%"></span>
-            <span style="font-size:1.15rem;font-weight:800;color:var(--accent)">Total: ${currency(Math.max(0, finalTotal))}</span>
-        </div>`;
+            ${totalTax ? `<span>Total GST (Included): <b>${currency(totalTax)}</b></span>` : ''}
+            <span>Subtotal: <b>${currency(subtotal)}</b></span>
+            ${totalDiscount ? `<span class="is-negative">Discount: <b>-${currency(totalDiscount)}</b></span>` : ''}
+            <strong class="invoice-total-grand">Total: ${currency(Math.max(0, finalTotal))}</strong>`;
     }
 }
 
@@ -8986,12 +9035,26 @@ function renderSOLines() {
         const discSummary = li.discountPct > 0
             ? `${li.discountPct}% off`
             : (li.discountAmt > 0 ? `-${currency(li.discountAmt)}` : 'No discount');
+        const summaryBits = [
+            discSummary !== 'No discount' ? discSummary : '',
+            li.gstRate ? `GST ${li.gstRate}%` : '',
+            edited ? `Listed ${currency(li.listedPrice)}` : ''
+        ].filter(Boolean);
         return `
         <div class="sales-line-card ${borderClass}">
             <div class="sales-line-head" onclick="${forceExpanded ? '' : `toggleSOLine(${i})`}">
                 <div class="sales-line-index">${i + 1}</div>
                 <div class="sales-line-copy">
                     <div class="sales-line-name">${escapeHtml(li.name)}</div>
+                    ${renderCompactMetricRow({
+                        qtyInputHtml: `<input type="number" class="doc-line-compact-input" value="${li.qty}" min="1" inputmode="decimal" onchange="updateSOLine(${i},'qty',this.value)" onclick="event.stopPropagation()" onfocus="event.stopPropagation()">`,
+                        uom: li.unit || 'Pcs',
+                        priceText: currency(li.price),
+                        amountText: currency(li.amount),
+                        extraClass: 'sales-line-compact-grid'
+                    })}
+                    ${summaryBits.length ? `<div class="sales-line-summary-note">${escapeHtml(summaryBits.join(' | '))}</div>` : ''}
+                    ${li._priceAlert ? `<div class="sales-line-summary-note is-alert">Below purchase price ${currency(li.purchasePrice)}</div>` : ''}
                 </div>
                 <button class="sales-line-delete" onclick="event.stopPropagation();removeSOLine(${i})">${msIcon('delete')}</button>
             </div>
@@ -11569,18 +11632,16 @@ function renderInvoiceFormShell(config) {
                     </div>
                     <div id="inv-advance-section"></div>
                 </div>
-                <div id="inv-total-display" class="invoice-total-stack">Total: ${currency(0)}</div>
+                <div id="inv-total-display" class="invoice-total-stack">
+                    <strong class="invoice-total-grand">Total: ${currency(0)}</strong>
+                </div>
             </section>
         </div>
-        <div class="sales-doc-footer">
-            <div class="sales-doc-footer-main">
-                <span>Invoice Total</span>
-                <strong id="inv-footer-total">${currency(0)}</strong>
-            </div>
+        <div class="sales-doc-footer sticky-action-bar">
             <div class="sales-doc-footer-actions">
-                <button class="btn btn-outline" onclick="navigateTo('invoices')">Cancel</button>
-                ${showSaveAndNew ? `<button class="btn btn-outline" onclick="window._saveAndNew=true;saveInvoice()">Save &amp; New</button>` : ''}
-                <button class="btn btn-primary" onclick="${saveAction}">${escapeHtml(saveLabel)}</button>
+                <button type="button" class="btn btn-outline" onclick="navigateTo('invoices')">Cancel</button>
+                ${showSaveAndNew ? `<button type="button" class="btn btn-outline" onclick="window._saveAndNew=true;saveInvoice()">Save &amp; New</button>` : ''}
+                <button type="button" class="btn btn-primary" onclick="${saveAction}">${escapeHtml(saveLabel)}</button>
             </div>
         </div>
         ${renderInvoiceItemSubModal(categories, type === 'sale' ? 'Add Items to Sale Invoice' : 'Add Items to Stock In')}
@@ -11593,16 +11654,26 @@ function renderInvoiceLines() {
     el.innerHTML = invoiceItems.map((li, i) => {
         const edited = li.listedPrice !== undefined && Math.abs(li.price - li.listedPrice) > 0.01;
         const borderClass = li._priceAlert ? 'is-alert' : edited ? 'is-edited' : '';
+        const summaryBits = [
+            li.discountPct > 0 ? `${li.discountPct}% off` : (li.discountAmt > 0 ? `-${currency(li.discountAmt)}` : ''),
+            li.gstRate ? `GST ${li.gstRate}%` : '',
+            edited ? `Listed ${currency(li.listedPrice)}` : ''
+        ].filter(Boolean);
         return `
         <div class="sales-line-card ${borderClass}">
             <div class="sales-line-head">
                 <div class="sales-line-index">${i + 1}</div>
                 <div class="sales-line-copy">
                     <div class="sales-line-name">${escapeHtml(li.name)}</div>
-                    <div class="sales-line-meta">${li.qty} ${escapeHtml(li.unit || 'Pcs')} | ${currency(li.price)}${li.gstRate ? ` | GST ${li.gstRate}%` : ''}</div>
-                </div>
-                <div class="sales-line-summary">
-                    <strong>${currency(li.amount)}</strong>
+                    ${renderCompactMetricRow({
+                        qtyInputHtml: `<input type="number" class="doc-line-compact-input" value="${li.qty}" min="0.001" step="any" inputmode="decimal" onchange="updateInvoiceLine(${i},'qty',this.value)">`,
+                        uom: li.unit || 'Pcs',
+                        priceText: currency(li.price),
+                        amountText: currency(li.amount),
+                        extraClass: 'sales-line-compact-grid'
+                    })}
+                    ${summaryBits.length ? `<div class="sales-line-summary-note">${escapeHtml(summaryBits.join(' | '))}</div>` : ''}
+                    ${li._priceAlert ? `<div class="sales-line-summary-note is-alert">Below purchase price ${currency(li.purchasePrice)}</div>` : ''}
                 </div>
                 <button class="sales-line-delete" onclick="removeInvoiceLine(${i})">${msIcon('delete')}</button>
             </div>
@@ -11687,15 +11758,13 @@ function updateInvoiceTotal() {
     }
 
     el.innerHTML = `
-        <div class="invoice-total-stack">
-            ${taxableAmt !== undefined ? `<span>Taxable Amount: <b>${currency(taxableAmt)}</b></span>` : ''}
-            ${rateLines || ''}
-            ${totalTax ? `<span>Total GST: <b>${currency(totalTax)}</b></span>` : ''}
-            <span>Subtotal: <b>${currency(sub)}</b></span>
-            ${totalDiscount ? `<span class="is-negative">Discount: <b>-${currency(totalDiscount)}</b></span>` : ''}
-            ${roundoff ? `<span>Round Off: <b>${roundoff > 0 ? '+' : ''}${currency(roundoff)}</b></span>` : ''}
-            <strong class="invoice-total-grand">Total: ${currency(total)}</strong>
-        </div>`;
+        ${taxableAmt !== undefined ? `<span>Taxable Amount: <b>${currency(taxableAmt)}</b></span>` : ''}
+        ${rateLines || ''}
+        ${totalTax ? `<span>Total GST: <b>${currency(totalTax)}</b></span>` : ''}
+        <span>Subtotal: <b>${currency(sub)}</b></span>
+        ${totalDiscount ? `<span class="is-negative">Discount: <b>-${currency(totalDiscount)}</b></span>` : ''}
+        ${roundoff ? `<span>Round Off: <b>${roundoff > 0 ? '+' : ''}${currency(roundoff)}</b></span>` : ''}
+        <strong class="invoice-total-grand">Total: ${currency(total)}</strong>`;
 
     const footerTotal = $('inv-footer-total');
     if (footerTotal) footerTotal.textContent = currency(total);
