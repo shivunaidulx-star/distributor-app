@@ -980,7 +980,7 @@ const ROLE_NAME_MAP = {
 };
 const CUSTOMER_PORTAL_ENABLED = false; // Feature kept in codebase for future relaunch, disabled for current live release.
 function getAppVersion() {
-    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v1.106.9';
+    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v133';
 }
 
 const PAGE_LABELS = {
@@ -1240,36 +1240,6 @@ const appEl = $('app');
 const pageContent = $('page-content');
 const pageTitle = $('page-title');
 const sidebar = $('sidebar');
-const SIDEBAR_COLLAPSE_KEY = 'dm_sidebar_collapsed';
-
-function setSidebarCollapsed(collapsed, options = {}) {
-    const { persist = true } = options;
-    if (window.innerWidth <= 768) {
-        document.body.classList.remove('sidebar-collapsed');
-        return;
-    }
-    document.body.classList.toggle('sidebar-collapsed', !!collapsed);
-    const toggleBtn = $('sidebar-collapse-toggle');
-    if (toggleBtn) {
-        toggleBtn.title = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
-        toggleBtn.setAttribute('aria-label', toggleBtn.title);
-        const icon = toggleBtn.querySelector('.material-symbols-outlined');
-        if (icon) icon.textContent = collapsed ? 'chevron_right' : 'chevron_left';
-    }
-    if (persist) {
-        try { localStorage.setItem(SIDEBAR_COLLAPSE_KEY, collapsed ? '1' : '0'); } catch (_) { }
-    }
-}
-
-function toggleSidebarCollapsed() {
-    setSidebarCollapsed(!document.body.classList.contains('sidebar-collapsed'));
-}
-
-function restoreSidebarCollapsed() {
-    let saved = false;
-    try { saved = localStorage.getItem(SIDEBAR_COLLAPSE_KEY) === '1'; } catch (_) { }
-    setSidebarCollapsed(saved, { persist: false });
-}
 
 // =============================================
 //  SETUP WIZARD (First Launch)
@@ -1638,9 +1608,6 @@ async function initApp() {
         if (logoutBtn) logoutBtn.addEventListener('click', (e) => { e.preventDefault(); logout(); });
         $('sidebar-close').addEventListener('click', () => sidebar.classList.remove('open'));
         $('sidebar-toggle').addEventListener('click', () => sidebar.classList.toggle('open'));
-        const sidebarCollapseToggle = $('sidebar-collapse-toggle');
-        if (sidebarCollapseToggle) sidebarCollapseToggle.addEventListener('click', toggleSidebarCollapsed);
-        restoreSidebarCollapsed();
         $('modal-close').addEventListener('click', closeModal);
         $('modal-overlay').addEventListener('click', e => { if (e.target === $('modal-overlay')) closeModal(); });
         document.querySelectorAll('.nav-item').forEach(item => {
@@ -1691,7 +1658,7 @@ function openModal(title, html, footer, isFullScreen = false) {
 
     $('modal-overlay').classList.remove('hidden');
     // Prevent background page scroll while modal is open
-    document.body.classList.add('body-scroll-lock');
+    document.body.style.overflow = 'hidden';
     document.body.classList.add('modal-open');
     // Hide FAB so it doesn't overlap modal buttons
     const fab = $('app-fab');
@@ -1712,7 +1679,7 @@ function openModal(title, html, footer, isFullScreen = false) {
 }
 function closeModal() {
     $('modal-overlay').classList.add('hidden');
-    document.body.classList.remove('body-scroll-lock'); // Restore page scroll
+    document.body.style.overflow = ''; // Restore page scroll
     document.body.classList.remove('modal-open');
     document.querySelectorAll('.search-dropdown-list').forEach(d => d.remove());
     const footerEl = $('modal-footer');
@@ -1980,9 +1947,9 @@ function renderSOItemSubModal(categories) {
     return `
     <div id="so-item-sub-modal" class="sub-modal doc-item-modal">
         <div class="sub-modal-header doc-item-modal-header">
-            <button type="button" class="back-btn doc-item-back-btn" onclick="closeSoItemSubModal()">&larr; Back</button>
+            <button class="btn-icon" onclick="closeSoItemSubModal()">${msIcon('arrow_back', '', 'font-size:1.2rem')}</button>
             <h3>Add Items to Sale Order</h3>
-            <div style="width:40px"></div>
+            <button class="btn-icon" onclick="closeSoItemSubModal()">${msIcon('close', '', 'font-size:1.2rem')}</button>
         </div>
         <div class="sub-modal-body so-item-sub-body doc-item-modal-body">
             <div class="doc-field-grid doc-field-grid-2 doc-item-filter-block">
@@ -2047,7 +2014,7 @@ function renderSOItemSubModal(categories) {
     return `
     <div id="so-item-sub-modal" class="sub-modal doc-item-modal">
         <div class="sub-modal-header doc-item-modal-header">
-            <button type="button" class="back-btn doc-item-back-btn" onclick="closeSoItemSubModal()">&larr; Back</button>
+            <button class="btn-icon" onclick="closeSoItemSubModal()">${msIcon('arrow_back', '', 'font-size:1.2rem')}</button>
             <h3>Add Items to Sale Order</h3>
             <div style="width:40px"></div>
         </div>
@@ -2117,7 +2084,7 @@ function renderInvoiceItemSubModal(categories, title = 'Add Items to Invoice') {
     return `
     <div id="inv-item-sub-modal" class="sub-modal doc-item-modal">
         <div class="sub-modal-header doc-item-modal-header">
-            <button type="button" class="back-btn doc-item-back-btn" onclick="closeInvItemSubModal()">&larr; Back</button>
+            <button class="btn-icon" onclick="closeInvItemSubModal()">${msIcon('arrow_back', '', 'font-size:1.2rem')}</button>
             <h3>${escapeHtml(title)}</h3>
             <div style="width:40px"></div>
         </div>
@@ -2366,7 +2333,6 @@ function initSwipeActions() { /* placeholder for future swipe-to-delete/edit */ 
 // --- Navigation ---
 async function navigateTo(page, options = {}) {
     setPageChromeMode('default');
-    document.body.classList.remove('body-scroll-lock'); // ALWAYS UNLOCK ON NAVIGATION
     const isSilent = options.silent === true;
     if (!currentUser) return showLoginScreen();
     if (page === 'customerrequests' && !CUSTOMER_PORTAL_ENABLED) {
@@ -2434,7 +2400,7 @@ async function navigateTo(page, options = {}) {
 
     // Show a loader ONLY if NOT silent refresh
     if (!isSilent) {
-        pageContent.scrollTop = 0; pageContent.innerHTML = '<div style="display:flex;justify-content:center;align-items:center;height:200px"><div class="loader"></div></div>';
+        pageContent.innerHTML = '<div style="display:flex;justify-content:center;align-items:center;height:200px"><div class="loader"></div></div>';
     }
 
     const renderers = { dashboard: renderDashboard, parties: renderParties, partyledger: renderPartyLedgerLayout, inventorysetup: renderInventorySetup, categories: renderCategories, uom: renderUOM, inventory: renderInventory, catalog: renderCatalog, salesorders: renderSalesOrders, purchaseorders: renderPurchaseOrders, invoices: renderInvoices, payments: renderPayments, expenses: renderExpenses, packing: renderPacking, delivery: renderDelivery, reports: renderReports, packers: renderPackers, deliverypersons: renderDeliveryPersons, users: renderUsers, setup: renderCompanySetup, noseries: renderNoSeries, customerrequests: renderCustomerRequests, staffmaster: renderStaffMaster, attendance: renderAttendance, hrpayroll: renderHRPayroll, packorder: renderPackOrderPage, stockledger: () => renderStockLedger(null), orderdetail: renderOrderDetailPage, podetail: renderPODetailPage, deliverydetail: renderDeliveryDetailPage, stockadjust: renderStockAdjustPage, directpurchase: renderDirectPurchasePage, partyform: renderPartyFormPage, itemform: renderItemFormPage, invoiceform: renderInvoiceFormPage, editinvoiceform: renderEditInvoiceFormPage, packagedetails: renderPackageDetailsPage, rangeatt: renderRangeAttPage };
@@ -3154,15 +3120,6 @@ function filterNavWidget(q) {
     const s = q.toLowerCase();
     rows.forEach(r => r.style.display = (!s || r.dataset.name.includes(s)) ? '' : 'none');
 }
-function wrapDashboardScroll(contentHtml) {
-    return `
-        <div class="dashboard-wrapper" style="display: flex; flex-direction: column; height: 100%;">
-            <div class="dashboard-scroll-area" style="flex: 1; overflow-y: auto; padding: 1px; padding-bottom: 100px;">
-                ${contentHtml}
-            </div>
-        </div>
-    `;
-}
 async function renderDashboard() {
     DB.showSkeleton(pageContent, 3);
     const role = currentUser.role;
@@ -3207,7 +3164,7 @@ async function renderDashboard() {
         );
         const todayCollection = myTodayPayments.reduce((s, p) => s + p.amount, 0);
 
-        pageContent.scrollTop = 0; pageContent.innerHTML = wrapDashboardScroll(`
+        pageContent.innerHTML = `
             <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; margin-bottom: 16px;">
                 
                 <div class="card" style="margin:0; border-left: 4px solid ${barColor}">
@@ -3285,7 +3242,7 @@ async function renderDashboard() {
                 </div>
             </div>
             ${renderPartyNavWidget(parties)}
-        `);
+        `;
         return;
     }
 
@@ -3295,7 +3252,7 @@ async function renderDashboard() {
         const dispatched = myDels.filter(d => d.status === 'Dispatched');
         const delivered = myDels.filter(d => d.status === 'Delivered');
         const undelivered = myDels.filter(d => d.status === 'Undelivered');
-        pageContent.scrollTop = 0; pageContent.innerHTML = wrapDashboardScroll(`
+        pageContent.innerHTML = `
             <div class="stats-grid">
                 <div class="stat-card blue"><div class="stat-icon">${msIcon('local_shipping')}</div><div class="stat-value">${dispatched.length}</div><div class="stat-label">In Transit</div></div>
                 <div class="stat-card green"><div class="stat-icon">${msIcon('task_alt')}</div><div class="stat-value">${delivered.length}</div><div class="stat-label">Delivered</div></div>
@@ -3318,7 +3275,7 @@ async function renderDashboard() {
                     <tbody>${dispatched.slice(-5).reverse().map(d => `<tr><td style="font-weight:600">${d.orderNo}</td><td>${d.partyName}</td><td><span class="badge badge-info">${d.invoiceNo || '-'}</span></td><td><span class="badge badge-info">${d.status}</span></td></tr>`).join('') || '<tr><td colspan="4"><div class="empty-state"><p>No active dispatches</p><p class="empty-subtitle">All deliveries are complete</p></div></td></tr>'}</tbody></table>
                 </div>`}
             </div></div>
-            ${renderPartyNavWidget(parties)}`);
+            ${renderPartyNavWidget(parties)}`;
         return;
     }
 
@@ -3329,7 +3286,7 @@ async function renderDashboard() {
         const unassigned = allApproved.filter(o => !o.assignedPacker);
         const myAssigned = allApproved.filter(o => o.assignedPacker === currentUser.name);
         const packed = salesOrders.filter(o => o.packed && o.packedBy === currentUser.name);
-        pageContent.scrollTop = 0; pageContent.innerHTML = wrapDashboardScroll(`
+        pageContent.innerHTML = `
             <div class="stats-grid">
                 <div class="stat-card amber"><div class="stat-icon">${msIcon('inventory_2')}</div><div class="stat-value">${myQueue.length}</div><div class="stat-label">Packing Queue</div></div>
                 <div class="stat-card green"><div class="stat-icon">${msIcon('task_alt')}</div><div class="stat-value">${packed.length}</div><div class="stat-label">Packed by Me</div></div>
@@ -3345,7 +3302,7 @@ async function renderDashboard() {
             ${unassigned.length ? `<div class="card"><div class="card-header"><h3>Unassigned Orders</h3></div><div class="card-body" style="${isMobile ? 'padding:8px' : ''}">
                 ${isMobile ? unassigned.slice(0, 5).map(o => `<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 6px;border-bottom:1px solid var(--border)"><div><div style="font-weight:600;font-size:0.88rem">${o.orderNo} · ${escapeHtml(o.partyName)}</div><div style="font-size:0.72rem;color:var(--text-muted)">${o.items.length} items</div></div><div style="font-weight:700;color:var(--success)">${currency(o.total)}</div></div>`).join('') : `<div class="table-wrapper"><table class="data-table"><thead><tr><th>Order #</th><th>Party</th><th>Items</th><th>Total</th></tr></thead><tbody>${unassigned.slice(0, 5).map(o => `<tr><td style="font-weight:600">${o.orderNo}</td><td>${o.partyName}</td><td>${o.items.length}</td><td class="amount-green">${currency(o.total)}</td></tr>`).join('')}</tbody></table></div>`}
             </div></div>` : (!myAssigned.length ? `<div class="card"><div class="card-body"><div class="empty-state"><span class="empty-icon">${msIcon('inventory')}</span><p>All caught up!</p><p class="empty-subtitle">No orders waiting to be packed.</p></div></div></div>` : '')}
-            ${renderPartyNavWidget(parties)}`);
+            ${renderPartyNavWidget(parties)}`;
         return;
     }
 
@@ -3409,7 +3366,7 @@ async function renderDashboard() {
     const slowMovingItems = inventory.filter(i => itemSalesMap[i.id] && itemSalesMap[i.id] <= 5 && i.stock > 0);
 
     setDashboardSingleViewMode(true);
-    pageContent.scrollTop = 0; pageContent.innerHTML = await buildAdminCommandCenter({
+    pageContent.innerHTML = await buildAdminCommandCenter({
         role,
         invoices,
         inventory,
@@ -3454,7 +3411,7 @@ async function renderDashboard() {
 
     const tileHover = 'onmouseover="this.style.transform=\'translateY(-2px)\';this.style.boxShadow=\'0 6px 20px rgba(0,0,0,0.2)\'" onmouseout="this.style.transform=\'none\';this.style.boxShadow=\'none\'"';
 
-    pageContent.scrollTop = 0; pageContent.innerHTML = `
+    pageContent.innerHTML = `
     ${pendingSO ? `<div class="dash-alert dash-alert-amber" onclick="navigateTo('salesorders')" style="cursor:pointer"><strong>${pendingSO} Pending Orders</strong> awaiting approval &nbsp;<span style="color:var(--accent)">→ Review</span></div>` : ''}
     ${approvedUnpacked ? `<div class="dash-alert dash-alert-blue" onclick="navigateTo('packing')" style="cursor:pointer"><strong>${approvedUnpacked} Orders</strong> ready for packing &nbsp;<span style="color:var(--accent)">→ Pack Now</span></div>` : ''}
     ${undeliveredCount ? `<div class="dash-alert dash-alert-red" onclick="navigateTo('delivery')" style="cursor:pointer"><strong>${undeliveredCount} Undelivered / Returned</strong> need attention &nbsp;<span style="color:var(--accent)">→ Handle</span></div>` : ''}
@@ -3840,7 +3797,7 @@ async function buildAdminCommandCenter(model) {
         .map(key => ({ key, ...ALL_QUICK_ACTIONS.find(x => x.key === key), meta: quickActionMeta[key] || { desc: '' } }))
         .filter(action => action.label);
 
-    return wrapDashboardScroll(`
+    return `
     <div class="admin-dash-shell admin-dash-single-view">
         <div class="admin-dash-single-layout">
             <section class="admin-dash-hero admin-dash-single-header ${pressureTone}">
@@ -3871,7 +3828,6 @@ async function buildAdminCommandCenter(model) {
                 </div>
             </section>
 
-            <div style="flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding-bottom: 100px;">
             <section class="admin-dash-panel admin-dash-single-main">
                 <div class="admin-dash-panel-head">
                     <div>
@@ -3894,12 +3850,12 @@ async function buildAdminCommandCenter(model) {
 
                 <div class="admin-dash-single-actions">
                     ${dashboardActions.map(action => {
-        const isPrimary = action.key === 'new-sale' || action.key === 'payment-in';
-        return `<button type="button" class="admin-dash-single-action ${isPrimary ? 'primary' : ''}" onclick="${action.fn}" title="${action.meta.desc}">
+            const isPrimary = action.key === 'new-sale' || action.key === 'payment-in';
+            return `<button type="button" class="admin-dash-single-action ${isPrimary ? 'primary' : ''}" onclick="${action.fn}" title="${action.meta.desc}">
                                 <span class="material-symbols-outlined">${action.icon}</span>
                                 <strong>${action.label}</strong>
                             </button>`;
-    }).join('')}
+        }).join('')}
                 </div>
             </section>
 
@@ -3970,11 +3926,10 @@ async function buildAdminCommandCenter(model) {
                     </div>
                 </section>
             </aside>
-            </div>
         </div>
 
         ${CUSTOMER_PORTAL_ENABLED ? `<div id="dashboard-customer-req-slot" class="hidden">${renderDashboardCustomerReqPlaceholder()}</div>` : ''}
-    </div>`);
+    </div>`;
 }
 
 function toggleDashPeriodMenu() {
@@ -4112,7 +4067,7 @@ async function renderParties() {
     const totalReceivable = customers.reduce((s, c) => s + (c.balance < 0 ? Math.abs(c.balance) : 0), 0);
 
     if (isMobile) {
-        pageContent.scrollTop = 0; pageContent.innerHTML = `
+        pageContent.innerHTML = `
         ${balFilterBadge}
         <!-- Compact Stats -->
         <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:10px 12px;margin-bottom:10px">
@@ -4149,7 +4104,7 @@ async function renderParties() {
         <tbody id="party-tbody" style="display:none"></tbody>
         <table id="tbl-parties" style="display:none"><tbody></tbody></table>`;
     } else {
-        pageContent.scrollTop = 0; pageContent.innerHTML = `
+        pageContent.innerHTML = `
         ${balFilterBadge}
         <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
             <button class="catalog-pill ${_partyTab === 'all' ? 'active' : ''}" onclick="_partyTab='all';window._partyBalanceFilter=null;renderParties()"> All Parties (${parties.length})</button>
@@ -4319,7 +4274,7 @@ async function renderPartyFormPage() {
         defaultCode = await nextPartyCode('Customer');
     }
     const pageContent = document.getElementById('page-content');
-    pageContent.scrollTop = 0; pageContent.innerHTML = `
+    pageContent.innerHTML = `
     <div class="page-header" style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
         <button class="btn btn-outline btn-sm" onclick="navigateTo('parties')"> Back</button>
         <h2 style="margin:0;flex:1">${p ? 'Edit Party' : 'Add Party'}</h2>
@@ -5646,7 +5601,7 @@ async function renderInventory() {
     const isMobile = window.innerWidth < 768;
 
     if (isMobile) {
-        pageContent.scrollTop = 0; pageContent.innerHTML = `
+        pageContent.innerHTML = `
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
             <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center">
                 <div style="font-size:1.4rem;font-weight:800;color:#3b82f6">${totalItems}</div>
@@ -5674,7 +5629,7 @@ async function renderInventory() {
         return;
     }
 
-    pageContent.scrollTop = 0; pageContent.innerHTML = `
+    pageContent.innerHTML = `
         <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px">
             <div class="dash-pulse-tile" style="--tile-color:#3b82f6;animation-delay:0.04s">
                 <div class="dash-pulse-icon"></div>
@@ -6123,7 +6078,7 @@ async function renderItemFormPage() {
     }
 
     const pageContent = document.getElementById('page-content');
-    pageContent.scrollTop = 0; pageContent.innerHTML = `
+    pageContent.innerHTML = `
     <div class="page-header" style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
         <button class="btn btn-outline btn-sm" onclick="navigateTo('inventory')"> Back</button>
         <h2 style="margin:0;flex:1">${i ? 'Edit Item' : 'Add Item'}</h2>
@@ -6646,7 +6601,7 @@ async function openBulkEditModal() {
             <td style="min-width:75px"><input type="number" class="be-lowstock" value="${item.lowStockAlert || 5}" min="0" step="1" style="${inStyle};text-align:right"></td>
         </tr>`;
     }).join('');
-    pageContent.scrollTop = 0; pageContent.innerHTML = `
+    pageContent.innerHTML = `
         <div class="section-toolbar" style="margin-bottom:16px">
             <div style="display:flex;align-items:center;gap:10px">
                 <button class="btn btn-outline" onclick="renderInventory()"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-2px">arrow_back</span> Back</button>
@@ -6813,7 +6768,7 @@ async function renderStockAdjustPage() {
     const inv = await DB.getAll('inventory');
     const item = itemId ? inv.find(x => x.id === itemId) : null;
     const adjNo = 'ADJ-' + Date.now().toString(36).toUpperCase().substr(-6);
-    pageContent.scrollTop = 0; pageContent.innerHTML = `
+    pageContent.innerHTML = `
     <div style="max-width:600px;margin:0 auto;padding-bottom:80px">
         <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;padding-top:4px">
             <button class="btn-icon" onclick="navigateTo('inventory')" style="font-size:1.1rem;padding:4px 10px">← Back</button>
@@ -7021,7 +6976,7 @@ async function renderStockLedger(itemId) {
         .filter(e => e.itemId === itemId)
         .sort((a, b) => new Date(a.date) - new Date(b.date) || String(a.id).localeCompare(String(b.id)));
 
-    pageContent.scrollTop = 0; pageContent.innerHTML = `
+    pageContent.innerHTML = `
         <div class="section-toolbar">
             <h3 style="font-size:1rem;display:flex;align-items:center;gap:10px">
                 <button class="btn-icon" onclick="navigateTo('inventory')" title="Back to Inventory" style="font-size:1.2rem;padding:4px 8px">← Back</button>
@@ -7502,7 +7457,7 @@ function renderItemImportPreview() {
         ].some(v => String(v || '').toLowerCase().includes(query));
     });
 
-    pageContent.scrollTop = 0; pageContent.innerHTML = `
+    pageContent.innerHTML = `
         <div class="section-toolbar" style="margin-bottom:16px;align-items:flex-start;gap:12px">
             <div>
                 <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
@@ -7744,7 +7699,6 @@ async function commitItemImport() {
 // =============================================
 let soItems = [];
 async function renderSalesOrders() {
-    setSidebarCollapsed(true);
     const orders = await DB.getAll('salesorders');
     const soStatusRank = o => {
         if (o.status === 'pending') return 0;
@@ -7761,7 +7715,7 @@ async function renderSalesOrders() {
     const isMobile = window.innerWidth < 768;
 
     if (isMobile) {
-        pageContent.scrollTop = 0; pageContent.innerHTML = `
+        pageContent.innerHTML = `
         <!-- Compact Stats -->
         <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:10px 12px;margin-bottom:10px">
             <div style="display:flex;gap:0">
@@ -7800,7 +7754,7 @@ async function renderSalesOrders() {
         <tbody id="so-tbody" style="display:none"></tbody>
         <table id="tbl-salesorders" style="display:none"><tbody></tbody></table>`;
     } else {
-        pageContent.scrollTop = 0; pageContent.innerHTML = `
+        pageContent.innerHTML = `
         <div class="stats-grid" style="margin-bottom:18px">
             <div class="stat-card amber"><div class="stat-icon"></div><div class="stat-value">${p.length}</div><div class="stat-label">Pending</div></div>
             <div class="stat-card green"><div class="stat-icon"></div><div class="stat-value">${a.length}</div><div class="stat-label">Approved</div></div>
@@ -8015,7 +7969,6 @@ async function filterSOTable() {
     soUpdateBulkBtn();
 }
 async function openSalesOrderModal() {
-    document.body.classList.add('body-scroll-lock'); // LOCK SCROLL
     soItems = [];
     window._soExpandedLines = new Set();
     currentPage = 'salesorders';
@@ -8027,7 +7980,7 @@ async function openSalesOrderModal() {
         DB.getAll('categories')
     ]);
     const customers = parties.filter(p => p.type === 'Customer');
-    pageContent.scrollTop = 0; pageContent.innerHTML = `
+    pageContent.innerHTML = `
     <div style="max-width:680px;margin:0 auto;padding-bottom:100px">
         <!-- Header -->
         <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;padding-top:4px">
@@ -8195,10 +8148,10 @@ function renderSalesOrderFormShell(config) {
         primaryAction
     } = config;
     return `
-    <div class="sales-doc-shell" id="sales-order-form">
+    <div class="sales-doc-shell">
         ${editId ? `<input type="hidden" id="f-so-edit-id" value="${editId}">` : ''}
         <div class="sales-doc-header">
-            <button class="sales-doc-back" type="button" onclick="navigateTo('salesorders')">${msIcon('arrow_back')}<span>Back</span></button>
+            <button class="sales-doc-back" onclick="navigateTo('salesorders')">${msIcon('arrow_back')}</button>
             <div class="sales-doc-header-copy">
                 <h2>${escapeHtml(title)}</h2>
                 <p>${escapeHtml(subtitle)}</p>
@@ -8857,7 +8810,7 @@ async function renderOrderDetailPage() {
         ? `<button class="btn btn-outline btn-sm" onclick="openPartyMap('${soParty.lat}','${soParty.lng}','${escapeHtml(soParty.name)}')" style="margin-left:8px;font-size:0.75rem;padding:2px 8px"> Navigate</button>`
         : '';
 
-    pageContent.scrollTop = 0; pageContent.innerHTML = `
+    pageContent.innerHTML = `
     <div style="max-width:680px;margin:0 auto;padding-bottom:80px">
         <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;padding-top:4px">
             <button class="btn-icon" onclick="navigateTo('salesorders')" style="font-size:1rem;padding:4px 10px;display:inline-flex;align-items:center;gap:6px">${msIcon('arrow_back', '', 'font-size:1.05rem')}<span>Back</span></button>
@@ -8942,7 +8895,7 @@ async function editSalesOrder(id) {
     currentPage = 'salesorders';
     pageTitle.textContent = 'Edit Sales Order';
 
-    pageContent.scrollTop = 0; pageContent.innerHTML = `
+    pageContent.innerHTML = `
     <div style="max-width:680px;margin:0 auto;padding-bottom:100px">
         <input type="hidden" id="f-so-edit-id" value="${orig.id}">
 
@@ -9088,7 +9041,7 @@ async function openSalesOrderModal() {
         DB.getAll('categories')
     ]);
     const customers = parties.filter(p => p.type === 'Customer');
-    pageContent.scrollTop = 0; pageContent.innerHTML = renderSalesOrderFormShell({
+    pageContent.innerHTML = renderSalesOrderFormShell({
         title: 'Sale Order',
         subtitle: 'Create a clean mobile-first order entry.',
         orderNo: 'Auto',
@@ -9158,7 +9111,7 @@ async function editSalesOrder(id) {
     currentPage = 'salesorders';
     pageTitle.textContent = 'Edit Sales Order';
     setPageChromeMode('sales-doc');
-    pageContent.scrollTop = 0; pageContent.innerHTML = renderSalesOrderFormShell({
+    pageContent.innerHTML = renderSalesOrderFormShell({
         title: `Edit ${orig.orderNo}`,
         subtitle: 'Adjust customer, lines, and commercial terms.',
         orderNo: orig.orderNo || 'Auto',
@@ -9332,7 +9285,7 @@ async function renderPurchaseOrders() {
         };
         window._renderPOCards = renderPOCards;
 
-        pageContent.scrollTop = 0; pageContent.innerHTML = `
+        pageContent.innerHTML = `
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:10px">
             <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:8px;text-align:center">
                 <div style="font-size:1.2rem;font-weight:800;color:#f59e0b">${p.length}</div>
@@ -9362,7 +9315,7 @@ async function renderPurchaseOrders() {
         return;
     }
 
-    pageContent.scrollTop = 0; pageContent.innerHTML = `
+    pageContent.innerHTML = `
         <div class="stats-grid-sm" style="margin-bottom:14px">
             <div class="stat-card amber"><div class="stat-icon"></div><div class="stat-value">${p.length}</div><div class="stat-label">Pending PO</div></div>
             <div class="stat-card green"><div class="stat-icon"></div><div class="stat-value">${r.length}</div><div class="stat-label">Received</div></div>
@@ -9435,7 +9388,7 @@ async function renderPurchaseInvoices() {
     const isMobile = window.innerWidth < 768;
 
     if (isMobile) {
-        pageContent.scrollTop = 0; pageContent.innerHTML = `
+        pageContent.innerHTML = `
             <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px">
                 <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center">
                     <div style="font-size:1.2rem;font-weight:800;color:#2563eb">${pinvs.length}</div>
@@ -9470,7 +9423,7 @@ async function renderPurchaseInvoices() {
             </div>
             <div id="pinv-list">${renderPInvCards(pinvs)}</div>`;
     } else {
-        pageContent.scrollTop = 0; pageContent.innerHTML = `
+        pageContent.innerHTML = `
             <div class="stats-grid-sm" style="margin-bottom:14px">
                 <div class="stat-card blue"><div class="stat-icon"></div><div class="stat-value">${pinvs.length}</div><div class="stat-label">Total Invoices</div></div>
                 <div class="stat-card red"><div class="stat-icon"></div><div class="stat-value">${currency(totalAmt)}</div><div class="stat-label">Total Purchase</div></div>
@@ -9609,7 +9562,7 @@ async function renderDirectPurchasePage() {
     const [parties, inv] = await Promise.all([DB.getAll('parties'), DB.getAll('inventory')]);
     const suppliers = parties.filter(p => p.type === 'Supplier');
     poItems = [];
-    pageContent.scrollTop = 0; pageContent.innerHTML = `
+    pageContent.innerHTML = `
     <div style="max-width:680px;margin:0 auto;padding-bottom:80px">
         <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;padding-top:4px">
             <button class="btn-icon" onclick="navigateTo('purchaseorders')" style="font-size:1.1rem;padding:4px 10px">← Back</button>
@@ -9863,7 +9816,7 @@ async function renderPODetailPage() {
     const orders = await DB.getAll('purchaseorders');
     const o = orders.find(x => x.id === id); if (!o) { navigateTo('purchaseorders'); return; }
     pageTitle.textContent = `PO ${o.poNo}`;
-    pageContent.scrollTop = 0; pageContent.innerHTML = `
+    pageContent.innerHTML = `
     <div style="max-width:680px;margin:0 auto;padding-bottom:80px">
         <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;padding-top:4px">
             <button class="btn-icon" onclick="navigateTo('purchaseorders')" style="font-size:1.1rem;padding:4px 10px">← Back</button>
@@ -9947,7 +9900,6 @@ async function deletePO(id) {
 // =============================================
 let invoiceItems = [];
 async function renderInvoices() {
-    setSidebarCollapsed(true);
     const [invoices, payments] = await Promise.all([DB.getAll('invoices'), DB.getAll('payments')]);
 
     // Build payments map: invoiceNo → paid amount
@@ -9972,7 +9924,7 @@ async function renderInvoices() {
     const isMobile = window.innerWidth < 768;
 
     if (isMobile) {
-        pageContent.scrollTop = 0; pageContent.innerHTML = `
+        pageContent.innerHTML = `
         <!-- Compact Stats -->
         <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:10px 12px;margin-bottom:10px">
             <div style="display:flex;gap:0">
@@ -10007,7 +9959,7 @@ async function renderInvoices() {
         
         <div id="invoice-list">${renderInvoiceCards(visibleInvoices)}</div>`;
     } else {
-        pageContent.scrollTop = 0; pageContent.innerHTML = `
+        pageContent.innerHTML = `
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
             <div style="background:#fff;border-radius:12px;padding:14px 16px;box-shadow:0 1px 6px rgba(0,0,0,0.08)">
                 <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:4px">Total Sale</div>
@@ -10351,8 +10303,7 @@ async function renderInvoiceFormPage() {
     ]);
     const filteredParties = parties.filter(p => p.type === ptype);
     const pageContent = document.getElementById('page-content');
-    pageContent.scrollTop = 0; pageContent.innerHTML = `
-    <div id="sale-invoice-form">
+    pageContent.innerHTML = `
     <div class="page-header" style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
         <button class="btn btn-outline btn-sm" onclick="navigateTo('invoices')"> Back</button>
         <h2 style="margin:0;flex:1">${type === 'sale' ? 'Create Sale Invoice' : 'Create Purchase / Stock In'}</h2>
@@ -11367,7 +11318,7 @@ async function renderEditInvoiceFormPage() {
     invoiceItems = (inv.items || []).map(li => ({ ...li }));
 
     const pageContent = document.getElementById('page-content');
-    pageContent.scrollTop = 0; pageContent.innerHTML = `
+    pageContent.innerHTML = `
     <div class="page-header" style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
         <button class="btn btn-outline btn-sm" onclick="navigateTo('invoices')"> Back</button>
         <h2 style="margin:0;flex:1">Edit Invoice ${escapeHtml(inv.invoiceNo)}</h2>
@@ -11499,7 +11450,7 @@ function renderInvoiceFormShell(config) {
     return `
     <div class="sales-doc-shell invoice-doc-shell">
         <div class="sales-doc-header">
-            <button class="sales-doc-back" type="button" onclick="navigateTo('invoices')">${msIcon('arrow_back')}<span>Back</span></button>
+            <button class="sales-doc-back" onclick="navigateTo('invoices')">${msIcon('arrow_back')}</button>
             <div class="sales-doc-header-copy">
                 <h2>${escapeHtml(title)}</h2>
                 <p>${escapeHtml(subtitle)}</p>
@@ -11761,7 +11712,7 @@ async function renderInvoiceFormPage() {
     const filteredParties = parties.filter(p => p.type === ptype);
     const pageContent = document.getElementById('page-content');
     setPageChromeMode('sales-doc');
-    pageContent.scrollTop = 0; pageContent.innerHTML = renderInvoiceFormShell({
+    pageContent.innerHTML = renderInvoiceFormShell({
         title: type === 'sale' ? 'Sale Invoice' : 'Purchase / Stock In',
         subtitle: type === 'sale' ? 'Fast invoice entry tuned for mobile.' : 'Receive stock without the cramped modal layout.',
         invoiceNo: 'Auto',
@@ -11865,7 +11816,7 @@ async function renderEditInvoiceFormPage() {
     invoiceItems = (inv.items || []).map(li => ({ ...li }));
     const pageContent = document.getElementById('page-content');
     setPageChromeMode('sales-doc');
-    pageContent.scrollTop = 0; pageContent.innerHTML = renderInvoiceFormShell({
+    pageContent.innerHTML = renderInvoiceFormShell({
         title: `Edit ${inv.invoiceNo}`,
         subtitle: 'Update posted lines and repost stock safely.',
         invoiceNo: inv.invoiceNo,
@@ -12846,7 +12797,7 @@ async function renderPayments() {
     const collectorOptions = !isSalesman ? `<option value="">All</option>${collectorNames.map(n => `<option>${escapeHtml(n)}</option>`).join('')}` : '';
 
     if (isMobile) {
-        pageContent.scrollTop = 0; pageContent.innerHTML = `
+        pageContent.innerHTML = `
         <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:10px 12px;margin-bottom:10px">
             <div style="display:flex;gap:0;margin-bottom:${modeChips ? '8px' : '0'}">
                 <div style="flex:1;text-align:center;border-right:1px solid var(--border);padding-right:8px">
@@ -12887,7 +12838,7 @@ async function renderPayments() {
         <div id="pay-tbody" style="display:none"></div>
         <table id="tbl-payments" style="display:none"><tbody></tbody></table>`;
     } else {
-        pageContent.scrollTop = 0; pageContent.innerHTML = `
+        pageContent.innerHTML = `
         <div class="stats-grid" style="margin-bottom:14px" id="pay-stat-tiles">
             <div class="stat-card green"><div class="stat-icon"></div><div class="stat-value" id="pay-stat-in">${currency(totalIn)}</div><div class="stat-label">Payment In</div></div>
             ${!isSalesman ? `<div class="stat-card red"><div class="stat-icon"></div><div class="stat-value" id="pay-stat-out">${currency(totalOut)}</div><div class="stat-label">Payment Out</div></div>` : ''}
@@ -13307,8 +13258,7 @@ async function openPaymentModal(prefillPartyId) {
     const co = DB.ls.getObj('db_company') || {};
     const isSalesmanRole = currentUser.role === 'Salesman';
 
-    pageContent.scrollTop = 0; pageContent.innerHTML = `
-    <div class="payment-form-container">
+    pageContent.innerHTML = `
         <!-- Sticky top bar -->
         <div class="pay-page-header">
             <button class="btn-icon pay-back-btn" onclick="renderPayments()"><span class="material-symbols-outlined">arrow_back</span></button>
@@ -13410,7 +13360,6 @@ async function openPaymentModal(prefillPartyId) {
             ${!isSalesmanRole ? `<button class="btn btn-outline" style="flex:1;min-height:48px" onclick="renderPayments()">Cancel</button>` : ''}
             <button class="btn btn-outline btn-save-new" id="btn-save-new" onclick="window._saveAndNew=true;savePayment()"> Save & New</button>
             <button class="btn btn-primary" id="btn-save-payment" style="flex:2;min-height:48px;font-size:1rem;font-weight:700" onclick="savePayment()"> Save Payment</button>
-        </div>
         </div>
     `;
 
@@ -14666,7 +14615,7 @@ async function renderExpenses() {
     const isMobile = window.innerWidth < 768;
 
     if (isMobile) {
-        pageContent.scrollTop = 0; pageContent.innerHTML = `
+        pageContent.innerHTML = `
         <!-- Mobile: compact stat tiles -->
         <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:10px 12px;margin-bottom:10px;text-align:center">
             <div style="display:flex;gap:5px;justify-content:space-around">
@@ -14700,7 +14649,7 @@ async function renderExpenses() {
         <table id="exp-table" style="display:none"><tbody></tbody></table>
         `;
     } else {
-        pageContent.scrollTop = 0; pageContent.innerHTML = `
+        pageContent.innerHTML = `
         <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
             <div class="stat-card amber" style="flex:1;min-width:140px;padding:12px 16px"><div style="font-size:0.72rem;font-weight:700;text-transform:uppercase;color:var(--text-muted);margin-bottom:4px">Sales Discount</div><div style="font-size:1.3rem;font-weight:800;color:#f59e0b">${currency(salDisc)}</div></div>
             <div class="stat-card blue" style="flex:1;min-width:140px;padding:12px 16px"><div style="font-size:0.72rem;font-weight:700;text-transform:uppercase;color:var(--text-muted);margin-bottom:4px">Payment Discount</div><div style="font-size:1.3rem;font-weight:800;color:#3b82f6">${currency(payDisc)}</div></div>
@@ -14845,7 +14794,7 @@ function renderPacking() {
     const isMobile = window.innerWidth < 768;
 
     if (isMobile) {
-        pageContent.scrollTop = 0; pageContent.innerHTML = `
+        pageContent.innerHTML = `
         <!-- Compact Stats -->
         <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:10px 12px;margin-bottom:10px">
             <div style="display:flex;gap:0;margin-bottom:8px">
@@ -14917,7 +14866,7 @@ function renderPacking() {
         <div>${renderPackedHistoryCards(filteredHistory)}</div>
         `;
     } else {
-        pageContent.scrollTop = 0; pageContent.innerHTML = `
+        pageContent.innerHTML = `
         <div class="stats-grid" style="margin-bottom:18px">
             <div class="stat-card amber"><div class="stat-icon"></div><div class="stat-value">${readyToPackRows.length}</div><div class="stat-label">Ready to Pack</div></div>
             <div class="stat-card blue"><div class="stat-icon"></div><div class="stat-value">${packedNoInvoice.length}</div><div class="stat-label">Awaiting Invoice</div></div>
@@ -15459,7 +15408,7 @@ async function renderPackOrderPage() {
         }
     });
 
-    pageContent.scrollTop = 0; pageContent.innerHTML = `
+    pageContent.innerHTML = `
         <div class="pack-workbench">
             <div class="pack-header">
                 <div class="pack-meta">
@@ -15937,7 +15886,7 @@ function renderPackageDetailsPage() {
     if (!s) { navigateTo('packing'); return; }
     const { orderId, packer, endTime, durationMins, packedItems, orderNo } = s;
     const pageContent = document.getElementById('page-content');
-    pageContent.scrollTop = 0; pageContent.innerHTML = `
+    pageContent.innerHTML = `
     <div class="page-header" style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
         <button class="btn btn-outline btn-sm" onclick="navigateTo('packorder')"> Back to Items</button>
         <h2 style="margin:0;flex:1">Package Details \u2014 ${escapeHtml(orderNo)}</h2>
@@ -16406,7 +16355,7 @@ async function renderDelivery() {
     const isMobile = window.innerWidth < 768;
 
     if (isMobile) {
-        pageContent.scrollTop = 0; pageContent.innerHTML = `
+        pageContent.innerHTML = `
         <!-- Compact Stats -->
         <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:10px 12px;margin-bottom:10px">
             <div style="display:flex;gap:0;margin-bottom:8px">
@@ -16461,7 +16410,7 @@ async function renderDelivery() {
         <table id="tbl-delivery" style="display:none"><tbody></tbody></table>
         `;
     } else {
-        pageContent.scrollTop = 0; pageContent.innerHTML = `
+        pageContent.innerHTML = `
         <div class="stats-grid" style="margin-bottom:18px">
             ${canEdit() ? `<div class="stat-card amber"><div class="stat-icon"></div><div class="stat-value">${readyToDispatch.length}</div><div class="stat-label">Ready to Dispatch</div></div>` : ''}
             <div class="stat-card blue"><div class="stat-icon"></div><div class="stat-value">${dispatched.length}</div><div class="stat-label">In Transit</div></div>
@@ -16925,7 +16874,7 @@ async function renderDeliveryDetailPage() {
                 : '';
 
     pageTitle.textContent = `Delivery — ${d.orderNo}`;
-    pageContent.scrollTop = 0; pageContent.innerHTML = `
+    pageContent.innerHTML = `
     <div style="max-width:680px;margin:0 auto;padding-bottom:80px">
         <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;padding-top:4px">
             <button class="btn-icon" onclick="navigateTo('delivery')" style="font-size:1.1rem;padding:4px 10px">← Back</button>
@@ -17992,8 +17941,7 @@ function exportTableToExcel(tableId, filename) {
     showToast('Report exported!', 'success');
 }
 function renderReports() {
-    setSidebarCollapsed(true);
-    pageContent.scrollTop = 0; pageContent.innerHTML = `
+    pageContent.innerHTML = `
         <div class="report-grid">
             <div class="report-card" onclick="showReport('payment-report')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(16,185,129,0.12),rgba(249,115,22,0.08))"><div class="report-icon"><span class="material-symbols-outlined">payments</span></div></div><div class="report-text"><h4>Payment Report</h4><p>Pay In / Pay Out with filters</p></div></div>
             <div class="report-card" onclick="showReport('sales')"><div class="report-icon-wrap"><div class="report-icon"><span class="material-symbols-outlined">trending_up</span></div></div><div class="report-text"><h4>Sales Report</h4><p>Sales invoices summary</p></div></div>
@@ -18040,9 +17988,8 @@ function renderReports() {
 `;
 }
 async function showReport(type) {
-    setSidebarCollapsed(true);
     // Each report opens as a full page  replace page content entirely
-    pageContent.scrollTop = 0; pageContent.innerHTML = `
+    pageContent.innerHTML = `
         <div class="section-toolbar" style="margin-bottom:16px;flex-wrap:wrap;gap:8px">
             <button class="btn btn-outline" onclick="renderReports()"> Back</button>
         </div>
@@ -18741,7 +18688,7 @@ async function showReport(type) {
         const users = await DB.getAll('users');
         const salesmen = users.filter(u => u.role === 'Salesman' || u.role === 'Manager' || u.role === 'Admin');
 
-        pageContent.scrollTop = 0; pageContent.innerHTML = `
+        pageContent.innerHTML = `
         <div class="section-toolbar" style="flex-wrap:wrap;gap:8px;margin-bottom:16px">
             <button class="btn btn-outline" onclick="renderReports()"> Back</button>
             <h3 style="flex:1;min-width:200px"> Customer Payment Trend</h3>
@@ -18814,7 +18761,7 @@ async function showReport(type) {
 
     if (type === 'zero-sales') {
         const salesUsers = users.filter(u => ['Admin', 'Manager', 'Salesman'].includes(u.role));
-        pageContent.scrollTop = 0; pageContent.innerHTML = `
+        pageContent.innerHTML = `
         <div class="section-toolbar" style="flex-wrap:wrap;gap:8px;margin-bottom:16px">
             <button class="btn btn-outline" onclick="renderReports()"> Back</button>
             <h3 style="flex:1;min-width:200px">Zero Sales Customers</h3>
@@ -20362,14 +20309,14 @@ function renderPackers() {
         </div>`).join('') : '<div class="empty-state"><p>No packers added yet</p></div>';
 
     if (isMobile) {
-        pageContent.scrollTop = 0; pageContent.innerHTML = `
+        pageContent.innerHTML = `
         <div style="display:flex;justify-content:flex-end;margin-bottom:10px">
             <button class="btn btn-primary" onclick="openPackerModal()">+ Add Packer</button>
         </div>
         ${mobileCards}`;
         return;
     }
-    pageContent.scrollTop = 0; pageContent.innerHTML = `
+    pageContent.innerHTML = `
         <div class="section-toolbar">
             <h3 style="font-size:1rem">Manage Packers</h3>
             <button class="btn btn-primary" onclick="openPackerModal()">+ Add Packer</button>
@@ -20429,14 +20376,14 @@ function renderDeliveryPersons() {
         </div>`).join('') : '<div class="empty-state"><p>No delivery persons added yet</p></div>';
 
     if (isMobile) {
-        pageContent.scrollTop = 0; pageContent.innerHTML = `
+        pageContent.innerHTML = `
         <div style="display:flex;justify-content:flex-end;margin-bottom:10px">
             <button class="btn btn-primary" onclick="openDelPersonModal()">+ Add Delivery Person</button>
         </div>
         ${mobileCards}`;
         return;
     }
-    pageContent.scrollTop = 0; pageContent.innerHTML = `
+    pageContent.innerHTML = `
         <div class="section-toolbar">
             <h3 style="font-size:1rem">Manage Delivery Persons</h3>
             <button class="btn btn-primary" onclick="openDelPersonModal()">+ Add Delivery Person</button>
@@ -20519,7 +20466,7 @@ function renderUsers() {
     const canManageUsers = hasPerm('action.users.manage');
     const isMobile = window.innerWidth < 768;
     if (isMobile) {
-        pageContent.scrollTop = 0; pageContent.innerHTML = `
+        pageContent.innerHTML = `
         <div style="display:flex;justify-content:flex-end;margin-bottom:10px">
             ${canManageUsers ? `<button class="btn btn-primary" onclick="openUserModal()">+ Add User</button>` : ''}
         </div>
@@ -20544,7 +20491,7 @@ function renderUsers() {
         }).join('') || '<div class="empty-state"><p>No users</p></div>'}`;
         return;
     }
-    pageContent.scrollTop = 0; pageContent.innerHTML = `
+    pageContent.innerHTML = `
         <div class="section-toolbar">
             <h3 style="font-size:1rem">Users & Access</h3>
             ${canManageUsers ? `<button class="btn btn-primary" onclick="openUserModal()">+ Add User</button>` : ''}
@@ -21034,7 +20981,7 @@ async function renderNoSeries() {
     const isMobile = window.innerWidth < 768;
 
     if (isMobile) {
-        pageContent.scrollTop = 0; pageContent.innerHTML = `
+        pageContent.innerHTML = `
         <div style="display:flex;justify-content:flex-end;margin-bottom:10px">
             <button class="btn btn-primary btn-sm" onclick="openNoSeriesModal()">+ Add Series</button>
         </div>
@@ -21109,7 +21056,7 @@ async function renderNoSeries() {
     });
 
     html += `</tbody></table></div></div>`;
-    pageContent.scrollTop = 0; pageContent.innerHTML = html;
+    pageContent.innerHTML = html;
 }
 
 async function openNoSeriesModal(id = null) {
@@ -21229,7 +21176,7 @@ async function renderCompanySetup() {
     // Always reload from Supabase so UPI / settings are fresh on any device
     await DB.loadSettings();
     const co = DB.ls.getObj('db_company') || {};
-    pageContent.scrollTop = 0; pageContent.innerHTML = `
+    pageContent.innerHTML = `
         <div class="card"><div class="card-body padded">
             <h3 style="margin-bottom:20px;font-size:1.1rem">Company Information</h3>
             <div class="form-group">
@@ -21868,7 +21815,7 @@ async function renderPartyLedgerLayout() {
 
     const isMobile = window.innerWidth < 768;
     const _lbHtml = isMobile ? _buildLedgerMobileCards(ledger, partyId) : null;
-    pageContent.scrollTop = 0; pageContent.innerHTML = `
+    pageContent.innerHTML = `
         <div class="section-toolbar">
             <h3 style="font-size:1rem;display:flex;align-items:center;gap:10px">
                 <button class="btn-icon" onclick="navigateTo('parties')" title="Back to Parties" style="font-size:1.2rem;padding:4px 8px">← Back</button>
@@ -22403,7 +22350,7 @@ async function renderCatalog() {
     const items = allItems.filter(i => i.active !== false);
     const catNames = [...new Set(items.map(i => i.category).filter(Boolean))];
 
-    pageContent.scrollTop = 0; pageContent.innerHTML = `
+    pageContent.innerHTML = `
         <div style="margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;gap:10px">
             <h2 style="font-size:1.2rem;margin:0"> Item Catalog</h2>
             <button class="btn btn-outline btn-sm" onclick="syncCatalogData()"> Sync Data</button>
@@ -22812,7 +22759,7 @@ async function renderCatalogNative() {
     const items = allItems.filter(i => i.active !== false);
     const catNames = [...new Set(items.map(i => i.category).filter(Boolean))];
 
-    pageContent.scrollTop = 0; pageContent.innerHTML = `
+    pageContent.innerHTML = `
         <div class="catalog-native-shell">
             <div class="catalog-native-toolbar">
                 <div class="catalog-native-head">
@@ -23204,7 +23151,7 @@ async function createOrderFromCatalog() {
     const categories = await DB.getAll('categories');
     // Render as a full dedicated page instead of a popup
     pageTitle.textContent = 'New Sales Order';
-    pageContent.scrollTop = 0; pageContent.innerHTML = `
+    pageContent.innerHTML = `
         <div class="card">
             <div class="card-body">
                 <div class="form-row" style="grid-template-columns:1fr 1fr">
@@ -23335,7 +23282,7 @@ async function createOrderFromCatalog() {
     const customers = allParties.filter(p => p.type === 'Customer');
     const categories = await DB.getAll('categories');
 
-    pageContent.scrollTop = 0; pageContent.innerHTML = renderSalesOrderFormShell({
+    pageContent.innerHTML = renderSalesOrderFormShell({
         title: 'Sale Order',
         subtitle: 'Cart items are preloaded from catalog.',
         orderNo: 'Auto',
@@ -23364,7 +23311,7 @@ async function createOrderFromCatalog() {
 let invSetupTab = 'categories';
 
 async function renderInventorySetup() {
-    pageContent.scrollTop = 0; pageContent.innerHTML = `
+    pageContent.innerHTML = `
         <div style="display:flex;gap:8px;margin-bottom:20px;overflow-x:auto;padding-bottom:4px">
             <button class="catalog-pill ${invSetupTab === 'categories' ? 'active' : ''}" onclick="invSetupTab='categories';renderInventorySetup()"> Categories</button>
             <button class="catalog-pill ${invSetupTab === 'uom' ? 'active' : ''}" onclick="invSetupTab='uom';renderInventorySetup()"> UOM</button>
@@ -24322,12 +24269,12 @@ async function rejectCustReg(regId) {
 // ---- STAFF MASTER ----
 async function renderStaffMaster() {
     const { data: staff, error } = await supabaseClient.from('staff').select('*').order('name');
-    if (error) { pageContent.scrollTop = 0; pageContent.innerHTML = `<p style="color:red">Error: ${error.message}</p>`; return; }
+    if (error) { pageContent.innerHTML = `<p style="color:red">Error: ${error.message}</p>`; return; }
     const isAdmin = currentUser && currentUser.role === 'Admin';
     const isMobile = window.innerWidth < 768;
 
     if (isMobile) {
-        pageContent.scrollTop = 0; pageContent.innerHTML = `
+        pageContent.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
             <div style="font-size:0.82rem;color:var(--text-muted)">${staff.length} member(s)</div>
             ${isAdmin ? `<button class="btn btn-primary btn-sm" onclick="openStaffModal()">+ Add Staff</button>` : ''}
@@ -24358,7 +24305,7 @@ async function renderStaffMaster() {
         return;
     }
 
-    pageContent.scrollTop = 0; pageContent.innerHTML = `
+    pageContent.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
         <div>
             <div style="font-size:0.85rem;color:var(--text-muted)">${staff.length} staff member(s)</div>
@@ -24536,7 +24483,7 @@ async function renderAttendance() {
         <input type="date" id="att-to" value="${selTo}" class="form-control" style="width:150px">
         <button class="btn btn-primary btn-sm" onclick="openRangeAttModal()">Mark Range</button>`;
 
-    pageContent.scrollTop = 0; pageContent.innerHTML = `
+    pageContent.innerHTML = `
     <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:16px">
         <div style="display:flex;align-items:center;gap:6px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:3px">
             <button class="btn btn-sm ${!rangeMode ? 'btn-primary' : 'btn-outline'}" style="border-radius:6px" onclick="window._attRangeMode=false;renderAttendance()">Single Day</button>
@@ -24648,7 +24595,7 @@ function openRangeAttModal() {
 function renderRangeAttPage() {
     const dates = window._rangeAttDates || [];
     const pageContent = document.getElementById('page-content');
-    pageContent.scrollTop = 0; pageContent.innerHTML = `
+    pageContent.innerHTML = `
     <div class="page-header" style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
         <button class="btn btn-outline btn-sm" onclick="navigateTo('attendance')"> Back</button>
         <h2 style="margin:0;flex:1">Mark Attendance \u2014 Date Range</h2>
@@ -24845,7 +24792,7 @@ async function renderHRPayroll() {
     const totalNet = rows.reduce((t, r) => t + r.net, 0);
     const totalAdvPending = rows.reduce((t, r) => t + r.advPending, 0);
 
-    pageContent.scrollTop = 0; pageContent.innerHTML = `
+    pageContent.innerHTML = `
     <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-bottom:16px">
         <input type="month" value="${selMonth}" onchange="window._payMonth=this.value;renderHRPayroll()" class="form-control" style="width:160px">
         <span style="font-size:0.82rem;color:var(--text-muted)">Working Days (excl. Sun): <strong>${workingDays}</strong></span>
@@ -25245,7 +25192,7 @@ async function openVyaparPaymentImport() {
     if (fab) fab.classList.add('hidden');
     document.body.classList.remove('pay-form-open');
 
-    pageContent.scrollTop = 0; pageContent.innerHTML = `
+    pageContent.innerHTML = `
         <div class="pay-page-header">
             <button class="btn-icon pay-back-btn" onclick="renderPayments()"><span class="material-symbols-outlined">arrow_back</span></button>
             <div style="flex:1">
@@ -25626,14 +25573,3 @@ async function postVyaparImportPayments() {
         if (btn) { btn.disabled = false; btn.textContent = `Retry (${errorCount} failed)`; }
     }
 }
-
-// ============================================
-// APP INITIALIZATION & GLOBAL EVENT LISTENERS
-// ============================================
-
-// Disable pull-to-refresh on older mobile iOS browsers
-document.addEventListener('touchmove', function(e) {
-    if (window.scrollY === 0 && e.touches && e.touches[0].clientY > 0) {
-        e.preventDefault();
-    }
-}, { passive: false });
