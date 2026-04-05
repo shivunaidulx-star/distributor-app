@@ -1071,7 +1071,7 @@ const ROLE_NAME_MAP = {
 };
 const CUSTOMER_PORTAL_ENABLED = false; // Feature kept in codebase for future relaunch, disabled for current live release.
 function getAppVersion() {
-    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v145';
+    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v151';
 }
 
 const PAGE_LABELS = {
@@ -3021,21 +3021,115 @@ function today() {
     const offset = d.getTimezoneOffset() * 60000;
     return new Date(d.getTime() - offset).toISOString().split('T')[0];
 }
+function getPaymentGroupKey(payment) {
+    return String(
+        payment?.payNo ||
+        payment?.pay_no ||
+        payment?.receiptNo ||
+        payment?.receipt_no ||
+        payment?.id ||
+        ''
+    );
+}
+function getPaymentRowTotalReduction(payment) {
+    if (!payment) return 0;
+    if (payment.totalReduction !== undefined || payment.total_reduction !== undefined) {
+        return +(payment.totalReduction ?? payment.total_reduction ?? 0);
+    }
+    return +((+payment.amount || 0) + (+payment.discount || 0)).toFixed(2);
+}
+function groupPaymentsByReference(payments = []) {
+    const groups = new Map();
+    (payments || []).forEach(payment => {
+        const key = getPaymentGroupKey(payment);
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(payment);
+    });
+    return groups;
+}
+function summarizePaymentGroup(groupRows = []) {
+    const rows = [...(groupRows || [])];
+    const primary = rows[0] || null;
+    const allocationsRow = rows.find(row => row.allocations && Object.keys(row.allocations).length > 0) || null;
+    const payNo = primary ? getPaymentGroupKey(primary) : '';
+    const totalAmount = +rows.reduce((sum, row) => sum + (+row.amount || 0), 0).toFixed(2);
+    const totalDiscount = +rows.reduce((sum, row) => sum + (+row.discount || 0), 0).toFixed(2);
+    const totalReduction = +rows.reduce((sum, row) => sum + getPaymentRowTotalReduction(row), 0).toFixed(2);
+    const modes = rows.map(row => row.mode || 'Cash').filter(Boolean);
+    const modeSummary = [...new Set(modes)].join(' + ') || 'Cash';
+    return {
+        rows,
+        primary,
+        allocations: allocationsRow ? allocationsRow.allocations : null,
+        payNo,
+        totalAmount,
+        totalDiscount,
+        totalReduction,
+        modeSummary,
+        isSplit: rows.length > 1 || new Set(modes).size > 1
+    };
+}
+function isLinkedPaymentInvoiceRef(invoiceNo) {
+    const ref = String(invoiceNo || '').trim();
+    return !!ref && ref !== 'Advance' && ref !== 'Multi' && ref !== 'Multi/Disc';
+}
+function summarizePaymentInvoices(groupRows = []) {
+    const summary = summarizePaymentGroup(groupRows);
+    const allocationMap = {};
+    if (summary.allocations && Object.keys(summary.allocations).length > 0) {
+        Object.entries(summary.allocations).forEach(([invoiceNo, amount]) => {
+            allocationMap[invoiceNo] = +(Number(amount || 0)).toFixed(2);
+        });
+    } else {
+        summary.rows.forEach(row => {
+            const invoiceNo = row.invoiceNo || row.invoice_no || '';
+            if (!isLinkedPaymentInvoiceRef(invoiceNo)) return;
+            allocationMap[invoiceNo] = +((allocationMap[invoiceNo] || 0) + getPaymentRowTotalReduction(row)).toFixed(2);
+        });
+    }
+    const allocated = +Object.values(allocationMap).reduce((sum, value) => sum + (+value || 0), 0).toFixed(2);
+    const unallocated = +Math.max(0, summary.totalReduction - allocated).toFixed(2);
+    return { summary, allocationMap, allocated, unallocated };
+}
+function getPaymentReceiptModel(payments = [], paymentOrId) {
+    const groupRows = findPaymentGroupRows(payments, paymentOrId);
+    const summary = summarizePaymentGroup(groupRows);
+    return {
+        groupRows,
+        summary,
+        invoiceSummary: summarizePaymentInvoices(groupRows),
+        referenceNo: summary.payNo || summary.primary?.id || '',
+        date: summary.primary?.date || '',
+        type: summary.primary?.type || 'in',
+        partyName: summary.primary?.partyName || '',
+        note: summary.primary?.note || ''
+    };
+}
+function findPaymentGroupRows(payments = [], paymentOrId) {
+    const payment = typeof paymentOrId === 'string'
+        ? (payments || []).find(row => String(row.id) === String(paymentOrId))
+        : paymentOrId;
+    if (!payment) return [];
+    const key = getPaymentGroupKey(payment);
+    return (payments || []).filter(row => getPaymentGroupKey(row) === key);
+}
 function buildInvoicePaidMap(payments = []) {
     const paidMap = {};
-    (payments || []).forEach(payment => {
-        if (payment.allocations) {
-            Object.entries(payment.allocations).forEach(([invoiceNo, amount]) => {
+    const activePayments = (payments || []).filter(payment => payment && payment.status !== 'cancelled');
+    for (const groupRows of groupPaymentsByReference(activePayments).values()) {
+        const summary = summarizePaymentGroup(groupRows);
+        if (summary.allocations && Object.keys(summary.allocations).length > 0) {
+            Object.entries(summary.allocations).forEach(([invoiceNo, amount]) => {
                 paidMap[invoiceNo] = (paidMap[invoiceNo] || 0) + Number(amount || 0);
             });
-            return;
+            continue;
         }
-        if (payment.invoiceNo) {
-            paidMap[payment.invoiceNo] = (paidMap[payment.invoiceNo] || 0)
-                + Number(payment.amount || 0)
-                + Number(payment.discount || 0);
-        }
-    });
+        summary.rows.forEach(payment => {
+            const invoiceNo = payment.invoiceNo || payment.invoice_no || '';
+            if (!invoiceNo || invoiceNo === 'Advance' || invoiceNo === 'Multi' || invoiceNo === 'Multi/Disc') return;
+            paidMap[invoiceNo] = (paidMap[invoiceNo] || 0) + getPaymentRowTotalReduction(payment);
+        });
+    }
     return paidMap;
 }
 function getInvoiceOutstandingAmount(invoice, paidMap = {}) {
@@ -4629,18 +4723,19 @@ async function renderPartyFormPage() {
     }
     const pageContent = document.getElementById('page-content');
     pageContent.innerHTML = `
+    <div class="desktop-form-page">
     <div class="page-header" style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
         <button class="btn btn-outline btn-sm" onclick="navigateTo('parties')"> Back</button>
         <h2 style="margin:0;flex:1">${p ? 'Edit Party' : 'Add Party'}</h2>
     </div>
-    <div class="modal-body" style="max-width:600px;margin:0 auto">
+    <div class="modal-body desktop-form-shell" style="max-width:600px;margin:0 auto">
         <div class="form-group"><label>Name *</label><input id="f-party-name" class="form-control" value="${p ? p.name : ''}"></div>
         <div class="form-group"><label>Party Code <span style="font-size:0.78rem;color:var(--text-muted)">(auto-generated from number series)</span></label>
             <input id="f-party-code" class="form-control" value="${p ? p.partyCode || '' : defaultCode}" placeholder="e.g. CUST-00001" style="text-transform:uppercase;font-family:monospace" oninput="this.value=this.value.toUpperCase().replace(/[^A-Z0-9-]/g,'')">
         </div>
         <div class="form-row"><div class="form-group"><label>Type</label><select id="f-party-type" class="form-control" data-is-new="${!p}" onchange="onPartyTypeChange(this)"><option ${p && p.type === 'Customer' ? 'selected' : ''}>Customer</option><option ${p && p.type === 'Supplier' ? 'selected' : ''}>Supplier</option></select></div>
         <div class="form-group"><label>Phone</label><input id="f-party-phone" class="form-control" value="${p ? p.phone || '' : ''}"></div></div>
-        <div class="form-row"><div class="form-group"><label>Party Group / Category</label><input id="f-party-group" class="form-control" value="${p ? p.group || '' : ''}" placeholder="e.g. Retailer, Wholesaler, Chain..."></div>
+        <div class="form-row-3"><div class="form-group"><label>Party Group / Category</label><input id="f-party-group" class="form-control" value="${p ? p.group || '' : ''}" placeholder="e.g. Retailer, Wholesaler, Chain..."></div>
         <div class="form-group"><label>Area / Route</label><input id="f-party-area" class="form-control" value="${p ? p.area || '' : ''}" placeholder="e.g. Town, Route-1" onchange="onPartyAreaChange(this)" onblur="onPartyAreaChange(this)"></div>
         <div class="form-group"><label>Route Code</label><input id="f-party-route-code" class="form-control" value="${p ? p.routeCode || '' : ''}" placeholder="e.g. R001" style="text-transform:uppercase;font-family:monospace" oninput="this.value=this.value.toUpperCase().replace(/[^A-Z0-9-]/g,'')"></div></div>
         <div class="form-row"><div class="form-group"><label>City</label><input id="f-party-city" class="form-control" value="${p ? p.city || '' : ''}"></div>
@@ -4682,6 +4777,7 @@ async function renderPartyFormPage() {
             ${!id ? `<button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveParty('')" style="flex:1"> Save & New</button>` : ''}
             <button class="btn btn-primary" onclick="saveParty('${id || ''}')" style="flex:1">Save Party</button>
         </div>
+    </div>
     </div>`;
 }
 async function saveParty(id) {
@@ -6352,7 +6448,7 @@ function syncItemPricesFromBatches(batches) {
     if (fifo) {
         update.mrp = fifo.mrp;
         update.salePrice = fifo.salePrice ?? fifo.sale_price;
-        if (fifo.priceTiers) update.priceTiers = fifo.priceTiers;
+        update.priceTiers = Array.isArray(fifo.priceTiers) ? JSON.parse(JSON.stringify(fifo.priceTiers)) : [];
     }
     if (newest) { update.purchasePrice = newest.purchasePrice ?? newest.purchase_price; }
     return update;
@@ -6491,20 +6587,24 @@ function applyPurchaseLineToBatches(item, line, { remove = false, dateVal = toda
     const qty = getLinePrimaryQty(line);
     const batches = JSON.parse(JSON.stringify(item.batches || []));
     let target = null;
+    const hasExplicitMrp = line && line.mrp !== undefined && line.mrp !== null && line.mrp !== '';
 
-    if (line && line.mrp !== undefined && line.mrp !== null && line.mrp !== '') {
+    if (hasExplicitMrp) {
         target = batches.find(b => +b.mrp === +line.mrp && (b.isActive ?? b.is_active) !== false);
     }
-    if (!target && batches.length) {
+    if (!target && batches.length && !hasExplicitMrp) {
         const active = batches.filter(b => (b.isActive ?? b.is_active) !== false).sort((a, b) => (a.receivedDate || a.received_date || '') < (b.receivedDate || b.received_date || '') ? -1 : 1);
         target = active[active.length - 1] || batches[batches.length - 1];
     }
     if (!target && !remove) {
+        const purchasePriceValue = +(Number.parseFloat(line.price ?? line.purchasePrice ?? item.purchasePrice ?? 0) || 0).toFixed(2);
+        const salePriceValue = +(Number.parseFloat(line.salePrice ?? item.salePrice ?? 0) || 0).toFixed(2);
+        const mrpValue = +(Number.parseFloat(line.mrp ?? item.mrp ?? 0) || 0).toFixed(2);
         target = {
             id: makeBatchId(),
-            mrp: line.mrp ?? item.mrp ?? 0,
-            purchasePrice: line.price ?? line.purchasePrice ?? item.purchasePrice ?? 0,
-            salePrice: line.salePrice ?? item.salePrice ?? 0,
+            mrp: mrpValue,
+            purchasePrice: purchasePriceValue,
+            salePrice: salePriceValue,
             qty: 0,
             receivedDate: dateVal || today(),
             isActive: true
@@ -6524,14 +6624,95 @@ function applyPurchaseLineToBatches(item, line, { remove = false, dateVal = toda
     }
 
     target.qty = +((target.qty || 0) + qty).toFixed(4);
-    target.purchasePrice = line.price ?? line.purchasePrice ?? target.purchasePrice ?? item.purchasePrice ?? 0;
-    if (line.salePrice !== undefined && line.salePrice !== null) target.salePrice = line.salePrice;
-    else if (target.salePrice === undefined || target.salePrice === null) target.salePrice = item.salePrice ?? 0;
-    if (line.mrp !== undefined && line.mrp !== null && line.mrp !== '') target.mrp = line.mrp;
+    target.purchasePrice = +(Number.parseFloat(line.price ?? line.purchasePrice ?? target.purchasePrice ?? item.purchasePrice ?? 0) || 0).toFixed(2);
+    if (line.salePrice !== undefined && line.salePrice !== null) target.salePrice = +(Number.parseFloat(line.salePrice) || 0).toFixed(2);
+    else if (target.salePrice === undefined || target.salePrice === null) target.salePrice = +(Number.parseFloat(item.salePrice ?? 0) || 0).toFixed(2);
+    if (hasExplicitMrp) target.mrp = +(Number.parseFloat(line.mrp) || 0).toFixed(2);
     target.receivedDate = target.receivedDate || dateVal || today();
     target.isActive = target.isActive ?? true;
 
     return { updatedBatches: batches, priceSync: syncItemPricesFromBatches(batches), remaining: 0 };
+}
+function normalizePurchaseLine(line, { label = 'Purchase line', requireRate = true } = {}) {
+    const itemId = getLineItemId(line);
+    const qtyValue = +(Number.parseFloat(getLinePrimaryQty(line)) || 0).toFixed(4);
+    const priceValue = +(Number.parseFloat(line?.price) || 0).toFixed(2);
+    const mrpRaw = line?.mrp;
+    const hasMrp = mrpRaw !== undefined && mrpRaw !== null && String(mrpRaw).trim() !== '';
+    const mrpValue = hasMrp ? +(Number.parseFloat(mrpRaw) || 0).toFixed(2) : null;
+
+    if (!itemId) throw new Error(`${label} is missing the item reference.`);
+    if (!Number.isFinite(qtyValue) || qtyValue <= 0) throw new Error(`${label} has an invalid quantity.`);
+    if (!Number.isFinite(priceValue) || (requireRate ? priceValue <= 0 : priceValue < 0)) {
+        throw new Error(`${label} has an invalid rate.`);
+    }
+    if (hasMrp && (!Number.isFinite(mrpValue) || mrpValue <= 0)) throw new Error(`${label} has an invalid MRP.`);
+
+    return {
+        ...line,
+        itemId,
+        qty: qtyValue,
+        primaryQty: qtyValue,
+        price: priceValue,
+        mrp: mrpValue,
+        amount: +(qtyValue * priceValue).toFixed(2)
+    };
+}
+function buildInventoryAdjustmentMutation(item, { actualQty, mrp = null, adjDate = today(), purchasePrice = null, salePrice = null } = {}) {
+    const qtyChange = +(Number.parseFloat(actualQty) || 0).toFixed(3);
+    if (!Number.isFinite(qtyChange) || Math.abs(qtyChange) <= 0) throw new Error('Enter a valid quantity.');
+
+    const currentStock = +(+item.stock || 0).toFixed(3);
+    const newStock = +(currentStock + qtyChange).toFixed(3);
+    if (newStock < -0.0001) throw new Error(`Cannot reduce below zero. Current stock: ${currentStock}`);
+
+    const updateData = { stock: newStock };
+    const hasMrp = mrp !== undefined && mrp !== null && String(mrp).trim() !== '';
+    if (!hasMrp) return { updateData, newStock, mrpValue: null };
+
+    const mrpValue = +(Number.parseFloat(mrp) || 0).toFixed(2);
+    if (!Number.isFinite(mrpValue) || mrpValue <= 0) throw new Error('MRP is required.');
+
+    const batches = item.batches ? JSON.parse(JSON.stringify(item.batches)) : [];
+    const existingBatch = batches.find(batch => +batch.mrp === mrpValue);
+    const isDefaultItemMrp = !batches.length && +(+item.mrp || 0).toFixed(2) === mrpValue;
+
+    if (existingBatch) {
+        if (qtyChange < 0 && (+existingBatch.qty || 0) + qtyChange < -0.0001) {
+            throw new Error(`Cannot reduce below zero for MRP ${mrpValue}. Available batch qty: ${(+existingBatch.qty || 0).toFixed(3)}`);
+        }
+        existingBatch.qty = +((+existingBatch.qty || 0) + qtyChange).toFixed(3);
+        if (existingBatch.qty < 0) existingBatch.qty = 0;
+    } else if (isDefaultItemMrp) {
+        batches.push({
+            id: makeBatchId(),
+            mrp: mrpValue,
+            purchasePrice: +(+item.purchasePrice || 0).toFixed(2),
+            salePrice: +(+item.salePrice || 0).toFixed(2),
+            qty: +Math.max(0, newStock).toFixed(3),
+            receivedDate: adjDate,
+            isActive: true
+        });
+    } else {
+        if (qtyChange < 0) throw new Error('For negative adjustment, select an existing MRP batch.');
+        const purchasePriceValue = +(Number.parseFloat(purchasePrice) || 0).toFixed(2);
+        const salePriceValue = +(Number.parseFloat(salePrice) || 0).toFixed(2);
+        if (!Number.isFinite(purchasePriceValue) || purchasePriceValue <= 0) throw new Error('Purchase Price is mandatory for a new MRP batch');
+        if (!Number.isFinite(salePriceValue) || salePriceValue <= 0) throw new Error('Sale Price is mandatory for a new MRP batch');
+        batches.push({
+            id: makeBatchId(),
+            mrp: mrpValue,
+            purchasePrice: purchasePriceValue,
+            salePrice: salePriceValue,
+            qty: +Math.max(0, qtyChange).toFixed(3),
+            receivedDate: adjDate,
+            isActive: true
+        });
+    }
+
+    Object.assign(updateData, syncItemPricesFromBatches(batches));
+    updateData.batches = batches;
+    return { updateData, newStock, mrpValue };
 }
 function validateSaleLinesBeforePost(inventory, lines, { existingLines = [] } = {}) {
     const co = DB.getObj('db_company') || {};
@@ -6616,11 +6797,12 @@ async function renderItemFormPage() {
 
     const pageContent = document.getElementById('page-content');
     pageContent.innerHTML = `
+    <div class="desktop-form-page">
     <div class="page-header" style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
         <button class="btn btn-outline btn-sm" onclick="navigateTo('inventory')"> Back</button>
         <h2 style="margin:0;flex:1">${i ? 'Edit Item' : 'Add Item'}</h2>
     </div>
-    <div class="modal-body" style="max-width:600px;margin:0 auto">
+    <div class="modal-body desktop-form-shell" style="max-width:600px;margin:0 auto">
         <div style="margin-bottom:14px;display:flex;align-items:center;gap:14px">
             <div id="item-photo-preview" class="btn btn-outline" style="display:flex;width:70px;height:70px;border-radius:10px;border:2px dashed var(--border);align-items:center;justify-content:center;overflow:hidden;cursor:pointer;flex-shrink:0;background:var(--bg-body);margin-bottom:0;padding:0;">
                 ${i && (i.imageUrl || i.photo) ? `<img src="${i.imageUrl || i.photo}" style="width:100%;height:100%;object-fit:cover;pointer-events:none;">` : `<span class="material-symbols-outlined" style="font-size:1.5rem;pointer-events:none;">photo_camera</span>`}
@@ -6647,7 +6829,7 @@ async function renderItemFormPage() {
             <div class="form-group"><label>Category *</label><select id="f-item-cat" class="form-control" onchange="onCatChangeItemModal()"><option value="">Select Category</option>${selCatOpts}</select></div>
             <div class="form-group"><label>Sub-Category *</label><select id="f-item-subcat" class="form-control"><option value="">Select Sub-Category</option>${subOpts}</select></div>
         </div>
-        <div class="form-row">
+        <div class="form-row-3">
             <div class="form-group"><label>HSN Code</label><input id="f-item-hsn" class="form-control" value="${i ? i.hsn || '' : ''}" placeholder="e.g. 10063020"></div>
             <div class="form-group">
                 <label>GST Rate %</label>
@@ -6666,21 +6848,21 @@ async function renderItemFormPage() {
             <div class="form-group"><label>Secondary UOM (Opt)</label><input id="f-item-secuom" class="form-control" list="uom-options" value="${i ? i.secUom || '' : ''}" placeholder="e.g. Box"></div>
             <div class="form-group"><label>Conversion Ratio</label><input type="number" id="f-item-secratio" class="form-control" value="${i ? i.secUomRatio || '' : ''}" placeholder="1 Pri = ? Sec"></div>
         </div>
-        <div class="form-row">
-            <div class="form-group"><label>Purchase Price</label><input type="number" id="f-item-pp" class="form-control" value="${i ? Math.round(i.purchasePrice) : 0}" step="1" min="0"></div>
-            <div class="form-group"><label>Standard Sale Price</label><input type="number" id="f-item-sp" class="form-control" value="${i ? Math.round(i.salePrice) : 0}" step="1" min="0"></div>
-            <div class="form-group"><label>MRP</label><input type="number" id="f-item-mrp" class="form-control" value="${i && i.mrp ? Math.round(i.mrp) : ''}" step="1" min="0" placeholder="Max Retail Price"></div>
+        <div class="form-row-3">
+            <div class="form-group"><label>Purchase Price</label><input type="number" id="f-item-pp" class="form-control" value="${i ? (+(+i.purchasePrice || 0).toFixed(2)) : 0}" step="0.01" min="0"></div>
+            <div class="form-group"><label>Standard Sale Price</label><input type="number" id="f-item-sp" class="form-control" value="${i ? (+(+i.salePrice || 0).toFixed(2)) : 0}" step="0.01" min="0"></div>
+            <div class="form-group"><label>MRP</label><input type="number" id="f-item-mrp" class="form-control" value="${i && i.mrp !== undefined && i.mrp !== null && i.mrp !== '' ? (+(+i.mrp || 0).toFixed(2)) : ''}" step="0.01" min="0" placeholder="Max Retail Price"></div>
         </div>
 
         <div style="background:var(--bg-body);padding:10px;border-radius:6px;border:1px solid var(--border);margin-bottom:12px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
                 <span style="margin:0;font-weight:600;font-size:0.85rem">Volume Pricing (Opt)</span>
-                <button class="btn btn-outline btn-sm" onclick="addPriceTier()" style="padding:4px 8px;font-size:0.75rem">+ Add Tier</button>
+                <button type="button" class="btn btn-outline btn-sm" onclick="addPriceTier()" style="padding:4px 8px;font-size:0.75rem">+ Add Tier</button>
             </div>
             <div id="price-tiers-container"></div>
         </div>
 
-        <div class="form-row">
+        <div class="form-row-3">
             <div class="form-group"><label>Opening Stock</label><input type="number" id="f-item-stock" class="form-control" value="${i ? i.stock : 0}"></div>
             <div class="form-group"><label>Warehouse</label>
                 <select id="f-item-warehouse" class="form-control">
@@ -6694,7 +6876,7 @@ async function renderItemFormPage() {
         <div style="background:var(--bg-body);padding:10px;border-radius:6px;border:1px solid var(--border);margin-bottom:12px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
                 <span style="font-weight:600;font-size:0.85rem"> MRP / Batch Stock</span>
-                <button class="btn btn-outline btn-sm" onclick="openAddBatchForm()" style="padding:4px 8px;font-size:0.75rem">+ Add MRP Batch</button>
+                <button type="button" class="btn btn-outline btn-sm" onclick="openAddBatchForm()" style="padding:4px 8px;font-size:0.75rem">+ Add MRP Batch</button>
             </div>
             <div id="item-batches-container"></div>
         </div>
@@ -6703,6 +6885,7 @@ async function renderItemFormPage() {
             ${!id ? `<button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveItem('')" style="flex:1"> Save & New</button>` : ''}
             <button class="btn btn-primary" onclick="saveItem('${id || ''}')" style="flex:1">Save Item</button>
         </div>
+    </div>
     </div>`;
 
     renderPriceTiers();
@@ -6767,9 +6950,9 @@ function renderPriceTiers() {
     }
     el.innerHTML = currentItemTiers.map((t, i) => `
         <div style="display:flex;gap:10px;align-items:center;margin-bottom:6px;">
-            <div><span style="font-size:0.8rem">Min Qty:</span> <input type="number" style="width:70px;padding:4px;font-size:0.9rem;border-radius:4px;border:1px solid var(--border)" value="${t.minQty}" onchange="updatePriceTier(${i}, 'minQty', this.value)"></div>
-            <div><span style="font-size:0.8rem">Price :</span> <input type="number" style="width:90px;padding:4px;font-size:0.9rem;border-radius:4px;border:1px solid var(--border)" value="${t.price}" onchange="updatePriceTier(${i}, 'price', this.value)"></div>
-            <button class="btn-icon" style="color:var(--danger);margin-top:14px" onclick="removePriceTier(${i})"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>
+            <div><span style="font-size:0.8rem">Min Qty:</span> <input type="number" id="f-tier-min-${i}" name="item_tier_min_qty_${i}" style="width:70px;padding:4px;font-size:0.9rem;border-radius:4px;border:1px solid var(--border)" value="${t.minQty}" onchange="updatePriceTier(${i}, 'minQty', this.value)"></div>
+            <div><span style="font-size:0.8rem">Price :</span> <input type="number" id="f-tier-price-${i}" name="item_tier_price_${i}" step="0.01" min="0" style="width:90px;padding:4px;font-size:0.9rem;border-radius:4px;border:1px solid var(--border)" value="${t.price}" onchange="updatePriceTier(${i}, 'price', this.value)"></div>
+            <button type="button" class="btn-icon" style="color:var(--danger);margin-top:14px" onclick="removePriceTier(${i})"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>
         </div>
     `).join('');
 }
@@ -6803,9 +6986,9 @@ function renderItemBatches() {
                     <span class="badge ${bActive ? 'badge-success' : 'badge-danger'}">${bActive ? 'Active' : 'Inactive'}</span>
                 </td>
                 <td style="padding:5px 6px;text-align:center">
-                    <button class="btn btn-outline btn-sm" onclick="toggleItemBatchActive(${idx})" style="padding:2px 6px;font-size:0.75rem">${bActive ? 'Deactivate' : 'Activate'}</button>
-                    <button class="btn-icon" onclick="openAddBatchForm(${idx})" style="color:var(--primary);margin-left:4px" title="Edit"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button>
-                    <button class="btn-icon" onclick="deleteItemBatch(${idx})" style="color:var(--danger);margin-left:4px" title="Delete"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>
+                    <button type="button" class="btn btn-outline btn-sm" onclick="toggleItemBatchActive(${idx})" style="padding:2px 6px;font-size:0.75rem">${bActive ? 'Deactivate' : 'Activate'}</button>
+                    <button type="button" class="btn-icon" onclick="openAddBatchForm(${idx})" style="color:var(--primary);margin-left:4px" title="Edit"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button>
+                    <button type="button" class="btn-icon" onclick="deleteItemBatch(${idx})" style="color:var(--danger);margin-left:4px" title="Delete"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>
                 </td>
             </tr>`;
     }).join('')}
@@ -6813,18 +6996,24 @@ function renderItemBatches() {
 }
 
 function toggleItemBatchActive(idx) {
+    if (!currentItemBatches[idx]) return;
     const cur = currentItemBatches[idx].isActive ?? currentItemBatches[idx].is_active;
     currentItemBatches[idx].isActive = cur === false ? true : false;
     delete currentItemBatches[idx].is_active; // normalize to camelCase
     // Resync item prices after changing active status
     const sync = syncItemPricesFromBatches(currentItemBatches);
-    if (sync.mrp) { const el = $('f-item-mrp'); if (el) el.value = sync.mrp; }
-    if (sync.salePrice) { const el = $('f-item-sp'); if (el) el.value = sync.salePrice; }
-    if (sync.purchasePrice) { const el = $('f-item-pp'); if (el) el.value = sync.purchasePrice; }
+    if (sync.mrp !== undefined) { const el = $('f-item-mrp'); if (el) el.value = sync.mrp; }
+    if (sync.salePrice !== undefined) { const el = $('f-item-sp'); if (el) el.value = sync.salePrice; }
+    if (sync.purchasePrice !== undefined) { const el = $('f-item-pp'); if (el) el.value = sync.purchasePrice; }
+    if (sync.priceTiers !== undefined) {
+        currentItemTiers = Array.isArray(sync.priceTiers) ? JSON.parse(JSON.stringify(sync.priceTiers)) : [];
+        renderPriceTiers();
+    }
     renderItemBatches();
 }
 
 function deleteItemBatch(idx) {
+    if (!currentItemBatches[idx]) return;
     if (!confirm('Remove this batch?')) return;
     currentItemBatches.splice(idx, 1);
 
@@ -6840,8 +7029,8 @@ function deleteItemBatch(idx) {
     if (sync.purchasePrice !== undefined) { const el = $('f-item-pp'); if (el) el.value = sync.purchasePrice; }
     if (sync.priceTiers !== undefined) {
         currentItemTiers = sync.priceTiers ? JSON.parse(JSON.stringify(sync.priceTiers)) : [];
-        renderPriceTiers();
     }
+    renderPriceTiers();
     renderItemBatches();
 }
 
@@ -6858,21 +7047,21 @@ function openAddBatchForm(editIdx = -1) {
         <div id="inline-batch-form" style="background:var(--bg-body);border:1px dashed var(--primary);border-radius:8px;padding:12px;margin-bottom:14px;">
             <div style="font-weight:600;margin-bottom:8px;color:var(--primary);font-size:0.9rem">${b ? 'Edit MRP Batch' : 'Add New MRP Batch'}</div>
             <div class="form-row">
-                <div class="form-group"><label>MRP  *</label><input type="number" id="f-batch-mrp" value="${b ? b.mrp : ''}" placeholder="Max Retail Price" autofocus></div>
-                <div class="form-group"><label>Date Received</label><input type="date" id="f-batch-date" value="${today}"></div>
+                <div class="form-group"><label>MRP  *</label><input type="number" id="f-batch-mrp" name="item_batch_mrp" value="${b ? b.mrp : ''}" placeholder="Max Retail Price" step="0.01" min="0" autocomplete="off" autofocus></div>
+                <div class="form-group"><label>Date Received</label><input type="date" id="f-batch-date" name="item_batch_received_date" value="${today}" autocomplete="off"></div>
             </div>
             <div class="form-row">
-                <div class="form-group"><label>Purchase Price  *</label><input type="number" id="f-batch-pp" value="${b ? (b.purchasePrice || b.purchase_price || '') : ''}" placeholder="Your cost price" step="1" min="0"></div>
-                <div class="form-group"><label>Sale Price  *</label><input type="number" id="f-batch-sp" value="${b ? (b.salePrice || b.sale_price || '') : ''}" placeholder="Price to customer" step="1" min="0"></div>
+                <div class="form-group"><label>Purchase Price  *</label><input type="number" id="f-batch-pp" name="item_batch_purchase_price" value="${b ? (b.purchasePrice || b.purchase_price || '') : ''}" placeholder="Your cost price" step="0.01" min="0" autocomplete="off"></div>
+                <div class="form-group"><label>Sale Price  *</label><input type="number" id="f-batch-sp" name="item_batch_sale_price" value="${b ? (b.salePrice || b.sale_price || '') : ''}" placeholder="Price to customer" step="0.01" min="0" autocomplete="off"></div>
             </div>
             <div class="form-row" style="background:var(--surface);padding:8px;border-radius:6px;margin:8px 0;border:1px solid var(--border)">
-                <div class="form-group" style="margin:0"><label style="font-size:0.75rem">Volume Qty Limit (Opt)</label><input type="number" id="f-batch-vqty" value="${b && b.priceTiers && b.priceTiers.length ? b.priceTiers[0].minQty : ''}" placeholder="Min Qty for discount"></div>
-                <div class="form-group" style="margin:0"><label style="font-size:0.75rem">Volume Sale Price</label><input type="number" id="f-batch-vprice" value="${b && b.priceTiers && b.priceTiers.length ? b.priceTiers[0].price : ''}" placeholder="Discounted price"></div>
+                <div class="form-group" style="margin:0"><label style="font-size:0.75rem">Volume Qty Limit (Opt)</label><input type="number" id="f-batch-vqty" name="item_batch_volume_min_qty" value="${b && b.priceTiers && b.priceTiers.length ? b.priceTiers[0].minQty : ''}" step="0.001" min="0" placeholder="Min Qty for discount" autocomplete="off"></div>
+                <div class="form-group" style="margin:0"><label style="font-size:0.75rem">Volume Sale Price</label><input type="number" id="f-batch-vprice" name="item_batch_volume_sale_price" value="${b && b.priceTiers && b.priceTiers.length ? b.priceTiers[0].price : ''}" step="0.01" min="0" placeholder="Discounted price" autocomplete="off"></div>
             </div>
-            <div class="form-group"><label>Opening Qty</label><input type="number" id="f-batch-qty" value="${b ? (b.qty || 0) : 0}" min="0"></div>
+            <div class="form-group"><label>Opening Qty</label><input type="number" id="f-batch-qty" name="item_batch_opening_qty" value="${b ? (b.qty || 0) : 0}" step="0.001" min="0" autocomplete="off"></div>
             <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:10px">
-                <button class="btn btn-outline btn-sm" onclick="cancelAddBatchForm()">Cancel</button>
-                <button class="btn btn-primary btn-sm" onclick="saveItemBatch(${editIdx})">${b ? 'Save Changes' : 'Add Batch'}</button>
+                <button type="button" class="btn btn-outline btn-sm" onclick="cancelAddBatchForm()">Cancel</button>
+                <button type="button" class="btn btn-primary btn-sm" onclick="saveItemBatch(${editIdx})">${b ? 'Save Changes' : 'Add Batch'}</button>
             </div>
         </div>
     `;
@@ -6895,30 +7084,36 @@ function onBatchMrpChange() {
 }
 
 function saveItemBatch(editIdx = -1) {
-    const mrp = +($('f-batch-mrp') || {}).value;
-    const pp = +($('f-batch-pp') || {}).value;
-    const sp = +($('f-batch-sp') || {}).value;
-    const qty = +($('f-batch-qty') || {}).value || 0;
+    const mrp = Number.parseFloat(($('f-batch-mrp') || {}).value || '');
+    const pp = Number.parseFloat(($('f-batch-pp') || {}).value || '');
+    const sp = Number.parseFloat(($('f-batch-sp') || {}).value || '');
+    const qty = Number.parseFloat(($('f-batch-qty') || {}).value || '') || 0;
     const date = ($('f-batch-date') || {}).value || '';
-    const vqty = +($('f-batch-vqty') || {}).value || 0;
-    const vprice = +($('f-batch-vprice') || {}).value || 0;
+    const vqty = Number.parseFloat(($('f-batch-vqty') || {}).value || '') || 0;
+    const vprice = Number.parseFloat(($('f-batch-vprice') || {}).value || '') || 0;
 
-    if (!mrp) return alert('MRP is required');
-    if (!pp) return alert('Purchase Price is mandatory for a new MRP batch');
-    if (!sp) return alert('Sale Price is mandatory for a new MRP batch');
+    if (!Number.isFinite(mrp) || mrp <= 0) return alert('MRP is required');
+    if (!Number.isFinite(pp) || pp <= 0) return alert('Purchase Price is mandatory for a new MRP batch');
+    if (!Number.isFinite(sp) || sp <= 0) return alert('Sale Price is mandatory for a new MRP batch');
 
     const tiers = (vqty > 0 && vprice >= 0) ? [{ minQty: vqty, price: vprice }] : [];
+    const mrpValue = +mrp.toFixed(2);
+    const purchasePriceValue = +pp.toFixed(2);
+    const salePriceValue = +sp.toFixed(2);
+    const qtyValue = +qty.toFixed(3);
+    const duplicateIdx = currentItemBatches.findIndex((batch, idx) => idx !== editIdx && +batch.mrp === mrpValue);
+    if (duplicateIdx > -1) return alert('This MRP batch already exists. Edit the existing batch instead.');
 
     if (editIdx > -1) {
         const b = currentItemBatches[editIdx];
-        b.mrp = Math.round(mrp);
-        b.purchasePrice = Math.round(pp);
-        b.salePrice = Math.round(sp);
-        b.qty = qty;
+        b.mrp = mrpValue;
+        b.purchasePrice = purchasePriceValue;
+        b.salePrice = salePriceValue;
+        b.qty = qtyValue;
         b.receivedDate = date;
         b.priceTiers = tiers;
     } else {
-        currentItemBatches.push({ id: 'b_' + Date.now().toString(36), mrp: Math.round(mrp), purchasePrice: Math.round(pp), salePrice: Math.round(sp), qty, receivedDate: date, isActive: true, priceTiers: tiers });
+        currentItemBatches.push({ id: makeBatchId(), mrp: mrpValue, purchasePrice: purchasePriceValue, salePrice: salePriceValue, qty: qtyValue, receivedDate: date, isActive: true, priceTiers: tiers });
     }
 
     // Auto-update total stock based on batches
@@ -6932,8 +7127,8 @@ function saveItemBatch(editIdx = -1) {
     if (sync.salePrice !== undefined) { const el = $('f-item-sp'); if (el) el.value = sync.salePrice; }
     if (sync.purchasePrice !== undefined) { const el = $('f-item-pp'); if (el) el.value = sync.purchasePrice; }
 
-    if (sync.priceTiers && sync.priceTiers.length) {
-        currentItemTiers = JSON.parse(JSON.stringify(sync.priceTiers));
+    if (sync.priceTiers !== undefined) {
+        currentItemTiers = Array.isArray(sync.priceTiers) ? JSON.parse(JSON.stringify(sync.priceTiers)) : [];
         renderPriceTiers();
     }
 
@@ -7306,7 +7501,7 @@ async function renderStockAdjustPage() {
     const item = itemId ? inv.find(x => x.id === itemId) : null;
     const adjNo = 'ADJ-' + Date.now().toString(36).toUpperCase().substr(-6);
     pageContent.innerHTML = `
-    <div style="max-width:600px;margin:0 auto;padding-bottom:80px">
+    <div class="desktop-form-page desktop-form-shell" style="max-width:600px;margin:0 auto;padding-bottom:80px">
         <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;padding-top:4px">
             <button class="btn-icon" onclick="navigateTo('inventory')" style="font-size:1.1rem;padding:4px 10px">← Back</button>
             <h2 style="font-size:1.1rem;font-weight:700;margin:0">Stock Adjustment Journal</h2>
@@ -7387,63 +7582,40 @@ function onAdjMrpChange() {
     section.style.display = exists ? 'none' : 'block';
 }
 async function saveStockAdjustment() {
+    if (!beginSave()) return;
     const itemId = $('f-adj-item').value;
-    if (!itemId) return alert('Select an item');
+    if (!itemId) { endSave(); return alert('Select an item'); }
     const qty = +$('f-adj-qty').value;
-    if (!qty || qty <= 0) return alert('Enter a valid quantity');
+    if (!qty || qty <= 0) { endSave(); return alert('Enter a valid quantity'); }
     const type = $('f-adj-type').value;
     const adjDate = $('f-adj-date').value;
     const reason = $('f-adj-reason').value + ($('f-adj-notes').value.trim() ? '  ' + $('f-adj-notes').value.trim() : '');
     const docNo = $('f-adj-docno').value;
-    const mrp = +($('f-adj-mrp') || {}).value || 0;
+    const mrpRaw = (($('f-adj-mrp') || {}).value || '').trim();
+    const mrp = mrpRaw === '' ? null : +(Number.parseFloat(mrpRaw) || 0).toFixed(2);
 
     try {
         const items = await DB.getAll('inventory');
         const item = items.find(x => x.id === itemId);
-        if (!item) return alert('Item not found');
+        if (!item) { endSave(); return alert('Item not found'); }
 
         const actualQty = type === 'Positive Adj' ? qty : -qty;
-        if (item.stock + actualQty < 0) return alert('Cannot reduce below zero. Current stock: ' + item.stock);
+        const mutation = buildInventoryAdjustmentMutation(item, {
+            actualQty,
+            mrp,
+            adjDate,
+            purchasePrice: ($('f-adj-pp') || {}).value || null,
+            salePrice: ($('f-adj-sp') || {}).value || null
+        });
 
-        const newStock = item.stock + actualQty;
-        const updateData = { stock: newStock };
+        await DB.update('inventory', itemId, mutation.updateData);
+        await addLedgerEntry(item.id, item.name, type, actualQty, docNo, reason + (mutation.mrpValue ? ` | MRP ${mutation.mrpValue}` : ''));
 
-        // --- Batch / MRP handling ---
-        if (mrp) {
-            const batches = item.batches ? JSON.parse(JSON.stringify(item.batches)) : [];
-            const existingBatch = batches.find(b => +b.mrp === mrp);
-
-            if (existingBatch) {
-                // MRP already exists  just update qty on that batch
-                existingBatch.qty = (existingBatch.qty || 0) + actualQty;
-                if (existingBatch.qty < 0) existingBatch.qty = 0;
-            } else if (!batches.length && +item.mrp === mrp) {
-                // No batches yet and MRP matches item default  silently create first batch from existing item prices
-                batches.push({ id: 'b_' + Date.now().toString(36), mrp, purchasePrice: item.purchasePrice || 0, salePrice: item.salePrice || 0, qty: Math.max(0, newStock), receivedDate: adjDate, isActive: true });
-            } else {
-                // Genuinely new MRP  purchase price and sale price are mandatory
-                const pp = +($('f-adj-pp') || {}).value;
-                const sp = +($('f-adj-sp') || {}).value;
-                if (!pp) return alert('Purchase Price is mandatory for a new MRP batch');
-                if (!sp) return alert('Sale Price is mandatory for a new MRP batch');
-                batches.push({
-                    id: 'b_' + Date.now().toString(36),
-                    mrp, purchasePrice: pp, salePrice: sp,
-                    qty: type === 'Positive Adj' ? qty : 0,
-                    receivedDate: adjDate, isActive: true
-                });
-                // Sync item prices via FIFO after adding new batch
-                Object.assign(updateData, syncItemPricesFromBatches(batches));
-            }
-            updateData.batches = batches;
-        }
-
-        await DB.update('inventory', itemId, updateData);
-        await addLedgerEntry(item.id, item.name, type, actualQty, docNo, reason + (mrp ? ` | MRP ${mrp}` : ''));
-
+        endSave();
         await navigateTo('inventory');
-        showToast(`Stock adjusted! ${item.name}: ${actualQty > 0 ? '+' : ''}${actualQty}  New stock: ${newStock}${mrp ? ` | MRP ${mrp}` : ''}`, 'success');
+        showToast(`Stock adjusted! ${item.name}: ${actualQty > 0 ? '+' : ''}${actualQty}  New stock: ${mutation.newStock}${mutation.mrpValue ? ` | MRP ${mutation.mrpValue}` : ''}`, 'success');
     } catch (err) {
+        endSave();
         alert('Error adjusting stock: ' + err.message);
     }
 }
@@ -7815,21 +7987,31 @@ function processStockImport(event) {
             const cols = parseCSVLine(lines[i]);
             const colsMapped = cols.map(c => (c || '').trim());
             if (colsMapped.length < 4 || colsMapped.filter(c => c).length < 2) continue;
-            const [itemName, dateStr, typeStr, qtyStr, reason] = colsMapped;
+            const [itemName, dateStr, typeStr, qtyStr, reason, mrpStr] = colsMapped;
             const item = items.find(x => (x.name || '').toLowerCase() === itemName.toLowerCase());
             if (!item) { errors.push(`Row ${i + 1}: Item "${itemName}" not found`); continue; }
-            const qty = parseInt(qtyStr, 10);
-            if (isNaN(qty) || qty <= 0) { errors.push(`Row ${i + 1}: Invalid qty "${qtyStr}"`); continue; }
+            const qty = Number.parseFloat(qtyStr);
+            if (!Number.isFinite(qty) || qty <= 0) { errors.push(`Row ${i + 1}: Invalid qty "${qtyStr}"`); continue; }
             const isIncrease = typeStr.toLowerCase().startsWith('increase') || typeStr.toLowerCase() === 'positive' || typeStr === '+';
             const actualQty = isIncrease ? qty : -qty;
             if (item.stock + actualQty < 0) { errors.push(`Row ${i + 1}: "${itemName}" stock would go below zero`); continue; }
             const adjDate = dateStr && /^\d{4}-\d{2}-\d{2}$/.test(dateStr) ? dateStr : today();
-            pendingStockImports.push({ item, actualQty, adjDate, entryType: isIncrease ? 'Positive Adj' : 'Negative Adj', reason: (reason || 'Excel Import') + ' (imported)' });
+            const mrp = mrpStr && mrpStr.trim() !== '' ? +(Number.parseFloat(mrpStr) || 0).toFixed(2) : null;
+            if (mrp !== null) {
+                if (!Number.isFinite(mrp) || mrp <= 0) { errors.push(`Row ${i + 1}: Invalid MRP "${mrpStr}"`); continue; }
+                const batches = item.batches || [];
+                const hasKnownMrp = batches.some(batch => +batch.mrp === mrp) || (!batches.length && +(+item.mrp || 0).toFixed(2) === mrp);
+                if (!hasKnownMrp) {
+                    errors.push(`Row ${i + 1}: New MRP ${mrp} for "${itemName}" needs manual Stock Adjustment with prices.`);
+                    continue;
+                }
+            }
+            pendingStockImports.push({ item, actualQty, adjDate, mrp, entryType: isIncrease ? 'Positive Adj' : 'Negative Adj', reason: (reason || 'Excel Import') + ' (imported)' });
         }
         let html = '';
         if (errors.length) html += `<div style="margin-bottom:14px;padding:12px;background:var(--danger-soft);border:1px solid rgba(239,68,68,0.3);border-radius:8px;font-size:0.85rem"><strong style="color:var(--danger)"> ${errors.length} Errors Found (Rows skipped)</strong><ul style="margin-top:6px;padding-left:14px;color:var(--danger);max-height:100px;overflow-y:auto">${errors.map(err => `<li>${err}</li>`).join('')}</ul></div>`;
         html += `<div style="margin-bottom:10px;font-weight:600"> ${pendingStockImports.length} Valid Adjustments Preview</div>`;
-        if (pendingStockImports.length) html += `<div style="max-height:300px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius-sm)"><table class="data-table"><thead><tr><th>Date</th><th>Item</th><th>Type</th><th>Qty</th><th>New Stock</th></tr></thead><tbody>${pendingStockImports.map(p => `<tr><td>${fmtDate(p.adjDate)}</td><td>${p.item.name}</td><td><span class="badge ${p.actualQty > 0 ? 'badge-success' : 'badge-danger'}">${p.entryType}</span></td><td style="font-weight:700;color:${p.actualQty > 0 ? 'var(--success)' : 'var(--danger)'}">${p.actualQty > 0 ? '+' : ''}${p.actualQty}</td><td>${p.item.stock + p.actualQty}</td></tr>`).join('')}</tbody></table></div>`;
+        if (pendingStockImports.length) html += `<div style="max-height:300px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius-sm)"><table class="data-table"><thead><tr><th>Date</th><th>Item</th><th>MRP</th><th>Type</th><th>Qty</th><th>New Stock</th></tr></thead><tbody>${pendingStockImports.map(p => `<tr><td>${fmtDate(p.adjDate)}</td><td>${p.item.name}</td><td>${p.mrp ? currency(p.mrp) : '-'}</td><td><span class="badge ${p.actualQty > 0 ? 'badge-success' : 'badge-danger'}">${p.entryType}</span></td><td style="font-weight:700;color:${p.actualQty > 0 ? 'var(--success)' : 'var(--danger)'}">${p.actualQty > 0 ? '+' : ''}${p.actualQty}</td><td>${(+p.item.stock || 0) + p.actualQty}</td></tr>`).join('')}</tbody></table></div>`;
         html += `<div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="commitStockImport()" ${pendingStockImports.length === 0 ? 'disabled' : ''}> Confirm & Apply Adjustments</button></div>`;
         openModal('Import Excel Preview', html);
         event.target.value = '';
@@ -7848,6 +8030,7 @@ function processStockImport(event) {
 }
 
 async function commitStockImport() {
+    if (!beginSave()) return;
     let count = 0;
 
     try {
@@ -7855,23 +8038,30 @@ async function commitStockImport() {
         for (const p of pendingStockImports) {
             const item = inventory.find(x => x.id === p.item.id);
             if (item) {
-                const newStock = item.stock + p.actualQty;
-                await DB.update('inventory', item.id, { stock: newStock });
+                const mutation = buildInventoryAdjustmentMutation(item, {
+                    actualQty: p.actualQty,
+                    mrp: p.mrp,
+                    adjDate: p.adjDate
+                });
+                await DB.update('inventory', item.id, mutation.updateData);
 
                 // Update local item object for next iteration if same item exists in import
-                item.stock = newStock;
+                item.stock = mutation.newStock;
+                if (mutation.updateData.batches) item.batches = mutation.updateData.batches;
 
                 // Add ledger entry
-                await addLedgerEntry(item.id, item.name, p.entryType, p.actualQty, 'IMPORT-' + Date.now().toString(36).toUpperCase().substr(-6), p.reason);
+                await addLedgerEntry(item.id, item.name, p.entryType, p.actualQty, 'IMPORT-' + Date.now().toString(36).toUpperCase().substr(-6), p.reason + (mutation.mrpValue ? ` | MRP ${mutation.mrpValue}` : ''));
                 count++;
             }
         }
 
         pendingStockImports = [];
+        endSave();
         closeModal();
         await renderInventory();
         showToast(`Import complete! ${count} adjustments applied.`, 'success');
     } catch (err) {
+        endSave();
         alert('Error during stock import: ' + err.message);
     }
 }
@@ -9354,7 +9544,7 @@ async function renderOrderDetailPage() {
         : '';
 
     pageContent.innerHTML = `
-    <div style="max-width:680px;margin:0 auto;padding-bottom:80px">
+    <div class="desktop-form-page desktop-form-shell" style="max-width:680px;margin:0 auto;padding-bottom:80px">
         <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;padding-top:4px">
             <button class="btn-icon" onclick="navigateTo('salesorders')" style="font-size:1rem;padding:4px 10px;display:inline-flex;align-items:center;gap:6px">${msIcon('arrow_back', '', 'font-size:1.05rem')}<span>Back</span></button>
             <h2 style="font-size:1.1rem;font-weight:700;margin:0">Order ${escapeHtml(o.orderNo)}</h2>
@@ -10138,7 +10328,7 @@ async function renderDirectPurchasePage() {
         </div>
         <hr style="margin:16px 0;border-color:var(--border)">
         <h4 style="font-size:0.9rem;margin-bottom:10px">Add Items</h4>
-        <div class="form-row" style="gap:8px">
+        <div class="form-row desktop-inline-entry-row" style="gap:8px">
             <div class="form-group" style="flex:2"><label>Item</label><input id="f-di-item-input" placeholder="Type item name..."></div>
             <div class="form-group"><label>MRP </label><input type="number" id="f-di-mrp" step="0.01" placeholder="MRP"></div>
             <div class="form-group"><label>Qty</label><input type="number" id="f-di-qty" value="1" min="1"></div>
@@ -10169,10 +10359,25 @@ function addDIPOLine() {
     const inp = $('f-di-item-input');
     const itemId = inp.dataset.selectedId;
     if (!itemId) return alert('Please select an item from the list');
-    const qty = +$('f-di-qty').value;
-    const price = +$('f-di-price').value;
-    const mrp = +($('f-di-mrp') || {}).value || 0;
-    poItems.push({ itemId, name: inp.value, qty, price, mrp, amount: qty * price, unit: 'Pcs' });
+    try {
+        const qty = +$('f-di-qty').value;
+        const price = +$('f-di-price').value;
+        const mrpRaw = (($('f-di-mrp') || {}).value || '').trim();
+        const mrp = mrpRaw === '' ? null : +(Number.parseFloat(mrpRaw) || 0).toFixed(2);
+        const item = (DB.get('db_inventory') || []).find(row => String(row.id) === String(itemId));
+        const line = normalizePurchaseLine({
+            itemId,
+            name: inp.value,
+            qty,
+            primaryQty: qty,
+            price,
+            mrp,
+            unit: item?.unit || 'Pcs'
+        }, { label: `Direct purchase item "${inp.value}"` });
+        poItems.push(line);
+    } catch (err) {
+        return alert(err.message);
+    }
     renderDILines();
     inp.value = ''; inp.dataset.selectedId = ''; $('f-di-qty').value = 1; $('f-di-price').value = ''; if ($('f-di-mrp')) $('f-di-mrp').value = ''; inp.focus();
 }
@@ -10202,7 +10407,10 @@ async function saveDirectPurchaseInvoice() {
         const invNo = await nextNumber('PINV-');
         const invDate = $('f-di-date').value;
         const notes = ($('f-di-notes') || {}).value || '';
-        const persistedItems = poItems.map(li => ({ ...li, primaryQty: getLinePrimaryQty(li) || (+li.qty || 0) }));
+        const persistedItems = poItems.map((li, idx) => normalizePurchaseLine(
+            { ...li, primaryQty: getLinePrimaryQty(li) || (+li.qty || 0) },
+            { label: `Direct purchase line ${idx + 1}` }
+        ));
         const total = persistedItems.reduce((s, l) => s + l.amount, 0);
         const inv = {
             invoiceNo: invNo, date: invDate, type: 'purchase',
@@ -10217,7 +10425,6 @@ async function saveDirectPurchaseInvoice() {
             const item = inventory.find(i => String(i.id) === String(li.itemId));
             if (!item) throw new Error(`Item not found: ${li.name || li.itemId}`);
             const qty = getLinePrimaryQty(li);
-            if (qty <= 0) throw new Error(`Invalid quantity for ${li.name || item.name}`);
             const itemUpdate = { stock: (item.stock || 0) + qty };
             const batchResult = applyPurchaseLineToBatches(item, li, { dateVal: invDate });
             if (batchResult.updatedBatches) {
@@ -10317,11 +10524,31 @@ function addPOLine() {
     const inp = $('f-po-item-input');
     const itemId = inp.dataset.selectedId;
     if (!itemId) return alert('Please select an item from the list');
-    const qty = +$('f-po-qty').value;
-    const price = +$('f-po-price').value;
-    poItems.push({ itemId, name: inp.value, qty, price, amount: qty * price, unit: 'Pcs' });
+    try {
+        const qty = +$('f-po-qty').value;
+        const price = +$('f-po-price').value;
+        const mrpRaw = (($('f-po-mrp') || {}).value || '').trim();
+        const mrp = mrpRaw === '' ? null : +(Number.parseFloat(mrpRaw) || 0).toFixed(2);
+        const item = (DB.get('db_inventory') || []).find(row => String(row.id) === String(itemId));
+        const line = normalizePurchaseLine({
+            itemId,
+            name: inp.value,
+            qty,
+            primaryQty: qty,
+            price,
+            mrp,
+            unit: item?.unit || 'Pcs'
+        }, { label: `Purchase order item "${inp.value}"`, requireRate: false });
+        poItems.push(line);
+    } catch (err) {
+        return alert(err.message);
+    }
     renderPOLines();
-    inp.value = ''; inp.dataset.selectedId = ''; $('f-po-qty').value = 1; $('f-po-price').value = '';
+    inp.value = '';
+    inp.dataset.selectedId = '';
+    $('f-po-qty').value = 1;
+    $('f-po-price').value = '';
+    if ($('f-po-mrp')) $('f-po-mrp').value = '';
     inp.focus();
 }
 
@@ -10329,7 +10556,7 @@ function renderPOLines() {
     const el = $('po-lines-list');
     el.innerHTML = poItems.map((li, i) => `
         <div style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);font-size:0.88rem;align-items:center">
-            <span style="flex:1">${li.name}</span>
+            <span style="flex:1">${li.name}${li.mrp ? `<span style="display:block;font-size:0.74rem;color:var(--text-muted)">MRP ${currency(li.mrp)}</span>` : ''}</span>
             <span style="width:70px;text-align:center">${li.qty} ${li.unit || ''}</span>
             <span style="width:100px;text-align:right">@ ${currency(li.price)}</span>
             <span style="width:100px;text-align:right;font-weight:600;color:var(--accent)">${currency(li.amount)}</span>
@@ -10352,8 +10579,8 @@ async function savePurchaseOrder() {
         date: $('f-po-date').value,
         partyId,
         partyName: party.name,
-        items: [...poItems],
-        total: poItems.reduce((s, l) => s + l.amount, 0),
+        items: poItems.map((li, idx) => normalizePurchaseLine({ ...li, primaryQty: getLinePrimaryQty(li) || (+li.qty || 0) }, { label: `Purchase order line ${idx + 1}`, requireRate: false })),
+        total: poItems.reduce((s, l) => s + (+l.amount || 0), 0),
         status: 'pending',
         createdBy: currentUser.name
     };
@@ -10399,36 +10626,39 @@ async function renderPODetailPage() {
 
 async function receivePO(id) {
     if (!confirm('Received all goods? This will update inventory and create a purchase invoice.')) return;
+    if (!beginSave()) return;
     const orders = await DB.getAll('purchaseorders');
-    const o = orders.find(x => x.id === id); if (!o) return;
+    const o = orders.find(x => x.id === id); if (!o) { endSave(); return; }
 
     try {
+        if (o.status !== 'pending') throw new Error('This purchase order has already been processed.');
+        const persistedItems = (o.items || []).map((li, idx) => normalizePurchaseLine(
+            { ...li, primaryQty: getLinePrimaryQty(li) || (+li.qty || 0) },
+            { label: `PO line ${idx + 1}`, requireRate: false }
+        ));
         const invNo = await nextNumber('PINV-');
         const inv = {
             id: DB.id(), invoiceNo: invNo, date: today(), type: 'purchase',
-            partyId: o.partyId, partyName: o.partyName, items: [...o.items],
+            partyId: o.partyId, partyName: o.partyName, items: persistedItems,
             subtotal: o.total, gst: 0, total: o.total, status: 'posted', fromOrder: o.poNo,
             createdBy: currentUser.name
         };
-        await DB.insert('invoices', inv);
-
         const inventory = await DB.getAll('inventory');
-        for (const li of o.items) {
+        for (const li of persistedItems) {
             const item = inventory.find(i => i.id === li.itemId);
-            if (item) {
-                const qty = getLinePrimaryQty(li);
-                const newStock = (item.stock || 0) + qty;
-                const itemUpdate = { stock: newStock };
-                const batchResult = applyPurchaseLineToBatches(item, { ...li, primaryQty: qty }, { dateVal: today() });
-                if (batchResult.updatedBatches) {
-                    itemUpdate.batches = batchResult.updatedBatches;
-                    Object.assign(itemUpdate, batchResult.priceSync || {});
-                }
-                item.stock = newStock;
-                if (itemUpdate.batches) item.batches = itemUpdate.batches;
-                await DB.update('inventory', item.id, itemUpdate);
-                await addLedgerEntry(item.id, item.name, 'Purchase', qty, invNo, `Received from ${o.poNo}`);
+            if (!item) throw new Error(`Item not found: ${li.name || li.itemId}`);
+            const qty = getLinePrimaryQty(li);
+            const newStock = (item.stock || 0) + qty;
+            const itemUpdate = { stock: newStock };
+            const batchResult = applyPurchaseLineToBatches(item, { ...li, primaryQty: qty }, { dateVal: today() });
+            if (batchResult.updatedBatches) {
+                itemUpdate.batches = batchResult.updatedBatches;
+                Object.assign(itemUpdate, batchResult.priceSync || {});
             }
+            item.stock = newStock;
+            if (itemUpdate.batches) item.batches = itemUpdate.batches;
+            await DB.update('inventory', item.id, itemUpdate);
+            await addLedgerEntry(item.id, item.name, 'Purchase', qty, invNo, `Received from ${o.poNo}`);
         }
 
         const parties = await DB.getAll('parties');
@@ -10439,10 +10669,12 @@ async function receivePO(id) {
             await addPartyLedgerEntry(party.id, party.name, 'Purchase Invoice', -o.total, invNo, `PO Goods Receipt ${o.poNo}`);
         }
 
+        await DB.insert('invoices', inv);
         await DB.update('purchaseorders', id, { status: 'received' });
+        endSave();
         await navigateTo('purchaseorders');
         showToast(`Goods received! Inventory updated. Invoice: ${invNo}`, 'success');
-    } catch (err) { alert(err.message); }
+    } catch (err) { endSave(); alert(err.message); }
 }
 
 async function deletePO(id) {
@@ -10584,20 +10816,8 @@ function exportInvoiceList() {
 }
 async function getInvoicePaidAmount(invNo) {
     const payments = await DB.getAll('payments');
-    return payments.reduce((sum, p) => {
-        // Multi-invoice allocation link
-        if (p.allocations && p.allocations[invNo]) {
-            // If the payment has a discount, we should proportionally attribute it or 
-            // handle it if the allocation was meant to be the "total reduction".
-            // In our system, the allocation value *is* the total reduction (Amt + Disc) for that invoice.
-            return sum + (+p.allocations[invNo]);
-        }
-        // Legacy or direct link (single invoice)
-        if (p.invoiceNo === invNo) {
-            return sum + (p.amount || 0) + (p.discount || 0);
-        }
-        return sum;
-    }, 0);
+    const paidMap = buildInvoicePaidMap(payments);
+    return +(paidMap[invNo] || 0);
 }
 
 function renderInvoiceRows(invs) {
@@ -12631,17 +12851,20 @@ async function saveEditedInvoice(id) {
 
 async function recalculateStockLedger(itemId) {
     try {
-        const { data, error } = await supabaseClient
-            .from('stock_ledger')
-            .select('*')
-            .eq('item_id', itemId)
-            .order('date', { ascending: true })
-            .order('id', { ascending: true });
-        if (error || !data || !data.length) return;
+        const data = (await DB.getAll('stock_ledger'))
+            .filter(entry => String(entry.itemId || entry.item_id || '') === String(itemId))
+            .sort((a, b) => {
+                const dateCmp = String(a.date || '').localeCompare(String(b.date || ''));
+                if (dateCmp !== 0) return dateCmp;
+                return String(a.id || '').localeCompare(String(b.id || ''));
+            });
+        if (!data.length) return;
         let running = 0;
         for (const entry of data) {
             running = +(running + (entry.qty || 0)).toFixed(2);
-            await DB.rawUpdate('stock_ledger', entry.id, { runningStock: running });
+            if (+entry.runningStock !== running) {
+                await DB.rawUpdate('stock_ledger', entry.id, { runningStock: running });
+            }
         }
         await DB.refreshTables(['stock_ledger']);
     } catch (e) {
@@ -13694,35 +13917,46 @@ async function viewPaymentDetails(id) {
     const payments = await DB.getAll('payments');
     const p = payments.find(x => x.id === id);
     if (!p) return;
+    const receipt = getPaymentReceiptModel(payments, p);
+    const invoiceEntries = Object.entries(receipt.invoiceSummary.allocationMap);
+    const invoiceHtml = invoiceEntries.length
+        ? `<table style="width:100%;font-size:0.82rem;border-collapse:collapse">
+                ${invoiceEntries.map(([inv, amt]) => `
+                <tr>
+                    <td style="padding:2px 0"><a href="#" onclick="viewInvoiceByNo('${inv}');return false" style="color:var(--primary);font-weight:600">${escapeHtml(getInvoiceDisplayNo(inv) || inv)}</a></td>
+                    <td style="text-align:right;font-weight:700;color:var(--success)">${(+amt).toFixed(2)}</td>
+                </tr>`).join('')}
+                ${receipt.invoiceSummary.unallocated > 0.01 ? `<tr><td style="padding:2px 0;color:var(--text-muted)">Unallocated</td><td style="text-align:right;color:var(--accent);font-weight:700">${receipt.invoiceSummary.unallocated.toFixed(2)}</td></tr>` : ''}
+           </table>`
+        : `<span style="color:var(--text-muted)">Advance / Unallocated</span>`;
+    const paymentModesHtml = receipt.summary.rows.map(row => {
+        const chequeDetails = (row.mode === 'Cheque' && (row.chequeNo || row.cheque_no))
+            ? `<div style="font-size:0.72rem;color:var(--text-muted)">#${escapeHtml(row.chequeNo || row.cheque_no || '')}${row.chequeBank || row.cheque_bank ? ` | ${escapeHtml(row.chequeBank || row.cheque_bank)}` : ''}</div>`
+            : '';
+        return `<tr>
+            <td style="padding:6px 0;color:var(--text-secondary)">${escapeHtml(row.mode || 'Cash')}${chequeDetails}</td>
+            <td style="padding:6px 0;text-align:right;font-weight:700">${currency(row.amount || 0)}</td>
+        </tr>`;
+    }).join('');
     openModal('Payment Receipt', `
         <div style="background:var(--bg-card);padding:20px;border-radius:var(--radius-md);border:1px solid var(--border)">
             <div style="display:flex;justify-content:space-between;margin-bottom:15px;border-bottom:1px solid var(--border);padding-bottom:10px">
                 <div>
-                    <h3 style="margin:0;font-size:1.1rem">${p.partyName}</h3>
-                    <div style="font-size:0.85rem;color:var(--text-muted)">Date: ${fmtDate(p.date)}</div>
+                    <h3 style="margin:0;font-size:1.1rem">${escapeHtml(receipt.partyName || '')}</h3>
+                    <div style="font-size:0.85rem;color:var(--text-muted)">Date: ${fmtDate(receipt.date)}</div>
                 </div>
                 <div style="text-align:right">
-                    <span class="badge ${p.type === 'in' ? 'badge-success' : 'badge-danger'}">${p.type === 'in' ? 'Payment In' : 'Payment Out'}</span>
+                    <span class="badge ${receipt.type === 'in' ? 'badge-success' : 'badge-danger'}">${receipt.type === 'in' ? 'Payment In' : 'Payment Out'}</span>
                 </div>
             </div>
             <table style="width:100%;font-size:0.9rem;border-collapse:collapse;margin-bottom:15px">
-                <tr style="border-bottom:1px dashed var(--border)"><td style="padding:8px 0;color:var(--text-secondary)">Payment Mode</td><td style="padding:8px 0;text-align:right;font-weight:600">${p.mode || 'Cash'}</td></tr>
-                <tr style="border-bottom:1px dashed var(--border)"><td style="padding:8px 0;color:var(--text-secondary)">Amount</td><td style="padding:8px 0;text-align:right;font-weight:700;font-size:1.1rem;color:${p.type === 'in' ? 'var(--success)' : 'var(--danger)'}">${currency(p.amount)}</td></tr>
-                <tr style="border-bottom:1px dashed var(--border)"><td style="padding:8px 0;color:var(--text-secondary);vertical-align:top">Invoice(s)</td><td style="padding:8px 0;text-align:right">
-                    ${p.allocations && Object.keys(p.allocations).length > 0
-            ? `<table style="width:100%;font-size:0.82rem;border-collapse:collapse">
-                            ${Object.entries(p.allocations).map(([inv, amt]) => `
-                            <tr>
-                                <td style="padding:2px 0"><a href="#" onclick="viewInvoiceByNo('${inv}');return false" style="color:var(--primary);font-weight:600">${escapeHtml(getInvoiceDisplayNo(inv) || inv)}</a></td>
-                                <td style="text-align:right;font-weight:700;color:var(--success)">${(+amt).toFixed(2)}</td>
-                            </tr>`).join('')}
-                            ${(() => { const used = Object.values(p.allocations).reduce((s, v) => s + (+v), 0); const rem = p.amount - used; return rem > 0.01 ? `<tr><td style="padding:2px 0;color:var(--text-muted)">Unallocated</td><td style="text-align:right;color:var(--accent);font-weight:700">${rem.toFixed(2)}</td></tr>` : ''; })()}
-                          </table>`
-            : (p.invoiceNo && p.invoiceNo !== 'Advance'
-                ? `<a href="#" onclick="viewInvoiceByNo('${p.invoiceNo}');return false" style="color:var(--accent);text-decoration:underline">${escapeHtml(getInvoiceDisplayNo(p.invoiceNo) || p.invoiceNo)}</a>`
-                : `<span style="color:var(--text-muted)">${p.invoiceNo === 'Advance' ? 'Advance' : 'Unlinked'}</span>`)}
-                </td></tr>
-                <tr><td style="padding:8px 0;color:var(--text-secondary)">Note</td><td style="padding:8px 0;text-align:right">${p.note || '-'}</td></tr>
+                <tr style="border-bottom:1px dashed var(--border)"><td style="padding:8px 0;color:var(--text-secondary);vertical-align:top">Payment Modes</td><td style="padding:8px 0;text-align:right"><table style="width:100%;font-size:0.82rem;border-collapse:collapse">${paymentModesHtml}</table></td></tr>
+                <tr style="border-bottom:1px dashed var(--border)"><td style="padding:8px 0;color:var(--text-secondary)">Received Amount</td><td style="padding:8px 0;text-align:right;font-weight:700;font-size:1.05rem;color:${receipt.type === 'in' ? 'var(--success)' : 'var(--danger)'}">${currency(receipt.summary.totalAmount)}</td></tr>
+                ${receipt.summary.totalDiscount > 0 ? `<tr style="border-bottom:1px dashed var(--border)"><td style="padding:8px 0;color:var(--text-secondary)">Discount</td><td style="padding:8px 0;text-align:right;font-weight:700">${currency(receipt.summary.totalDiscount)}</td></tr>` : ''}
+                <tr style="border-bottom:1px dashed var(--border)"><td style="padding:8px 0;color:var(--text-secondary)">Balance Reduction</td><td style="padding:8px 0;text-align:right;font-weight:800;font-size:1.1rem;color:${receipt.type === 'in' ? 'var(--success)' : 'var(--danger)'}">${currency(receipt.summary.totalReduction)}</td></tr>
+                <tr style="border-bottom:1px dashed var(--border)"><td style="padding:8px 0;color:var(--text-secondary)">Reference</td><td style="padding:8px 0;text-align:right;font-weight:600">${escapeHtml(receipt.referenceNo || '-')}</td></tr>
+                <tr style="border-bottom:1px dashed var(--border)"><td style="padding:8px 0;color:var(--text-secondary);vertical-align:top">Invoice(s)</td><td style="padding:8px 0;text-align:right">${invoiceHtml}</td></tr>
+                <tr><td style="padding:8px 0;color:var(--text-secondary)">Note</td><td style="padding:8px 0;text-align:right">${escapeHtml(receipt.note || '-')}</td></tr>
             </table>
         </div>
         <div class="modal-actions">
@@ -13838,11 +14072,25 @@ function _buildPaymentPageHtml(p, co) {
 }
 
 function printPaymentReceipt(id) {
-    const p = DB.get('db_payments').find(x => x.id === id);
+    const payments = DB.get('db_payments') || [];
+    const p = payments.find(x => x.id === id);
     if (!p) return;
+    const receipt = getPaymentReceiptModel(payments, p);
+    const invoiceKeys = Object.keys(receipt.invoiceSummary.allocationMap);
+    const printablePayment = {
+        payNo: receipt.referenceNo,
+        date: receipt.date,
+        type: receipt.type,
+        partyName: receipt.partyName,
+        mode: receipt.summary.modeSummary,
+        note: receipt.note,
+        amount: receipt.summary.totalReduction,
+        allocations: invoiceKeys.length ? receipt.invoiceSummary.allocationMap : null,
+        invoiceNo: invoiceKeys.length === 1 ? invoiceKeys[0] : 'Advance'
+    };
     const co = DB.getObj('db_company') || {};
-    const bodyHtml = _buildPaymentPageHtml(p, co);
-    const title = `Payment Receipt - ${p.partyName}`;
+    const bodyHtml = _buildPaymentPageHtml(printablePayment, co);
+    const title = `Payment Receipt - ${receipt.partyName}`;
     const css = _getPaymentPrintCss();
 
     let overlay = document.getElementById('inv-print-overlay');
@@ -14489,6 +14737,7 @@ async function savePayment(id) {
         for (let i = 0; i < payRows.length; i++) {
             const row = payRows[i];
             const rowDisc = i === 0 ? disc : 0; // Only attach discount to the first row to avoid double counting
+            const rowAllocations = i === 0 && Object.keys(allocations).length > 0 ? allocations : null;
 
             const payData = {
                 pay_no: payRefNo,
@@ -14502,7 +14751,7 @@ async function savePayment(id) {
                 mode: row.mode,
                 note: $('f-pay-note').value.trim(),
                 invoice_no: invNoStr || (rowDisc > 0 ? 'Multi/Disc' : 'Advance'),
-                allocations: allocations, // Store full allocation map in each row for reference
+                allocations: rowAllocations,
                 collected_by: $('f-pay-collected-by')?.value || currentUser.name,
                 created_by: currentUser ? currentUser.userId : 'System',
                 status: 'posted'
@@ -14591,19 +14840,22 @@ async function savePayment(id) {
 async function openLinkInvoiceModal(payId) {
     const payments = await DB.getAll('payments');
     const pay = payments.find(p => p.id === payId); if (!pay) return;
+    const groupRows = findPaymentGroupRows(payments, pay);
+    const summary = summarizePaymentGroup(groupRows);
+    const paymentInvoices = summarizePaymentInvoices(groupRows);
     const invType = pay.type === 'in' ? 'sale' : 'purchase';
     const invoices = (await DB.getAll('invoices')).filter(i => i.type === invType && i.partyId === pay.partyId && i.status !== 'cancelled');
 
     let options = '';
     for (const i of invoices) {
         const paid = await getInvoicePaidAmount(i.invoiceNo);
-        const adjPaid = pay.invoiceNo === i.invoiceNo ? paid - pay.amount : paid;
+        const adjPaid = paid - (paymentInvoices.allocationMap[i.invoiceNo] || 0);
         const remaining = i.total - adjPaid;
         if (remaining > 0.01) options += `<option value="${i.invoiceNo}">${escapeHtml(getInvoiceDisplayNo(i) || i.invoiceNo)}  Due: ${currency(remaining)}</option>`;
     }
 
     openModal('Link Payment to Invoice', `
-        <div style="margin-bottom:14px"><strong>Party:</strong> ${pay.partyName} | <strong>Amount:</strong> ${currency(pay.amount)}</div>
+        <div style="margin-bottom:14px"><strong>Party:</strong> ${pay.partyName} | <strong>Amount:</strong> ${currency(summary.totalReduction)}</div>
         <div class="form-group"><label>Select Invoice</label>
             <select id="f-link-invoice"><option value="">Select</option>${options}</select>
         </div>
@@ -14669,14 +14921,15 @@ async function openReceivePaymentForInvoice(invoiceId) {
 }
 
 async function saveDirectPayment() {
+    if (!beginSave()) return;
     const invId = $('f-pay-inv-id').value;
     const invoices = await DB.getAll('invoices');
     const inv = invoices.find(i => i.id === invId);
-    if (!inv) return alert('Invoice not found');
+    if (!inv) { endSave(); return alert('Invoice not found'); }
 
     const amt = +$('f-pay-amount').value;
     const disc = +($('f-pay-discount')?.value) || 0;
-    if (!amt || amt <= 0) return alert('Enter a valid amount');
+    if (!amt || amt <= 0) { endSave(); return alert('Enter a valid amount'); }
     const totalReduction = amt + disc;
 
     const isSale = inv.type === 'sale';
@@ -14740,8 +14993,10 @@ async function saveDirectPayment() {
         } else {
             await DB.refreshTables(['payments', 'parties', 'party_ledger', 'expenses']);
         }
+        endSave();
         showToast('Payment recorded successfully', 'success');
     } catch (err) {
+        endSave();
         console.error('Save Payment Error:', err);
         alert('Error: ' + err.message);
     }
@@ -14757,29 +15012,28 @@ async function allocateAdvanceToInvoice(invId) {
 
     const payments = await DB.getAll('payments');
     const payType = inv.type === 'sale' ? 'in' : 'out';
-    const advances = payments.filter(p => {
-        if (p.partyId !== inv.partyId || p.type !== payType || p.status === 'cancelled') return false;
-        // Calculate remaining balance for this payment
-        const used = p.allocations
-            ? Object.values(p.allocations).reduce((s, v) => s + (+v), 0)
-            : (p.invoiceNo && p.invoiceNo !== 'Advance' && p.invoiceNo !== 'Multi' ? p.amount : 0);
-        return (p.amount - used) > 0.01;
-    });
+    const advances = [...groupPaymentsByReference(payments.filter(p => p && p.status !== 'cancelled')).values()]
+        .map(groupRows => summarizePaymentInvoices(groupRows))
+        .filter(({ summary, unallocated }) =>
+            summary.primary &&
+            summary.primary.partyId === inv.partyId &&
+            summary.primary.type === payType &&
+            unallocated > 0.01
+        );
 
     let optionsHtml = '';
     for (const a of advances) {
-        const used = a.allocations ? Object.values(a.allocations).reduce((s, val) => s + (+val), 0) : 0;
-        const rem = a.amount - used;
+        const rem = a.unallocated;
         if (rem > 0) {
             optionsHtml += `
             <div style="display:flex;justify-content:space-between;align-items:center;padding:10px;border:1px solid var(--border);border-radius:6px;margin-bottom:8px;">
                 <div>
-                    <strong>Date:</strong> ${fmtDate(a.date)}<br>
-                    <strong>Available:</strong> <span style="color:var(--success);font-weight:700">${currency(rem)}</span> (of ${currency(a.amount)})
+                    <strong>Date:</strong> ${fmtDate(a.summary.primary.date)} | <strong>Ref:</strong> ${escapeHtml(a.summary.payNo || a.summary.primary.id)}<br>
+                    <strong>Available:</strong> <span style="color:var(--success);font-weight:700">${currency(rem)}</span> (of ${currency(a.summary.totalReduction)})
                 </div>
                 <div>
-                    <input type="number" id="alloc-amt-${a.id}" max="${Math.min(rem, due)}" value="${Math.min(rem, due).toFixed(2)}" class="form-control" style="width:100px;display:inline-block;padding:4px" placeholder="Amount">
-                    <button class="btn btn-primary btn-sm" onclick="saveAdvanceAllocation('${a.id}', '${inv.invoiceNo}', ${rem})">Apply</button>
+                    <input type="number" id="alloc-amt-${a.summary.primary.id}" max="${Math.min(rem, due)}" value="${Math.min(rem, due).toFixed(2)}" class="form-control" style="width:100px;display:inline-block;padding:4px" placeholder="Amount">
+                    <button class="btn btn-primary btn-sm" onclick="saveAdvanceAllocation('${a.summary.primary.id}', '${inv.invoiceNo}', ${rem})">Apply</button>
                 </div>
             </div>
             `;
@@ -14800,29 +15054,47 @@ async function allocateAdvanceToInvoice(invId) {
 }
 
 async function saveAdvanceAllocation(payId, invoiceNo, maxAvail) {
+    if (!beginSave()) return;
     const amt = +document.getElementById('alloc-amt-' + payId).value;
-    if (!amt || amt <= 0) return alert('Enter amount to apply');
-    if (amt > maxAvail + 0.01) return alert('Amount exceeds available advance');
+    if (!amt || amt <= 0) { endSave(); return alert('Enter amount to apply'); }
+    if (amt > maxAvail + 0.01) { endSave(); return alert('Amount exceeds available advance'); }
 
     const invoices = await DB.getAll('invoices');
     const inv = invoices.find(i => i.invoiceNo === invoiceNo);
-    if (!inv) return alert('Invoice not found');
+    if (!inv) { endSave(); return alert('Invoice not found'); }
     const paid = await getInvoicePaidAmount(invoiceNo);
     const due = inv.total - paid;
-    if (amt > due + 0.01) return alert('Amount exceeds invoice due amount');
+    if (amt > due + 0.01) { endSave(); return alert('Amount exceeds invoice due amount'); }
 
     try {
         const payments = await DB.getAll('payments');
         const pay = payments.find(p => p.id === payId);
-        if (!pay) return;
+        if (!pay) { endSave(); return; }
+        const groupRows = findPaymentGroupRows(payments, pay);
+        const paymentInvoices = summarizePaymentInvoices(groupRows);
+        if (amt > paymentInvoices.unallocated + 0.01) {
+            endSave();
+            return alert('Amount exceeds available advance');
+        }
 
-        const allocs = pay.allocations || {};
-        allocs[invoiceNo] = (allocs[invoiceNo] || 0) + amt;
+        const allocs = { ...(paymentInvoices.summary.allocations || {}) };
+        allocs[invoiceNo] = +((allocs[invoiceNo] || 0) + amt).toFixed(2);
+        const invoiceKeys = Object.keys(allocs);
+        const invoiceRef = invoiceKeys.length === 1 ? invoiceKeys[0] : 'Multi';
 
-        await DB.update('payments', pay.id, { allocations: allocs });
+        for (let index = 0; index < groupRows.length; index++) {
+            const row = groupRows[index];
+            await DB.adminUpdate('payments', row.id, {
+                invoice_no: invoiceRef,
+                allocations: index === 0 ? allocs : null
+            });
+        }
+        await DB.refreshTables(['payments']);
+        endSave();
         showToast('Advance applied successfully', 'success');
         await viewInvoice(inv.id);
     } catch (err) {
+        endSave();
         alert('Error: ' + err.message);
     }
 }
@@ -14830,8 +15102,15 @@ async function saveAdvanceAllocation(payId, invoiceNo, maxAvail) {
 async function linkPaymentToInvoice(payId) {
     const invNo = $('f-link-invoice').value; if (!invNo) return alert('Select an invoice');
     try {
-        await DB.update('payments', payId, { invoiceNo: invNo });
+        const payments = await DB.getAll('payments');
+        const pay = payments.find(p => p.id === payId);
+        if (!pay) return alert('Payment not found');
+        const groupRows = findPaymentGroupRows(payments, pay);
+        for (const row of groupRows) {
+            await DB.adminUpdate('payments', row.id, { invoice_no: invNo, allocations: null });
+        }
         closeModal();
+        await DB.refreshTables(['payments']);
         await renderPayments();
         showToast('Payment linked!', 'success');
     } catch (err) {
@@ -14843,45 +15122,55 @@ async function deletePayment(id) {
         return alert("Access Denied: Only Admin or users with Edit permission can delete records.");
     }
     if (!confirm('Delete payment? Effects will be reversed.')) return;
+    if (!beginSave()) return;
     try {
         const payments = await DB.getAll('payments');
         const pay = payments.find(p => p.id === id);
         if (pay) {
-            // 1. Reverse party balance (use totalReduction = amount + discount)
-            const totalReduction = (pay.amount || 0) + (pay.discount || 0);
+            const groupRows = findPaymentGroupRows(payments, pay);
+            const summary = summarizePaymentGroup(groupRows);
+
+            // 1. Reverse party balance using the grouped payment reduction
             const parties = await DB.getAll('parties');
             const party = parties.find(p => p.id === pay.partyId);
             if (party) {
-                const balChange = pay.type === 'in' ? totalReduction : -totalReduction;
+                const balChange = pay.type === 'in' ? summary.totalReduction : -summary.totalReduction;
                 const newBal = (party.balance || 0) + balChange;
                 await DB.update('parties', party.id, { balance: newBal });
             }
 
             // 2. Delete related party_ledger entries via admin RPC (bypasses RLS)
-            const payRefNo = pay.payNo || pay.id.substring(0, 8);
+            const payRefNo = summary.payNo || pay.id.substring(0, 8);
             const ledger = await DB.getAll('party_ledger');
             const ledgerEntries = ledger.filter(e => (e.documentNo || e.docNo) === payRefNo && e.partyId === pay.partyId);
             for (const entry of ledgerEntries) {
                 await DB.adminDelete('party_ledger', entry.id);
             }
-            if (typeof recalculatePartyLedger === 'function') {
+            if (party && typeof recalculatePartyLedger === 'function') {
                 await recalculatePartyLedger(party.id);
             }
 
             // 3. Delete related expense entries (discount expenses)
-            if (pay.discount > 0 && pay.type === 'in') {
+            if (summary.totalDiscount > 0 && pay.type === 'in') {
                 const expenses = await DB.getAll('expenses');
                 const discExp = expenses.find(e => e.category === 'Payment Discount' && e.docNo === payRefNo);
                 if (discExp) {
                     await DB.adminDelete('expenses', discExp.id);
                 }
             }
+
+            // 4. Delete all payment rows that belong to the same payment reference
+            for (const row of groupRows) {
+                await DB.adminDelete('payments', row.id);
+            }
+        } else {
+            await DB.adminDelete('payments', id);
         }
-        // Delete the payment record itself via admin RPC
-        await DB.adminDelete('payments', id);
         await renderPayments();
+        endSave();
         showToast('Payment deleted and all related entries reversed!', 'warning');
     } catch (err) {
+        endSave();
         alert('Error: ' + err.message);
     }
 }
@@ -14890,14 +15179,17 @@ async function openEditPaymentModal(id) {
     const payments = await DB.getAll('payments');
     const pay = payments.find(p => p.id === id);
     if (!pay) return alert('Payment not found');
+    const groupRows = findPaymentGroupRows(payments, pay);
+    const summary = summarizePaymentGroup(groupRows);
+    const paymentInvoices = summarizePaymentInvoices(groupRows);
 
     const invType = pay.type === 'in' ? 'sale' : 'purchase';
     const invoices = (await DB.getAll('invoices')).filter(i => i.type === invType && i.partyId === pay.partyId && i.status !== 'cancelled');
 
     let rows = '';
     for (const i of invoices) {
-        // allocation already attributed to this instance  we attribute the FULL reduction (Amt+Disc)
-        let alreadyAllocatedHere = (pay.allocations && pay.allocations[i.invoiceNo]) ? pay.allocations[i.invoiceNo] : 0;
+        // allocation already attributed to this payment reference; subtract it from current due while editing
+        let alreadyAllocatedHere = paymentInvoices.allocationMap[i.invoiceNo] || 0;
         let totalPaidBefore = (await getInvoicePaidAmount(i.invoiceNo)) - alreadyAllocatedHere;
         let remaining = i.total - totalPaidBefore;
 
@@ -14924,64 +15216,124 @@ async function openEditPaymentModal(id) {
         </div>
     ` : `<div style="margin:10px 0;font-size:0.85rem;color:var(--text-muted)">No pending invoices for this party.</div>`;
 
+    const editModeRowsHtml = summary.rows.map((row, idx) => `
+        <div class="pay-mode-row pay-edit-mode-row" style="display:grid;grid-template-columns:1fr 120px 40px;gap:8px;margin-bottom:8px;align-items:end">
+            <div class="form-group" style="margin-bottom:0">
+                <label style="font-size:0.75rem">Amount ${idx + 1}</label>
+                <input type="number" class="f-pay-edit-row-amount" min="0" step="0.01" value="${(+row.amount || 0).toFixed(2)}" oninput="onEditPayAmountChange()">
+            </div>
+            <div class="form-group" style="margin-bottom:0">
+                <label style="font-size:0.75rem">Mode</label>
+                <select class="f-pay-edit-row-mode" onchange="toggleEditGroupChequeFields();onEditPayAmountChange()">
+                    <option ${row.mode === 'Cash' ? 'selected' : ''}>Cash</option>
+                    <option ${row.mode === 'UPI' ? 'selected' : ''}>UPI</option>
+                    <option ${row.mode === 'Bank Transfer' ? 'selected' : ''}>Bank Transfer</option>
+                    <option ${row.mode === 'Cheque' ? 'selected' : ''}>Cheque</option>
+                </select>
+            </div>
+            ${idx === 0 && summary.rows.length === 1
+            ? '<div style="height:38px"></div>'
+            : `<button class="btn-icon" onclick="removeEditPaymentModeRow(this)" style="height:38px;color:var(--danger)"><span class="material-symbols-outlined">delete</span></button>`}
+        </div>
+    `).join('');
+
     openModal('Edit Payment', `
         <div class="form-row">
-            <div class="form-group"><label>Date</label><input type="date" id="f-pay-date" value="${pay.date}"></div>
+            <div class="form-group"><label>Date</label><input type="date" id="f-pay-date" value="${summary.primary.date}"></div>
             <div class="form-group"><label>Type</label>
                 <select id="f-pay-type" disabled><option value="in" ${pay.type === 'in' ? 'selected' : ''}>Payment In</option><option value="out" ${pay.type === 'out' ? 'selected' : ''}>Payment Out</option></select>
             </div>
         </div>
         <div class="form-group"><label style="font-size:0.85rem;font-weight:700">${pay.type === 'in' ? 'Customer' : 'Supplier'}</label>
-            <input value="${escapeHtml(pay.partyName)}" disabled style="background:var(--bg-input);font-weight:600">
+            <input value="${escapeHtml(summary.primary.partyName)}" disabled style="background:var(--bg-input);font-weight:600">
         </div>
-        
-        <div class="form-row">
-            <div class="form-group"><label>Amount </label><input type="number" id="f-pay-amount" min="0" value="${pay.amount}" oninput="onEditPayAmountChange()"></div>
-            <div class="form-group"><label>Discount </label><input type="number" id="f-pay-discount" min="0" value="${pay.discount || 0}" oninput="onEditPayAmountChange()"></div>
+
+        <div style="margin-bottom:10px">
+            <label style="font-size:0.8rem;font-weight:700;color:var(--text-muted)">PAYMENT MODES</label>
+        </div>
+        <div id="edit-pay-modes-container" style="margin-bottom:12px">${editModeRowsHtml}</div>
+        <button class="btn btn-outline btn-sm" onclick="addEditPaymentModeRow()" style="margin-bottom:14px;width:100%;border-style:dashed">+ Add Another Mode</button>
+
+        <div class="form-group"><label>Discount </label><input type="number" id="f-pay-discount" min="0" step="0.01" value="${summary.totalDiscount.toFixed(2)}" oninput="onEditPayAmountChange()"></div>
+
+        <div style="margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;padding:10px;background:rgba(59,130,246,0.05);border-radius:8px">
+            <span style="font-size:0.9rem;font-weight:700;color:var(--text-muted)">Total Received:</span>
+            <span style="font-size:1.1rem;font-weight:800;color:var(--primary)" id="edit-pay-received-display">${currency(summary.totalAmount)}</span>
         </div>
         
         <div style="margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;padding:10px;background:rgba(59,130,246,0.05);border-radius:8px">
             <span style="font-size:0.9rem;font-weight:700;color:var(--text-muted)">Balance Reduction:</span>
-            <span style="font-size:1.1rem;font-weight:800;color:var(--primary)" id="edit-pay-total-display">${currency((pay.amount || 0) + (pay.discount || 0))}</span>
+            <span style="font-size:1.1rem;font-weight:800;color:var(--primary)" id="edit-pay-total-display">${currency(summary.totalReduction)}</span>
         </div>
 
         <div id="pay-edit-invoice-section">${invSecHtml}</div>
 
         <div class="form-row">
-            <div class="form-group"><label>Mode</label>
-                <select id="f-pay-mode" onchange="toggleEditChequeFields()"><option ${pay.mode === 'Cash' ? 'selected' : ''}>Cash</option><option ${pay.mode === 'UPI' ? 'selected' : ''}>UPI</option><option ${pay.mode === 'Bank Transfer' ? 'selected' : ''}>Bank Transfer</option><option ${pay.mode === 'Cheque' ? 'selected' : ''}>Cheque</option></select>
-            </div>
-            <div class="form-group"><label>Collected By</label><input id="f-pay-collected-by" value="${escapeHtml(pay.collectedBy || '')}"></div>
+            <div class="form-group"><label>Collected By</label><input id="f-pay-collected-by" value="${escapeHtml(summary.primary.collectedBy || summary.primary.createdBy || '')}"></div>
+            <div class="form-group"><label>Reference</label><input value="${escapeHtml(summary.payNo)}" disabled style="background:var(--bg-input);font-weight:600"></div>
         </div>
-        <div id="edit-cheque-fields" style="display:${pay.mode === 'Cheque' ? 'block' : 'none'}">
+        <div id="edit-cheque-fields" style="display:${summary.rows.some(row => row.mode === 'Cheque') ? 'block' : 'none'}">
             <div class="form-row">
-                <div class="form-group"><label>Cheque No</label><input id="f-pay-cheque-no" value="${escapeHtml(pay.chequeNo || '')}" placeholder="Cheque number"></div>
-                <div class="form-group"><label>Bank</label><input id="f-pay-cheque-bank" value="${escapeHtml(pay.chequeBank || '')}" placeholder="Bank name"></div>
+                <div class="form-group"><label>Cheque No</label><input id="f-pay-cheque-no" value="${escapeHtml(summary.primary.chequeNo || '')}" placeholder="Cheque number"></div>
+                <div class="form-group"><label>Bank</label><input id="f-pay-cheque-bank" value="${escapeHtml(summary.primary.chequeBank || '')}" placeholder="Bank name"></div>
             </div>
             <div class="form-row">
-                <div class="form-group"><label>Cheque Date</label><input type="date" id="f-pay-cheque-date" value="${pay.chequeDepositDate || pay.chequeDate || ''}"></div>
+                <div class="form-group"><label>Cheque Date</label><input type="date" id="f-pay-cheque-date" value="${summary.primary.chequeDepositDate || summary.primary.chequeDate || ''}"></div>
                 <div class="form-group"><label>Status</label>
                     <select id="f-pay-cheque-status">
-                        <option ${(pay.chequeStatus || 'Pending') === 'Pending' ? 'selected' : ''}>Pending</option>
-                        <option ${pay.chequeStatus === 'Deposited' ? 'selected' : ''}>Deposited</option>
-                        <option ${pay.chequeStatus === 'Cleared' ? 'selected' : ''}>Cleared</option>
-                        <option ${pay.chequeStatus === 'Bounced' ? 'selected' : ''}>Bounced</option>
+                        <option ${(summary.primary.chequeStatus || 'Pending') === 'Pending' ? 'selected' : ''}>Pending</option>
+                        <option ${summary.primary.chequeStatus === 'Deposited' ? 'selected' : ''}>Deposited</option>
+                        <option ${summary.primary.chequeStatus === 'Cleared' ? 'selected' : ''}>Cleared</option>
+                        <option ${summary.primary.chequeStatus === 'Bounced' ? 'selected' : ''}>Bounced</option>
                     </select>
                 </div>
             </div>
         </div>
-        <div class="form-group"><label>Note</label><input id="f-pay-note" placeholder="Optional note" value="${escapeHtml(pay.note || '')}"></div>
+        <div class="form-group"><label>Note</label><input id="f-pay-note" placeholder="Optional note" value="${escapeHtml(summary.primary.note || '')}"></div>
         <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="saveEditedPayment('${pay.id}')">Save Changes</button></div>
     `);
 
-    window.toggleEditChequeFields = function () {
+    window.toggleEditGroupChequeFields = function () {
         const cf = $('edit-cheque-fields');
-        if (cf) cf.style.display = $('f-pay-mode').value === 'Cheque' ? 'block' : 'none';
+        if (!cf) return;
+        const hasCheque = [...document.querySelectorAll('.f-pay-edit-row-mode')].some(sel => sel.value === 'Cheque');
+        cf.style.display = hasCheque ? 'block' : 'none';
     };
 
+    window.addEditPaymentModeRow = function () {
+        const container = $('edit-pay-modes-container');
+        if (!container) return;
+        const row = document.createElement('div');
+        row.className = 'pay-mode-row pay-edit-mode-row';
+        row.style = 'display:grid;grid-template-columns:1fr 120px 40px;gap:8px;margin-bottom:8px;align-items:end';
+        row.innerHTML = `
+            <div class="form-group" style="margin-bottom:0">
+                <label style="font-size:0.75rem">Amount</label>
+                <input type="number" class="f-pay-edit-row-amount" min="0" step="0.01" placeholder="0.00" oninput="onEditPayAmountChange()">
+            </div>
+            <div class="form-group" style="margin-bottom:0">
+                <label style="font-size:0.75rem">Mode</label>
+                <select class="f-pay-edit-row-mode" onchange="toggleEditGroupChequeFields();onEditPayAmountChange()"><option>Cash</option><option>UPI</option><option>Bank Transfer</option><option>Cheque</option></select>
+            </div>
+            <button class="btn-icon" onclick="removeEditPaymentModeRow(this)" style="height:38px;color:var(--danger)"><span class="material-symbols-outlined">delete</span></button>
+        `;
+        container.appendChild(row);
+        window.toggleEditGroupChequeFields();
+    };
+    window.removeEditPaymentModeRow = function (btn) {
+        const rowsEls = document.querySelectorAll('.pay-edit-mode-row');
+        if (rowsEls.length <= 1) return;
+        const row = btn ? btn.closest('.pay-edit-mode-row') : null;
+        if (row) row.remove();
+        window.toggleEditGroupChequeFields();
+        window.onEditPayAmountChange();
+    };
     window.onEditPayAmountChange = function () {
-        const amt = +($('f-pay-amount').value) || 0;
+        let amt = 0;
+        document.querySelectorAll('.f-pay-edit-row-amount').forEach(inp => amt += (+inp.value || 0));
         const disc = +($('f-pay-discount').value) || 0;
+        const receivedEl = $('edit-pay-received-display');
+        if (receivedEl) receivedEl.textContent = currency(amt);
         $('edit-pay-total-display').textContent = currency(amt + disc);
     };
 
@@ -14992,13 +15344,22 @@ async function openEditPaymentModal(id) {
         if (lbl) lbl.textContent = currency(tot);
     };
 
+    window.toggleEditGroupChequeFields();
+    window.onEditPayAmountChange();
     setTimeout(() => window.updateEditAllocTotal(), 100);
 }
 
 window.saveEditedPayment = async function (id) {
-    const amt = +$('f-pay-amount').value;
+    if (!beginSave()) return;
+    const payRows = [];
+    document.querySelectorAll('.pay-edit-mode-row').forEach(row => {
+        const amount = +(row.querySelector('.f-pay-edit-row-amount')?.value || 0);
+        const mode = row.querySelector('.f-pay-edit-row-mode')?.value || 'Cash';
+        if (amount > 0) payRows.push({ amount: +amount.toFixed(2), mode });
+    });
+    if (!payRows.length) { endSave(); return alert('Enter at least one payment amount'); }
+    const amt = +payRows.reduce((sum, row) => sum + row.amount, 0).toFixed(2);
     const disc = +($('f-pay-discount')?.value) || 0;
-    if (!amt || amt <= 0) return alert('Enter valid amount');
     const totalReduction = amt + disc;
 
     let allocations = {};
@@ -15007,25 +15368,28 @@ window.saveEditedPayment = async function (id) {
         const val = +inp.value;
         if (val > 0) { allocations[inp.dataset.inv] = val; totalAlloc += val; }
     });
-    if (totalAlloc > totalReduction + 0.01) return alert('Allocation exceeds total reduction (Amount + Discount).');
+    if (totalAlloc > totalReduction + 0.01) { endSave(); return alert('Allocation exceeds total reduction (Amount + Discount).'); }
 
     const invNo = Object.keys(allocations).length === 1 ? Object.keys(allocations)[0] : (Object.keys(allocations).length > 1 ? Object.keys(allocations).join(',') : '');
 
     try {
         const payments = await DB.getAll('payments');
         const oldPay = payments.find(p => p.id === id);
-        if (!oldPay) return alert('Payment not found');
-
-        const oldAmount = oldPay.amount || 0;
-        const oldDiscount = oldPay.discount || 0;
-        const oldTotalReduction = oldPay.totalReduction || (oldAmount + oldDiscount);
+        if (!oldPay) { endSave(); return alert('Payment not found'); }
+        const existingRows = findPaymentGroupRows(payments, oldPay);
+        const oldSummary = summarizePaymentGroup(existingRows);
 
         // Update party balance
         const parties = await DB.getAll('parties');
         const party = parties.find(p => p.id === oldPay.partyId);
+        const payRefNo = oldSummary.payNo || oldPay.id.substring(0, 8);
+        const noteVal = $('f-pay-note').value.trim();
+        const collectedBy = $('f-pay-collected-by')?.value?.trim() || oldSummary.primary.collectedBy || oldSummary.primary.createdBy || '';
+        const editedDate = $('f-pay-date').value;
+        const hasAllocations = Object.keys(allocations).length > 0;
         if (party) {
             // Revert old reduction: if it was "in", we add it back to balance.
-            const revBalChange = oldPay.type === 'in' ? oldTotalReduction : -oldTotalReduction;
+            const revBalChange = oldPay.type === 'in' ? oldSummary.totalReduction : -oldSummary.totalReduction;
             const tempBal = (party.balance || 0) + revBalChange;
 
             // Apply new reduction
@@ -15035,20 +15399,16 @@ window.saveEditedPayment = async function (id) {
             await DB.update('parties', party.id, { balance: finalBal });
 
             // Find the original ledger entry and update it
-            const payRefNo = oldPay.payNo || oldPay.id.substring(0, 8);
             const ledger = await DB.getAll('party_ledger');
             const ledgerEntry = ledger.find(e => (e.documentNo || e.docNo) === payRefNo && e.partyId === party.id);
             if (ledgerEntry) {
-                const editedMode = $('f-pay-mode').value;
-                const editedDate = $('f-pay-date').value;
-                const editedCollector = $('f-pay-collected-by')?.value?.trim() || oldPay.collectedBy || oldPay.createdBy || '';
                 await DB.adminUpdate('party_ledger', ledgerEntry.id, {
                     date: editedDate,
                     type: oldPay.type === 'in' ? 'Payment In' : 'Payment Out',
                     amount: newBalChange,
                     documentNo: payRefNo,
-                    reason: `Mode: ${editedMode}${editedCollector ? ` | Collected By: ${editedCollector}` : ''} (Edited)`,
-                    createdBy: editedCollector || ledgerEntry.createdBy || ledgerEntry.created_by || oldPay.createdBy || currentUser?.userId || currentUser?.name || 'System'
+                    reason: `Mode: ${payRows.map(row => row.mode).join('+')}${collectedBy ? ` | Collected By: ${collectedBy}` : ''} (Edited)`,
+                    createdBy: collectedBy || ledgerEntry.createdBy || ledgerEntry.created_by || oldPay.createdBy || currentUser?.userId || currentUser?.name || 'System'
                 });
             }
 
@@ -15060,12 +15420,11 @@ window.saveEditedPayment = async function (id) {
         // Manage Expense Entry for Discount (use adminUpdate/adminDelete for RLS bypass)
         if (oldPay.type === 'in') {
             const expenses = await DB.getAll('expenses');
-            const payRefNo = oldPay.payNo || oldPay.id.substring(0, 8);
             const discExp = expenses.find(e => e.category === 'Payment Discount' && e.docNo === payRefNo);
 
             if (disc > 0) {
                 const expData = {
-                    date: $('f-pay-date').value,
+                    date: editedDate,
                     category: 'Payment Discount',
                     amount: disc,
                     party_id: party ? party.id : null,
@@ -15084,37 +15443,56 @@ window.saveEditedPayment = async function (id) {
             }
         }
 
-        // Update payment record via admin RPC (bypasses RLS)
-        const modeVal = $('f-pay-mode').value;
-        const updateData = {
-            date: $('f-pay-date').value,
-            amount: amt,
-            discount: disc,
-            total_reduction: totalReduction,
-            mode: modeVal,
-            note: $('f-pay-note').value.trim(),
-            collected_by: $('f-pay-collected-by')?.value || oldPay.collectedBy,
-            invoice_no: invNo,
-            allocations: Object.keys(allocations).length > 0 ? allocations : null
-        };
-        if (modeVal === 'Cheque') {
-            updateData.cheque_no = $('f-pay-cheque-no')?.value?.trim() || null;
-            updateData.cheque_bank = $('f-pay-cheque-bank')?.value?.trim() || null;
-            updateData.cheque_deposit_date = $('f-pay-cheque-date')?.value || null;
-            updateData.cheque_status = $('f-pay-cheque-status')?.value || 'Pending';
-        } else {
-            updateData.cheque_no = null;
-            updateData.cheque_bank = null;
-            updateData.cheque_deposit_date = null;
-            updateData.cheque_status = null;
+        // Sync all payment rows that belong to the same payment reference
+        for (let idx = 0; idx < Math.max(existingRows.length, payRows.length); idx++) {
+            const row = payRows[idx];
+            const existing = existingRows[idx];
+            if (!row && existing) {
+                await DB.adminDelete('payments', existing.id);
+                continue;
+            }
+            if (!row) continue;
+
+            const rowDisc = idx === 0 ? disc : 0;
+            const isChequeRow = row.mode === 'Cheque';
+            const rowData = {
+                pay_no: payRefNo,
+                date: editedDate,
+                type: oldPay.type,
+                party_id: oldPay.partyId,
+                party_name: oldPay.partyName,
+                amount: row.amount,
+                discount: rowDisc,
+                total_reduction: +(row.amount + rowDisc).toFixed(2),
+                mode: row.mode,
+                note: noteVal,
+                collected_by: collectedBy,
+                invoice_no: invNo || (rowDisc > 0 ? 'Multi/Disc' : 'Advance'),
+                allocations: idx === 0 && hasAllocations ? allocations : null,
+                cheque_no: isChequeRow ? ($('f-pay-cheque-no')?.value?.trim() || null) : null,
+                cheque_bank: isChequeRow ? ($('f-pay-cheque-bank')?.value?.trim() || null) : null,
+                cheque_deposit_date: isChequeRow ? ($('f-pay-cheque-date')?.value || null) : null,
+                cheque_status: isChequeRow ? ($('f-pay-cheque-status')?.value || 'Pending') : null
+            };
+
+            if (existing) {
+                await DB.adminUpdate('payments', existing.id, rowData);
+            } else {
+                await DB.rawInsert('payments', {
+                    ...rowData,
+                    created_by: oldSummary.primary.createdBy || currentUser?.userId || 'System',
+                    status: oldSummary.primary.status || 'posted'
+                });
+            }
         }
-        await DB.adminUpdate('payments', id, updateData);
 
         closeModal();
         await DB.refreshTables(['payments', 'parties', 'party_ledger']);
         await renderPayments();
+        endSave();
         showToast('Payment updated successfully!', 'success');
     } catch (err) {
+        endSave();
         alert('Error: ' + err.message);
     }
 };

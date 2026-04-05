@@ -334,6 +334,47 @@ table { border-collapse: collapse; width: 100%; }
     gap: 14px;
 }
 
+.desktop-form-page {
+    width: 100%;
+}
+
+.desktop-form-shell {
+    width: min(100%, 680px);
+}
+
+.desktop-inline-entry-row {
+    align-items: end;
+}
+
+@media (min-width: 1100px) {
+    .desktop-form-page {
+        width: 100%;
+        max-width: none !important;
+        margin: 0 !important;
+    }
+    .desktop-form-page .page-header {
+        margin-bottom: 20px !important;
+    }
+    .desktop-form-shell {
+        width: 100% !important;
+        max-width: none !important;
+        margin: 0 !important;
+    }
+    .desktop-inline-entry-row {
+        grid-template-columns: minmax(0, 2.4fr) repeat(3, minmax(120px, 0.95fr)) auto;
+    }
+    #page-content > div[style*='max-width:600px;margin:0 auto'],
+    #page-content > div[style*='max-width:680px;margin:0 auto'],
+    #page-content > div[style*='max-width:700px;margin:0 auto'],
+    #page-content .modal-body[style*='max-width:600px;margin:0 auto'],
+    #page-content .modal-body[style*='max-width:680px;margin:0 auto'],
+    #page-content .modal-body[style*='max-width:700px;margin:0 auto'] {
+        width: 100% !important;
+        max-width: none !important;
+        margin: 0 !important;
+    }
+}
+
 /* ============================================
    APP LAYOUT
    ============================================ */
@@ -6561,6 +6602,68 @@ body.catalog-page-open .omnibox-container {
 .sales-line-note-danger {
     color: var(--danger);
     font-weight: 700;
+}
+@media (min-width: 1100px) {
+    body.sales-doc-page-open .sales-line-card.is-dense {
+        border-radius: 16px;
+    }
+    body.sales-doc-page-open .sales-line-card.is-dense .sales-line-head {
+        align-items: center;
+        padding: 10px 12px 6px;
+    }
+    body.sales-doc-page-open .sales-line-card.is-dense .sales-line-copy {
+        gap: 2px;
+    }
+    body.sales-doc-page-open .sales-line-card.is-dense .sales-line-name {
+        font-size: 0.9rem;
+    }
+    body.sales-doc-page-open .sales-line-card.is-dense .sales-line-delete {
+        width: 32px;
+        height: 32px;
+        border-radius: 10px;
+        margin-top: 0;
+    }
+    body.sales-doc-page-open .sales-line-card.is-dense .sales-line-editor {
+        padding: 0 12px 10px;
+        border-top: none;
+    }
+    body.sales-doc-page-open .sales-line-card.is-dense .sales-line-grid {
+        grid-template-columns: minmax(72px, 0.72fr) minmax(86px, 0.86fr) minmax(120px, 1fr) minmax(110px, 0.92fr) minmax(128px, 1fr);
+        gap: 8px;
+        padding-top: 0;
+        align-items: end;
+    }
+    body.sales-doc-page-open .sales-line-card.is-dense .sales-line-field-wide {
+        grid-column: span 1;
+    }
+    body.sales-doc-page-open .sales-line-card.is-dense .sales-line-field,
+    body.sales-doc-page-open .sales-line-card.is-dense .sales-line-amount {
+        gap: 4px;
+    }
+    body.sales-doc-page-open .sales-line-card.is-dense .sales-line-field span,
+    body.sales-doc-page-open .sales-line-card.is-dense .sales-line-amount span {
+        font-size: 0.62rem;
+        letter-spacing: 0.04em;
+    }
+    body.sales-doc-page-open .sales-line-card.is-dense .sales-line-field input {
+        min-height: 34px;
+        border-radius: 10px;
+        padding: 6px 8px;
+        font-size: 0.86rem;
+    }
+    body.sales-doc-page-open .sales-line-card.is-dense .sales-line-amount {
+        min-height: 34px;
+        justify-content: center;
+        padding: 6px 10px;
+        border-radius: 10px;
+    }
+    body.sales-doc-page-open .sales-line-card.is-dense .sales-line-amount strong {
+        font-size: 0.92rem;
+    }
+    body.sales-doc-page-open .sales-line-card.is-dense .sales-line-note {
+        margin-top: 6px;
+        font-size: 0.7rem;
+    }
 }
 .invoice-total-stack {
     display: flex;

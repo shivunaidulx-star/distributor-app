@@ -1,4 +1,4 @@
-const CACHE = 'distromanager-v148';
+const CACHE = 'distromanager-v151';
 const STATIC = ['./', './index.html', './style.css', './app.js', './manifest.json', './logo_prakash.png', './qrcode.min.js'];
 
 // Helper to ignore query parameters (like ?v=67) for cache matching
@@ -26,6 +26,7 @@ self.addEventListener('fetch', e => {
     const url = e.request.url;
     // Skip external APIs and CDNs
     if (url.includes('supabase.co') || url.includes('fonts.') || url.includes('cdn.')) return;
+    if (e.request.method !== 'GET') return;
 
     // Network-First Strategy
     // This ensures that if the user is online, they ALWAYS get the latest code.
@@ -33,10 +34,12 @@ self.addEventListener('fetch', e => {
     e.respondWith(
         fetch(e.request)
             .then(networkRes => {
-                const resClone = networkRes.clone();
-                caches.open(CACHE).then(cache => {
-                    cache.put(cleanURL(url), resClone);
-                });
+                if (networkRes && networkRes.ok) {
+                    const resClone = networkRes.clone();
+                    caches.open(CACHE).then(cache => {
+                        cache.put(cleanURL(url), resClone);
+                    });
+                }
                 return networkRes;
             })
             .catch(() => {
