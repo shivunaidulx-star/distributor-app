@@ -4054,7 +4054,7 @@ async function buildAdminCommandCenter(model) {
         }
     ];
 
-    const dashboardActions = ['new-sale', 'payment-in', 'salesorders', 'invoices']
+    const dashboardActions = ['new-sale', 'payment-in', 'salesorders', 'invoices', 'update-party-gps']
         .map(key => ({ key, ...ALL_QUICK_ACTIONS.find(x => x.key === key), meta: quickActionMeta[key] || { desc: '' } }))
         .filter(action => action.label);
 
