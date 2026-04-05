@@ -16107,6 +16107,7 @@ async function renderPackOrderPage() {
 
         // MRP Logic
         const activeBatches = item ? getActiveBatches(item) : [];
+        const fallbackMrp = (activeBatches.length === 0 && item) ? (item.mrp || '') : '';
         let mrpHtml = `
                 <div id="mrp-wrapper-${idx}" style="display:flex;align-items:center;gap:4px">
                     ${activeBatches.length === 1 ? `
@@ -16121,7 +16122,7 @@ async function renderPackOrderPage() {
                     </select>
                     <button class="btn-icon" onclick="packEditMrp(${idx}, '${li.itemId}')" title="Manual Entry" style="color:var(--primary);padding:4px"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button>
                     ` : `
-                    <input type="number" id="pack-mrp-${idx}" class="form-control pack-mrp-input" placeholder="Enter MRP *(req)" style="min-width:140px;flex:1" oninput="packMrpInputChanged(${idx})">
+                    <input type="number" id="pack-mrp-${idx}" class="form-control pack-mrp-input" placeholder="Enter MRP *(req)" value="${fallbackMrp}" ${fallbackMrp ? `data-mrp="${fallbackMrp}" style="min-width:140px;flex:1;border-color:var(--success)"` : `style="min-width:140px;flex:1"`} oninput="packMrpInputChanged(${idx})">
                     `}
                 </div>`;
 
