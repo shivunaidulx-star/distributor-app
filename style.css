@@ -1765,7 +1765,8 @@ table { border-collapse: collapse; width: 100%; }
         font-size: 1rem;
     }
     .doc-item-core-grid,
-    .doc-item-secondary-grid {
+    .doc-item-secondary-grid,
+    .doc-item-utility-grid {
         gap: 8px;
     }
     .doc-item-qty-shell input {
@@ -3983,31 +3984,6 @@ body.modal-open .bottom-nav { display: none !important; }
     align-items: flex-end;
     gap: 8px;
 }
-.admin-dash-command-radar-controls {
-    display: flex;
-    gap: 6px;
-}
-.admin-dash-scroll-btn {
-    width: 32px;
-    height: 32px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 10px;
-    border: 1px solid rgba(15,23,42,0.12);
-    background: rgba(255,255,255,0.88);
-    color: var(--text-primary);
-    box-shadow: 0 6px 18px rgba(15,23,42,0.08);
-    transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
-}
-.admin-dash-scroll-btn:hover {
-    transform: translateY(-1px);
-    border-color: rgba(249,115,22,0.22);
-    box-shadow: 0 10px 18px rgba(15,23,42,0.10);
-}
-.admin-dash-scroll-btn .material-symbols-outlined {
-    font-size: 1.1rem;
-}
 .admin-dash-meter {
     position: relative;
     overflow: hidden;
@@ -5966,9 +5942,10 @@ body.catalog-page-open .omnibox-container {
     font-size: 0.68rem;
 }
 .sales-doc-panel.is-collapsed .sales-doc-grid,
-.sales-doc-panel.is-collapsed .doc-field-grid {
-    gap: 6px;
-    margin-bottom: 6px;
+.sales-doc-panel.is-collapsed .doc-field-grid,
+.sales-doc-panel.is-collapsed .sales-doc-details,
+.sales-doc-panel.is-collapsed > .doc-input-shell {
+    display: none;
 }
 .sales-doc-panel.is-collapsed .sales-doc-grid:last-child,
 .sales-doc-panel.is-collapsed .doc-field-grid:last-child {
@@ -6552,6 +6529,15 @@ body.catalog-page-open .omnibox-container {
 .doc-item-core-grid {
     margin-bottom: 10px;
 }
+.doc-item-utility-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.25fr);
+    gap: 10px;
+    align-items: stretch;
+}
+.doc-item-mrp-shell {
+    margin-bottom: 0;
+}
 .doc-item-qty-shell {
     border-color: rgba(245,158,11,0.28);
     box-shadow: inset 0 0 0 1px rgba(245,158,11,0.08);
@@ -6561,7 +6547,6 @@ body.catalog-page-open .omnibox-container {
     font-weight: 800;
 }
 .doc-item-note-wrap {
-    margin-top: 12px;
     padding: 10px 12px;
     border-radius: 16px;
     background: linear-gradient(180deg, rgba(255,247,237,0.8) 0%, rgba(255,255,255,0.95) 100%);
@@ -6920,6 +6905,9 @@ body.catalog-page-open .omnibox-container {
         border-radius: 22px;
         padding: 12px;
     }
+    .doc-item-utility-grid {
+        grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+    }
     .doc-item-modal-actions {
         padding: 12px 12px calc(12px + env(safe-area-inset-bottom));
     }
@@ -6950,6 +6938,58 @@ body.catalog-page-open .omnibox-container {
     .catalog-native-media {
         width: 88px;
         height: 88px;
+    }
+}
+
+@media (max-width: 460px) {
+    .doc-item-utility-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (max-height: 740px) {
+    .doc-item-modal-header {
+        padding: 10px 12px;
+        gap: 10px;
+    }
+    .doc-item-modal-chip {
+        display: none;
+    }
+    .doc-item-modal-title p {
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 1;
+        overflow: hidden;
+    }
+    .doc-item-modal-body {
+        padding: 10px 12px 14px;
+    }
+    .doc-item-filter-card,
+    .doc-item-sheet-card {
+        padding: 10px 11px;
+        border-radius: 20px;
+    }
+    .doc-item-filter-card {
+        margin-bottom: 10px;
+    }
+    .doc-item-sheet-heading {
+        margin-bottom: 8px;
+    }
+    .doc-item-primary-field {
+        margin-bottom: 8px;
+        padding: 8px 10px;
+    }
+    .doc-item-core-grid {
+        margin-bottom: 8px;
+    }
+    .doc-item-note-wrap {
+        padding: 8px 10px;
+    }
+    .doc-item-modal-actions {
+        padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+    }
+    .doc-item-modal-actions .btn {
+        min-height: 48px;
     }
 }
 

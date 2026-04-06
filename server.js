@@ -31,7 +31,15 @@ const server = http.createServer((req, res) => {
                 res.end('500 Internal Error');
             }
         } else {
-            res.writeHead(200, { 'Content-Type': MIME_TYPES[ext] || 'application/octet-stream' });
+            const headers = {
+                'Content-Type': MIME_TYPES[ext] || 'application/octet-stream'
+            };
+            if (['.html', '.css', '.js', '.json'].includes(ext) || path.basename(filePath) === 'sw.js' || path.basename(filePath) === 'manifest.json') {
+                headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, proxy-revalidate';
+                headers['Pragma'] = 'no-cache';
+                headers['Expires'] = '0';
+            }
+            res.writeHead(200, headers);
             res.end(content);
         }
     });

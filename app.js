@@ -723,11 +723,18 @@ const ColumnManager = {
         ],
     },
     get(page) {
+        const restrictedInventoryCols = new Set(['purchasePrice', 'value', 'actions']);
+        const applyRoleRules = (cols) => {
+            if (page === 'inventory' && !userHasRole(currentUser, 'Admin')) {
+                return cols.filter(col => !restrictedInventoryCols.has(col.key));
+            }
+            return cols;
+        };
         try {
             const saved = JSON.parse(localStorage.getItem('colcfg_' + page));
-            if (saved && saved.length) return saved;
+            if (saved && saved.length) return applyRoleRules(saved);
         } catch (e) { }
-        return this.PAGES[page].map(c => ({ ...c, visible: c.required || c.visible !== false }));
+        return applyRoleRules(this.PAGES[page].map(c => ({ ...c, visible: c.required || c.visible !== false })));
     },
     save(page, cols) {
         localStorage.setItem('colcfg_' + page, JSON.stringify(cols));
@@ -1071,11 +1078,12 @@ const ROLE_NAME_MAP = {
 };
 const CUSTOMER_PORTAL_ENABLED = false; // Feature kept in codebase for future relaunch, disabled for current live release.
 function getAppVersion() {
-    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v157';
+    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v158';
 }
 
 const PAGE_LABELS = {
     dashboard: 'Dashboard',
+    collectionroute: 'Collection Route',
     parties: 'Parties',
     partyledger: 'Party Ledger',
     inventorysetup: 'Inventory Setup',
@@ -1104,6 +1112,7 @@ const PAGE_LABELS = {
 };
 const PAGE_PERMISSION_MAP = {
     dashboard: 'page.dashboard',
+    collectionroute: 'page.payments',
     parties: 'page.parties',
     partyledger: 'page.partyledger',
     inventorysetup: 'page.inventorysetup',
@@ -2081,6 +2090,13 @@ function applyPageFormMobileEnhancements(container) {
     if (!formShell) return;
     formShell.querySelectorAll('input, select, textarea').forEach(el => attachMobileKeyboardScrollFix(el));
 }
+function ensureMobileSalesOrderStartsCompact() {
+    if (window.innerWidth < 1100) setSalesDocLayoutMode(true);
+}
+function setDocItemModalChrome(isOpen) {
+    const fab = $('app-fab');
+    if (fab) fab.classList.toggle('hidden', !!isOpen);
+}
 
 
 
@@ -2089,7 +2105,6 @@ function renderSOItemSubModal(categories) {
         modalId: 'so-item-sub-modal',
         closeAction: 'closeSoItemSubModal()',
         title: 'Add Items to Sale Order',
-        subtitle: 'Filter, search, and save items in one touch-friendly sheet.',
         categories,
         categoryFilterId: 'f-so-cat-filter',
         categoryFilterHandler: 'onSOCatFilterChange()',
@@ -2102,7 +2117,6 @@ function renderSOItemSubModal(categories) {
         uomHandler: 'onSOUomChange()',
         priceInputId: 'f-so-price',
         mrpInputId: 'f-so-mrp',
-        taxModeId: 'f-so-tax-mode',
         noteId: 'f-so-item-note',
         saveAndNewAction: 'addSOLine()',
         saveAction: 'addSOLineAndClose()',
@@ -2115,7 +2129,6 @@ function renderDocItemSubModal(config) {
         modalId,
         closeAction,
         title,
-        subtitle,
         categories,
         categoryFilterId,
         categoryFilterHandler,
@@ -2128,7 +2141,6 @@ function renderDocItemSubModal(config) {
         uomHandler,
         priceInputId,
         mrpInputId,
-        taxModeId,
         noteId,
         saveAndNewAction,
         saveAction,
@@ -2141,7 +2153,6 @@ function renderDocItemSubModal(config) {
             <button class="btn-icon doc-item-modal-back" onclick="${closeAction}">${msIcon('arrow_back', '', 'font-size:1.2rem')}</button>
             <div class="doc-item-modal-title">
                 <h3>${escapeHtml(title)}</h3>
-                <p>${escapeHtml(subtitle)}</p>
             </div>
             <div class="doc-item-modal-chip">Quick Entry</div>
         </div>
@@ -2149,7 +2160,6 @@ function renderDocItemSubModal(config) {
             <div class="doc-item-filter-card">
                 <div class="doc-item-section-copy">
                     <h4>Browse Items</h4>
-                    <p>Narrow the list first, then pick the exact item.</p>
                 </div>
                 <div class="doc-field-grid doc-field-grid-2 doc-item-filter-block">
                     <div class="doc-input-shell">
@@ -2171,7 +2181,6 @@ function renderDocItemSubModal(config) {
                 <div class="doc-item-sheet-heading">
                     <div class="doc-item-section-copy">
                         <h4>Item Details</h4>
-                        <p>Keep quantity, unit, and rate visible while you type.</p>
                     </div>
                     <span class="doc-item-sheet-badge">Touch Ready</span>
                 </div>
@@ -2195,21 +2204,15 @@ function renderDocItemSubModal(config) {
                         <input type="number" id="${priceInputId}" value="" min="0" step="0.01" inputmode="decimal" placeholder="Listed">
                     </div>
                 </div>
-                <div class="doc-field-grid doc-field-grid-2 doc-item-secondary-grid">
-                    <div class="doc-input-shell">
+                <div class="doc-item-utility-grid">
+                    <div class="doc-input-shell doc-item-mrp-shell">
                         <label>MRP</label>
                         <input type="number" id="${mrpInputId}" value="" readonly placeholder="MRP">
                     </div>
-                    <div class="doc-input-shell">
-                        <label>Tax Mode</label>
-                        <select id="${taxModeId}" disabled>
-                            <option value="inclusive">With Tax</option>
-                        </select>
+                    <div class="doc-item-note-wrap">
+                        <div class="doc-item-note-label">Stock Snapshot</div>
+                        <div class="doc-item-note" id="${noteId}">Choose an item to view stock, code, and category.</div>
                     </div>
-                </div>
-                <div class="doc-item-note-wrap">
-                    <div class="doc-item-note-label">Stock Snapshot</div>
-                    <div class="doc-item-note" id="${noteId}">Choose an item to view stock, code, and category.</div>
                 </div>
             </div>
         </div>
@@ -2224,14 +2227,10 @@ function renderDocItemSubModal(config) {
 }
 
 function renderInvoiceItemSubModal(categories, title = 'Add Items to Invoice') {
-    const subtitle = title === 'Add Items to Stock In'
-        ? 'Receive stock with quantity, unit, and rate on one screen.'
-        : 'Search stock, confirm rate, and save without leaving the form.';
     return renderDocItemSubModal({
         modalId: 'inv-item-sub-modal',
         closeAction: 'closeInvItemSubModal()',
         title,
-        subtitle,
         categories,
         categoryFilterId: 'f-inv-cat-filter',
         categoryFilterHandler: 'onInvCatFilterChange()',
@@ -2244,7 +2243,6 @@ function renderInvoiceItemSubModal(categories, title = 'Add Items to Invoice') {
         uomHandler: 'onInvUomChange()',
         priceInputId: 'f-inv-price',
         mrpInputId: 'f-inv-mrp',
-        taxModeId: 'f-inv-tax-mode',
         noteId: 'f-inv-item-note',
         saveAndNewAction: 'addInvoiceLine()',
         saveAction: 'addInvoiceLineAndClose()'
@@ -2508,6 +2506,7 @@ async function navigateTo(page, options = {}) {
 
     // Mobile back button — show on sub-pages / More-sheet pages, hide on main tabs
     const MOBILE_BACK_TARGETS = {
+        collectionroute: 'dashboard',
         parties: 'dashboard', inventory: 'dashboard', payments: 'dashboard',
         expenses: 'dashboard', packing: 'dashboard', delivery: 'dashboard',
         reports: 'dashboard', purchaseorders: 'dashboard', packers: 'dashboard',
@@ -2541,6 +2540,7 @@ async function navigateTo(page, options = {}) {
     }
 
     const titles = { dashboard: 'Dashboard', parties: 'Parties', partyledger: 'Party Ledger', inventorysetup: 'Inventory Setup', categories: 'Categories Master', uom: 'UOM Master', inventory: 'Inventory', catalog: 'Item Catalog', salesorders: 'Sales Orders', purchaseorders: 'Purchase Orders', invoices: 'Invoices', payments: 'Payments', expenses: 'Expenses', packing: 'Packing', delivery: 'Delivery', reports: 'Reports', packers: 'Packers Master', deliverypersons: 'Delivery Persons', users: 'Users & Roles', setup: 'Company Setup', noseries: 'No. Series Setup', customerrequests: 'Customer Requests', staffmaster: 'Staff Master', attendance: 'Attendance', hrpayroll: 'HR & Payroll', packorder: 'Pack Order', orderdetail: 'Order Detail', podetail: 'PO Detail', deliverydetail: 'Delivery Detail', stockadjust: 'Stock Adjustment', directpurchase: 'Direct Purchase Invoice', partyform: 'Party', itemform: 'Item', invoiceform: 'Create Invoice', editinvoiceform: 'Edit Invoice', packagedetails: 'Package Details', rangeatt: 'Mark Attendance — Range' };
+    titles.collectionroute = 'Collection Route';
     pageTitle.textContent = titles[page] || page;
 
     // Show a loader ONLY if NOT silent refresh
@@ -2550,6 +2550,7 @@ async function navigateTo(page, options = {}) {
 
     const renderers = { dashboard: renderDashboard, parties: renderParties, partyledger: renderPartyLedgerLayout, inventorysetup: renderInventorySetup, categories: renderCategories, uom: renderUOM, inventory: renderInventory, catalog: renderCatalog, salesorders: renderSalesOrders, purchaseorders: renderPurchaseOrders, invoices: renderInvoices, payments: renderPayments, expenses: renderExpenses, packing: renderPacking, delivery: renderDelivery, reports: renderReports, packers: renderPackers, deliverypersons: renderDeliveryPersons, users: renderUsers, setup: renderCompanySetup, noseries: renderNoSeries, customerrequests: renderCustomerRequests, staffmaster: renderStaffMaster, attendance: renderAttendance, hrpayroll: renderHRPayroll, packorder: renderPackOrderPage, stockledger: () => renderStockLedger(null), orderdetail: renderOrderDetailPage, podetail: renderPODetailPage, deliverydetail: renderDeliveryDetailPage, stockadjust: renderStockAdjustPage, directpurchase: renderDirectPurchasePage, partyform: renderPartyFormPage, itemform: renderItemFormPage, invoiceform: renderInvoiceFormPage, editinvoiceform: renderEditInvoiceFormPage, packagedetails: renderPackageDetailsPage, rangeatt: renderRangeAttPage };
 
+    renderers.collectionroute = renderCollectionRoutePage;
     if (renderers[page]) {
         await renderers[page]();
     }
@@ -2616,6 +2617,7 @@ const BOTTOM_NAV_TABS = {
 const ALL_QUICK_ACTIONS = [
     { key: 'new-sale', icon: 'add', label: 'New Sale', fn: "openInvoiceModal('sale')" },
     { key: 'payment-in', icon: 'payments', label: 'Record Payment', fn: "openPaymentModal()" },
+    { key: 'collection-bills', icon: 'route', label: 'Collection Route', fn: "openCollectionRoutePage()" },
     { key: 'catalog', icon: 'local_mall', label: 'Catalog', fn: "navigateTo('catalog')" },
     { key: 'salesorders', icon: 'receipt_long', label: 'Orders', fn: "navigateTo('salesorders')" },
     { key: 'parties', icon: 'group', label: 'Parties', fn: "navigateTo('parties')" },
@@ -2634,7 +2636,7 @@ const ALL_QUICK_ACTIONS = [
 const DEFAULT_QUICK_ACTIONS = {
     Admin: ['payment-in', 'salesorders', 'new-sale', 'parties', 'catalog', 'inventory', 'delivery', 'reports', 'update-party-gps', 'update-item-photo'],
     Manager: ['payment-in', 'salesorders', 'new-sale', 'parties', 'payments', 'catalog', 'update-party-gps', 'update-item-photo'],
-    Salesman: ['payment-in', 'salesorders', 'parties', 'catalog', 'update-item-photo'],
+    Salesman: ['payment-in', 'collection-bills', 'salesorders', 'parties', 'catalog', 'update-item-photo'],
     Packing: ['packing', 'salesorders'],
     Delivery: ['delivery', 'salesorders'],
 };
@@ -2853,6 +2855,149 @@ function saveAdminHomePersonalization() {
     closeModal();
     renderDashboard();
     showToast('Home layout saved!', 'success');
+}
+const STAFF_DASHBOARD_SECTION_META = {
+    sales: { key: 'sales', label: 'Sales Dashboard', note: 'Orders, collections, and sales shortcuts.' },
+    delivery: { key: 'delivery', label: 'Delivery Dashboard', note: 'Dispatch status, delivery actions, and active trips.' },
+    packing: { key: 'packing', label: 'Packing Dashboard', note: 'Packing queue, assignments, and pending work.' },
+    payroll: { key: 'payroll', label: 'My Payroll', note: 'Attendance, salary, and advance balance.' }
+};
+function getStaffDashboardPrefsKey(user = currentUser) {
+    const raw = normalizeIdentityValue(user?.userId || user?.name || getPrimaryUserRole(user) || 'staff');
+    return 'staff_dashboard_prefs_' + (raw || 'staff');
+}
+function getStaffDashboardSections(user = currentUser) {
+    const sections = [];
+    if (userHasRole(user, 'Salesman')) sections.push(STAFF_DASHBOARD_SECTION_META.sales);
+    if (userHasRole(user, 'Delivery')) sections.push(STAFF_DASHBOARD_SECTION_META.delivery);
+    if (userHasRole(user, 'Packing')) sections.push(STAFF_DASHBOARD_SECTION_META.packing);
+    if (sections.length) sections.push(STAFF_DASHBOARD_SECTION_META.payroll);
+    return sections;
+}
+function getStaffDashboardPrefs(user = currentUser) {
+    const availableSections = getStaffDashboardSections(user);
+    const optionKeys = availableSections.map(section => section.key);
+    let raw = {};
+    try { raw = JSON.parse(localStorage.getItem(getStaffDashboardPrefsKey(user)) || '{}') || {}; } catch (e) { raw = {}; }
+    const rawOrder = Array.isArray(raw.order) ? raw.order.map(String) : optionKeys;
+    const order = [...new Set([...rawOrder.filter(key => optionKeys.includes(key)), ...optionKeys.filter(key => !rawOrder.includes(key))])];
+    const hidden = Array.isArray(raw.hidden) ? [...new Set(raw.hidden.map(String).filter(key => optionKeys.includes(key)))] : [];
+    return {
+        order,
+        hidden,
+        salesCollectionVisible: raw.salesCollectionVisible !== false
+    };
+}
+function saveStaffDashboardPrefs(prefs, user = currentUser) {
+    localStorage.setItem(getStaffDashboardPrefsKey(user), JSON.stringify(prefs));
+}
+function renderStaffDashboardPrefRows() {
+    const body = $('staff-dashboard-pref-body');
+    if (!body) return;
+    const sections = getStaffDashboardSections(currentUser);
+    const prefs = window._staffDashboardPrefsDraft || getStaffDashboardPrefs();
+    const hiddenSet = new Set(prefs.hidden || []);
+    const sectionRows = prefs.order.map((key, idx) => {
+        const item = sections.find(section => section.key === key);
+        if (!item) return '';
+        const visible = !hiddenSet.has(key);
+        return `<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border)">
+            <div style="flex:1;min-width:0">
+                <div style="font-weight:700;font-size:0.9rem;color:var(--text-primary)">${item.label}</div>
+                <div style="font-size:0.78rem;color:var(--text-muted);margin-top:2px">${item.note}</div>
+            </div>
+            <label style="display:flex;align-items:center;gap:6px;font-size:0.78rem;color:var(--text-secondary);font-weight:600;white-space:nowrap">
+                <input type="checkbox" ${visible ? 'checked' : ''} onchange="toggleStaffDashboardSection('${key}',this.checked)" style="width:16px;height:16px;accent-color:var(--primary)">
+                Show
+            </label>
+            <div style="display:flex;gap:6px">
+                <button class="btn btn-outline btn-sm" ${idx === 0 ? 'disabled' : ''} onclick="moveStaffDashboardSection('${key}',-1)" style="padding:4px 8px">Up</button>
+                <button class="btn btn-outline btn-sm" ${idx === prefs.order.length - 1 ? 'disabled' : ''} onclick="moveStaffDashboardSection('${key}',1)" style="padding:4px 8px">Down</button>
+            </div>
+        </div>`;
+    }).join('');
+    const salesOptions = userHasRole(currentUser, 'Salesman') ? `
+        <div style="margin-top:14px;padding-top:10px;border-top:1px solid var(--border)">
+            <div style="font-weight:800;font-size:0.9rem;color:var(--text-primary);margin-bottom:4px">Sales Options</div>
+            <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:8px">Show or hide optional cards inside the Sales dashboard.</div>
+            <div style="display:flex;align-items:center;gap:12px;padding:10px 0">
+                <div style="flex:1;min-width:0">
+                    <div style="font-weight:700;font-size:0.88rem;color:var(--text-primary)">Today's Collection</div>
+                    <div style="font-size:0.78rem;color:var(--text-muted);margin-top:2px">Receipt count and collected amount for today.</div>
+                </div>
+                <label style="display:flex;align-items:center;gap:6px;font-size:0.78rem;color:var(--text-secondary);font-weight:600;white-space:nowrap">
+                    <input type="checkbox" ${prefs.salesCollectionVisible ? 'checked' : ''} onchange="toggleStaffDashboardSalesCollection(this.checked)" style="width:16px;height:16px;accent-color:var(--primary)">
+                    Show
+                </label>
+            </div>
+        </div>` : '';
+    body.innerHTML = `${sectionRows}${salesOptions}`;
+}
+function openStaffDashboardPersonalization() {
+    window._staffDashboardPrefsDraft = getStaffDashboardPrefs();
+    openModal('Edit Dashboard', `
+        <div style="margin-bottom:12px;padding:12px 14px;border-radius:14px;background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.16)">
+            <div style="font-weight:800;color:var(--text-primary);margin-bottom:4px">Dashboard Layout</div>
+            <div style="font-size:0.82rem;color:var(--text-muted)">Show or hide dashboard sections and move them up or down.</div>
+        </div>
+        <div id="staff-dashboard-pref-body"></div>
+    `, `
+        <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveStaffDashboardPersonalization()">Save Layout</button>
+    `);
+    renderStaffDashboardPrefRows();
+}
+function moveStaffDashboardSection(key, direction) {
+    const prefs = window._staffDashboardPrefsDraft || getStaffDashboardPrefs();
+    const order = [...(prefs.order || [])];
+    const idx = order.indexOf(key);
+    if (idx < 0) return;
+    const nextIdx = idx + direction;
+    if (nextIdx < 0 || nextIdx >= order.length) return;
+    [order[idx], order[nextIdx]] = [order[nextIdx], order[idx]];
+    prefs.order = order;
+    window._staffDashboardPrefsDraft = prefs;
+    renderStaffDashboardPrefRows();
+}
+function toggleStaffDashboardSection(key, visible) {
+    const prefs = window._staffDashboardPrefsDraft || getStaffDashboardPrefs();
+    const hidden = new Set(prefs.hidden || []);
+    if (visible) hidden.delete(key);
+    else hidden.add(key);
+    prefs.hidden = [...hidden];
+    window._staffDashboardPrefsDraft = prefs;
+    renderStaffDashboardPrefRows();
+}
+function toggleStaffDashboardSalesCollection(visible) {
+    const prefs = window._staffDashboardPrefsDraft || getStaffDashboardPrefs();
+    prefs.salesCollectionVisible = !!visible;
+    window._staffDashboardPrefsDraft = prefs;
+    renderStaffDashboardPrefRows();
+}
+function saveStaffDashboardPersonalization() {
+    const prefs = window._staffDashboardPrefsDraft || getStaffDashboardPrefs();
+    saveStaffDashboardPrefs(prefs);
+    closeModal();
+    renderDashboard();
+    showToast('Dashboard layout saved!', 'success');
+}
+function buildStaffDashboardToolbar() {
+    return `
+        <div style="display:flex;justify-content:flex-end;align-items:center;margin-bottom:12px">
+            <button class="btn btn-outline btn-sm" onclick="openStaffDashboardPersonalization()">Edit Dashboard</button>
+        </div>`;
+}
+function buildStaffDashboardEmptyState() {
+    return `
+        <div class="card">
+            <div class="card-body">
+                <div class="empty-state">
+                    <span class="empty-icon">${msIcon('dashboard_customize')}</span>
+                    <p>No dashboard sections are visible.</p>
+                    <p class="empty-subtitle">Use Edit Dashboard to show sections again.</p>
+                </div>
+            </div>
+        </div>`;
 }
 function showBottomNav() {
     const bn = $('bottom-nav');
@@ -3576,20 +3721,8 @@ function buildDashboardRoleBanner(roles = []) {
             </div>
         </div>`;
 }
-function buildSalesmanDashboardSection({ salesOrders, invoices, payments, isMobile }) {
+function buildSalesmanDashboardSection({ salesOrders, payments, isMobile, includeQuickActions = true, includeTodayCollection = true }) {
     const mySO = salesOrders.filter(order => matchesUserIdentity(order.createdBy, currentUser));
-    const startOfMonth = today().substring(0, 8) + '01';
-    const myMonthInvoices = invoices.filter(invoice =>
-        invoice.type === 'sale' &&
-        invoice.status !== 'cancelled' &&
-        invoice.date >= startOfMonth &&
-        matchesUserIdentity(invoice.createdBy, currentUser)
-    );
-    const currentAch = myMonthInvoices.reduce((sum, invoice) => sum + invoice.total, 0);
-    const target = currentUser.monthlyTarget || 0;
-    const achPct = target > 0 ? Math.min(100, (currentAch / target) * 100) : 0;
-    const barColor = achPct >= 100 ? '#22c55e' : achPct >= 75 ? '#3b82f6' : achPct >= 50 ? '#f59e0b' : '#ef4444';
-
     const todayStr = today();
     const myTodayPayments = payments.filter(payment =>
         payment.type === 'in' &&
@@ -3605,40 +3738,16 @@ function buildSalesmanDashboardSection({ salesOrders, invoices, payments, isMobi
                 <span class="badge ${ROLE_BADGE_CLASS['Salesman'] || 'badge-success'}">Salesman</span>
             </div>
 
-            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;margin-bottom:16px">
-                <div class="card" style="margin:0;border-left:4px solid ${barColor}">
-                    <div class="card-body" style="padding:16px">
-                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-                            <h4 style="margin:0;font-size:0.9rem;color:var(--text-secondary)">Monthly Sales Target</h4>
-                            <span style="font-weight:800;color:${barColor}">${achPct.toFixed(1)}%</span>
-                        </div>
-                        <div style="height:10px;background:var(--bg-body);border-radius:10px;overflow:hidden;margin-bottom:12px;border:1px solid var(--border)">
-                            <div style="width:${achPct}%;height:100%;background:${barColor};transition:width 1s ease-in-out"></div>
-                        </div>
-                        <div style="display:flex;justify-content:space-between;align-items:center">
-                            <div>
-                                <div style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase">Achieved</div>
-                                <div style="font-size:1.05rem;font-weight:700;color:var(--text-primary)">${currency(currentAch)}</div>
-                            </div>
-                            <div style="text-align:right">
-                                <div style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase">Target</div>
-                                <div style="font-size:1.05rem;font-weight:700;color:var(--text-secondary)">${target > 0 ? currency(target) : 'Not Set'}</div>
-                            </div>
-                        </div>
+            ${includeTodayCollection ? `<div class="card" style="margin:0 0 16px;border-left:4px solid #10b981">
+                <div class="card-body" style="padding:16px;display:flex;flex-direction:column;justify-content:center">
+                    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
+                        <h4 style="margin:0;font-size:0.9rem;color:var(--text-secondary)">Today's Collection</h4>
+                        <span class="badge badge-success" style="font-size:0.75rem">${myTodayPayments.length} Receipts</span>
                     </div>
+                    <div style="font-size:1.8rem;font-weight:800;color:#10b981;line-height:1.2">${currency(todayCollection)}</div>
+                    <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">Total amount received today</div>
                 </div>
-
-                <div class="card" style="margin:0;border-left:4px solid #10b981">
-                    <div class="card-body" style="padding:16px;display:flex;flex-direction:column;justify-content:center">
-                        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
-                            <h4 style="margin:0;font-size:0.9rem;color:var(--text-secondary)">Today's Collection</h4>
-                            <span class="badge badge-success" style="font-size:0.75rem">${myTodayPayments.length} Receipts</span>
-                        </div>
-                        <div style="font-size:1.8rem;font-weight:800;color:#10b981;line-height:1.2">${currency(todayCollection)}</div>
-                        <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">Total amount received today</div>
-                    </div>
-                </div>
-            </div>
+            </div>` : ''}
 
             <div class="stats-grid">
                 <div class="stat-card amber"><div class="stat-icon">${msIcon('hourglass_top')}</div><div class="stat-value">${mySO.filter(order => order.status === 'pending').length}</div><div class="stat-label">My Pending</div></div>
@@ -3647,14 +3756,16 @@ function buildSalesmanDashboardSection({ salesOrders, invoices, payments, isMobi
                 <div class="stat-card blue"><div class="stat-icon">${msIcon('receipt_long')}</div><div class="stat-value">${mySO.length}</div><div class="stat-label">Total Orders</div></div>
             </div>
 
+            ${includeQuickActions ? `
             <div class="section-toolbar" style="margin-top:8px"><h3>Quick Actions</h3></div>
             <div class="quick-actions">
+                <button class="quick-action-btn" onclick="openCollectionRoutePage()"><span class="qa-icon material-symbols-outlined">route</span><span class="qa-label">Collection Route</span></button>
                 <button class="quick-action-btn" onclick="navigateTo('salesorders')"><span class="qa-icon material-symbols-outlined">receipt_long</span><span class="qa-label">New Order</span></button>
                 <button class="quick-action-btn" onclick="navigateTo('parties')"><span class="qa-icon material-symbols-outlined">group</span><span class="qa-label">Parties</span></button>
                 <button class="quick-action-btn" onclick="navigateTo('catalog')"><span class="qa-icon material-symbols-outlined">local_mall</span><span class="qa-label">Catalog</span></button>
                 <button class="quick-action-btn" onclick="openPartyGpsModal()"><span class="qa-icon material-symbols-outlined">location_on</span><span class="qa-label">Update GPS</span></button>
                 <button class="quick-action-btn" onclick="openItemPhotoModal()"><span class="qa-icon material-symbols-outlined">add_a_photo</span><span class="qa-label">Update Photo</span></button>
-            </div>
+            </div>` : ''}
 
             <div class="card">
                 <div class="card-header"><h3>My Recent Orders</h3></div>
@@ -3678,7 +3789,7 @@ function buildSalesmanDashboardSection({ salesOrders, invoices, payments, isMobi
             </div>
         </section>`;
 }
-function buildDeliveryDashboardSection({ deliveries, isMobile }) {
+function buildDeliveryDashboardSection({ deliveries, isMobile, includeQuickActions = true }) {
     const myDels = deliveries.filter(row => matchesUserIdentity(row.deliveryPerson, currentUser));
     const dispatched = myDels.filter(row => row.status === 'Dispatched');
     const delivered = myDels.filter(row => row.status === 'Delivered');
@@ -3697,12 +3808,13 @@ function buildDeliveryDashboardSection({ deliveries, isMobile }) {
                 <div class="stat-card amber"><div class="stat-icon">${msIcon('assignment')}</div><div class="stat-value">${myDels.length}</div><div class="stat-label">Total Assigned</div></div>
             </div>
 
+            ${includeQuickActions ? `
             <div class="section-toolbar" style="margin-top:8px"><h3>Quick Actions</h3></div>
             <div class="quick-actions">
                 <button class="quick-action-btn" onclick="navigateTo('delivery')"><span class="qa-icon material-symbols-outlined">local_shipping</span><span class="qa-label">My Deliveries</span></button>
                 <button class="quick-action-btn" onclick="openPartyGpsModal()"><span class="qa-icon material-symbols-outlined">location_on</span><span class="qa-label">Update GPS</span></button>
                 <button class="quick-action-btn" onclick="openItemPhotoModal()"><span class="qa-icon material-symbols-outlined">add_a_photo</span><span class="qa-label">Update Photo</span></button>
-            </div>
+            </div>` : ''}
 
             <div class="card"><div class="card-header"><h3>My Active Dispatches</h3></div><div class="card-body" style="${isMobile ? 'padding:8px' : ''}">
                 ${isMobile ? (dispatched.slice(-5).reverse().map(row => `
@@ -3716,7 +3828,7 @@ function buildDeliveryDashboardSection({ deliveries, isMobile }) {
             </div></div>
         </section>`;
 }
-function buildPackingDashboardSection({ salesOrders, isMobile }) {
+function buildPackingDashboardSection({ salesOrders, isMobile, includeQuickActions = true }) {
     const allApproved = salesOrders.filter(order => order.status === 'approved' && !order.packed && !order.cannotComplete);
     const myQueue = allApproved.filter(order => !order.assignedPacker || matchesUserIdentity(order.assignedPacker, currentUser));
     const unassigned = allApproved.filter(order => !order.assignedPacker);
@@ -3734,11 +3846,13 @@ function buildPackingDashboardSection({ salesOrders, isMobile }) {
                 <div class="stat-card green"><div class="stat-icon">${msIcon('task_alt')}</div><div class="stat-value">${packed.length}</div><div class="stat-label">Packed by Me</div></div>
             </div>
 
+            ${includeQuickActions ? `
             <div class="section-toolbar" style="margin-top:8px"><h3>Quick Actions</h3></div>
             <div class="quick-actions">
                 <button class="quick-action-btn" onclick="navigateTo('packing')"><span class="qa-icon material-symbols-outlined">inventory_2</span><span class="qa-label">Packing Queue</span></button>
+                <button class="quick-action-btn" onclick="openPartyGpsModal()"><span class="qa-icon material-symbols-outlined">location_on</span><span class="qa-label">Update GPS</span></button>
                 <button class="quick-action-btn" onclick="openItemPhotoModal()"><span class="qa-icon material-symbols-outlined">add_a_photo</span><span class="qa-label">Update Photo</span></button>
-            </div>
+            </div>` : ''}
 
             ${myAssigned.length ? `<div class="card" style="margin-bottom:12px"><div class="card-header"><h3>Assigned to Me</h3></div><div class="card-body" style="${isMobile ? 'padding:8px' : ''}">
                 ${isMobile ? myAssigned.slice(0, 5).map(order => `<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 6px;border-bottom:1px solid var(--border)"><div><div style="font-weight:600;font-size:0.88rem">${order.orderNo} · ${escapeHtml(order.partyName)}</div><div style="font-size:0.72rem;color:var(--text-muted)">${order.items.length} items</div></div><div style="font-weight:700;color:var(--success)">${currency(order.total)}</div></div>`).join('') : `<div class="table-wrapper"><table class="data-table"><thead><tr><th>Order #</th><th>Party</th><th>Items</th><th>Total</th></tr></thead><tbody>${myAssigned.slice(0, 5).map(order => `<tr><td style="font-weight:600">${order.orderNo}</td><td>${order.partyName}</td><td>${order.items.length}</td><td class="amount-green">${currency(order.total)}</td></tr>`).join('')}</tbody></table></div>`}
@@ -3856,19 +3970,32 @@ async function renderDashboard() {
     // ── SALESMAN DASHBOARD ──
     const dashboardRoles = ['Salesman', 'Delivery', 'Packing'].filter(roleName => userHasRole(currentUser, roleName));
     if (!isAdminLike && dashboardRoles.length) {
-        const sections = [];
-        if (dashboardRoles.length > 1) sections.push(buildDashboardRoleBanner(dashboardRoles));
+        const availableSections = getStaffDashboardSections(currentUser);
+        const sectionMap = {};
+        const quickActionRole = dashboardRoles[dashboardRoles.length - 1] || '';
+        const prefs = getStaffDashboardPrefs(currentUser);
         if (dashboardRoles.includes('Salesman')) {
-            sections.push(buildSalesmanDashboardSection({ salesOrders, invoices, payments, isMobile }));
+            sectionMap.sales = buildSalesmanDashboardSection({
+                salesOrders,
+                payments,
+                isMobile,
+                includeQuickActions: quickActionRole === 'Salesman',
+                includeTodayCollection: prefs.salesCollectionVisible !== false
+            });
         }
         if (dashboardRoles.includes('Delivery')) {
-            sections.push(buildDeliveryDashboardSection({ deliveries: dels, isMobile }));
+            sectionMap.delivery = buildDeliveryDashboardSection({ deliveries: dels, isMobile, includeQuickActions: quickActionRole === 'Delivery' });
         }
         if (dashboardRoles.includes('Packing')) {
-            sections.push(buildPackingDashboardSection({ salesOrders, isMobile }));
+            sectionMap.packing = buildPackingDashboardSection({ salesOrders, isMobile, includeQuickActions: quickActionRole === 'Packing' });
         }
-        sections.push(buildDashboardPayrollSection(await getDashboardPayrollSnapshot(currentUser), { showMissing: true }));
-        pageContent.innerHTML = `${sections.filter(Boolean).join('')}${renderPartyNavWidget(parties)}`;
+        sectionMap.payroll = buildDashboardPayrollSection(await getDashboardPayrollSnapshot(currentUser), { showMissing: true });
+        const hiddenSet = new Set(prefs.hidden || []);
+        const sections = (prefs.order || availableSections.map(section => section.key))
+            .filter(key => !hiddenSet.has(key))
+            .map(key => sectionMap[key])
+            .filter(Boolean);
+        pageContent.innerHTML = `${buildStaffDashboardToolbar()}${sections.length ? sections.join('') : buildStaffDashboardEmptyState()}`;
         return;
     }
 
@@ -3949,6 +4076,7 @@ async function renderDashboard() {
 
             <div class="section-toolbar" style="margin-top:8px"><h3>Quick Actions</h3></div>
             <div class="quick-actions">
+                <button class="quick-action-btn" onclick="openCollectionRoutePage()"><span class="qa-icon material-symbols-outlined">route</span><span class="qa-label">Collection Route</span></button>
                 <button class="quick-action-btn" onclick="navigateTo('salesorders')"><span class="qa-icon material-symbols-outlined">receipt_long</span><span class="qa-label">New Order</span></button>
                 <button class="quick-action-btn" onclick="navigateTo('parties')"><span class="qa-icon material-symbols-outlined">group</span><span class="qa-label">Parties</span></button>
                 <button class="quick-action-btn" onclick="navigateTo('catalog')"><span class="qa-icon material-symbols-outlined">local_mall</span><span class="qa-label">Catalog</span></button>
@@ -4325,6 +4453,7 @@ async function buildAdminCommandCenter(model) {
     const quickActionMeta = {
         'new-sale': { desc: 'Launch a fresh sale and move stock fast.', accent: '#22c55e' },
         'payment-in': { desc: 'Capture receipts, allocations, and follow-up cash.', accent: '#14b8a6' },
+        'collection-bills': { desc: 'Work the live collection route with payment and no-payment actions.', accent: '#3b82f6' },
         'catalog': { desc: 'Open the product showcase with cleaner visuals.', accent: '#8b5cf6' },
         'salesorders': { desc: 'Control approvals, edits, and dispatch readiness.', accent: '#f97316' },
         'parties': { desc: 'Monitor customers, suppliers, and route quality.', accent: '#3b82f6' },
@@ -4659,14 +4788,6 @@ async function buildAdminCommandCenter(model) {
                                 <span>Open queues</span>
                                 <strong>${activeRadarCount}</strong>
                             </div>
-                            <div class="admin-dash-command-radar-controls">
-                                <button type="button" class="admin-dash-scroll-btn" onclick="scrollDashboardRadar(this,'up')" aria-label="Scroll operational radar up">
-                                    <span class="material-symbols-outlined">keyboard_arrow_up</span>
-                                </button>
-                                <button type="button" class="admin-dash-scroll-btn" onclick="scrollDashboardRadar(this,'down')" aria-label="Scroll operational radar down">
-                                    <span class="material-symbols-outlined">keyboard_arrow_down</span>
-                                </button>
-                            </div>
                         </div>
                     </div>
                     <p class="admin-dash-command-radar-copy">${hottestRadar && hottestRadar.count > 0 ? `${hottestRadar.count} ${hottestRadar.count === 1 ? 'queue needs' : 'queues need'} attention first.` : 'All operational queues are currently clear.'}</p>
@@ -4701,14 +4822,6 @@ async function buildAdminCommandCenter(model) {
 
         ${CUSTOMER_PORTAL_ENABLED ? `<div id="dashboard-customer-req-slot" class="hidden">${renderDashboardCustomerReqPlaceholder()}</div>` : ''}
     </div>`;
-}
-
-function scrollDashboardRadar(trigger, direction) {
-    const radar = trigger && trigger.closest ? trigger.closest('.admin-dash-command-radar') : null;
-    const list = radar ? radar.querySelector('.admin-dash-command-radar-list') : null;
-    if (!list) return;
-    const delta = Math.max(140, Math.round(list.clientHeight * 0.55));
-    list.scrollBy({ top: direction === 'up' ? -delta : delta, behavior: 'smooth' });
 }
 async function openDeliveredWithoutPaymentFollowUpModal() {
     const [deliveries, invoices, payments] = await Promise.all([
@@ -5676,13 +5789,98 @@ function downloadPartyTemplate() {
     showToast('Party template downloaded!', 'success');
 }
 
+function formatOpeningBalTemplateDate(rawValue = '') {
+    const value = rawValue instanceof Date
+        ? new Date(rawValue.getTime() - rawValue.getTimezoneOffset() * 60000).toISOString().split('T')[0]
+        : String(rawValue || '').trim().replace(/^'+/, '');
+    if (!value) return '';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+        const [yyyy, mm, dd] = value.split('-');
+        return `${dd}-${mm}-${yyyy}`;
+    }
+    if (/^\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{4}$/.test(value)) {
+        const [part1, part2, yyyy] = value.split(/[\/.\-]/);
+        return `${part1.padStart(2, '0')}-${part2.padStart(2, '0')}-${yyyy}`;
+    }
+    return value;
+}
+function buildOpeningBalIsoDate(year, month, day) {
+    const yyyy = +year;
+    const mm = +month;
+    const dd = +day;
+    if (!Number.isInteger(yyyy) || !Number.isInteger(mm) || !Number.isInteger(dd)) return '';
+    if (mm < 1 || mm > 12 || dd < 1 || dd > 31) return '';
+    const parsed = new Date(Date.UTC(yyyy, mm - 1, dd));
+    if (
+        parsed.getUTCFullYear() !== yyyy
+        || parsed.getUTCMonth() !== mm - 1
+        || parsed.getUTCDate() !== dd
+    ) return '';
+    return `${yyyy}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
+}
+function parseOpeningBalImportDate(rawValue) {
+    if (rawValue instanceof Date) {
+        return new Date(rawValue.getTime() - rawValue.getTimezoneOffset() * 60000).toISOString().split('T')[0];
+    }
+    if (typeof rawValue === 'number' && Number.isFinite(rawValue) && rawValue > 0) {
+        const parsed = new Date(Date.UTC(1899, 11, 30) + rawValue * 86400000);
+        if (!Number.isNaN(parsed.getTime())) {
+            return parsed.toISOString().split('T')[0];
+        }
+    }
+    const value = String(rawValue || '').trim().replace(/^'+/, '');
+    if (!value) return '';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+        const [yyyy, mm, dd] = value.split('-');
+        return buildOpeningBalIsoDate(yyyy, mm, dd);
+    }
+    if (/^\d{1,2}[\-.]\d{1,2}[\-.]\d{4}$/.test(value)) {
+        const [dd, mm, yyyy] = value.split(/[\-.]/);
+        return buildOpeningBalIsoDate(yyyy, mm, dd);
+    }
+    if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(value)) {
+        const [part1, part2, yyyy] = value.split('/');
+        if (+part1 > 12) return buildOpeningBalIsoDate(yyyy, part2, part1);
+        if (+part2 > 12) return buildOpeningBalIsoDate(yyyy, part1, part2);
+        return buildOpeningBalIsoDate(yyyy, part2, part1);
+    }
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime())
+        ? ''
+        : new Date(parsed.getTime() - parsed.getTimezoneOffset() * 60000).toISOString().split('T')[0];
+}
+
 function downloadOpeningBalTemplate() {
-    let csv = 'Party Code,Party Name *,Party Type (Customer/Supplier),Vyapar Invoice No *,Invoice Date (YYYY-MM-DD) *,Invoice Amount *,Due Date (YYYY-MM-DD),Assigned User / Collector,Notes\n';
-    csv += 'ACME,Acme Corp,Customer,INV-001,2024-01-15,15000,2024-02-14,Ram,Outstanding from Jan\n';
-    csv += 'ACME,Acme Corp,Customer,INV-002,2024-02-10,8500,2024-03-11,Ram,\n';
-    csv += 'RAJE,Raj Enterprises,Customer,INV-101,2024-03-01,22000,2024-03-31,Sita,\n';
-    csv += 'GLOB,Global Supplies,Supplier,PINV-55,2024-02-20,45000,2024-03-20,,Purchase outstanding\n';
-    downloadCSV(csv, 'opening_balance_import_template.csv');
+    const headers = [
+        'Party Code',
+        'Party Name *',
+        'Party Type (Customer/Supplier)',
+        'Vyapar Invoice No *',
+        'Invoice Date (DD-MM-YYYY) *',
+        'Invoice Amount *',
+        'Due Date (DD-MM-YYYY)',
+        'Assigned User / Collector',
+        'Notes'
+    ];
+    const sampleRows = [
+        ['ACME', 'Acme Corp', 'Customer', 'INV-001', formatOpeningBalTemplateDate('2024-01-15'), 15000, formatOpeningBalTemplateDate('2024-02-14'), 'Ram', 'Outstanding from Jan'],
+        ['ACME', 'Acme Corp', 'Customer', 'INV-002', formatOpeningBalTemplateDate('2024-02-10'), 8500, formatOpeningBalTemplateDate('2024-03-11'), 'Ram', ''],
+        ['RAJE', 'Raj Enterprises', 'Customer', 'INV-101', formatOpeningBalTemplateDate('2024-03-01'), 22000, formatOpeningBalTemplateDate('2024-03-31'), 'Sita', ''],
+        ['GLOB', 'Global Supplies', 'Supplier', 'PINV-55', formatOpeningBalTemplateDate('2024-02-20'), 45000, formatOpeningBalTemplateDate('2024-03-20'), '', 'Purchase outstanding']
+    ];
+    if (typeof XLSX !== 'undefined') {
+        const ws = XLSX.utils.aoa_to_sheet([headers, ...sampleRows]);
+        ws['!cols'] = [
+            { wch: 12 }, { wch: 24 }, { wch: 24 }, { wch: 18 }, { wch: 18 },
+            { wch: 16 }, { wch: 18 }, { wch: 22 }, { wch: 24 }
+        ];
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Opening Balance');
+        XLSX.writeFile(wb, 'opening_balance_import_template.xlsx');
+    } else {
+        const csv = [headers.join(','), ...sampleRows.map(row => row.map(toCsvCell).join(','))].join('\n') + '\n';
+        downloadCSV(csv, 'opening_balance_import_template.csv');
+    }
     showToast('Opening balance template downloaded!', 'success');
 }
 
@@ -5698,30 +5896,30 @@ async function processOpeningBalImport(event) {
     const file = event.target.files[0];
     if (!file) return;
 
-    async function getLines() {
+    async function getRows() {
         if (file.name.match(/\.xlsx?$/i) && typeof XLSX !== 'undefined') {
             return await new Promise(resolve => {
                 const reader = new FileReader();
                 reader.onload = e => {
-                    const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
-                    resolve(XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]]));
+                    const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array', cellDates: true });
+                    resolve(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' }));
                 };
                 reader.readAsArrayBuffer(file);
-            }).then(csv => csv.split(/\r?\n/).filter(l => l.trim()));
+            });
         }
         const text = await file.text();
-        return text.split(/\r?\n/).filter(l => l.trim());
+        return text.split(/\r?\n/).filter(l => l.trim()).map(line => parseCSVLine(line));
     }
 
-    const lines = await getLines();
-    if (lines.length < 2) return alert('File is empty or has no data rows');
+    const rows = await getRows();
+    if (rows.length < 2) return alert('File is empty or has no data rows');
 
     const parties = DB.get('db_parties') || [];
     const users = getCachedUsers().filter(u => isSalesOpsUser(u));
     const invoices = await DB.getAll('invoices');
     const errors = [];
     const preview = [];
-    const headerCols = parseCSVLine(lines[0]).map(c => String(c || '').trim());
+    const headerCols = (rows[0] || []).map(c => String(c || '').trim());
     const headerMap = {};
     headerCols.forEach((header, index) => {
         const key = String(header || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
@@ -5739,38 +5937,26 @@ async function processOpeningBalImport(event) {
     const getCell = (cols, ...keys) => {
         for (const key of keys) {
             const idx = headerMap[key];
-            if (idx !== undefined) return (cols[idx] || '').trim();
+            if (idx !== undefined) return cols[idx];
         }
         return '';
-    };
-    const parseImportDate = (rawValue) => {
-        const value = String(rawValue || '').trim();
-        if (!value) return '';
-        if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
-        if (/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4}$/.test(value)) {
-            const [dd, mm, yyyy] = value.split(/[\/\-]/);
-            return `${yyyy}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`;
-        }
-        const parsed = new Date(value);
-        return Number.isNaN(parsed.getTime()) ? '' : new Date(parsed.getTime() - parsed.getTimezoneOffset() * 60000).toISOString().split('T')[0];
     };
     const parseImportAmount = (rawValue) => {
         const cleaned = String(rawValue || '').replace(/,/g, '').replace(/[^\d.-]/g, '');
         return parseFloat(cleaned);
     };
 
-    for (let i = 1; i < lines.length; i++) {
-        const cols = parseCSVLine(lines[i]);
-        const colsMapped = cols.map(c => (c || '').trim());
+    for (let i = 1; i < rows.length; i++) {
+        const colsMapped = (rows[i] || []).map(c => c instanceof Date ? c : String(c || '').trim());
         if (!colsMapped.length || colsMapped.every(c => !c)) continue;
 
         const partyCode = getCell(colsMapped, 'party_code', 'partycode', 'customer_id', 'customerid', 'code');
         const partyName = getCell(colsMapped, 'party_name', 'partyname', 'customer_name', 'customername', 'party', 'customer', 'name');
         const partyType = getCell(colsMapped, 'party_type', 'partytype', 'party_type_customer_supplier', 'type') || 'Customer';
         const invoiceNo = getCell(colsMapped, 'vyapar_invoice_no', 'vyapar_invoice', 'invoice_no', 'invoiceno', 'bill_no', 'billno', 'voucher_no', 'ref_no');
-        const invoiceDate = parseImportDate(getCell(colsMapped, 'invoice_date', 'invoice_date_yyyy_mm_dd', 'invoicedate', 'bill_date', 'billdate', 'invoice_dt', 'date'));
+        const invoiceDate = parseOpeningBalImportDate(getCell(colsMapped, 'invoice_date', 'invoice_date_dd_mm_yyyy', 'invoice_date_yyyy_mm_dd', 'invoicedate', 'bill_date', 'billdate', 'invoice_dt', 'date'));
         const amount = parseImportAmount(getCell(colsMapped, 'invoice_amount', 'invoiceamount', 'amount', 'balance', 'outstanding', 'outstanding_amount', 'due_amount'));
-        const dueDate = parseImportDate(getCell(colsMapped, 'due_date', 'due_date_yyyy_mm_dd', 'duedate', 'due_dt'));
+        const dueDate = parseOpeningBalImportDate(getCell(colsMapped, 'due_date', 'due_date_dd_mm_yyyy', 'due_date_yyyy_mm_dd', 'duedate', 'due_dt'));
         const assignedRaw = getCell(colsMapped, 'assigned_user_collector', 'assigned_user', 'assigned_to', 'collector', 'collected_by', 'user_name', 'username', 'salesman', 'user');
         const notes = getCell(colsMapped, 'notes', 'note', 'remark', 'remarks', 'description');
 
@@ -5838,8 +6024,8 @@ async function processOpeningBalImport(event) {
                 <td style="font-family:monospace;font-weight:600">${r.partyCode}</td>
                 <td>${r.partyName}</td>
                 <td style="font-family:monospace">${r.invoiceNo}</td>
-                <td>${r.invoiceDate}</td>
-                <td>${r.dueDate || '-'}</td>
+                <td>${formatOpeningBalTemplateDate(r.invoiceDate)}</td>
+                <td>${r.dueDate ? formatOpeningBalTemplateDate(r.dueDate) : '-'}</td>
                 <td>${escapeHtml(r.assignedTo || '-')}</td>
                 <td style="font-weight:600;color:var(--accent)">${currency(r.amount)}</td>
                 <td><span class="badge ${r.action === 'create' ? 'badge-success' : 'badge-info'}">${r.action.toUpperCase()}</span></td>
@@ -6575,6 +6761,7 @@ function getItemThumb(i) {
 
 function renderInvCards(items, reservedMap = {}) {
     if (!items.length) return '<div class="empty-state"><div class="empty-icon"></div><p>No items found</p></div>';
+    const isAdminInventoryView = userHasRole(currentUser, 'Admin');
     return items.map(i => {
         const reserved = reservedMap[i.id] || 0;
         const available = i.stock - reserved;
@@ -6599,14 +6786,14 @@ function renderInvCards(items, reservedMap = {}) {
             <div style="display:flex;border-top:1px solid var(--border);padding:7px 12px;gap:6px;align-items:center;background:var(--bg-secondary,rgba(0,0,0,0.02))">
                 <div style="flex:1;font-size:0.8rem;display:flex;gap:10px;flex-wrap:wrap">
                     <span><span style="color:var(--text-muted);font-size:0.72rem">Sale</span> <strong style="color:var(--accent)">${currency(i.salePrice)}</strong></span>
-                    <span><span style="color:var(--text-muted);font-size:0.72rem">Pur</span> <strong style="color:var(--text-primary)">${currency(i.purchasePrice)}</strong></span>
+                    ${isAdminInventoryView ? `<span><span style="color:var(--text-muted);font-size:0.72rem">Pur</span> <strong style="color:var(--text-primary)">${currency(i.purchasePrice)}</strong></span>` : ''}
                     <span><span style="color:var(--text-muted);font-size:0.72rem">MRP</span> <strong style="color:var(--text-primary)">${fb ? currency(fb.mrp) : (i.mrp ? currency(i.mrp) : '-')}</strong></span>
                 </div>
-                <div style="display:flex;gap:2px" onclick="event.stopPropagation()">
+                ${isAdminInventoryView ? `<div style="display:flex;gap:2px" onclick="event.stopPropagation()">
                     ${canEdit() ? `<button class="btn-icon" style="color:var(--primary)" onclick="openStockAdjustmentModal('${i.id}')" title="Adjust"><span class="material-symbols-outlined" style="font-size:1.1rem">inventory</span></button>` : ''}
                     <button class="btn-icon" style="color:var(--info)" onclick="renderStockLedger('${i.id}')" title="Ledger"><span class="material-symbols-outlined" style="font-size:1.1rem">list_alt</span></button>
                     ${canEdit() ? `<button class="btn-icon" style="color:var(--warning)" onclick="openItemModal('${i.id}')" title="Edit"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button>` : ''}
-                </div>
+                </div>` : ''}
             </div>
         </div>`;
     }).join('');
@@ -6638,6 +6825,8 @@ async function renderInventory() {
     window._inventoryReservedMap = reservedMap;
 
     const isMobile = window.innerWidth < 768;
+    const isAdminInventoryView = userHasRole(currentUser, 'Admin');
+    const inventoryCols = ColumnManager.get('inventory').filter(c => c.visible);
 
     if (isMobile) {
         pageContent.innerHTML = `
@@ -6669,7 +6858,7 @@ async function renderInventory() {
     }
 
     pageContent.innerHTML = `
-        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px">
+        <div style="display:grid;grid-template-columns:repeat(${isAdminInventoryView ? 4 : 3},1fr);gap:8px;margin-bottom:14px">
             <div class="dash-pulse-tile" style="--tile-color:#3b82f6;animation-delay:0.04s">
                 <div class="dash-pulse-icon"></div>
                 <div class="dash-pulse-val dash-count" data-val="${totalItems}" style="color:#3b82f6">${totalItems}</div>
@@ -6680,11 +6869,11 @@ async function renderInventory() {
                 <div class="dash-pulse-val dash-count" data-val="${totalStock}" style="color:#10b981">${totalStock}</div>
                 <div class="dash-pulse-lbl">Stock Qty</div>
             </div>
-            <div class="dash-pulse-tile" style="--tile-color:#f59e0b;animation-delay:0.12s">
+            ${isAdminInventoryView ? `<div class="dash-pulse-tile" style="--tile-color:#f59e0b;animation-delay:0.12s">
                 <div class="dash-pulse-icon"></div>
                 <div class="dash-pulse-val" style="color:#f59e0b;font-size:0.7rem">${currency(totalValue)}</div>
                 <div class="dash-pulse-lbl">Stock Value</div>
-            </div>
+            </div>` : ''}
             <div class="dash-pulse-tile${lowStock ? ' dash-pulse-alert' : ''}" onclick="document.getElementById('inv-search')&&(document.getElementById('inv-search').value='__low__',filterInvTable())" style="--tile-color:${lowStock ? '#ef4444' : '#10b981'};animation-delay:0.16s;cursor:${lowStock ? 'pointer' : 'default'}">
                 <div class="dash-pulse-icon"></div>
                 <div class="dash-pulse-val" style="color:${lowStock ? '#ef4444' : '#10b981'}">${lowStock}</div>
@@ -6713,17 +6902,17 @@ async function renderInventory() {
                 <button class="btn btn-outline" onclick="importStockExcel()"><span class="material-symbols-outlined" style="font-size:1.1rem">upload</span> Import Stock</button>` : ''}
             </div>
         </div>
-        <div id="bulk-bar-inv" style="display:none;align-items:center;gap:8px;background:var(--accent);color:#fff;padding:8px 12px;border-radius:8px;margin-bottom:8px;flex-wrap:wrap">
+        ${isAdminInventoryView ? `<div id="bulk-bar-inv" style="display:none;align-items:center;gap:8px;background:var(--accent);color:#fff;padding:8px 12px;border-radius:8px;margin-bottom:8px;flex-wrap:wrap">
             <span id="bulk-cnt-inv" style="font-weight:700;flex:1">0 selected</span>
             <button class="btn" onclick="bulkActivateItems()" style="background:#fff;color:#10b981;padding:4px 10px;font-size:0.82rem;font-weight:600"> Activate</button>
             <button class="btn" onclick="bulkDeactivateItems()" style="background:#fff;color:#f59e0b;padding:4px 10px;font-size:0.82rem;font-weight:600"> Deactivate</button>
             <button class="btn" onclick="openBulkEditModal()" style="background:#fff;color:#6366f1;padding:4px 10px;font-size:0.82rem;font-weight:600"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-2px">edit_note</span> Bulk Edit</button>
             <button class="btn" onclick="bulkDeleteItems()" style="background:#ef4444;color:#fff;padding:4px 10px;font-size:0.82rem;font-weight:600"> Delete</button>
             <button class="btn" onclick="clearBulkItems()" style="background:rgba(255,255,255,0.2);color:#fff;padding:4px 10px;font-size:0.82rem"> Clear</button>
-        </div>
+        </div>` : ''}
         <div class="card"><div class="card-body">
             <div class="table-wrapper">
-                <table class="data-table" id="inv-table" style="min-width:900px"><thead><tr><th style="width:36px;text-align:center"><input type="checkbox" id="bulk-all-inv" onchange="toggleSelectAllItems(this)" style="width:16px;height:16px;cursor:pointer"></th>${ColumnManager.get('inventory').filter(c => c.visible).map(c => `<th>${c.label}</th>`).join('')}</tr></thead>
+                <table class="data-table" id="inv-table" style="min-width:900px"><thead><tr>${isAdminInventoryView ? `<th style="width:36px;text-align:center"><input type="checkbox" id="bulk-all-inv" onchange="toggleSelectAllItems(this)" style="width:16px;height:16px;cursor:pointer"></th>` : ''}${inventoryCols.map(c => `<th>${c.label}</th>`).join('')}</tr></thead>
                 <tbody id="inv-tbody">${renderInvRows(items, reservedMap, getABCAnalysis(items))}</tbody></table>
             </div>
         </div></div>
@@ -6744,8 +6933,10 @@ async function renderInventory() {
 }
 
 function renderInvRows(items, reservedMap = {}, abcMap = {}) {
-    if (!items.length) return '<tr><td colspan="13"><div class="empty-state"><div class="empty-icon"></div><p>No items yet</p></div></td></tr>';
     const cols = ColumnManager.get('inventory').filter(c => c.visible);
+    const isAdminInventoryView = userHasRole(currentUser, 'Admin');
+    const totalCols = cols.length + (isAdminInventoryView ? 1 : 0);
+    if (!items.length) return `<tr><td colspan="${totalCols}"><div class="empty-state"><div class="empty-icon"></div><p>No items yet</p></div></td></tr>`;
     return items.map(i => {
         const reserved = reservedMap[i.id] || 0;
         const available = i.stock - reserved;
@@ -6767,7 +6958,7 @@ function renderInvRows(items, reservedMap = {}, abcMap = {}) {
             value: `<td style="min-width:110px;text-align:right">${currency(i.stock * i.purchasePrice)}</td>`,
             actions: `<td style="min-width:150px"><div class="action-btns">${canEdit() ? `<button class="btn-icon" style="color:var(--primary)" onclick="openStockAdjustmentModal('${i.id}')" title="Adjust Stock"><span class="material-symbols-outlined" style="font-size:1.1rem">inventory</span></button>` : ''}<button class="btn-icon" style="color:var(--info)" onclick="renderStockLedger('${i.id}')" title="View Ledger"><span class="material-symbols-outlined" style="font-size:1.1rem">list_alt</span></button>${canEdit() ? `<button class="btn-icon" style="color:var(--warning)" onclick="openItemModal('${i.id}')" title="Edit"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button><button class="btn-icon" style="color:var(--danger)" onclick="deleteItem('${i.id}')" title="Delete"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>` : ''}</div></td>`,
         };
-        return `<tr><td style="width:36px;text-align:center"><input type="checkbox" class="bulk-chk-item" data-id="${i.id}" onchange="toggleBulkItem('${i.id}',this)" style="width:16px;height:16px;cursor:pointer" ${window._bulkItems && window._bulkItems.has(i.id) ? 'checked' : ''}></td>${cols.map(c => cellMap[c.key] || '').join('')}</tr>`;
+        return `<tr>${isAdminInventoryView ? `<td style="width:36px;text-align:center"><input type="checkbox" class="bulk-chk-item" data-id="${i.id}" onchange="toggleBulkItem('${i.id}',this)" style="width:16px;height:16px;cursor:pointer" ${window._bulkItems && window._bulkItems.has(i.id) ? 'checked' : ''}></td>` : ''}${cols.map(c => cellMap[c.key] || '').join('')}</tr>`;
     }).join('');
 }
 window.onInvCatChange = function () {
@@ -9802,19 +9993,21 @@ window.toggleSOLine = function (i) {
     else window._soExpandedLines.add(i);
     renderSOLines();
 };
-function openSoItemSubModal() { const el = $('so-item-sub-modal'); if (el) { el.classList.add('active'); setTimeout(() => { const inp = $('f-so-item-input'); if (inp) inp.focus(); }, 150); } }
+function openSoItemSubModal() { const el = $('so-item-sub-modal'); if (el) { setDocItemModalChrome(true); el.classList.add('active'); setTimeout(() => { const inp = $('f-so-item-input'); if (inp) inp.focus(); }, 150); } }
 function closeSoItemSubModal() {
     const activeEl = document.activeElement;
     if (activeEl && typeof activeEl.blur === 'function') activeEl.blur();
     const el = $('so-item-sub-modal');
     if (el) el.classList.remove('active');
+    setDocItemModalChrome(false);
 }
-function openInvItemSubModal() { const el = $('inv-item-sub-modal'); if (el) { el.classList.add('active'); setTimeout(() => { const inp = $('f-inv-item-input'); if (inp) inp.focus(); }, 150); } }
+function openInvItemSubModal() { const el = $('inv-item-sub-modal'); if (el) { setDocItemModalChrome(true); el.classList.add('active'); setTimeout(() => { const inp = $('f-inv-item-input'); if (inp) inp.focus(); }, 150); } }
 function closeInvItemSubModal() {
     const activeEl = document.activeElement;
     if (activeEl && typeof activeEl.blur === 'function') activeEl.blur();
     const el = $('inv-item-sub-modal');
     if (el) el.classList.remove('active');
+    setDocItemModalChrome(false);
 }
 
 async function saveSalesOrder(id) {
@@ -10192,6 +10385,7 @@ async function openSalesOrderModal() {
     currentPage = 'salesorders';
     pageTitle.textContent = 'New Sales Order';
     setPageChromeMode('sales-doc');
+    ensureMobileSalesOrderStartsCompact();
 
     const [parties, inv, categories] = await Promise.all([
         DB.getAll('parties'),
@@ -10269,6 +10463,7 @@ async function editSalesOrder(id) {
     currentPage = 'salesorders';
     pageTitle.textContent = 'Edit Sales Order';
     setPageChromeMode('sales-doc');
+    ensureMobileSalesOrderStartsCompact();
     pageContent.innerHTML = renderSalesOrderFormShell({
         title: `Edit ${orig.orderNo}`,
         subtitle: 'Adjust customer, lines, and commercial terms.',
@@ -14136,6 +14331,10 @@ async function renderPayments() {
                 <button onclick="openVyaparPaymentImport()" style="border:1px solid #7c3aed;background:transparent;color:#7c3aed;border-radius:7px;padding:7px 10px;font-size:0.85rem;cursor:pointer;flex-shrink:0" title="Import from Vyapar"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-3px">upload_file</span></button>
                 <button class="btn btn-primary btn-sm" onclick="openPaymentModal()" style="white-space:nowrap;padding:7px 14px;flex-shrink:0">+ Record</button>
             </div>
+            ${isSalesman ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:0 0 8px">
+                <button class="btn btn-primary btn-sm" onclick="openCollectionRoutePage()" style="justify-content:center"><span class="material-symbols-outlined" style="font-size:1rem">route</span> Collection Route</button>
+                <button class="btn btn-outline btn-sm" onclick="openCollectionBillsReportFromPayments()" style="justify-content:center;border-color:var(--primary);color:var(--primary)"><span class="material-symbols-outlined" style="font-size:1rem">assignment</span> Bills Report</button>
+            </div>` : ''}
             <div id="pay-extra-filters" style="display:none">
                 <input id="pay-search" placeholder="Search parties/receipts..." oninput="filterPayTable()" style="width:100%;margin-bottom:6px;padding:7px 10px;border:1px solid var(--border);border-radius:7px;font-size:0.82rem;background:var(--bg-input);box-sizing:border-box">
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
@@ -14173,6 +14372,8 @@ async function renderPayments() {
                 <div class="pay-filter-group"><label>Mode</label><select id="pay-mode-filter" onchange="filterPayTable()"><option value="">All Modes</option><option>Cash</option><option>UPI</option><option>Cheque</option><option>Bank Transfer</option></select></div>
                 ${!isSalesman ? `<div class="pay-filter-group"><label>Collector</label><select id="pay-collector-filter" onchange="filterPayTable()">${collectorOptions}</select></div>` : ''}
                 <div style="display:flex;gap:6px;align-items:center;padding-top:14px">
+                    ${isSalesman ? `<button class="btn btn-primary btn-sm" onclick="openCollectionRoutePage()" title="Collection Route"><span class="material-symbols-outlined" style="font-size:1.1rem">route</span> Collection Route</button>` : ''}
+                    ${isSalesman ? `<button class="btn btn-outline btn-sm" onclick="openCollectionBillsReportFromPayments()" title="Bills Report" style="border-color:var(--primary);color:var(--primary)"><span class="material-symbols-outlined" style="font-size:1.1rem">assignment</span> Bills Report</button>` : ''}
                     <button class="btn btn-outline btn-sm" onclick="DB.exportToExcel('tbl-payments', 'payments')" title="Export Excel" style="border-color:#16a34a;color:#16a34a"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span></button>
                     <button class="btn btn-outline btn-sm" onclick="openColumnPersonalizer('payments','renderPayments')" title="Column Config" style="border-color:var(--accent);color:var(--accent)"><span class="material-symbols-outlined" style="font-size:1.1rem">view_column</span></button>
                     <button class="btn btn-outline btn-sm" onclick="openVyaparPaymentImport()" title="Import Payments from Vyapar" style="border-color:#7c3aed;color:#7c3aed"><span class="material-symbols-outlined" style="font-size:1.1rem">upload_file</span></button>
@@ -14189,6 +14390,269 @@ async function renderPayments() {
         <div id="pay-list" style="display:none"></div>`;
     }
     filterPayTable();
+}
+function formatCollectionRouteDistance(distanceKm) {
+    if (!Number.isFinite(distanceKm)) return 'GPS pending';
+    if (distanceKm < 1) return `${Math.max(1, Math.round(distanceKm * 1000))} m away`;
+    return `${distanceKm.toFixed(distanceKm < 10 ? 1 : 0)} km away`;
+}
+function requestCollectionRouteLocation(forceRefresh = false) {
+    if (!navigator.geolocation || window._collectionRouteGpsPending) return false;
+    window._collectionRouteGpsPending = true;
+    window._collectionRouteGpsMessage = forceRefresh
+        ? 'Refreshing nearby order from current location...'
+        : 'Getting current location for route sorting...';
+    navigator.geolocation.getCurrentPosition(pos => {
+        window._userCoords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        window._collectionRouteGpsPending = false;
+        window._collectionRouteGpsMessage = forceRefresh
+            ? 'Nearby order refreshed from current GPS.'
+            : 'Route sorted using current GPS.';
+        if (currentPage === 'collectionroute') renderCollectionRoutePage(forceRefresh, true);
+    }, err => {
+        window._collectionRouteGpsPending = false;
+        window._collectionRouteGpsMessage = err && err.code === 1
+            ? 'Location permission is blocked. Route stays in saved order.'
+            : 'Current GPS could not be read. Route kept the saved order.';
+        console.warn('Collection route geolocation failed', err);
+        if (currentPage === 'collectionroute') renderCollectionRoutePage(forceRefresh, true);
+    }, {
+        enableHighAccuracy: true,
+        maximumAge: forceRefresh ? 0 : 60000,
+        timeout: 12000
+    });
+    return true;
+}
+function renderCollectionRouteCard(entry, sectionKey = 'pending', index = 0, total = 0) {
+    const routeKeyJs = escapeHtml(JSON.stringify(entry.routeKey || ''));
+    const partyIdJs = escapeHtml(JSON.stringify(entry.partyId || ''));
+    const nameJs = escapeHtml(JSON.stringify(entry.partyName || ''));
+    const latJs = escapeHtml(JSON.stringify(entry.lat || ''));
+    const lngJs = escapeHtml(JSON.stringify(entry.lng || ''));
+    const historyPartyJs = escapeHtml(JSON.stringify(entry.partyId || ''));
+    const hasGps = !!(entry.lat && entry.lng);
+    const hasPartyId = !!entry.partyId;
+    const safePhone = String(entry.phone || '').replace(/[^0-9+]/g, '');
+    const invoiceLabels = (entry.invoices || [])
+        .map(row => row.displayInvoiceNo || row.invoiceNo || '')
+        .filter(Boolean);
+    const invoicePreview = invoiceLabels.length > 3
+        ? `${invoiceLabels.slice(0, 3).join(', ')} +${invoiceLabels.length - 3} more`
+        : (invoiceLabels.join(', ') || 'Invoice details are not linked yet.');
+    const areaLine = [entry.area, entry.city, entry.routeCode].filter(Boolean).join(' | ') || 'Collection party';
+    const badgeMap = {
+        pending: { label: `Stop ${index + 1}${total ? ` / ${total}` : ''}`, bg: 'rgba(59,130,246,0.12)', color: '#1d4ed8' },
+        no_payment: { label: 'No Payment', bg: 'rgba(245,158,11,0.12)', color: '#b45309' },
+        partial: { label: 'Partial', bg: 'rgba(139,92,246,0.12)', color: '#6d28d9' },
+        done: { label: 'Done Today', bg: 'rgba(16,185,129,0.12)', color: '#047857' }
+    };
+    const badge = badgeMap[sectionKey] || badgeMap.pending;
+    const metricCell = (label, value, tone = 'var(--text-primary)') => `
+        <div style="background:var(--bg-body);border:1px solid var(--border);border-radius:10px;padding:9px 10px">
+            <div style="font-size:0.68rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.35px">${label}</div>
+            <div style="font-size:0.95rem;font-weight:800;color:${tone};margin-top:3px">${value}</div>
+        </div>`;
+    let statusHtml = '';
+    if (sectionKey === 'no_payment') {
+        statusHtml = `
+            <div style="margin:0 0 10px;padding:10px 12px;border-radius:10px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.18);font-size:0.82rem;color:var(--text-secondary)">
+                <div style="font-weight:700;color:#b45309;margin-bottom:4px">${escapeHtml(entry.reason || 'No payment captured')}</div>
+                <div>Follow up: <strong>${entry.followUpDate ? fmtDate(entry.followUpDate) : 'Not set'}</strong></div>
+                ${entry.note ? `<div style="margin-top:4px">Note: ${escapeHtml(entry.note)}</div>` : ''}
+            </div>`;
+    } else if (sectionKey === 'partial') {
+        statusHtml = `
+            <div style="margin:0 0 10px;padding:10px 12px;border-radius:10px;background:rgba(139,92,246,0.08);border:1px solid rgba(139,92,246,0.18);font-size:0.82rem;color:var(--text-secondary)">
+                <div style="font-weight:700;color:#6d28d9;margin-bottom:4px">Payment received today: ${currency(entry.todayReceived || 0)}</div>
+                <div>Balance still pending: <strong>${currency(entry.balanceAmount || 0)}</strong></div>
+                ${entry.lastPaymentRef ? `<div style="margin-top:4px">Receipt: ${escapeHtml(entry.lastPaymentRef)}</div>` : ''}
+            </div>`;
+    } else if (sectionKey === 'done') {
+        statusHtml = `
+            <div style="margin:0 0 10px;padding:10px 12px;border-radius:10px;background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.18);font-size:0.82rem;color:var(--text-secondary)">
+                <div style="font-weight:700;color:#047857;margin-bottom:4px">Settled today</div>
+                <div>Collected today: <strong>${currency(entry.todayReceived || 0)}</strong></div>
+                ${entry.lastPaymentRef ? `<div style="margin-top:4px">Receipt: ${escapeHtml(entry.lastPaymentRef)}</div>` : ''}
+            </div>`;
+    }
+    const actionButtons = [];
+    if ((sectionKey === 'pending' || sectionKey === 'partial' || sectionKey === 'no_payment') && hasPartyId) {
+        actionButtons.push(`<button class="btn btn-primary btn-sm" onclick="openCollectionRoutePayment(${routeKeyJs}, ${partyIdJs})">Record Payment</button>`);
+    }
+    if (sectionKey === 'pending') {
+        actionButtons.push(`<button class="btn btn-outline btn-sm" onclick="openCollectionRouteNoPayment(${routeKeyJs})">No Payment</button>`);
+    }
+    if (sectionKey === 'no_payment') {
+        actionButtons.push(`<button class="btn btn-outline btn-sm" onclick="reopenCollectionRouteParty(${routeKeyJs})">Move to Current</button>`);
+    }
+    if (hasGps) {
+        actionButtons.push(`<button class="btn btn-outline btn-sm" onclick="openPartyMap(${latJs}, ${lngJs}, ${nameJs})">Navigate</button>`);
+    }
+    if (safePhone) {
+        actionButtons.push(`<a class="btn btn-outline btn-sm" href="tel:${safePhone}">Call</a>`);
+    }
+    if (hasPartyId) {
+        actionButtons.push(`<button class="btn btn-outline btn-sm" onclick="showPaymentHistory(${historyPartyJs}, '')">History</button>`);
+    }
+    if (sectionKey === 'pending' && total > 1) {
+        actionButtons.push(`<button class="btn btn-outline btn-sm" ${index === 0 ? 'disabled' : ''} onclick="moveCollectionRouteParty(${routeKeyJs}, -1)">Up</button>`);
+        actionButtons.push(`<button class="btn btn-outline btn-sm" ${index === total - 1 ? 'disabled' : ''} onclick="moveCollectionRouteParty(${routeKeyJs}, 1)">Down</button>`);
+    }
+    return `
+        <div style="border:1px solid var(--border);border-radius:14px;padding:14px 14px 12px;margin-bottom:12px;background:var(--bg-card);box-shadow:0 10px 24px rgba(15,23,42,0.04)">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
+                <div style="flex:1;min-width:0">
+                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px">
+                        <div style="font-size:1rem;font-weight:800;color:var(--text-primary)">${escapeHtml(entry.partyName || 'Unknown Party')}</div>
+                        ${entry.partyCode ? `<span class="badge badge-info" style="font-size:0.68rem">${escapeHtml(entry.partyCode)}</span>` : ''}
+                        <span style="font-size:0.72rem;font-weight:700;padding:4px 8px;border-radius:999px;background:${badge.bg};color:${badge.color}">${badge.label}</span>
+                    </div>
+                    <div style="font-size:0.8rem;color:var(--text-muted)">${escapeHtml(areaLine)}</div>
+                </div>
+                <div style="text-align:right;min-width:110px">
+                    <div style="font-size:0.68rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.4px">Balance</div>
+                    <div style="font-size:1.15rem;font-weight:900;color:var(--danger);margin-top:2px">${currency(entry.balanceAmount || 0)}</div>
+                </div>
+            </div>
+
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin:12px 0 10px">
+                ${metricCell('Invoices', String(entry.invoiceCount || 0))}
+                ${metricCell('Overdue', `${entry.overdueDays || 0} day${entry.overdueDays === 1 ? '' : 's'}`, (entry.overdueDays || 0) > 0 ? 'var(--danger)' : 'var(--success)')}
+                ${metricCell('Due Date', entry.dueDate ? fmtDate(entry.dueDate) : '-', 'var(--text-primary)')}
+                ${metricCell('Assigned', entry.assignedDate ? fmtDate(entry.assignedDate) : '-', 'var(--text-primary)')}
+                ${metricCell('Nearby', formatCollectionRouteDistance(entry.distanceKm), Number.isFinite(entry.distanceKm) ? 'var(--primary)' : 'var(--text-muted)')}
+                ${metricCell('Inv Amount', currency(entry.invoiceAmount || 0), 'var(--text-primary)')}
+            </div>
+
+            <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:10px">Bills: ${escapeHtml(invoicePreview)}</div>
+            ${statusHtml}
+
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+                ${actionButtons.join('')}
+            </div>
+        </div>`;
+}
+function renderCollectionRouteSection(title, entries, sectionKey, emptyMessage) {
+    const badgeClass = sectionKey === 'done'
+        ? 'badge-success'
+        : (sectionKey === 'partial' ? 'badge-info' : (sectionKey === 'no_payment' ? 'badge-warning' : 'badge-info'));
+    return `
+        <div class="card" style="margin:0 0 14px">
+            <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+                <h3>${title}</h3>
+                <span class="badge ${badgeClass}" style="font-size:0.72rem">${entries.length}</span>
+            </div>
+            <div class="card-body" style="padding:14px 14px 8px">
+                ${entries.length
+                    ? entries.map((entry, index) => renderCollectionRouteCard(entry, sectionKey, index, entries.length)).join('')
+                    : `<div class="empty-state" style="padding:20px 12px"><p>${escapeHtml(emptyMessage)}</p></div>`}
+            </div>
+        </div>`;
+}
+async function renderCollectionRoutePage(forceRefresh = false, skipGpsRefresh = false) {
+    currentPage = 'collectionroute';
+    pageTitle.textContent = 'Collection Route';
+    DB.showSkeleton(pageContent, 3);
+
+    if (!skipGpsRefresh && (!window._userCoords || forceRefresh)) {
+        requestCollectionRouteLocation(forceRefresh);
+    }
+
+    const [invoices, payments, parties, users] = await Promise.all([
+        DB.getAll('invoices'),
+        DB.getAll('payments'),
+        DB.getAll('parties'),
+        DB.getAll('users')
+    ]);
+    const reportRows = buildCollectionAllocationReportRows(invoices, payments, parties);
+    const { entries, routeState } = buildCollectionRoutePartyEntries(reportRows, parties, payments, currentUser, users);
+    const sections = resolveCollectionRouteSections(entries, routeState, forceRefresh);
+    saveCollectionRouteState(sections.routeState);
+    window._collectionRouteEntryMap = Object.fromEntries(entries.map(entry => [entry.routeKey, entry]));
+
+    const pendingBalance = sections.pending.reduce((sum, entry) => sum + +(entry.balanceAmount || 0), 0);
+    const totalBalance = entries.reduce((sum, entry) => sum + +(entry.balanceAmount || 0), 0);
+    const gpsStatus = window._collectionRouteGpsPending
+        ? 'Reading current GPS and refreshing nearby order...'
+        : (window._collectionRouteGpsMessage
+            || (Number.isFinite(sections.pending[0]?.distanceKm)
+                ? `Next stop is ${formatCollectionRouteDistance(sections.pending[0].distanceKm)} from current GPS.`
+                : 'GPS not ready yet. Tap Refresh Nearby once location is available.'));
+
+    if (!entries.length) {
+        pageContent.innerHTML = `
+            <div class="card">
+                <div class="card-body" style="padding:18px">
+                    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+                        <div>
+                            <h3 style="margin:0 0 6px">Collection Route</h3>
+                            <div style="font-size:0.84rem;color:var(--text-muted)">Allocated party-wise queue for field collections.</div>
+                        </div>
+                        <div style="display:flex;gap:8px;flex-wrap:wrap">
+                            <button class="btn btn-outline" onclick="refreshCollectionRouteNearby()">Refresh Nearby</button>
+                            <button class="btn btn-outline" onclick="openCollectionBillsReportFromRoute()">Bills Report</button>
+                            <button class="btn btn-primary" onclick="navigateTo('payments')">Open Payments</button>
+                        </div>
+                    </div>
+                    <div style="padding:12px 14px;border-radius:12px;background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.14);font-size:0.82rem;color:var(--text-secondary);margin-bottom:14px">${escapeHtml(gpsStatus)}</div>
+                    <div class="empty-state" style="padding:30px 12px">
+                        <p>No allocated pending bills were found for ${escapeHtml(currentUser?.name || 'this user')}.</p>
+                        <p class="empty-subtitle">Assign sale invoices for collection and they will appear here party-wise.</p>
+                    </div>
+                </div>
+            </div>`;
+        return;
+    }
+
+    pageContent.innerHTML = `
+        <div class="card" style="margin-bottom:14px;background:linear-gradient(135deg,rgba(59,130,246,0.08),rgba(16,185,129,0.06));border:1px solid rgba(59,130,246,0.14)">
+            <div class="card-body" style="padding:18px">
+                <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
+                    <div style="min-width:0;flex:1">
+                        <h3 style="margin:0 0 6px">Collection Route</h3>
+                        <div style="font-size:0.84rem;color:var(--text-muted);max-width:760px">Route starts from GPS order, then visited outlets move into buckets so the next party comes up automatically.</div>
+                    </div>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap">
+                        <button class="btn btn-outline" onclick="refreshCollectionRouteNearby()">Refresh Nearby</button>
+                        <button class="btn btn-outline" onclick="openCollectionBillsReportFromRoute()">Bills Report</button>
+                        <button class="btn btn-primary" onclick="navigateTo('payments')">Open Payments</button>
+                    </div>
+                </div>
+                <div style="margin-top:12px;padding:12px 14px;border-radius:12px;background:rgba(255,255,255,0.75);border:1px solid rgba(59,130,246,0.12);font-size:0.82rem;color:var(--text-secondary)">${escapeHtml(gpsStatus)}</div>
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-top:14px">
+                    <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:12px 14px">
+                        <div style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase">Pending Route</div>
+                        <div style="font-size:1.2rem;font-weight:900;color:var(--danger);margin-top:4px">${sections.pending.length}</div>
+                        <div style="font-size:0.78rem;color:var(--text-muted)">Balance ${currency(pendingBalance)}</div>
+                    </div>
+                    <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:12px 14px">
+                        <div style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase">No Payment</div>
+                        <div style="font-size:1.2rem;font-weight:900;color:#b45309;margin-top:4px">${sections.noPayment.length}</div>
+                        <div style="font-size:0.78rem;color:var(--text-muted)">Follow up bucket</div>
+                    </div>
+                    <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:12px 14px">
+                        <div style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase">Partial</div>
+                        <div style="font-size:1.2rem;font-weight:900;color:#6d28d9;margin-top:4px">${sections.partial.length}</div>
+                        <div style="font-size:0.78rem;color:var(--text-muted)">Collect again later</div>
+                    </div>
+                    <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:12px 14px">
+                        <div style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase">Done Today</div>
+                        <div style="font-size:1.2rem;font-weight:900;color:#047857;margin-top:4px">${sections.done.length}</div>
+                        <div style="font-size:0.78rem;color:var(--text-muted)">Visited and settled</div>
+                    </div>
+                    <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:12px 14px">
+                        <div style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase">Total Balance</div>
+                        <div style="font-size:1.2rem;font-weight:900;color:var(--text-primary);margin-top:4px">${currency(totalBalance)}</div>
+                        <div style="font-size:0.78rem;color:var(--text-muted)">${entries.length} parties in route</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        ${renderCollectionRouteSection('Current Route', sections.pending, 'pending', 'All pending outlets are cleared for now.')}
+        ${renderCollectionRouteSection('No Payment', sections.noPayment, 'no_payment', 'No outlets have been marked as no payment today.')}
+        ${renderCollectionRouteSection('Partially Collected', sections.partial, 'partial', 'No partial collections yet today.')}
+        ${renderCollectionRouteSection('Done Today', sections.done, 'done', 'No parties are fully settled yet today.')}`;
 }
 function togglePayFilters() {
     const extra = $('pay-extra-filters');
@@ -14594,11 +15058,14 @@ async function openPaymentModal(prefillPartyId) {
     const collectors = users.filter(u => isSalesOpsUser(u));
     const co = DB.ls.getObj('db_company') || {};
     const isSalesmanRole = currentUser && userHasRole(currentUser, 'Salesman') && !canEdit();
+    const returnPage = currentPage || 'payments';
+    const returnAction = `navigateTo('${returnPage}')`;
+    const isRouteContext = returnPage === 'collectionroute';
 
     pageContent.innerHTML = `
         <!-- Sticky top bar -->
         <div class="pay-page-header">
-            <button class="btn-icon pay-back-btn" onclick="renderPayments()"><span class="material-symbols-outlined">arrow_back</span></button>
+            <button class="btn-icon pay-back-btn" onclick="${returnAction}"><span class="material-symbols-outlined">arrow_back</span></button>
             <div style="flex:1">
                 <div style="font-size:1rem;font-weight:700;color:var(--text-primary)">Record Payment</div>
                 <div style="font-size:0.75rem;color:var(--text-muted)" id="pay-co-name">${escapeHtml(co.name || '')}</div>
@@ -14694,9 +15161,9 @@ async function openPaymentModal(prefillPartyId) {
 
         <!-- Sticky save footer -->
         <div class="pay-page-footer">
-            ${!isSalesmanRole ? `<button class="btn btn-outline" style="flex:1;min-height:48px" onclick="renderPayments()">Cancel</button>` : ''}
-            <button class="btn btn-outline btn-save-new" id="btn-save-new" onclick="window._saveAndNew=true;savePayment()"> Save & New</button>
-            <button class="btn btn-primary" id="btn-save-payment" style="flex:2;min-height:48px;font-size:1rem;font-weight:700" onclick="savePayment()"> Save Payment</button>
+            ${(!isSalesmanRole || isRouteContext || returnPage === 'dashboard') ? `<button class="btn btn-outline" style="flex:1;min-height:48px" onclick="${returnAction}">Cancel</button>` : ''}
+            ${!isRouteContext ? `<button class="btn btn-outline btn-save-new" id="btn-save-new" onclick="window._saveAndNew=true;savePayment()"> Save & New</button>` : ''}
+            <button class="btn btn-primary" id="btn-save-payment" style="flex:2;min-height:48px;font-size:1rem;font-weight:700" onclick="savePayment()">${isRouteContext ? 'Save & Next' : 'Save Payment'}</button>
         </div>
     `;
 
@@ -15232,8 +15699,14 @@ async function savePayment(id) {
         // Force background sync before rendering to show immediate results
         await DB.refreshTables(['payments', 'parties', 'party_ledger', 'expenses']);
 
-        if (andNew) {
+        if (currentPage === 'collectionroute' && payType === 'in') {
+            markCollectionRoutePaymentResult(payPartyId, payPartyName, payRefNo, totalReduction);
+        }
+
+        if (andNew && currentPage !== 'collectionroute') {
             openPaymentModal();
+        } else if (currentPage === 'collectionroute') {
+            await renderCollectionRoutePage();
         } else if (currentPage === 'payments') {
             await renderPayments();
         } else {
@@ -19710,7 +20183,392 @@ function exportTableToExcel(tableId, filename) {
     link.click();
     showToast('Report exported!', 'success');
 }
+function setReportBackNavigation(action = 'renderReports()', label = 'Back') {
+    window._reportBackAction = action;
+    window._reportBackLabel = label;
+}
+function consumeReportBackNavigation() {
+    const nav = {
+        action: window._reportBackAction || 'renderReports()',
+        label: window._reportBackLabel || 'Back'
+    };
+    setReportBackNavigation('renderReports()', 'Back');
+    return nav;
+}
+function getCollectionAllocationCollector(invoice) {
+    return String(invoice?.allocatedTo || invoice?.assignedTo || '').trim();
+}
+function getCollectionAllocationAssignedDate(invoice, collector = getCollectionAllocationCollector(invoice)) {
+    const history = Array.isArray(invoice?.allocationHistory) ? invoice.allocationHistory : [];
+    if (collector && history.length) {
+        for (let i = history.length - 1; i >= 0; i--) {
+            const entry = history[i] || {};
+            if (String(entry.assignedTo || '').trim() === collector && entry.date) {
+                return String(entry.date).substring(0, 10);
+            }
+        }
+    }
+    return invoice?.handoverDate || '';
+}
+function buildCollectionAllocationReportRows(invoices = [], payments = [], parties = []) {
+    const paidMap = buildInvoicePaidMap(payments);
+    const partyMap = new Map((parties || []).map(p => [String(p.id), p]));
+    return (invoices || [])
+        .filter(inv => inv.type === 'sale' && inv.status !== 'cancelled')
+        .map(inv => {
+            const collector = getCollectionAllocationCollector(inv);
+            const party = partyMap.get(String(inv.partyId)) || (parties || []).find(p => p.name === inv.partyName) || null;
+            const invoiceNo = inv.invoiceNo || '';
+            const displayInvoiceNo = getInvoiceDisplayNo(inv) || getInvoiceDisplayNo(invoiceNo) || invoiceNo;
+            const invoiceDate = inv.date || '';
+            const invoiceAmount = +(inv.total || 0);
+            const receivedAmount = +(paidMap[invoiceNo] || 0);
+            const balanceAmount = Math.max(0, +((invoiceAmount - receivedAmount).toFixed(2)));
+            const dueDate = inv.dueDate || '';
+            const dueMeta = getDueStatusMeta(dueDate);
+            const overdueDays = dueMeta.state === 'overdue' ? Math.abs(dueMeta.days || 0) : 0;
+            return {
+                invoiceId: inv.id,
+                invoiceNo,
+                displayInvoiceNo,
+                invoiceDate,
+                partyId: inv.partyId || (party ? party.id : ''),
+                partyCode: party?.partyCode || '',
+                partyName: inv.partyName || party?.name || '',
+                invoiceAmount,
+                receivedAmount,
+                balanceAmount,
+                dueDate,
+                assignedDate: getCollectionAllocationAssignedDate(inv, collector),
+                overdueDays,
+                collector,
+                dueMeta
+            };
+        })
+        .sort((a, b) =>
+            (b.overdueDays - a.overdueDays)
+            || String(a.dueDate || '9999-12-31').localeCompare(String(b.dueDate || '9999-12-31'))
+            || String(b.invoiceDate || '').localeCompare(String(a.invoiceDate || ''))
+            || String(a.displayInvoiceNo || '').localeCompare(String(b.displayInvoiceNo || ''))
+        );
+}
+function getCollectionRoutePartyKey(partyId = '', partyName = '') {
+    return partyId ? `party:${partyId}` : `name:${normalizeIdentityValue(partyName)}`;
+}
+function getCollectionRouteUserKey(user = currentUser) {
+    return normalizeIdentityValue(user?.userId || user?.name || 'salesman') || 'salesman';
+}
+function getCollectionRouteStorageKey(date = today(), user = currentUser) {
+    return `collection_route_${date}_${getCollectionRouteUserKey(user)}`;
+}
+function getCollectionRouteDefaultState() {
+    return { order: [], statuses: {} };
+}
+function getCollectionRouteState(date = today(), user = currentUser) {
+    try {
+        const raw = JSON.parse(localStorage.getItem(getCollectionRouteStorageKey(date, user)) || 'null');
+        if (!raw || typeof raw !== 'object') return getCollectionRouteDefaultState();
+        return {
+            order: Array.isArray(raw.order) ? raw.order.map(String) : [],
+            statuses: raw.statuses && typeof raw.statuses === 'object' ? raw.statuses : {}
+        };
+    } catch (err) {
+        return getCollectionRouteDefaultState();
+    }
+}
+function saveCollectionRouteState(state, date = today(), user = currentUser) {
+    const safeState = {
+        order: Array.isArray(state?.order) ? state.order.map(String) : [],
+        statuses: state?.statuses && typeof state.statuses === 'object' ? state.statuses : {}
+    };
+    localStorage.setItem(getCollectionRouteStorageKey(date, user), JSON.stringify(safeState));
+    return safeState;
+}
+function pruneCollectionRouteState(state, activeKeys = []) {
+    const safeState = {
+        order: Array.isArray(state?.order) ? [...state.order] : [],
+        statuses: state?.statuses && typeof state.statuses === 'object' ? { ...state.statuses } : {}
+    };
+    const activeSet = new Set((activeKeys || []).map(String));
+    safeState.order = safeState.order.filter(key => activeSet.has(String(key)));
+    Object.keys(safeState.statuses).forEach(key => {
+        if (!activeSet.has(String(key))) delete safeState.statuses[key];
+    });
+    return safeState;
+}
+function getCollectionRouteTomorrowDate() {
+    const dt = new Date();
+    dt.setDate(dt.getDate() + 1);
+    return new Date(dt.getTime() - dt.getTimezoneOffset() * 60000).toISOString().split('T')[0];
+}
+function setCollectionRoutePartyStatus(routeKey, patch = {}, date = today(), user = currentUser) {
+    const state = getCollectionRouteState(date, user);
+    const next = {
+        ...(state.statuses[routeKey] || {}),
+        ...patch,
+        updatedAt: new Date().toISOString()
+    };
+    state.statuses[routeKey] = next;
+    saveCollectionRouteState(state, date, user);
+    return next;
+}
+function clearCollectionRoutePartyStatus(routeKey, date = today(), user = currentUser) {
+    const state = getCollectionRouteState(date, user);
+    if (state.statuses[routeKey]) delete state.statuses[routeKey];
+    state.order = (state.order || []).filter(key => key !== routeKey);
+    saveCollectionRouteState(state, date, user);
+}
+function getCollectionRouteTodayPaymentSummary(payments = [], user = currentUser, users = getCachedUsers()) {
+    const summary = new Map();
+    (payments || [])
+        .filter(payment =>
+            payment.type === 'in'
+            && payment.date === today()
+            && matchesAnyUserIdentity([
+                payment.collectedBy || payment.collected_by,
+                payment.createdBy || payment.created_by
+            ], user, users)
+        )
+        .forEach(payment => {
+            const routeKey = getCollectionRoutePartyKey(payment.partyId || payment.party_id, payment.partyName || payment.party_name);
+            if (!routeKey) return;
+            const current = summary.get(routeKey) || { received: 0, count: 0, lastRef: '' };
+            current.received += +(payment.totalReduction || payment.total_reduction || payment.amount || 0);
+            current.count += 1;
+            current.lastRef = getPaymentReferenceNo(payment) || current.lastRef;
+            summary.set(routeKey, current);
+        });
+    return summary;
+}
+function buildCollectionRoutePartyEntries(rows = [], parties = [], payments = [], user = currentUser, users = getCachedUsers()) {
+    const partyMap = new Map((parties || []).map(party => [String(party.id), party]));
+    const todaySummary = getCollectionRouteTodayPaymentSummary(payments, user, users);
+    const grouped = new Map();
+
+    (rows || [])
+        .filter(row => row.collector && matchesUserIdentity(row.collector, user, users))
+        .forEach(row => {
+            const routeKey = getCollectionRoutePartyKey(row.partyId, row.partyName);
+            if (!routeKey) return;
+            const party = partyMap.get(String(row.partyId)) || (parties || []).find(p => normalizeIdentityValue(p.name) === normalizeIdentityValue(row.partyName)) || null;
+            const current = grouped.get(routeKey) || {
+                routeKey,
+                partyId: row.partyId || (party ? party.id : ''),
+                partyCode: row.partyCode || party?.partyCode || '',
+                partyName: row.partyName || party?.name || 'Unknown Party',
+                area: party?.area || '',
+                city: party?.city || '',
+                routeCode: party?.routeCode || '',
+                phone: party?.phone || '',
+                lat: party?.lat || '',
+                lng: party?.lng || '',
+                invoices: [],
+                invoiceCount: 0,
+                invoiceAmount: 0,
+                receivedAmount: 0,
+                balanceAmount: 0,
+                overdueDays: 0,
+                dueDate: '',
+                assignedDate: '',
+                todayReceived: 0,
+                todayReceiptCount: 0,
+                lastPaymentRef: '',
+                bucket: 'pending',
+                note: '',
+                reason: '',
+                followUpDate: '',
+                lastActionAt: '',
+                distanceKm: Infinity
+            };
+            current.invoices.push(row);
+            current.invoiceCount += 1;
+            current.invoiceAmount += +(row.invoiceAmount || 0);
+            current.receivedAmount += +(row.receivedAmount || 0);
+            current.balanceAmount += +(row.balanceAmount || 0);
+            current.overdueDays = Math.max(current.overdueDays || 0, +(row.overdueDays || 0));
+            const currentDue = current.dueDate || '9999-12-31';
+            const rowDue = row.dueDate || '9999-12-31';
+            if (rowDue < currentDue) current.dueDate = row.dueDate || current.dueDate;
+            const currentAssigned = current.assignedDate || '9999-12-31';
+            const rowAssigned = row.assignedDate || '9999-12-31';
+            if (rowAssigned < currentAssigned) current.assignedDate = row.assignedDate || current.assignedDate;
+            grouped.set(routeKey, current);
+        });
+
+    let routeState = getCollectionRouteState(today(), user);
+    const entries = [...grouped.values()]
+        .map(entry => {
+            const todayInfo = todaySummary.get(entry.routeKey) || { received: 0, count: 0, lastRef: '' };
+            const statusInfo = routeState.statuses[entry.routeKey] || {};
+            entry.todayReceived = +(todayInfo.received || 0);
+            entry.todayReceiptCount = +(todayInfo.count || 0);
+            entry.lastPaymentRef = statusInfo.paymentRef || todayInfo.lastRef || '';
+            entry.note = statusInfo.note || '';
+            entry.reason = statusInfo.reason || '';
+            entry.followUpDate = statusInfo.followUpDate || '';
+            entry.lastActionAt = statusInfo.updatedAt || '';
+            if (window._userCoords && entry.lat && entry.lng) {
+                entry.distanceKm = haversine(window._userCoords.lat, window._userCoords.lng, entry.lat, entry.lng);
+            }
+            const statusValue = statusInfo.status || '';
+            if (entry.balanceAmount <= 0.009 && (statusValue || entry.todayReceived > 0.009)) entry.bucket = 'done';
+            else if (statusValue === 'no_payment') entry.bucket = 'no_payment';
+            else if (statusValue === 'partial') entry.bucket = 'partial';
+            else if (entry.todayReceived > 0.009 && entry.balanceAmount > 0.009) entry.bucket = 'partial';
+            else entry.bucket = 'pending';
+            return entry;
+        })
+        .filter(entry => entry.balanceAmount > 0.009 || entry.bucket !== 'pending');
+
+    routeState = pruneCollectionRouteState(routeState, entries.map(entry => entry.routeKey));
+    return { entries, routeState };
+}
+function resolveCollectionRouteSections(entries = [], routeState = getCollectionRouteState(), forceRefresh = false) {
+    const distanceSort = (left, right) =>
+        ((left.distanceKm ?? Infinity) - (right.distanceKm ?? Infinity))
+        || ((right.overdueDays || 0) - (left.overdueDays || 0))
+        || String(left.partyName || '').localeCompare(String(right.partyName || ''));
+    const pendingEntries = entries.filter(entry => entry.bucket === 'pending');
+    const pendingMap = new Map(pendingEntries.map(entry => [entry.routeKey, entry]));
+    let order = forceRefresh
+        ? []
+        : (Array.isArray(routeState.order) ? routeState.order.filter(key => pendingMap.has(key)) : []);
+
+    if (!order.length || forceRefresh) {
+        order = [...pendingEntries].sort(distanceSort).map(entry => entry.routeKey);
+    } else {
+        const missing = pendingEntries
+            .filter(entry => !order.includes(entry.routeKey))
+            .sort(distanceSort)
+            .map(entry => entry.routeKey);
+        order = [...order, ...missing];
+    }
+
+    routeState.order = order;
+    return {
+        pending: order.map(key => pendingMap.get(key)).filter(Boolean),
+        noPayment: entries
+            .filter(entry => entry.bucket === 'no_payment')
+            .sort((left, right) =>
+                String(left.followUpDate || '9999-12-31').localeCompare(String(right.followUpDate || '9999-12-31'))
+                || String(right.lastActionAt || '').localeCompare(String(left.lastActionAt || ''))
+                || String(left.partyName || '').localeCompare(String(right.partyName || ''))
+            ),
+        partial: entries
+            .filter(entry => entry.bucket === 'partial')
+            .sort((left, right) =>
+                String(right.lastActionAt || '').localeCompare(String(left.lastActionAt || ''))
+                || ((right.todayReceived || 0) - (left.todayReceived || 0))
+                || String(left.partyName || '').localeCompare(String(right.partyName || ''))
+            ),
+        done: entries
+            .filter(entry => entry.bucket === 'done')
+            .sort((left, right) =>
+                String(right.lastActionAt || '').localeCompare(String(left.lastActionAt || ''))
+                || String(left.partyName || '').localeCompare(String(right.partyName || ''))
+            ),
+        routeState
+    };
+}
+function openCollectionBillsReportFromRoute() {
+    setReportBackNavigation(`pageTitle.textContent='Collection Route';renderCollectionRoutePage()`, 'Back to Route');
+    pageTitle.textContent = 'My Collection Bills';
+    showReport('collection-allocations');
+}
+function openCollectionRoutePage() {
+    navigateTo('collectionroute');
+}
+function refreshCollectionRouteNearby() {
+    renderCollectionRoutePage(true);
+}
+function moveCollectionRouteParty(routeKey, direction = 1) {
+    const state = getCollectionRouteState();
+    const order = Array.isArray(state.order) ? [...state.order] : [];
+    const currentIndex = order.indexOf(routeKey);
+    const nextIndex = currentIndex + direction;
+    if (currentIndex < 0 || nextIndex < 0 || nextIndex >= order.length) return;
+    [order[currentIndex], order[nextIndex]] = [order[nextIndex], order[currentIndex]];
+    state.order = order;
+    saveCollectionRouteState(state);
+    renderCollectionRoutePage();
+}
+function openCollectionRoutePayment(routeKey, partyId = '') {
+    window._collectionRouteActiveKey = routeKey;
+    window._collectionRouteActivePartyId = partyId || '';
+    openPaymentModal(partyId);
+}
+function markCollectionRoutePaymentResult(partyId = '', partyName = '', paymentRef = '', receivedAmount = 0) {
+    const routeKey = window._collectionRouteActiveKey || getCollectionRoutePartyKey(partyId, partyName);
+    if (!routeKey) return;
+    setCollectionRoutePartyStatus(routeKey, {
+        status: 'partial',
+        paymentRef,
+        receivedAmount: +(receivedAmount || 0)
+    });
+    window._collectionRouteActiveKey = '';
+    window._collectionRouteActivePartyId = '';
+}
+function reopenCollectionRouteParty(routeKey) {
+    clearCollectionRoutePartyStatus(routeKey);
+    renderCollectionRoutePage();
+}
+function openCollectionRouteNoPayment(routeKey) {
+    const entry = (window._collectionRouteEntryMap || {})[routeKey];
+    if (!entry) return;
+    const routeKeyJs = escapeHtml(JSON.stringify(routeKey));
+    openModal(`No Payment • ${escapeHtml(entry.partyName)}`, `
+        <div class="form-group">
+            <label>Reason</label>
+            <select id="cr-no-pay-reason">
+                <option>Come Tomorrow</option>
+                <option>Shop Closed</option>
+                <option>No Cash</option>
+                <option>Owner Not Available</option>
+                <option>Payment Promise</option>
+                <option>Other</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label>Next Follow-Up Date</label>
+            <input type="date" id="cr-no-pay-followup" value="${getCollectionRouteTomorrowDate()}">
+        </div>
+        <div class="form-group" style="margin-bottom:0">
+            <label>Note</label>
+            <textarea id="cr-no-pay-note" rows="3" placeholder="Optional visit note..."></textarea>
+        </div>
+    `, `
+        <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveCollectionRouteNoPayment(${routeKeyJs})">Save</button>
+    `);
+}
+function saveCollectionRouteNoPayment(routeKey) {
+    const entry = (window._collectionRouteEntryMap || {})[routeKey];
+    if (!entry) return;
+    const reason = ($('cr-no-pay-reason')?.value || 'Come Tomorrow').trim();
+    const followUpDate = ($('cr-no-pay-followup')?.value || getCollectionRouteTomorrowDate()).trim();
+    const note = ($('cr-no-pay-note')?.value || '').trim();
+    setCollectionRoutePartyStatus(routeKey, {
+        status: 'no_payment',
+        reason,
+        note,
+        followUpDate
+    });
+    closeModal();
+    showToast(`${entry.partyName} moved to No Payment`, 'warning');
+    renderCollectionRoutePage();
+}
+function openCollectionBillsReportFromPayments() {
+    setReportBackNavigation(`pageTitle.textContent='Payments';renderPayments()`, 'Back to Payments');
+    pageTitle.textContent = 'My Collection Bills';
+    showReport('collection-allocations');
+}
+function openCollectionBillsReportFromDashboard() {
+    setReportBackNavigation(`pageTitle.textContent='Dashboard';renderDashboard()`, 'Back to Dashboard');
+    pageTitle.textContent = 'My Collection Bills';
+    showReport('collection-allocations');
+}
 function renderReports() {
+    setReportBackNavigation('renderReports()', 'Back');
     pageContent.innerHTML = `
         <div class="report-grid">
             <div class="report-card" onclick="showReport('payment-report')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(16,185,129,0.12),rgba(249,115,22,0.08))"><div class="report-icon"><span class="material-symbols-outlined">payments</span></div></div><div class="report-text"><h4>Payment Report</h4><p>Pay In / Pay Out with filters</p></div></div>
@@ -19758,10 +20616,11 @@ function renderReports() {
 `;
 }
 async function showReport(type) {
+    const reportBack = consumeReportBackNavigation();
     // Each report opens as a full page  replace page content entirely
     pageContent.innerHTML = `
         <div class="section-toolbar" style="margin-bottom:16px;flex-wrap:wrap;gap:8px">
-            <button class="btn btn-outline" onclick="renderReports()"> Back</button>
+            <button class="btn btn-outline" onclick="${reportBack.action}"> ${escapeHtml(reportBack.label)}</button>
         </div>
         <div id="report-detail"></div>`;
     const el = $('report-detail'); if (!el) return;
@@ -19928,82 +20787,118 @@ async function showReport(type) {
     }
 
     if (type === 'collection-allocations') {
-        window._rAllocAll = invoices.filter(i => i.type === 'sale' && i.status !== 'cancelled');
-        const collectors = [...new Set(window._rAllocAll.map(i => i.allocatedTo || i.assignedTo))].filter(Boolean).sort();
+        const isSalesmanScopedReport = currentUser && userHasRole(currentUser, 'Salesman') && !canEdit();
+        window._rAllocRowsAll = buildCollectionAllocationReportRows(invoices, payments, parties)
+            .filter(row => row.collector)
+            .filter(row => !isSalesmanScopedReport || matchesUserIdentity(row.collector, currentUser, users));
+        const collectors = [...new Set(window._rAllocRowsAll.map(row => row.collector).filter(Boolean))]
+            .sort((a, b) => String(getUserDisplayName(a, users) || a).localeCompare(String(getUserDisplayName(b, users) || b)));
+        const exportName = isSalesmanScopedReport ? `MyCollectionBills_${today()}` : `CollectionAllocations_${today()}`;
 
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
             <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
-                <div class="form-group"><label>Filter Collector</label><select id="r-ca-user" onchange="renderCollectionAllocationsRpt()"><option value="">All</option><option value="Unassigned">Unassigned</option>${collectors.map(c => `<option>${c}</option>`).join('')}</select></div>
-                <div class="form-group"><label>Status</label><select id="r-ca-status" onchange="renderCollectionAllocationsRpt()"><option value="">All Assigned</option><option value="pending">Pending Balance</option><option value="paid">Fully Paid</option></select></div>
-                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-allocations','CollectionAllocations_${today()}')"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button></div>
+                ${!isSalesmanScopedReport ? `<div class="form-group"><label>Salesman</label><select id="r-ca-user" onchange="renderCollectionAllocationsRpt()"><option value="">All</option>${collectors.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(getUserDisplayName(c, users) || c)}</option>`).join('')}</select></div>` : ''}
+                <div class="form-group"><label>Inv From Date</label><input type="date" id="r-ca-from" onchange="renderCollectionAllocationsRpt()"></div>
+                <div class="form-group"><label>Inv To Date</label><input type="date" id="r-ca-to" value="${today()}" onchange="renderCollectionAllocationsRpt()"></div>
+                <div class="form-group"><label>Inv No</label><input id="r-ca-inv" placeholder="Invoice no..." oninput="renderCollectionAllocationsRpt()" style="width:150px"></div>
+                <div class="form-group"><label>Party Code</label><input id="r-ca-party-code" placeholder="Party code..." oninput="renderCollectionAllocationsRpt()" style="width:130px"></div>
+                <div class="form-group"><label>Name</label><input id="r-ca-party-name" placeholder="Party name..." oninput="renderCollectionAllocationsRpt()" style="width:180px"></div>
+                <div class="form-group"><label>Status</label><select id="r-ca-status" onchange="renderCollectionAllocationsRpt()"><option value="">All</option><option value="pending">Pending Balance</option><option value="paid">Fully Paid</option><option value="overdue">Overdue</option></select></div>
+                <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-allocations','${exportName}')"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button></div>
             </div>
+            <div style="margin-top:10px;font-size:0.8rem;color:var(--text-muted)">Tap the received amount to open payment history for that invoice.</div>
         </div></div>
         <div id="r-ca-out"></div>`;
 
-        window.renderCollectionAllocationsRpt = async function () {
-            const userFlt = $('r-ca-user').value;
-            const statusFlt = $('r-ca-status').value;
+        window.renderCollectionAllocationsRpt = function () {
+            const collectorFlt = isSalesmanScopedReport ? '' : (($('r-ca-user')?.value || '').trim());
+            const fromDate = $('r-ca-from')?.value || '';
+            const toDate = $('r-ca-to')?.value || '';
+            const invoiceFlt = (($('r-ca-inv')?.value || '').trim()).toLowerCase();
+            const partyCodeFlt = (($('r-ca-party-code')?.value || '').trim()).toLowerCase();
+            const partyNameFlt = (($('r-ca-party-name')?.value || '').trim()).toLowerCase();
+            const statusFlt = $('r-ca-status')?.value || '';
 
-            let html = '<div class="table-wrapper"><table class="data-table" id="tbl-allocations"><thead><tr><th>Collector</th><th>Invoice No</th><th>Date</th><th>Customer</th><th>Total Amt</th><th>Paid</th><th>Balance</th><th>Assigned On</th><th>Action</th></tr></thead><tbody>';
-            let grandTotal = 0, grandPaid = 0, grandBal = 0;
+            const rows = window._rAllocRowsAll.filter(row => {
+                const hasBalance = row.balanceAmount > 0.009;
+                const rowInvoice = String(row.displayInvoiceNo || row.invoiceNo || '').toLowerCase();
+                const rawInvoice = String(row.invoiceNo || '').toLowerCase();
+                const rowPartyCode = String(row.partyCode || '').toLowerCase();
+                const rowPartyName = String(row.partyName || '').toLowerCase();
+                if (collectorFlt && row.collector !== collectorFlt) return false;
+                if (fromDate && String(row.invoiceDate || '') < fromDate) return false;
+                if (toDate && String(row.invoiceDate || '') > toDate) return false;
+                if (invoiceFlt && !rowInvoice.includes(invoiceFlt) && !rawInvoice.includes(invoiceFlt)) return false;
+                if (partyCodeFlt && !rowPartyCode.includes(partyCodeFlt)) return false;
+                if (partyNameFlt && !rowPartyName.includes(partyNameFlt)) return false;
+                if (statusFlt === 'pending' && !hasBalance) return false;
+                if (statusFlt === 'paid' && hasBalance) return false;
+                if (statusFlt === 'overdue' && !(hasBalance && row.overdueDays > 0)) return false;
+                return true;
+            });
 
-            for (const inv of window._rAllocAll) {
-                const currCollector = inv.allocatedTo || inv.assignedTo;
-                if (userFlt === 'Unassigned') {
-                    if (currCollector) continue;
-                } else if (userFlt && currCollector !== userFlt) {
-                    continue;
-                }
+            const totals = rows.reduce((sum, row) => {
+                sum.invoice += row.invoiceAmount || 0;
+                sum.received += row.receivedAmount || 0;
+                sum.balance += row.balanceAmount || 0;
+                return sum;
+            }, { invoice: 0, received: 0, balance: 0 });
 
-                const paid = await getInvoicePaidAmount(inv.invoiceNo);
-                const bal = inv.total - paid;
-
-                if (statusFlt === 'pending' && bal <= 0) continue;
-                if (statusFlt === 'paid' && bal > 0) continue;
-
-                grandTotal += inv.total;
-                grandPaid += paid;
-                grandBal += bal;
-
-                let assignDate = '-';
-                if (inv.allocationHistory && inv.allocationHistory.length) {
-                    const last = inv.allocationHistory[inv.allocationHistory.length - 1];
-                    assignDate = fmtDate(last.date.substring(0, 10));
-                } else if (inv.handoverDate) {
-                    assignDate = fmtDate(inv.handoverDate);
-                }
-
-                html += `<tr>
-                    <td><span class="badge ${currCollector ? 'badge-info' : 'badge-outline'}">${escapeHtml(currCollector || 'Unassigned')}</span></td>
-                    <td><a href="#" onclick="viewInvoice('${inv.id}')" style="color:var(--primary);text-decoration:underline;font-weight:600">${inv.invoiceNo}</a></td>
-                    <td>${fmtDate(inv.date)}</td>
-                    <td>${escapeHtml(inv.partyName)}</td>
-                    <td>${currency(inv.total)}</td>
-                    <td class="amount-green">${currency(paid)}</td>
-                    <td style="color:${bal > 0 ? 'var(--danger)' : 'inherit'};font-weight:600">${currency(bal)}</td>
-                    <td style="font-size:0.8rem;color:var(--text-muted)">${assignDate}</td>
-                    <td>
-                        <div class="action-btns">
-                            <button class="btn-icon" style="color:var(--info)" title="Assign Salesman" onclick="openAssignCollectorModal('${inv.id}')"><span class="material-symbols-outlined" style="font-size:1.1rem">person_add</span></button>
-                            <button class="btn-icon" style="color:var(--primary)" title="Assign Collector" onclick="openAssignCollectorModal('${inv.id}')"><span class="material-symbols-outlined" style="font-size:1.1rem">assignment_ind</span></button>
-                            <button class="btn-icon" style="color:var(--success)" title="Payment History" onclick="showPaymentHistory('${inv.partyId}', '${inv.invoiceNo}')"><span class="material-symbols-outlined" style="font-size:1.1rem">history</span></button>
-                        </div>
+            const labelCols = isSalesmanScopedReport ? 4 : 5;
+            const tableHead = `<tr>${!isSalesmanScopedReport ? '<th>Salesman</th>' : ''}<th>Inv Date</th><th>Inv No</th><th>Party Code</th><th>Party Name</th><th style="text-align:right">Inv Amount</th><th style="text-align:right">Received Amount</th><th style="text-align:right">Balance Amount</th><th>Due Date</th><th>Assigned Date</th><th style="text-align:center">Over Due Days</th></tr>`;
+            const bodyRows = rows.map(row => {
+                const hasBalance = row.balanceAmount > 0.009;
+                const dueDateText = row.dueDate ? fmtDate(row.dueDate) : '-';
+                const overdueDisplay = row.dueDate ? row.overdueDays : '-';
+                const invoiceViewAction = `viewInvoice(${escapeHtml(JSON.stringify(row.invoiceId || ''))});return false`;
+                const paymentHistoryAction = row.partyId
+                    ? `showPaymentHistory(${escapeHtml(JSON.stringify(row.partyId || ''))}, ${escapeHtml(JSON.stringify(row.invoiceNo || ''))})`
+                    : `viewInvoicePaymentHistory(${escapeHtml(JSON.stringify(row.invoiceNo || ''))})`;
+                return `<tr>
+                    ${!isSalesmanScopedReport ? `<td><span class="badge badge-info">${escapeHtml(getUserDisplayName(row.collector, users) || row.collector || '-')}</span></td>` : ''}
+                    <td style="white-space:nowrap">${fmtDate(row.invoiceDate)}</td>
+                    <td><a href="#" onclick="${invoiceViewAction}" style="color:var(--primary);text-decoration:underline;font-weight:600">${escapeHtml(row.displayInvoiceNo || row.invoiceNo || '-')}</a></td>
+                    <td style="white-space:nowrap">${escapeHtml(row.partyCode || '-')}</td>
+                    <td style="min-width:180px">${escapeHtml(row.partyName || '-')}</td>
+                    <td style="text-align:right;font-weight:600">${currency(row.invoiceAmount)}</td>
+                    <td style="text-align:right">
+                        <button class="btn-link" style="font-weight:700;color:var(--success);background:none;border:none;cursor:pointer;padding:0" onclick="${paymentHistoryAction}">${currency(row.receivedAmount)}</button>
                     </td>
+                    <td style="text-align:right;font-weight:700;color:${hasBalance ? 'var(--danger)' : 'var(--text-primary)' }">${currency(row.balanceAmount)}</td>
+                    <td style="white-space:nowrap;color:${row.overdueDays > 0 ? 'var(--danger)' : 'inherit'}">${dueDateText}</td>
+                    <td style="white-space:nowrap;font-size:0.84rem;color:var(--text-muted)">${row.assignedDate ? fmtDate(row.assignedDate) : '-'}</td>
+                    <td style="text-align:center;font-weight:700;color:${row.overdueDays > 0 ? 'var(--danger)' : 'var(--text-muted)'}">${overdueDisplay}</td>
                 </tr>`;
-            }
+            }).join('');
 
-            html += `<tr style="font-weight:700;background:var(--bg-card)">
-                <td colspan="4" style="text-align:right">Total</td>
-                <td>${currency(grandTotal)}</td>
-                <td class="amount-green">${currency(grandPaid)}</td>
-                <td style="color:var(--danger)">${currency(grandBal)}</td>
-                <td colspan="2"></td>
-            </tr></tbody></table></div>`;
-            $('r-ca-out').innerHTML = html;
+            $('r-ca-out').innerHTML = `
+                <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;margin:0 0 10px">
+                    <div style="font-size:0.9rem;font-weight:700">${rows.length} invoice${rows.length === 1 ? '' : 's'}</div>
+                    <div style="display:flex;gap:10px;flex-wrap:wrap;font-size:0.84rem;color:var(--text-muted)">
+                        <span>Invoice: <strong style="color:var(--text-primary)">${currency(totals.invoice)}</strong></span>
+                        <span>Received: <strong style="color:var(--success)">${currency(totals.received)}</strong></span>
+                        <span>Balance: <strong style="color:var(--danger)">${currency(totals.balance)}</strong></span>
+                    </div>
+                </div>
+                <div class="table-wrapper">
+                    <table class="data-table" id="tbl-allocations">
+                        <thead>${tableHead}</thead>
+                        <tbody>
+                            ${bodyRows || `<tr><td colspan="${isSalesmanScopedReport ? 10 : 11}" class="empty-state"><p>No allocated bills found for the selected filters.</p></td></tr>`}
+                            <tr style="font-weight:700;background:var(--bg-card)">
+                                <td colspan="${labelCols}" style="text-align:right">Total (${rows.length} invoices)</td>
+                                <td style="text-align:right">${currency(totals.invoice)}</td>
+                                <td class="amount-green" style="text-align:right">${currency(totals.received)}</td>
+                                <td style="text-align:right;color:var(--danger)">${currency(totals.balance)}</td>
+                                <td colspan="3"></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>`;
         };
 
-        await window.renderCollectionAllocationsRpt();
+        window.renderCollectionAllocationsRpt();
     }
 
     if (type === 'stock-aging') {
@@ -25111,6 +26006,7 @@ async function createOrderFromCatalog() {
     currentPage = 'salesorders';
     pageTitle.textContent = 'New Sales Order';
     setPageChromeMode('sales-doc');
+    ensureMobileSalesOrderStartsCompact();
 
     const allParties = await DB.getAll('parties');
     const customers = allParties.filter(p => p.type === 'Customer');
