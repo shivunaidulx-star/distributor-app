@@ -1,6 +1,6 @@
 {
   "name": "distributor-app",
-  "version": "1.106.26",
+  "version": "1.106.31",
   "description": "Distributor Business Management App",
   "main": "server.js",
   "scripts": {

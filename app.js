@@ -1071,7 +1071,7 @@ const ROLE_NAME_MAP = {
 };
 const CUSTOMER_PORTAL_ENABLED = false; // Feature kept in codebase for future relaunch, disabled for current live release.
 function getAppVersion() {
-    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v151';
+    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v156';
 }
 
 const PAGE_LABELS = {
@@ -3022,14 +3022,15 @@ function today() {
     return new Date(d.getTime() - offset).toISOString().split('T')[0];
 }
 function getPaymentGroupKey(payment) {
-    return String(
-        payment?.payNo ||
-        payment?.pay_no ||
-        payment?.receiptNo ||
-        payment?.receipt_no ||
-        payment?.id ||
-        ''
-    );
+    const payRef = payment?.payNo || payment?.pay_no || payment?.receiptNo || payment?.receipt_no || '';
+    if (payRef) {
+        const payDate = payment?.date || '';
+        const partyRef = payment?.partyId || payment?.party_id || payment?.partyName || payment?.party_name || '';
+        const payType = payment?.type || '';
+        const ownerRef = payment?.collectedBy || payment?.collected_by || payment?.createdBy || payment?.created_by || '';
+        return [payRef, payDate, partyRef, payType, ownerRef].join('|');
+    }
+    return String(payment?.id || '');
 }
 function getPaymentRowTotalReduction(payment) {
     if (!payment) return 0;
@@ -3051,7 +3052,7 @@ function summarizePaymentGroup(groupRows = []) {
     const rows = [...(groupRows || [])];
     const primary = rows[0] || null;
     const allocationsRow = rows.find(row => row.allocations && Object.keys(row.allocations).length > 0) || null;
-    const payNo = primary ? getPaymentGroupKey(primary) : '';
+    const payNo = primary ? String(primary.payNo || primary.pay_no || primary.receiptNo || primary.receipt_no || primary.id || '') : '';
     const totalAmount = +rows.reduce((sum, row) => sum + (+row.amount || 0), 0).toFixed(2);
     const totalDiscount = +rows.reduce((sum, row) => sum + (+row.discount || 0), 0).toFixed(2);
     const totalReduction = +rows.reduce((sum, row) => sum + getPaymentRowTotalReduction(row), 0).toFixed(2);
@@ -7218,6 +7219,7 @@ async function saveItem(id) {
             }
         }
         showToast('Item saved successfully', 'success');
+        endSave();
         if (window._saveAndNew) {
             window._saveAndNew = false;
             window._editItemId = null;
@@ -22886,6 +22888,7 @@ async function executeSmartReset() {
     const confirmVal = ($('reset-confirm-input') || {}).value || '';
     if (confirmVal.trim().toUpperCase() !== 'RESET') { showToast('Type RESET to confirm', 'error'); return; }
 
+    const resetAll = window._resetOption === 'all';
     const entryTables = ['sales_orders', 'purchase_orders', 'invoices', 'payments', 'expenses', 'stock_ledger', 'party_ledger', 'delivery'];
     const documentSeriesCodes = ['INVOICE', 'SALES_ORDER', 'PURCHASE_ORDER', 'PURCHASE_INVOICE', 'VYAPAR_INVOICE', 'PAYMENT_IN', 'PAYMENT_OUT', 'EXPENSE'];
     const entryLsKeys = [
@@ -22912,6 +22915,17 @@ async function executeSmartReset() {
 
     try {
         const failures = [];
+        const masterSelection = {
+            parties: !!(document.getElementById('rm-parties') && document.getElementById('rm-parties').checked),
+            inventory: !!(document.getElementById('rm-inventory') && document.getElementById('rm-inventory').checked),
+            categories: !!(document.getElementById('rm-categories') && document.getElementById('rm-categories').checked),
+            uom: !!(document.getElementById('rm-uom') && document.getElementById('rm-uom').checked),
+            brands: !!(document.getElementById('rm-brands') && document.getElementById('rm-brands').checked),
+            deliveryPersons: !!(document.getElementById('rm-delpersons') && document.getElementById('rm-delpersons').checked),
+            packers: !!(document.getElementById('rm-packers') && document.getElementById('rm-packers').checked),
+            users: !!(document.getElementById('rm-users') && document.getElementById('rm-users').checked)
+        };
+
         // Re-set session role so RLS policies allow delete
         if (currentUser) {
             await supabaseClient.rpc('set_session_role', {
@@ -22919,45 +22933,67 @@ async function executeSmartReset() {
                 user_id: (currentUser.userId || currentUser.id || '').toLowerCase()
             });
         }
-        for (const t of entryTables) {
-            const { error } = await supabaseClient.from(t).delete().not('id', 'is', null);
-            if (error) {
-                console.warn(`Reset: failed to delete ${t}:`, error.message);
-                failures.push(`${t}: ${error.message}`);
+
+        let usedResetRpc = false;
+        if (currentUser && currentUser.role === 'Admin') {
+            const { error: resetRpcError } = await supabaseClient.rpc('admin_reset_app_data', {
+                p_user_role: currentUser.role,
+                p_reset_all: resetAll,
+                p_delete_parties: resetAll && masterSelection.parties,
+                p_delete_inventory: resetAll && masterSelection.inventory,
+                p_delete_categories: resetAll && masterSelection.categories,
+                p_delete_uom: resetAll && masterSelection.uom,
+                p_delete_delivery_persons: resetAll && masterSelection.deliveryPersons,
+                p_delete_packers: resetAll && masterSelection.packers,
+                p_delete_users: resetAll && masterSelection.users
+            });
+            if (resetRpcError) {
+                console.warn('Reset RPC unavailable, falling back to direct table deletes:', resetRpcError.message || resetRpcError);
+            } else {
+                usedResetRpc = true;
             }
         }
-        // Zero out all party balances so receivable/payable resets
-        const { error: partyResetError } = await supabaseClient.from('parties').update({ balance: 0 }).not('id', 'is', null);
-        if (partyResetError) failures.push(`parties balance reset: ${partyResetError.message}`);
 
-        // Keep item masters, but wipe transaction-driven inventory state.
-        const { error: inventoryResetError } = await supabaseClient
-            .from('inventory')
-            .update({ stock: 0, batches: [] })
-            .not('id', 'is', null);
-        if (inventoryResetError) failures.push(`inventory stock reset: ${inventoryResetError.message}`);
+        if (!usedResetRpc) {
+            for (const t of entryTables) {
+                const { error } = await supabaseClient.from(t).delete().not('id', 'is', null);
+                if (error) {
+                    console.warn(`Reset: failed to delete ${t}:`, error.message);
+                    failures.push(`${t}: ${error.message}`);
+                }
+            }
+            // Zero out all party balances so receivable/payable resets
+            const { error: partyResetError } = await supabaseClient.from('parties').update({ balance: 0 }).not('id', 'is', null);
+            if (partyResetError) failures.push(`parties balance reset: ${partyResetError.message}`);
 
-        const { error: docSeriesResetError } = await supabaseClient
-            .from('no_series')
-            .update({ last_no: 0 })
-            .in('code', documentSeriesCodes);
-        if (docSeriesResetError) failures.push(`document series reset: ${docSeriesResetError.message}`);
+            // Keep item masters, but wipe transaction-driven inventory state.
+            const { error: inventoryResetError } = await supabaseClient
+                .from('inventory')
+                .update({ stock: 0, batches: [] })
+                .not('id', 'is', null);
+            if (inventoryResetError) failures.push(`inventory stock reset: ${inventoryResetError.message}`);
 
-        const paySettings = { ...(DB.ls.getObj('pay_settings') || {}) };
-        paySettings.currentNo = '1';
+            const { error: docSeriesResetError } = await supabaseClient
+                .from('no_series')
+                .update({ last_no: 0 })
+                .in('code', documentSeriesCodes);
+            if (docSeriesResetError) failures.push(`document series reset: ${docSeriesResetError.message}`);
+
+            const { error: paySettingsError } = await supabaseClient
+                .from('settings')
+                .upsert({ key: 'pay_settings', value: { ...(DB.ls.getObj('pay_settings') || {}), currentNo: '1' } }, { onConflict: 'key' });
+            if (paySettingsError) failures.push(`pay_settings reset: ${paySettingsError.message}`);
+
+            const { error: vyaparSettingsError } = await supabaseClient
+                .from('settings')
+                .upsert({ key: 'vyapar_settings', value: { ...(DB.ls.getObj('vyapar_settings') || {}), currentNo: '1' } }, { onConflict: 'key' });
+            if (vyaparSettingsError) failures.push(`vyapar_settings reset: ${vyaparSettingsError.message}`);
+        }
+
+        const paySettings = { ...(DB.ls.getObj('pay_settings') || {}), currentNo: '1' };
         DB.ls.set('pay_settings', paySettings);
-        const { error: paySettingsError } = await supabaseClient
-            .from('settings')
-            .upsert({ key: 'pay_settings', value: paySettings }, { onConflict: 'key' });
-        if (paySettingsError) failures.push(`pay_settings reset: ${paySettingsError.message}`);
-
-        const vyaparSettings = { ...(DB.ls.getObj('vyapar_settings') || {}) };
-        vyaparSettings.currentNo = '1';
+        const vyaparSettings = { ...(DB.ls.getObj('vyapar_settings') || {}), currentNo: '1' };
         DB.ls.set('vyapar_settings', vyaparSettings);
-        const { error: vyaparSettingsError } = await supabaseClient
-            .from('settings')
-            .upsert({ key: 'vyapar_settings', value: vyaparSettings }, { onConflict: 'key' });
-        if (vyaparSettingsError) failures.push(`vyapar_settings reset: ${vyaparSettingsError.message}`);
 
         entryLsKeys.forEach(k => localStorage.removeItem(k));
         localStorage.removeItem('db_parties'); // force re-fetch so balance shows 0
@@ -22999,30 +23035,51 @@ async function executeSmartReset() {
             await DB.idb.set('db_no_series', updatedSeries).catch(() => { });
         }
 
-        if (window._resetOption === 'all') {
+        if (resetAll) {
             for (const m of masterMap) {
                 const el = document.getElementById(m.id);
                 if (el && el.checked) {
-                    if (m.supabase) {
+                    if (!usedResetRpc && m.supabase) {
                         const { error } = await supabaseClient.from(m.supabase).delete().not('id', 'is', null);
                         if (error) failures.push(`${m.supabase}: ${error.message}`);
                     }
                     localStorage.removeItem(m.ls);
                 }
             }
+            if (masterSelection.brands) {
+                const { error: brandsError } = await supabaseClient.from('brands').delete().not('id', 'is', null);
+                if (brandsError) failures.push(`brands: ${brandsError.message}`);
+                localStorage.removeItem('db_brands');
+            }
         }
 
-        const shouldResetPartySeries = window._resetOption === 'all'
-            && !!(document.getElementById('rm-parties') && document.getElementById('rm-parties').checked);
+        const shouldResetPartySeries = resetAll && masterSelection.parties;
         if (shouldResetPartySeries) {
             const partySeries = { ...(DB.ls.getObj('db_number_series') || {}) };
             partySeries.cust_start = 1;
             partySeries.supp_start = 1;
             DB.ls.set('db_number_series', partySeries);
-            const { error: partySeriesError } = await supabaseClient
-                .from('settings')
-                .upsert({ key: 'db_number_series', value: partySeries }, { onConflict: 'key' });
-            if (partySeriesError) failures.push(`party code series reset: ${partySeriesError.message}`);
+            if (!usedResetRpc) {
+                const { error: partySeriesError } = await supabaseClient
+                    .from('settings')
+                    .upsert({ key: 'db_number_series', value: partySeries }, { onConflict: 'key' });
+                if (partySeriesError) failures.push(`party code series reset: ${partySeriesError.message}`);
+            }
+        }
+
+        const remainingEntries = [];
+        for (const tableName of entryTables) {
+            const { count, error } = await supabaseClient
+                .from(tableName)
+                .select('id', { count: 'exact', head: true });
+            if (error) {
+                failures.push(`verify ${tableName}: ${error.message}`);
+                continue;
+            }
+            if ((count || 0) > 0) remainingEntries.push(`${tableName}=${count}`);
+        }
+        if (remainingEntries.length) {
+            failures.push(`remaining entry rows: ${remainingEntries.join(', ')}`);
         }
 
         if (failures.length) {
