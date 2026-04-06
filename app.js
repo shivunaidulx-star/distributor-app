@@ -1294,7 +1294,7 @@ function syncSalesDocLayoutModeUi() {
         mainContent.style.marginLeft = isDesktopSalesDoc ? '0' : '';
         mainContent.style.width = isDesktopSalesDoc ? '100%' : '';
     }
-    document.body.classList.remove('sales-doc-compact-mode');
+    document.body.classList.toggle('sales-doc-compact-mode', shouldCompact);
     document.querySelectorAll('.sales-doc-view-toggle, .sales-doc-panel-toggle').forEach(btn => {
         btn.innerHTML = getSalesDocLayoutToggleInnerHtml();
         btn.setAttribute('aria-label', `${meta.label} sales fields`);
@@ -2074,147 +2074,181 @@ function attachMobileKeyboardScrollFix(inputEl) {
         clearTimeout(inputEl._mobileKeyboardScrollTimer);
     }, sig);
 }
+function applyPageFormMobileEnhancements(container) {
+    const root = container || document.getElementById('page-content');
+    if (!root) return;
+    const formShell = root.querySelector('.page-form-shell');
+    if (!formShell) return;
+    formShell.querySelectorAll('input, select, textarea').forEach(el => attachMobileKeyboardScrollFix(el));
+}
 
 
 
 function renderSOItemSubModal(categories) {
+    return renderDocItemSubModal({
+        modalId: 'so-item-sub-modal',
+        closeAction: 'closeSoItemSubModal()',
+        title: 'Add Items to Sale Order',
+        subtitle: 'Filter, search, and save items in one touch-friendly sheet.',
+        categories,
+        categoryFilterId: 'f-so-cat-filter',
+        categoryFilterHandler: 'onSOCatFilterChange()',
+        subCategoryFilterId: 'f-so-subcat-filter',
+        subCategoryFilterHandler: 'onSOSubcatFilterChange()',
+        itemInputId: 'f-so-item-input',
+        searchInputClass: 'so-item-search-input search-dropdown-mobile-priority',
+        qtyInputId: 'f-so-qty',
+        uomId: 'f-so-uom',
+        uomHandler: 'onSOUomChange()',
+        priceInputId: 'f-so-price',
+        mrpInputId: 'f-so-mrp',
+        taxModeId: 'f-so-tax-mode',
+        noteId: 'f-so-item-note',
+        saveAndNewAction: 'addSOLine()',
+        saveAction: 'addSOLineAndClose()',
+        bodyClass: 'so-item-sub-body'
+    });
+}
+
+function renderDocItemSubModal(config) {
+    const {
+        modalId,
+        closeAction,
+        title,
+        subtitle,
+        categories,
+        categoryFilterId,
+        categoryFilterHandler,
+        subCategoryFilterId,
+        subCategoryFilterHandler,
+        itemInputId,
+        searchInputClass = 'search-dropdown-mobile-priority',
+        qtyInputId,
+        uomId,
+        uomHandler,
+        priceInputId,
+        mrpInputId,
+        taxModeId,
+        noteId,
+        saveAndNewAction,
+        saveAction,
+        bodyClass = '',
+        primaryActionLabel = 'Save'
+    } = config;
     return `
-    <div id="so-item-sub-modal" class="sub-modal doc-item-modal">
+    <div id="${modalId}" class="sub-modal doc-item-modal">
         <div class="sub-modal-header doc-item-modal-header">
-            <button class="btn-icon" onclick="closeSoItemSubModal()">${msIcon('arrow_back', '', 'font-size:1.2rem')}</button>
-            <h3>Add Items to Sale Order</h3>
-            <div style="width:40px"></div>
+            <button class="btn-icon doc-item-modal-back" onclick="${closeAction}">${msIcon('arrow_back', '', 'font-size:1.2rem')}</button>
+            <div class="doc-item-modal-title">
+                <h3>${escapeHtml(title)}</h3>
+                <p>${escapeHtml(subtitle)}</p>
+            </div>
+            <div class="doc-item-modal-chip">Quick Entry</div>
         </div>
-        <div class="sub-modal-body so-item-sub-body doc-item-modal-body">
-            <div class="doc-field-grid doc-field-grid-2 doc-item-filter-block">
-                <div class="doc-input-shell">
-                    <label>Category</label>
-                    <select id="f-so-cat-filter" onchange="onSOCatFilterChange()">
-                        <option value="">All Categories</option>
-                        ${categories.map(c => `<option value="${c.name}">${c.name}</option>`).join('')}
-                    </select>
+        <div class="sub-modal-body ${bodyClass ? `${bodyClass} ` : ''}doc-item-modal-body">
+            <div class="doc-item-filter-card">
+                <div class="doc-item-section-copy">
+                    <h4>Browse Items</h4>
+                    <p>Narrow the list first, then pick the exact item.</p>
                 </div>
-                <div class="doc-input-shell">
-                    <label>Sub-Category</label>
-                    <select id="f-so-subcat-filter" onchange="onSOSubcatFilterChange()">
-                        <option value="">All Sub-Categories</option>
-                    </select>
+                <div class="doc-field-grid doc-field-grid-2 doc-item-filter-block">
+                    <div class="doc-input-shell">
+                        <label>Category</label>
+                        <select id="${categoryFilterId}" onchange="${categoryFilterHandler}">
+                            <option value="">All Categories</option>
+                            ${categories.map(c => `<option value="${escapeHtml(c.name)}">${escapeHtml(c.name)}</option>`).join('')}
+                        </select>
+                    </div>
+                    <div class="doc-input-shell">
+                        <label>Sub-Category</label>
+                        <select id="${subCategoryFilterId}" onchange="${subCategoryFilterHandler}">
+                            <option value="">All Sub-Categories</option>
+                        </select>
+                    </div>
                 </div>
             </div>
             <div class="doc-item-sheet-card">
-                <div class="doc-input-shell doc-input-shell-focus so-item-search-group" style="margin-bottom:12px">
+                <div class="doc-item-sheet-heading">
+                    <div class="doc-item-section-copy">
+                        <h4>Item Details</h4>
+                        <p>Keep quantity, unit, and rate visible while you type.</p>
+                    </div>
+                    <span class="doc-item-sheet-badge">Touch Ready</span>
+                </div>
+                <div class="doc-input-shell doc-input-shell-focus doc-item-primary-field so-item-search-group">
                     <label>Item Name</label>
                     <div class="search-dropdown-wrapper">
-                        <input id="f-so-item-input" class="so-item-search-input search-dropdown-mobile-priority" placeholder="Search item or code">
+                        <input id="${itemInputId}" class="${searchInputClass}" placeholder="Search item or code">
                     </div>
                 </div>
-                <div class="doc-field-grid doc-field-grid-compact-3" style="margin-bottom:10px">
-                    <div class="doc-input-shell">
+                <div class="doc-field-grid doc-field-grid-compact-3 doc-item-core-grid">
+                    <div class="doc-input-shell doc-item-qty-shell">
                         <label>Quantity</label>
-                        <input type="number" id="f-so-qty" value="1" min="1">
+                        <input type="number" id="${qtyInputId}" value="1" min="1" inputmode="decimal">
                     </div>
                     <div class="doc-input-shell">
                         <label>Unit</label>
-                        <select id="f-so-uom" onchange="onSOUomChange()"><option value="">Select Unit</option></select>
+                        <select id="${uomId}" onchange="${uomHandler}"><option value="">Select Unit</option></select>
                     </div>
                     <div class="doc-input-shell">
                         <label>Rate (Price / Unit)</label>
-                        <input type="number" id="f-so-price" value="" min="0" step="0.01" placeholder="Listed">
+                        <input type="number" id="${priceInputId}" value="" min="0" step="0.01" inputmode="decimal" placeholder="Listed">
                     </div>
                 </div>
-                <div class="doc-field-grid doc-field-grid-2" style="margin-bottom:10px">
+                <div class="doc-field-grid doc-field-grid-2 doc-item-secondary-grid">
                     <div class="doc-input-shell">
                         <label>MRP</label>
-                        <input type="number" id="f-so-mrp" value="" readonly placeholder="MRP">
+                        <input type="number" id="${mrpInputId}" value="" readonly placeholder="MRP">
                     </div>
                     <div class="doc-input-shell">
                         <label>Tax Mode</label>
-                        <select id="f-so-tax-mode" disabled>
+                        <select id="${taxModeId}" disabled>
                             <option value="inclusive">With Tax</option>
                         </select>
                     </div>
                 </div>
-                <div class="doc-item-note" id="f-so-item-note">Pick an item to see stock and code.</div>
+                <div class="doc-item-note-wrap">
+                    <div class="doc-item-note-label">Stock Snapshot</div>
+                    <div class="doc-item-note" id="${noteId}">Choose an item to view stock, code, and category.</div>
+                </div>
             </div>
         </div>
         <div class="doc-item-modal-actions">
-            <button class="btn btn-outline" onclick="addSOLine()">Save &amp; New</button>
-            <button class="btn btn-primary so-item-add-btn" onclick="addSOLineAndClose()">
+            <button class="btn btn-outline" onclick="${saveAndNewAction}">Save &amp; New</button>
+            <button class="btn btn-primary so-item-add-btn" onclick="${saveAction}">
                 ${msIcon('check', '', 'font-size:1.1rem')}
-                <span>Save</span>
+                <span>${escapeHtml(primaryActionLabel)}</span>
             </button>
         </div>
     </div>`;
 }
 
 function renderInvoiceItemSubModal(categories, title = 'Add Items to Invoice') {
-    return `
-    <div id="inv-item-sub-modal" class="sub-modal doc-item-modal">
-        <div class="sub-modal-header doc-item-modal-header">
-            <button class="btn-icon" onclick="closeInvItemSubModal()">${msIcon('arrow_back', '', 'font-size:1.2rem')}</button>
-            <h3>${escapeHtml(title)}</h3>
-            <div style="width:40px"></div>
-        </div>
-        <div class="sub-modal-body doc-item-modal-body">
-            <div class="doc-field-grid doc-field-grid-2 doc-item-filter-block">
-                <div class="doc-input-shell">
-                    <label>Category</label>
-                    <select id="f-inv-cat-filter" onchange="onInvCatFilterChange()">
-                        <option value="">All Categories</option>
-                        ${categories.map(c => `<option value="${c.name}">${c.name}</option>`).join('')}
-                    </select>
-                </div>
-                <div class="doc-input-shell">
-                    <label>Sub-Category</label>
-                    <select id="f-inv-subcat-filter" onchange="onInvSubcatFilterChange()">
-                        <option value="">All Sub-Categories</option>
-                    </select>
-                </div>
-            </div>
-            <div class="doc-item-sheet-card">
-                <div class="doc-input-shell doc-input-shell-focus" style="margin-bottom:12px">
-                    <label>Item Name</label>
-                    <div class="search-dropdown-wrapper">
-                        <input id="f-inv-item-input" class="search-dropdown-mobile-priority" placeholder="Search item or code">
-                    </div>
-                </div>
-                <div class="doc-field-grid doc-field-grid-compact-3" style="margin-bottom:10px">
-                    <div class="doc-input-shell">
-                        <label>Quantity</label>
-                        <input type="number" id="f-inv-qty" value="1" min="1">
-                    </div>
-                    <div class="doc-input-shell">
-                        <label>Unit</label>
-                        <select id="f-inv-uom" onchange="onInvUomChange()"><option value="">Select Unit</option></select>
-                    </div>
-                    <div class="doc-input-shell">
-                        <label>Rate (Price / Unit)</label>
-                        <input type="number" id="f-inv-price" value="" min="0" step="0.01" placeholder="Listed">
-                    </div>
-                </div>
-                <div class="doc-field-grid doc-field-grid-2" style="margin-bottom:10px">
-                    <div class="doc-input-shell">
-                        <label>MRP</label>
-                        <input type="number" id="f-inv-mrp" value="" readonly placeholder="MRP">
-                    </div>
-                    <div class="doc-input-shell">
-                        <label>Tax Mode</label>
-                        <select id="f-inv-tax-mode" disabled>
-                            <option value="inclusive">With Tax</option>
-                        </select>
-                    </div>
-                </div>
-                <div class="doc-item-note" id="f-inv-item-note">Pick an item to see stock and code.</div>
-            </div>
-        </div>
-        <div class="doc-item-modal-actions">
-            <button class="btn btn-outline" onclick="addInvoiceLine()">Save &amp; New</button>
-            <button class="btn btn-primary so-item-add-btn" onclick="addInvoiceLineAndClose()">
-                ${msIcon('check', '', 'font-size:1.1rem')}
-                <span>Save</span>
-            </button>
-        </div>
-    </div>`;
+    const subtitle = title === 'Add Items to Stock In'
+        ? 'Receive stock with quantity, unit, and rate on one screen.'
+        : 'Search stock, confirm rate, and save without leaving the form.';
+    return renderDocItemSubModal({
+        modalId: 'inv-item-sub-modal',
+        closeAction: 'closeInvItemSubModal()',
+        title,
+        subtitle,
+        categories,
+        categoryFilterId: 'f-inv-cat-filter',
+        categoryFilterHandler: 'onInvCatFilterChange()',
+        subCategoryFilterId: 'f-inv-subcat-filter',
+        subCategoryFilterHandler: 'onInvSubcatFilterChange()',
+        itemInputId: 'f-inv-item-input',
+        searchInputClass: 'so-item-search-input search-dropdown-mobile-priority',
+        qtyInputId: 'f-inv-qty',
+        uomId: 'f-inv-uom',
+        uomHandler: 'onInvUomChange()',
+        priceInputId: 'f-inv-price',
+        mrpInputId: 'f-inv-mrp',
+        taxModeId: 'f-inv-tax-mode',
+        noteId: 'f-inv-item-note',
+        saveAndNewAction: 'addInvoiceLine()',
+        saveAction: 'addInvoiceLineAndClose()'
+    });
 }
 
 function buildItemSearchList(inventoryItems) {
@@ -2679,6 +2713,11 @@ function getBottomNavTabs(user = currentUser) {
         .map(page => ({ page, icon: (ALL_QUICK_ACTIONS.find(a => a.key === page)?.icon) || 'apps', label: PAGE_LABELS[page] || page }));
     return fallback.length ? fallback : [{ page: 'dashboard', icon: 'bar_chart', label: 'Home' }];
 }
+function getDashboardQuickActionRole(user = currentUser) {
+    if (userHasRole(user, 'Admin')) return 'Admin';
+    if (userHasRole(user, 'Manager')) return 'Manager';
+    return getPrimaryUserRole(user);
+}
 function getQuickActionKeys(role) {
     const saved = DB.ls.getObj('qa_prefs_' + role);
     return Array.isArray(saved) && saved.length ? saved : (DEFAULT_QUICK_ACTIONS[role] || DEFAULT_QUICK_ACTIONS['Admin']);
@@ -2690,7 +2729,7 @@ function saveQuickActionPrefs(role, keys) {
     showToast('Quick actions saved!', 'success');
 }
 function openEditQuickActions() {
-    const role = currentUser?.role || 'Admin';
+    const role = window._dashboardQuickActionRole || getDashboardQuickActionRole(currentUser);
     const current = getQuickActionKeys(role);
     const rows = ALL_QUICK_ACTIONS.map(a =>
         `<label style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border);cursor:pointer">
@@ -3320,6 +3359,9 @@ function getPaymentInvoiceSummary(payment) {
 function isSalesman() {
     return userHasRole(currentUser, 'Salesman');
 }
+function isSalesOpsUser(user) {
+    return userHasRole(user, 'Admin') || userHasRole(user, 'Manager') || userHasRole(user, 'Salesman');
+}
 function isPacker() {
     return userHasRole(currentUser, 'Packing');
 }
@@ -3450,10 +3492,355 @@ function filterNavWidget(q) {
     const s = q.toLowerCase();
     rows.forEach(r => r.style.display = (!s || r.dataset.name.includes(s)) ? '' : 'none');
 }
+function normalizeDashboardStaffLink(value) {
+    return String(value || '').trim().toLowerCase().replace(/\s+/g, '');
+}
+function findDashboardStaffRecord(user, staffRows = []) {
+    const key = normalizeDashboardStaffLink(user?.name || user?.userId || '');
+    if (!key) return null;
+    const userRoles = new Set(getUserRoles(user));
+    const matches = (staffRows || []).filter(row => normalizeDashboardStaffLink(row?.name) === key);
+    if (!matches.length) return null;
+    return matches.find(row => userRoles.has(normalizeRoleName(row?.role))) || matches[0];
+}
+async function getDashboardPayrollSnapshot(user = currentUser) {
+    if (!user) return null;
+    try {
+        const selMonth = today().substring(0, 7);
+        const [year, month] = selMonth.split('-').map(Number);
+        const daysInMonth = new Date(year, month, 0).getDate();
+        const workingDays = Array.from({ length: daysInMonth }, (_, idx) => idx + 1)
+            .filter(day => new Date(year, month - 1, day).getDay() !== 0).length;
+        const monthRange = getMonthDateRange(selMonth);
+
+        const { data: allStaff, error: staffErr } = await supabaseClient.from('staff').select('*').eq('status', 'active').order('name');
+        if (staffErr) throw staffErr;
+        const staff = findDashboardStaffRecord(user, allStaff || []);
+        if (!staff) return null;
+
+        const [attRes, advRes, salRes] = await Promise.all([
+            supabaseClient.from('attendance').select('*').eq('staff_id', staff.id).gte('date', monthRange.start).lte('date', monthRange.end),
+            supabaseClient.from('salary_advances').select('*').eq('staff_id', staff.id).order('date', { ascending: false }),
+            supabaseClient.from('salary_records').select('*').eq('staff_id', staff.id).order('month', { ascending: false })
+        ]);
+        if (attRes.error) throw attRes.error;
+        if (advRes.error) throw advRes.error;
+        if (salRes.error) throw salRes.error;
+
+        const monthAttendance = dedupeAttendanceRecords(attRes.data || []);
+        const presentDays = monthAttendance.filter(row => row.status === 'Present').length;
+        const halfDays = monthAttendance.filter(row => row.status === 'Half Day').length;
+        const paidLeaveDays = monthAttendance.filter(row => row.status === 'Paid Leave').length;
+        const effectiveDays = +(presentDays + halfDays * 0.5 + paidLeaveDays).toFixed(1);
+        const monthlySalary = +(staff.monthly_salary || 0);
+        const estimatedEarned = workingDays > 0 ? +((monthlySalary / workingDays) * effectiveDays).toFixed(2) : 0;
+
+        const advances = advRes.data || [];
+        const advanceBalance = +advances.reduce((sum, row) => sum + Math.max(0, (row.amount || 0) - (row.deducted || 0)), 0).toFixed(2);
+
+        const salaryRecords = salRes.data || [];
+        const monthSalaryRecord = salaryRecords.find(row => row.month === selMonth) || null;
+        const lastSalaryRecord = salaryRecords[0] || null;
+
+        return {
+            staff,
+            month: selMonth,
+            workingDays,
+            presentDays,
+            halfDays,
+            paidLeaveDays,
+            effectiveDays,
+            monthlySalary,
+            advanceBalance,
+            advanceCount: advances.filter(row => Math.max(0, (row.amount || 0) - (row.deducted || 0)) > 0.01).length,
+            estimatedEarned,
+            monthSalaryRecord,
+            lastSalaryRecord
+        };
+    } catch (error) {
+        console.warn('Dashboard payroll snapshot failed:', error?.message || error);
+        return null;
+    }
+}
+function buildDashboardRoleBanner(roles = []) {
+    const chips = (roles || []).map(role => `<span class="badge ${ROLE_BADGE_CLASS[role] || 'badge-info'}">${role}</span>`).join('');
+    if (!chips) return '';
+    return `
+        <div class="card" style="margin-bottom:14px">
+            <div class="card-body" style="padding:${window.innerWidth < 768 ? '12px 14px' : '14px 16px'};display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+                <div>
+                    <div style="font-weight:800;font-size:0.96rem">Multi-role dashboard</div>
+                    <div style="font-size:0.82rem;color:var(--text-muted)">Your home page now shows each assigned work area together.</div>
+                </div>
+                <div style="display:flex;flex-wrap:wrap;gap:6px">${chips}</div>
+            </div>
+        </div>`;
+}
+function buildSalesmanDashboardSection({ salesOrders, invoices, payments, isMobile }) {
+    const mySO = salesOrders.filter(order => matchesUserIdentity(order.createdBy, currentUser));
+    const startOfMonth = today().substring(0, 8) + '01';
+    const myMonthInvoices = invoices.filter(invoice =>
+        invoice.type === 'sale' &&
+        invoice.status !== 'cancelled' &&
+        invoice.date >= startOfMonth &&
+        matchesUserIdentity(invoice.createdBy, currentUser)
+    );
+    const currentAch = myMonthInvoices.reduce((sum, invoice) => sum + invoice.total, 0);
+    const target = currentUser.monthlyTarget || 0;
+    const achPct = target > 0 ? Math.min(100, (currentAch / target) * 100) : 0;
+    const barColor = achPct >= 100 ? '#22c55e' : achPct >= 75 ? '#3b82f6' : achPct >= 50 ? '#f59e0b' : '#ef4444';
+
+    const todayStr = today();
+    const myTodayPayments = payments.filter(payment =>
+        payment.type === 'in' &&
+        payment.date === todayStr &&
+        matchesAnyUserIdentity([payment.collectedBy, payment.createdBy], currentUser)
+    );
+    const todayCollection = myTodayPayments.reduce((sum, payment) => sum + payment.amount, 0);
+
+    return `
+        <section style="margin-bottom:18px">
+            <div class="section-toolbar" style="margin-bottom:10px">
+                <h3>Sales Dashboard</h3>
+                <span class="badge ${ROLE_BADGE_CLASS['Salesman'] || 'badge-success'}">Salesman</span>
+            </div>
+
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;margin-bottom:16px">
+                <div class="card" style="margin:0;border-left:4px solid ${barColor}">
+                    <div class="card-body" style="padding:16px">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+                            <h4 style="margin:0;font-size:0.9rem;color:var(--text-secondary)">Monthly Sales Target</h4>
+                            <span style="font-weight:800;color:${barColor}">${achPct.toFixed(1)}%</span>
+                        </div>
+                        <div style="height:10px;background:var(--bg-body);border-radius:10px;overflow:hidden;margin-bottom:12px;border:1px solid var(--border)">
+                            <div style="width:${achPct}%;height:100%;background:${barColor};transition:width 1s ease-in-out"></div>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;align-items:center">
+                            <div>
+                                <div style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase">Achieved</div>
+                                <div style="font-size:1.05rem;font-weight:700;color:var(--text-primary)">${currency(currentAch)}</div>
+                            </div>
+                            <div style="text-align:right">
+                                <div style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase">Target</div>
+                                <div style="font-size:1.05rem;font-weight:700;color:var(--text-secondary)">${target > 0 ? currency(target) : 'Not Set'}</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card" style="margin:0;border-left:4px solid #10b981">
+                    <div class="card-body" style="padding:16px;display:flex;flex-direction:column;justify-content:center">
+                        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
+                            <h4 style="margin:0;font-size:0.9rem;color:var(--text-secondary)">Today's Collection</h4>
+                            <span class="badge badge-success" style="font-size:0.75rem">${myTodayPayments.length} Receipts</span>
+                        </div>
+                        <div style="font-size:1.8rem;font-weight:800;color:#10b981;line-height:1.2">${currency(todayCollection)}</div>
+                        <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">Total amount received today</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="stats-grid">
+                <div class="stat-card amber"><div class="stat-icon">${msIcon('hourglass_top')}</div><div class="stat-value">${mySO.filter(order => order.status === 'pending').length}</div><div class="stat-label">My Pending</div></div>
+                <div class="stat-card green"><div class="stat-icon">${msIcon('task_alt')}</div><div class="stat-value">${mySO.filter(order => order.status === 'approved').length}</div><div class="stat-label">My Approved</div></div>
+                <div class="stat-card red"><div class="stat-icon">${msIcon('cancel')}</div><div class="stat-value">${mySO.filter(order => order.status === 'rejected').length}</div><div class="stat-label">My Rejected</div></div>
+                <div class="stat-card blue"><div class="stat-icon">${msIcon('receipt_long')}</div><div class="stat-value">${mySO.length}</div><div class="stat-label">Total Orders</div></div>
+            </div>
+
+            <div class="section-toolbar" style="margin-top:8px"><h3>Quick Actions</h3></div>
+            <div class="quick-actions">
+                <button class="quick-action-btn" onclick="navigateTo('salesorders')"><span class="qa-icon material-symbols-outlined">receipt_long</span><span class="qa-label">New Order</span></button>
+                <button class="quick-action-btn" onclick="navigateTo('parties')"><span class="qa-icon material-symbols-outlined">group</span><span class="qa-label">Parties</span></button>
+                <button class="quick-action-btn" onclick="navigateTo('catalog')"><span class="qa-icon material-symbols-outlined">local_mall</span><span class="qa-label">Catalog</span></button>
+                <button class="quick-action-btn" onclick="openPartyGpsModal()"><span class="qa-icon material-symbols-outlined">location_on</span><span class="qa-label">Update GPS</span></button>
+                <button class="quick-action-btn" onclick="openItemPhotoModal()"><span class="qa-icon material-symbols-outlined">add_a_photo</span><span class="qa-label">Update Photo</span></button>
+            </div>
+
+            <div class="card">
+                <div class="card-header"><h3>My Recent Orders</h3></div>
+                <div class="card-body" style="${isMobile ? 'padding:8px' : ''}">
+                    ${isMobile ? (mySO.slice(-5).reverse().map(order => {
+                        const stMap = { pending: 'badge-warning', approved: 'badge-success', rejected: 'badge-danger' };
+                        const stText = order.status || 'pending';
+                        return `<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 6px;border-bottom:1px solid var(--border)" onclick="navigateTo('salesorders')">
+                            <div><div style="font-weight:600;font-size:0.88rem">${order.orderNo} · ${escapeHtml(order.partyName)}</div><div style="font-size:0.72rem;color:var(--text-muted)">${fmtDate(order.date)}</div></div>
+                            <div style="text-align:right"><span class="badge ${stMap[stText] || 'badge-warning'}" style="text-transform:capitalize;font-size:0.65rem">${stText}</span><div style="font-weight:700;color:var(--success);font-size:0.88rem">${currency(order.total)}</div></div>
+                        </div>`;
+                    }).join('') || '<div class="empty-state"><p>No orders yet</p></div>') : `<div class="table-wrapper"><table class="data-table">
+                        <thead><tr><th>Date</th><th>Order #</th><th>Party</th><th>Status</th><th>Total</th></tr></thead>
+                        <tbody>${mySO.slice(-5).reverse().map(order => {
+                            const stMap = { pending: 'badge-warning', approved: 'badge-success', rejected: 'badge-danger' };
+                            const stText = order.status || 'pending';
+                            return `<tr><td>${fmtDate(order.date)}</td><td>${order.orderNo}</td><td>${order.partyName}</td><td><span class="badge ${stMap[stText] || 'badge-warning'}" style="text-transform:capitalize">${stText}</span></td><td class="amount-green">${currency(order.total)}</td></tr>`;
+                        }).join('') || '<tr><td colspan="5" class="empty-state"><p>No orders yet</p><p class="empty-subtitle">Create your first sales order to get started</p></td></tr>'}
+                        </tbody></table></div>`}
+                </div>
+            </div>
+        </section>`;
+}
+function buildDeliveryDashboardSection({ deliveries, isMobile }) {
+    const myDels = deliveries.filter(row => matchesUserIdentity(row.deliveryPerson, currentUser));
+    const dispatched = myDels.filter(row => row.status === 'Dispatched');
+    const delivered = myDels.filter(row => row.status === 'Delivered');
+    const undelivered = myDels.filter(row => row.status === 'Undelivered' || row.status === 'Returned');
+    return `
+        <section style="margin-bottom:18px">
+            <div class="section-toolbar" style="margin-bottom:10px">
+                <h3>Delivery Dashboard</h3>
+                <span class="badge ${ROLE_BADGE_CLASS['Delivery'] || 'badge-info'}">Delivery</span>
+            </div>
+
+            <div class="stats-grid">
+                <div class="stat-card blue"><div class="stat-icon">${msIcon('local_shipping')}</div><div class="stat-value">${dispatched.length}</div><div class="stat-label">In Transit</div></div>
+                <div class="stat-card green"><div class="stat-icon">${msIcon('task_alt')}</div><div class="stat-value">${delivered.length}</div><div class="stat-label">Delivered</div></div>
+                <div class="stat-card red"><div class="stat-icon">${msIcon('warning')}</div><div class="stat-value">${undelivered.length}</div><div class="stat-label">Undelivered</div></div>
+                <div class="stat-card amber"><div class="stat-icon">${msIcon('assignment')}</div><div class="stat-value">${myDels.length}</div><div class="stat-label">Total Assigned</div></div>
+            </div>
+
+            <div class="section-toolbar" style="margin-top:8px"><h3>Quick Actions</h3></div>
+            <div class="quick-actions">
+                <button class="quick-action-btn" onclick="navigateTo('delivery')"><span class="qa-icon material-symbols-outlined">local_shipping</span><span class="qa-label">My Deliveries</span></button>
+                <button class="quick-action-btn" onclick="openPartyGpsModal()"><span class="qa-icon material-symbols-outlined">location_on</span><span class="qa-label">Update GPS</span></button>
+                <button class="quick-action-btn" onclick="openItemPhotoModal()"><span class="qa-icon material-symbols-outlined">add_a_photo</span><span class="qa-label">Update Photo</span></button>
+            </div>
+
+            <div class="card"><div class="card-header"><h3>My Active Dispatches</h3></div><div class="card-body" style="${isMobile ? 'padding:8px' : ''}">
+                ${isMobile ? (dispatched.slice(-5).reverse().map(row => `
+                    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 6px;border-bottom:1px solid var(--border)">
+                        <div><div style="font-weight:600;font-size:0.88rem">${row.orderNo} · ${escapeHtml(row.partyName)}</div><div style="font-size:0.72rem;color:var(--text-muted)">${row.invoiceNo || '-'}</div></div>
+                        <span class="badge badge-info" style="font-size:0.65rem">${row.status}</span>
+                    </div>`).join('') || '<div class="empty-state"><p>No active dispatches</p></div>') : `<div class="table-wrapper">
+                    <table class="data-table"><thead><tr><th>Order #</th><th>Party</th><th>Invoice</th><th>Status</th></tr></thead>
+                    <tbody>${dispatched.slice(-5).reverse().map(row => `<tr><td style="font-weight:600">${row.orderNo}</td><td>${row.partyName}</td><td><span class="badge badge-info">${row.invoiceNo || '-'}</span></td><td><span class="badge badge-info">${row.status}</span></td></tr>`).join('') || '<tr><td colspan="4"><div class="empty-state"><p>No active dispatches</p><p class="empty-subtitle">All deliveries are complete</p></div></td></tr>'}</tbody></table>
+                </div>`}
+            </div></div>
+        </section>`;
+}
+function buildPackingDashboardSection({ salesOrders, isMobile }) {
+    const allApproved = salesOrders.filter(order => order.status === 'approved' && !order.packed && !order.cannotComplete);
+    const myQueue = allApproved.filter(order => !order.assignedPacker || matchesUserIdentity(order.assignedPacker, currentUser));
+    const unassigned = allApproved.filter(order => !order.assignedPacker);
+    const myAssigned = allApproved.filter(order => matchesUserIdentity(order.assignedPacker, currentUser));
+    const packed = salesOrders.filter(order => order.packed && matchesUserIdentity(order.packedBy, currentUser));
+    return `
+        <section style="margin-bottom:18px">
+            <div class="section-toolbar" style="margin-bottom:10px">
+                <h3>Packing Dashboard</h3>
+                <span class="badge ${ROLE_BADGE_CLASS['Packing'] || 'badge-warning'}">Packing</span>
+            </div>
+
+            <div class="stats-grid">
+                <div class="stat-card amber"><div class="stat-icon">${msIcon('inventory_2')}</div><div class="stat-value">${myQueue.length}</div><div class="stat-label">Packing Queue</div></div>
+                <div class="stat-card green"><div class="stat-icon">${msIcon('task_alt')}</div><div class="stat-value">${packed.length}</div><div class="stat-label">Packed by Me</div></div>
+            </div>
+
+            <div class="section-toolbar" style="margin-top:8px"><h3>Quick Actions</h3></div>
+            <div class="quick-actions">
+                <button class="quick-action-btn" onclick="navigateTo('packing')"><span class="qa-icon material-symbols-outlined">inventory_2</span><span class="qa-label">Packing Queue</span></button>
+                <button class="quick-action-btn" onclick="openItemPhotoModal()"><span class="qa-icon material-symbols-outlined">add_a_photo</span><span class="qa-label">Update Photo</span></button>
+            </div>
+
+            ${myAssigned.length ? `<div class="card" style="margin-bottom:12px"><div class="card-header"><h3>Assigned to Me</h3></div><div class="card-body" style="${isMobile ? 'padding:8px' : ''}">
+                ${isMobile ? myAssigned.slice(0, 5).map(order => `<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 6px;border-bottom:1px solid var(--border)"><div><div style="font-weight:600;font-size:0.88rem">${order.orderNo} · ${escapeHtml(order.partyName)}</div><div style="font-size:0.72rem;color:var(--text-muted)">${order.items.length} items</div></div><div style="font-weight:700;color:var(--success)">${currency(order.total)}</div></div>`).join('') : `<div class="table-wrapper"><table class="data-table"><thead><tr><th>Order #</th><th>Party</th><th>Items</th><th>Total</th></tr></thead><tbody>${myAssigned.slice(0, 5).map(order => `<tr><td style="font-weight:600">${order.orderNo}</td><td>${order.partyName}</td><td>${order.items.length}</td><td class="amount-green">${currency(order.total)}</td></tr>`).join('')}</tbody></table></div>`}
+            </div></div>` : ''}
+
+            ${unassigned.length ? `<div class="card"><div class="card-header"><h3>Unassigned Orders</h3></div><div class="card-body" style="${isMobile ? 'padding:8px' : ''}">
+                ${isMobile ? unassigned.slice(0, 5).map(order => `<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 6px;border-bottom:1px solid var(--border)"><div><div style="font-weight:600;font-size:0.88rem">${order.orderNo} · ${escapeHtml(order.partyName)}</div><div style="font-size:0.72rem;color:var(--text-muted)">${order.items.length} items</div></div><div style="font-weight:700;color:var(--success)">${currency(order.total)}</div></div>`).join('') : `<div class="table-wrapper"><table class="data-table"><thead><tr><th>Order #</th><th>Party</th><th>Items</th><th>Total</th></tr></thead><tbody>${unassigned.slice(0, 5).map(order => `<tr><td style="font-weight:600">${order.orderNo}</td><td>${order.partyName}</td><td>${order.items.length}</td><td class="amount-green">${currency(order.total)}</td></tr>`).join('')}</tbody></table></div>`}
+            </div></div>` : (!myAssigned.length ? `<div class="card"><div class="card-body"><div class="empty-state"><span class="empty-icon">${msIcon('inventory')}</span><p>All caught up!</p><p class="empty-subtitle">No orders waiting to be packed.</p></div></div></div>` : '')}
+        </section>`;
+}
+function buildDashboardPayrollSection(snapshot, options = {}) {
+    const showMissing = !!options.showMissing;
+    if (!snapshot) {
+        if (!showMissing) return '';
+        return `
+            <section style="margin-bottom:18px">
+                <div class="section-toolbar" style="margin-bottom:10px">
+                    <h3>My Payroll</h3>
+                    <span class="badge badge-info">Staff Link Needed</span>
+                </div>
+                <div class="card">
+                    <div class="card-body" style="padding:${window.innerWidth < 768 ? '12px 14px' : '16px 18px'}">
+                        <p style="margin:0;font-size:0.86rem;color:var(--text-muted)">No active staff profile is linked to this login yet. Add a Staff Master entry with the same employee name to show attendance, advances, and salary details here.</p>
+                    </div>
+                </div>
+            </section>`;
+    }
+
+    const monthRecord = snapshot.monthSalaryRecord;
+    const lastRecord = snapshot.lastSalaryRecord;
+    const earnedThisMonth = monthRecord ? +(monthRecord.earned_salary || snapshot.estimatedEarned || 0) : snapshot.estimatedEarned;
+    const netThisMonth = monthRecord ? +(monthRecord.net_payable || 0) : Math.max(0, earnedThisMonth);
+    const deductedThisMonth = monthRecord ? +(monthRecord.advances || 0) : 0;
+    const payrollStatusLabel = monthRecord ? (monthRecord.status === 'paid' ? `Paid for ${snapshot.month}` : `Processing ${snapshot.month}`) : `Estimate for ${snapshot.month}`;
+    const payrollStatusClass = monthRecord ? (monthRecord.status === 'paid' ? 'badge-success' : 'badge-warning') : 'badge-info';
+    const openPageAction = canAccessPage('hrpayroll')
+        ? `<button class="btn btn-outline btn-sm" onclick="navigateTo('hrpayroll')">Open Payroll</button>`
+        : (canAccessPage('attendance') ? `<button class="btn btn-outline btn-sm" onclick="navigateTo('attendance')">Open Attendance</button>` : '');
+
+    return `
+        <section style="margin-bottom:18px">
+            <div class="section-toolbar" style="margin-bottom:10px">
+                <h3>My Payroll</h3>
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                    <span class="badge ${payrollStatusClass}">${payrollStatusLabel}</span>
+                    ${openPageAction}
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-body" style="padding:${window.innerWidth < 768 ? '12px 14px' : '16px 18px'}">
+                    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+                        <div>
+                            <div style="font-weight:800;font-size:1rem">${escapeHtml(snapshot.staff.name)}</div>
+                            <div style="font-size:0.78rem;color:var(--text-muted)">${escapeHtml(snapshot.staff.role || 'Staff')} · ${currency(snapshot.monthlySalary)}/month</div>
+                        </div>
+                        ${lastRecord ? `<div style="text-align:right">
+                            <div style="font-size:0.72rem;color:var(--text-muted)">Last processed salary</div>
+                            <div style="font-weight:700">${escapeHtml(lastRecord.month || snapshot.month)}</div>
+                            <div style="font-size:0.78rem;color:var(--text-secondary)">${currency(lastRecord.net_payable || 0)}</div>
+                        </div>` : ''}
+                    </div>
+
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:12px">
+                        <div style="background:var(--bg-body);border:1px solid var(--border);border-radius:10px;padding:10px 12px">
+                            <div style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase">Attendance</div>
+                            <div style="font-weight:800;font-size:1.05rem">${snapshot.effectiveDays.toFixed(1)} / ${snapshot.workingDays}</div>
+                            <div style="font-size:0.76rem;color:var(--text-muted)">P ${snapshot.presentDays} · HD ${snapshot.halfDays} · PL ${snapshot.paidLeaveDays}</div>
+                        </div>
+                        <div style="background:var(--bg-body);border:1px solid var(--border);border-radius:10px;padding:10px 12px">
+                            <div style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase">Earned</div>
+                            <div style="font-weight:800;font-size:1.05rem;color:var(--success)">${currency(earnedThisMonth)}</div>
+                            <div style="font-size:0.76rem;color:var(--text-muted)">${monthRecord ? 'Recorded this month' : 'Live estimate'}</div>
+                        </div>
+                        <div style="background:var(--bg-body);border:1px solid var(--border);border-radius:10px;padding:10px 12px">
+                            <div style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase">Advance Balance</div>
+                            <div style="font-weight:800;font-size:1.05rem;color:${snapshot.advanceBalance > 0 ? '#ef4444' : 'var(--text-primary)'}">${snapshot.advanceBalance > 0 ? currency(snapshot.advanceBalance) : 'Cleared'}</div>
+                            <div style="font-size:0.76rem;color:var(--text-muted)">${snapshot.advanceCount} open record${snapshot.advanceCount === 1 ? '' : 's'}</div>
+                        </div>
+                        <div style="background:var(--bg-body);border:1px solid var(--border);border-radius:10px;padding:10px 12px">
+                            <div style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase">${monthRecord ? 'Net Pay' : 'Current Salary'}</div>
+                            <div style="font-weight:800;font-size:1.05rem;color:var(--accent)">${currency(netThisMonth)}</div>
+                            <div style="font-size:0.76rem;color:var(--text-muted)">${deductedThisMonth > 0 ? `Advance deducted ${currency(deductedThisMonth)}` : 'No deductions recorded'}</div>
+                        </div>
+                    </div>
+
+                    <div style="display:grid;gap:6px;font-size:0.82rem;color:var(--text-muted)">
+                        <div>${monthRecord && monthRecord.paid_date ? `Salary was marked paid on ${fmtDate(monthRecord.paid_date)} by ${escapeHtml(monthRecord.paid_by || '-')}.` : 'This section updates from attendance marks and processed payroll records.'}</div>
+                        <div>${snapshot.advanceBalance > 0 ? 'Advance balance is still pending and may reduce final payout when payroll is processed.' : 'No pending advance balance is waiting to be recovered.'}</div>
+                    </div>
+                </div>
+            </div>
+        </section>`;
+}
 async function renderDashboard() {
     DB.showSkeleton(pageContent, 3);
-    const role = currentUser.role;
+    const role = userHasRole(currentUser, 'Admin')
+        ? 'Admin'
+        : (userHasRole(currentUser, 'Manager') ? 'Manager' : getPrimaryUserRole(currentUser));
     const isMobile = window.innerWidth < 768;
+    const isAdminLike = userHasRole(currentUser, 'Admin') || userHasRole(currentUser, 'Manager');
+    window._dashboardQuickActionRole = getDashboardQuickActionRole(currentUser);
     setDashboardSingleViewMode(false);
     // Batch fetch data from Supabase
     const [invoices, payments, expenses, inventory, salesOrders, dels, parties] = await Promise.all([
@@ -3467,6 +3854,24 @@ async function renderDashboard() {
     ]);
 
     // ── SALESMAN DASHBOARD ──
+    const dashboardRoles = ['Salesman', 'Delivery', 'Packing'].filter(roleName => userHasRole(currentUser, roleName));
+    if (!isAdminLike && dashboardRoles.length) {
+        const sections = [];
+        if (dashboardRoles.length > 1) sections.push(buildDashboardRoleBanner(dashboardRoles));
+        if (dashboardRoles.includes('Salesman')) {
+            sections.push(buildSalesmanDashboardSection({ salesOrders, invoices, payments, isMobile }));
+        }
+        if (dashboardRoles.includes('Delivery')) {
+            sections.push(buildDeliveryDashboardSection({ deliveries: dels, isMobile }));
+        }
+        if (dashboardRoles.includes('Packing')) {
+            sections.push(buildPackingDashboardSection({ salesOrders, isMobile }));
+        }
+        sections.push(buildDashboardPayrollSection(await getDashboardPayrollSnapshot(currentUser), { showMissing: true }));
+        pageContent.innerHTML = `${sections.filter(Boolean).join('')}${renderPartyNavWidget(parties)}`;
+        return;
+    }
+
     if (role === 'Salesman') {
         // 1. My Orders
         const mySO = salesOrders.filter(o => o.createdBy === currentUser.userId || o.createdBy === currentUser.name);
@@ -4729,7 +5134,7 @@ async function renderPartyFormPage() {
         <button class="btn btn-outline btn-sm" onclick="navigateTo('parties')"> Back</button>
         <h2 style="margin:0;flex:1">${p ? 'Edit Party' : 'Add Party'}</h2>
     </div>
-    <div class="modal-body desktop-form-shell" style="max-width:600px;margin:0 auto">
+    <div class="page-form-shell desktop-form-shell" style="max-width:600px;margin:0 auto">
         <div class="form-group"><label>Name *</label><input id="f-party-name" class="form-control" value="${p ? p.name : ''}"></div>
         <div class="form-group"><label>Party Code <span style="font-size:0.78rem;color:var(--text-muted)">(auto-generated from number series)</span></label>
             <input id="f-party-code" class="form-control" value="${p ? p.partyCode || '' : defaultCode}" placeholder="e.g. CUST-00001" style="text-transform:uppercase;font-family:monospace" oninput="this.value=this.value.toUpperCase().replace(/[^A-Z0-9-]/g,'')">
@@ -4780,6 +5185,7 @@ async function renderPartyFormPage() {
         </div>
     </div>
     </div>`;
+    applyPageFormMobileEnhancements(pageContent);
 }
 async function saveParty(id) {
     const name = $('f-party-name').value.trim();
@@ -5311,7 +5717,7 @@ async function processOpeningBalImport(event) {
     if (lines.length < 2) return alert('File is empty or has no data rows');
 
     const parties = DB.get('db_parties') || [];
-    const users = getCachedUsers().filter(u => ['Admin', 'Manager', 'Salesman'].includes(u.role));
+    const users = getCachedUsers().filter(u => isSalesOpsUser(u));
     const invoices = await DB.getAll('invoices');
     const errors = [];
     const preview = [];
@@ -6803,7 +7209,7 @@ async function renderItemFormPage() {
         <button class="btn btn-outline btn-sm" onclick="navigateTo('inventory')"> Back</button>
         <h2 style="margin:0;flex:1">${i ? 'Edit Item' : 'Add Item'}</h2>
     </div>
-    <div class="modal-body desktop-form-shell" style="max-width:600px;margin:0 auto">
+    <div class="page-form-shell desktop-form-shell" style="max-width:600px;margin:0 auto">
         <div style="margin-bottom:14px;display:flex;align-items:center;gap:14px">
             <div id="item-photo-preview" class="btn btn-outline" style="display:flex;width:70px;height:70px;border-radius:10px;border:2px dashed var(--border);align-items:center;justify-content:center;overflow:hidden;cursor:pointer;flex-shrink:0;background:var(--bg-body);margin-bottom:0;padding:0;">
                 ${i && (i.imageUrl || i.photo) ? `<img src="${i.imageUrl || i.photo}" style="width:100%;height:100%;object-fit:cover;pointer-events:none;">` : `<span class="material-symbols-outlined" style="font-size:1.5rem;pointer-events:none;">photo_camera</span>`}
@@ -6889,6 +7295,7 @@ async function renderItemFormPage() {
     </div>
     </div>`;
 
+    applyPageFormMobileEnhancements(pageContent);
     renderPriceTiers();
     renderItemBatches();
 }
@@ -8815,7 +9222,7 @@ function setDocItemMeta(prefix, item) {
     const noteEl = $(`f-${prefix}-item-note`);
     if (!item) {
         if (mrpEl) mrpEl.value = '';
-        if (noteEl) noteEl.textContent = 'Pick an item to see stock and code.';
+        if (noteEl) noteEl.textContent = 'Choose an item to view stock, code, and category.';
         return;
     }
     const mrp = item.mrp || item.salePrice || item.purchasePrice || '';
@@ -10707,8 +11114,9 @@ async function renderInvoices() {
     window._invPaymentsMap = pm;
     window._invoiceDeliveryStatusMap = buildInvoiceDeliveryStatusMap(deliveries);
 
-    const visibleInvoices = currentUser.role === 'Salesman'
-        ? invoices.filter(i => i.assignedTo === currentUser.name)
+    const isSalesmanScopedUser = userHasRole(currentUser, 'Salesman') && !canEdit();
+    const visibleInvoices = isSalesmanScopedUser
+        ? invoices.filter(i => matchesUserIdentity(i.assignedTo, currentUser))
         : invoices;
     const validInvoices = visibleInvoices.filter(i => i.status !== 'cancelled');
     const sales = validInvoices.filter(i => i.type === 'sale');
@@ -10824,7 +11232,7 @@ async function getInvoicePaidAmount(invNo) {
 
 function renderInvoiceRows(invs) {
     if (!invs.length) return '<tr><td colspan="8" class="empty-state"><p>No invoices found</p></td></tr>';
-    const canPay = canEdit() || currentUser.role === 'Salesman';
+    const canPay = canEdit() || userHasRole(currentUser, 'Salesman');
     const cols = ColumnManager.get('invoices').filter(c => c.visible);
     return invs.map(i => {
         const displayNo = getInvoiceDisplayNo(i);
@@ -10864,7 +11272,7 @@ function renderInvoiceRows(invs) {
 function renderInvoiceCards(invs) {
     if (!invs.length) return '<div style="text-align:center;padding:40px;color:var(--text-muted)">No invoices found</div>';
     const pm = window._invPaymentsMap || {};
-    const canPay = canEdit() || currentUser.role === 'Salesman';
+    const canPay = canEdit() || userHasRole(currentUser, 'Salesman');
     return invs.map(i => {
         const displayNo = getInvoiceDisplayNo(i);
         const paid = pm[i.invoiceNo] || 0;
@@ -10915,7 +11323,7 @@ function openInvoiceActionsMenu(id, evt) {
     const invs = DB.cache['invoices'] || [];
     const i = invs.find(x => x.id === id);
     if (!i) return;
-    const canPay = canEdit() || currentUser.role === 'Salesman';
+    const canPay = canEdit() || userHasRole(currentUser, 'Salesman');
 
     const actions = [
         { icon: '👁️', label: 'View Invoice', fn: `viewInvoice('${id}')` },
@@ -10974,7 +11382,9 @@ async function filterInvTable2() {
     if (to) invs = invs.filter(i => (i.date || '') <= to);
     if (s) invs = invs.filter(i => (i.invoiceNo || '').toLowerCase().includes(s) || (i.partyName || '').toLowerCase().includes(s));
     if (t) invs = invs.filter(i => i.type === t);
-    if (currentUser.role === 'Salesman') invs = invs.filter(i => i.assignedTo === currentUser.name);
+    if (currentUser && userHasRole(currentUser, 'Salesman') && !canEdit()) {
+        invs = invs.filter(i => matchesUserIdentity(i.assignedTo, currentUser));
+    }
 
     const list = $('invoice-list');
     if (list) { list.innerHTML = renderInvoiceCards(invs); return; }
@@ -12876,7 +13286,7 @@ async function recalculateStockLedger(itemId) {
 
 async function openAssignCollectorModal(invId) {
     const users = await DB.getAll('users');
-    const collectors = users.filter(u => ['Admin', 'Manager', 'Salesman'].includes(u.role));
+    const collectors = users.filter(u => isSalesOpsUser(u));
 
     openModal('Assign Collector', `
         <div class="form-group" style="margin-bottom:20px">
@@ -13674,7 +14084,7 @@ async function renderPayments() {
     // Restore bottom nav hidden by openPaymentModal
     document.body.classList.remove('pay-form-open');
     const payments = await DB.getAll('payments');
-    const isSalesman = currentUser.role === 'Salesman';
+    const isSalesman = currentUser && userHasRole(currentUser, 'Salesman') && !canEdit();
     // Salesman sees only their own payments
     const visiblePayments = isSalesman
         ? payments.filter(p => matchesAnyUserIdentity([p.collectedBy, p.createdBy], currentUser))
@@ -13862,7 +14272,7 @@ async function filterPayTable() {
     const from = ($('pay-f-from') || {}).value || '';
     const to = ($('pay-f-to') || {}).value || '';
     let pays = await DB.getAll('payments');
-    if (currentUser && currentUser.role === 'Salesman') {
+    if (currentUser && userHasRole(currentUser, 'Salesman') && !canEdit()) {
         pays = pays.filter(p => matchesAnyUserIdentity([p.collectedBy, p.createdBy], currentUser) && p.type !== 'out');
     }
     if (from) pays = pays.filter(p => p.date >= from);
@@ -14181,9 +14591,9 @@ async function openPaymentModal(prefillPartyId) {
 
     // Render as full page (Vyapar-style) instead of a modal bottom sheet
     const [parties, users] = await Promise.all([DB.getAll('parties'), DB.getAll('users')]);
-    const collectors = users.filter(u => ['Admin', 'Manager', 'Salesman'].includes(u.role));
+    const collectors = users.filter(u => isSalesOpsUser(u));
     const co = DB.ls.getObj('db_company') || {};
-    const isSalesmanRole = currentUser.role === 'Salesman';
+    const isSalesmanRole = currentUser && userHasRole(currentUser, 'Salesman') && !canEdit();
 
     pageContent.innerHTML = `
         <!-- Sticky top bar -->
@@ -15823,7 +16233,7 @@ function renderPacking() {
         if (o.invoiceCancelled) return true;
         return invoices.some(i => i.fromOrder === o.orderNo && i.status === 'cancelled');
     };
-    const isAdmin = currentUser.role === 'Admin' || currentUser.role === 'Manager';
+    const isAdmin = userHasRole(currentUser, 'Admin') || userHasRole(currentUser, 'Manager');
 
     // Cannot complete orders (flagged, not yet re-approved)
     const cannotCompleteOrders = orders.filter(o => o.cannotComplete && !o.packed && o.status === 'approved');
@@ -15831,12 +16241,12 @@ function renderPacking() {
     // Filter ready to pack  exclude cannot-complete flagged ones
     let readyToPackRows = orders.filter(o => o.status === 'approved' && !o.packed && !hasCancelledInvoice(o) && !o.cannotComplete);
     if (!isAdmin) {
-        readyToPackRows = readyToPackRows.filter(o => !o.assignedPacker || o.assignedPacker === currentUser.name);
+        readyToPackRows = readyToPackRows.filter(o => !o.assignedPacker || matchesUserIdentity(o.assignedPacker, currentUser));
     }
 
     const allPackedNoInvoice = orders.filter(o => o.packed && !o.invoiceNo && !o.invoiceCancelled);
     // Non-admin sees only their own packed orders awaiting invoice
-    const packedNoInvoice = isAdmin ? allPackedNoInvoice : allPackedNoInvoice.filter(o => o.packedBy === currentUser.name);
+    const packedNoInvoice = isAdmin ? allPackedNoInvoice : allPackedNoInvoice.filter(o => matchesUserIdentity(o.packedBy, currentUser));
     const packedWithInvoice = orders.filter(o => o.packed && o.invoiceNo);
 
     // Date filter for Packed History (default: current month)
@@ -15963,7 +16373,7 @@ function renderPacking() {
                 actions: `<td><div class="action-btns">
                             ${!o.assignedPacker && isAdmin ? `<button class="btn btn-outline btn-sm" onclick="openAssignPackerModal('${o.id}')"> Assign</button>` : ''}
                             ${!o.assignedPacker && !isAdmin ? `<button class="btn btn-outline btn-sm" onclick="selfAssign('${o.id}')"> Self Assign</button>` : ''}
-                            ${o.assignedPacker === currentUser.name || isAdmin ? `<button class="btn btn-primary btn-sm" onclick="startPacking('${o.id}')"> Start Packing</button>` : ''}
+                            ${matchesUserIdentity(o.assignedPacker, currentUser) || isAdmin ? `<button class="btn btn-primary btn-sm" onclick="startPacking('${o.id}')"> Start Packing</button>` : ''}
                         </div></td>`,
             };
             return `<tr>${packCols.map(c => cellMap[c.key] || '').join('')}</tr>`;
@@ -16076,7 +16486,7 @@ function renderReadyToPackCards(orders, isAdmin) {
                 <div style="display:flex;gap:6px">
                     ${!o.assignedPacker && isAdmin ? `<button class="btn btn-outline btn-sm" style="padding:4px 10px;font-size:0.75rem" onclick="openAssignPackerModal('${o.id}')"> Assign</button>` : ''}
                     ${!o.assignedPacker && !isAdmin ? `<button class="btn btn-outline btn-sm" style="padding:4px 10px;font-size:0.75rem" onclick="selfAssign('${o.id}')"> Self Assign</button>` : ''}
-                    ${o.assignedPacker === currentUser.name || isAdmin ? `<button class="btn btn-primary btn-sm" style="padding:4px 10px;font-size:0.75rem" onclick="startPacking('${o.id}')"> Start</button>` : ''}
+                    ${matchesUserIdentity(o.assignedPacker, currentUser) || isAdmin ? `<button class="btn btn-primary btn-sm" style="padding:4px 10px;font-size:0.75rem" onclick="startPacking('${o.id}')"> Start</button>` : ''}
                 </div>
             </div>
         </div>
@@ -16404,7 +16814,12 @@ function openAssignPackerModal(orderId) {
 
     const allUsers = DB.cache['users'] || DB.cache['db_users'] || [];
     let packingUsers = allUsers
-        .filter(u => ['Packer', 'Helper', 'Manager', 'Admin'].includes(u.role))
+        .filter(u =>
+            userHasRole(u, 'Packing') ||
+            userHasRole(u, 'Helper') ||
+            userHasRole(u, 'Manager') ||
+            userHasRole(u, 'Admin')
+        )
         .map(u => u.name)
         .filter(Boolean);
     if (!packingUsers.length) packingUsers = allUsers.map(u => u.name).filter(Boolean);
@@ -17585,8 +18000,8 @@ async function renderDelivery() {
     ]);
 
     // User-wise filter: Delivery role only sees their own assignments
-    if (currentUser && currentUser.role === 'Delivery') {
-        dels = dels.filter(d => d.deliveryPerson === currentUser.name);
+    if (currentUser && userHasRole(currentUser, 'Delivery') && !canEdit()) {
+        dels = dels.filter(d => matchesUserIdentity(d.deliveryPerson, currentUser));
     }
 
     const dispatched = dels.filter(d => d.status === 'Dispatched');
@@ -17724,7 +18139,7 @@ function renderDelCards(dels, allParties) {
     if (!dels.length) return '<div style="text-align:center;padding:30px;color:var(--text-muted)">No deliveries found</div>';
     return dels.map(d => {
         const bdgClass = d.status === 'Delivered' ? 'badge-success' : (d.status === 'Dispatched' ? 'badge-info' : (d.status === 'Cancelled' ? 'badge-danger' : 'badge-warning'));
-        const isSalesman = currentUser && currentUser.role === 'Salesman';
+        const isSalesman = currentUser && userHasRole(currentUser, 'Salesman') && !userHasRole(currentUser, 'Delivery') && !canEdit();
         const displayDate = d.dispatchedAt || d.deliveredAt || d.returnedAt || d.undeliveredAt || d.date;
         return `
         <div data-del-id="${d.id}" style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:10px;box-shadow:0 1px 4px rgba(0,0,0,0.05);position:relative" onclick="viewDelivery('${d.id}')">
@@ -17794,7 +18209,7 @@ function renderDelRows(dels, parties) {
         })();
 
         // Person cell: admin/manager can change delivery person before delivery
-        const canChangePerson = currentUser && (currentUser.role === 'Admin' || currentUser.role === 'Manager') && d.status !== 'Delivered' && d.status !== 'Cancelled';
+        const canChangePerson = currentUser && (userHasRole(currentUser, 'Admin') || userHasRole(currentUser, 'Manager')) && d.status !== 'Delivered' && d.status !== 'Cancelled';
         const personCell = `<td>
             <div style="font-weight:600;font-size:0.85rem">${d.deliveryPerson || '-'}</div>
             ${canChangePerson ? `<button class="btn-link" style="font-size:0.72rem;color:var(--accent);background:none;border:none;cursor:pointer;padding:0;margin-top:2px" onclick="openChangeDeliveryPerson('${d.id}')"> Change</button>` : ''}
@@ -17823,8 +18238,8 @@ function renderDelRows(dels, parties) {
 async function filterDelTable() {
     const st = $('del-status-filter').value;
     let dels = await DB.getAll('delivery');
-    if (currentUser && currentUser.role === 'Delivery') {
-        dels = dels.filter(d => d.deliveryPerson === currentUser.name);
+    if (currentUser && userHasRole(currentUser, 'Delivery') && !canEdit()) {
+        dels = dels.filter(d => matchesUserIdentity(d.deliveryPerson, currentUser));
     }
     if (st) dels = dels.filter(d => d.status === st);
 
@@ -17837,7 +18252,7 @@ async function filterDelTable() {
 }
 
 async function openChangeDeliveryPerson(id) {
-    if (!currentUser || (currentUser.role !== 'Admin' && currentUser.role !== 'Manager')) {
+    if (!currentUser || (!userHasRole(currentUser, 'Admin') && !userHasRole(currentUser, 'Manager'))) {
         return alert('Only Admin or Manager can change the delivery person.');
     }
     const dels = DB.cache['delivery'] || [];
@@ -19365,7 +19780,7 @@ async function showReport(type) {
     if (type === 'sales') {
         window._rSalesAll = invoices.filter(i => i.type === 'sale' && i.status !== 'cancelled');
         const monthStart = currentMonthStart();
-        const salesUsers = users.filter(u => ['Admin', 'Manager', 'Salesman'].includes(u.role));
+        const salesUsers = users.filter(u => isSalesOpsUser(u));
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
             <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
@@ -19848,7 +20263,7 @@ async function showReport(type) {
         window._rInvPnlAll = invoices.filter(i => i.type === 'sale' && i.status !== 'cancelled');
         window._rInvPnlInvt = inventory;
         const monthStart = currentMonthStart();
-        const salesUsers = users.filter(u => ['Admin', 'Manager', 'Salesman'].includes(u.role));
+        const salesUsers = users.filter(u => isSalesOpsUser(u));
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
             <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
@@ -19951,7 +20366,7 @@ async function showReport(type) {
                 <div class="form-group"><label>From Date</label><input type="date" id="vy-s-from" value="${monthStart}" onchange="renderVyaparSalesTable()"></div>
                 <div class="form-group"><label>To Date</label><input type="date" id="vy-s-to" value="${today()}" onchange="renderVyaparSalesTable()"></div>
                 <div class="form-group"><label>Party</label><input id="vy-s-party" placeholder="All parties..." oninput="renderVyaparSalesTable()" style="width:180px"></div>
-                <div class="form-group"><label>Salesman</label><select id="vy-s-user" onchange="renderVyaparSalesTable()"><option value="">All</option>${users.filter(u => ['Admin', 'Manager', 'Salesman'].includes(u.role)).map(u => `<option>${u.name}</option>`).join('')}</select></div>
+                <div class="form-group"><label>Salesman</label><select id="vy-s-user" onchange="renderVyaparSalesTable()"><option value="">All</option>${users.filter(u => isSalesOpsUser(u)).map(u => `<option>${u.name}</option>`).join('')}</select></div>
                 <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-vy-sales','VyaparSales_${today()}')"> Export Excel</button></div>
             </div>
         </div></div>
@@ -19991,7 +20406,7 @@ async function showReport(type) {
     if (type === 'salesman') {
         window._rSlsInv = invoices.filter(i => i.type === 'sale' && i.status !== 'cancelled');
         window._rSlsPay = payments.filter(p => p.type === 'in');
-        const salesUsers = users.filter(u => ['Admin', 'Manager', 'Salesman'].includes(u.role));
+        const salesUsers = users.filter(u => isSalesOpsUser(u));
         const monthStart = currentMonthStart();
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
@@ -20026,11 +20441,11 @@ async function showReport(type) {
     if (type === 'user-outstanding') {
         window._rUOutInv = invoices.filter(i => i.type === 'sale' && i.status !== 'cancelled');
         window._rUOutPay = payments;
-        window._rUOutUsers = users.filter(u => ['Admin', 'Manager', 'Salesman'].includes(u.role));
+        window._rUOutUsers = users.filter(u => isSalesOpsUser(u));
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
             <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
-                <div class="form-group"><label>Salesman</label><select id="r-uo-user" onchange="renderUserOutstandingRpt()"><option value="">All Salesmen</option>${users.filter(u => ['Admin', 'Manager', 'Salesman'].includes(u.role)).map(u => `<option>${escapeHtml(u.name)}</option>`).join('')}</select></div>
+                <div class="form-group"><label>Salesman</label><select id="r-uo-user" onchange="renderUserOutstandingRpt()"><option value="">All Salesmen</option>${users.filter(u => isSalesOpsUser(u)).map(u => `<option>${escapeHtml(u.name)}</option>`).join('')}</select></div>
                 <div class="form-group"><label>Age</label><select id="r-uo-age" onchange="renderUserOutstandingRpt()"><option value="">All</option><option value="0-30">0-30 days</option><option value="31-60">31-60 days</option><option value="61-90">61-90 days</option><option value="90+">90+ days</option></select></div>
                 <div class="form-group"><label>Search Party</label><input id="r-uo-party" placeholder="Party name..." oninput="renderUserOutstandingRpt()" style="width:160px"></div>
                 <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('tbl-user-outstanding','OutstandingByUser_${today()}')"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button></div>
@@ -20043,7 +20458,7 @@ async function showReport(type) {
     if (type === 'payment-trend') {
         const allPayments = await DB.getAll('payments');
         const users = await DB.getAll('users');
-        const salesmen = users.filter(u => u.role === 'Salesman' || u.role === 'Manager' || u.role === 'Admin');
+        const salesmen = users.filter(u => isSalesOpsUser(u));
 
         pageContent.innerHTML = `
         <div class="section-toolbar" style="flex-wrap:wrap;gap:8px;margin-bottom:16px">
@@ -20074,7 +20489,7 @@ async function showReport(type) {
 
     if (type === 'payment-report') {
         const monthStart = currentMonthStart();
-        const collectors = users.filter(u => ['Admin', 'Manager', 'Salesman'].includes(u.role));
+        const collectors = users.filter(u => isSalesOpsUser(u));
         window._rPayAll = payments;
         el.innerHTML = `
         <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
@@ -20117,7 +20532,7 @@ async function showReport(type) {
     }
 
     if (type === 'zero-sales') {
-        const salesUsers = users.filter(u => ['Admin', 'Manager', 'Salesman'].includes(u.role));
+        const salesUsers = users.filter(u => isSalesOpsUser(u));
         pageContent.innerHTML = `
         <div class="section-toolbar" style="flex-wrap:wrap;gap:8px;margin-bottom:16px">
             <button class="btn btn-outline" onclick="renderReports()"> Back</button>
@@ -21944,6 +22359,23 @@ function openUserModal(id) {
             <button class="btn btn-primary" onclick="saveUser('${id || ''}')">Save User</button>
         </div>`);
 }
+async function ensureUserRoleMasterRecords(userData, selectedRoles = []) {
+    const staffName = String(userData?.name || '').trim();
+    if (!staffName) return;
+    const normalizedName = normalizeDashboardStaffLink(staffName);
+    if (selectedRoles.includes('Packing')) {
+        const packers = await DB.getAll('packers');
+        if (!packers.some(p => normalizeDashboardStaffLink(p?.name) === normalizedName)) {
+            await DB.insert('packers', { name: staffName });
+        }
+    }
+    if (selectedRoles.includes('Delivery')) {
+        const deliveryPersons = await DB.getAll('delivery_persons');
+        if (!deliveryPersons.some(p => normalizeDashboardStaffLink(p?.name) === normalizedName)) {
+            await DB.insert('delivery_persons', { name: staffName });
+        }
+    }
+}
 async function saveUser(id) {
     if (!hasPerm('action.users.manage')) return alert('Access denied');
     const name = $('f-user-name').value.trim();
@@ -21986,16 +22418,8 @@ async function saveUser(id) {
             savedUser = await DB.update('users', id, data);
         } else {
             savedUser = await DB.insert('users', data);
-            // Auto-create Packer or Delivery Person record
-            if (selectedRoles.includes('Packing')) {
-                const packers = await DB.getAll('packers');
-                if (!packers.some(p => p.name === name)) await DB.insert('packers', { name });
-            }
-            if (selectedRoles.includes('Delivery')) {
-                const dps = await DB.getAll('delivery_persons');
-                if (!dps.some(p => p.name === name)) await DB.insert('delivery_persons', { name });
-            }
         }
+        await ensureUserRoleMasterRecords(savedUser || data, selectedRoles);
         if (currentUser && savedUser && currentUser.id === savedUser.id) {
             currentUser = { ...currentUser, ...savedUser };
             window.currentUser = currentUser;
