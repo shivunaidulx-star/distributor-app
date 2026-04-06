@@ -1071,7 +1071,7 @@ const ROLE_NAME_MAP = {
 };
 const CUSTOMER_PORTAL_ENABLED = false; // Feature kept in codebase for future relaunch, disabled for current live release.
 function getAppVersion() {
-    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v156';
+    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v157';
 }
 
 const PAGE_LABELS = {
