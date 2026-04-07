@@ -5202,6 +5202,16 @@ body.dashboard-single-view-open .page-content.dashboard-single-view-host {
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
 }
+.pay-page-title {
+    flex: 1;
+    min-width: 0;
+}
+.pay-page-actions {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
 .pay-back-btn {
     width: 38px;
     height: 38px;
@@ -5265,6 +5275,17 @@ body.dashboard-single-view-open .page-content.dashboard-single-view-host {
     .pay-page-footer {
         bottom: 62px;
         padding-bottom: env(safe-area-inset-bottom, 12px);
+    }
+}
+@media (max-width: 560px) {
+    .pay-page-header {
+        flex-wrap: wrap;
+        align-items: flex-start;
+    }
+    .pay-page-actions {
+        width: 100%;
+        margin-left: 48px;
+        justify-content: flex-start;
     }
 }
 /* Payment form hides the bottom nav to eliminate the gap between footer and keyboard */

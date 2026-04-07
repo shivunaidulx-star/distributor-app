@@ -1120,7 +1120,7 @@ const ROLE_NAME_MAP = {
 };
 const CUSTOMER_PORTAL_ENABLED = false; // Feature kept in codebase for future relaunch, disabled for current live release.
 function getAppVersion() {
-    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v159';
+    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v160';
 }
 
 const PAGE_LABELS = {
@@ -14378,13 +14378,15 @@ async function renderPayments() {
         </div>
 
         <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:10px">
-            <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
-                <input type="date" id="pay-f-from" value="${monthStart}" onchange="filterPayTable()" style="flex:1;font-size:0.78rem;padding:7px 8px;border:1px solid var(--border);border-radius:7px;background:var(--bg-input)">
-                <span style="color:var(--text-muted);font-size:0.8rem">to</span>
-                <input type="date" id="pay-f-to" value="${today1}" onchange="filterPayTable()" style="flex:1;font-size:0.78rem;padding:7px 8px;border:1px solid var(--border);border-radius:7px;background:var(--bg-input)">
-                <button onclick="togglePayFilters()" id="pay-filter-toggle" style="border:1px solid var(--border);background:var(--bg-input);border-radius:7px;padding:7px 10px;font-size:0.85rem;cursor:pointer;flex-shrink:0"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-3px">tune</span></button>
-                <button onclick="openVyaparPaymentImport()" style="border:1px solid #7c3aed;background:transparent;color:#7c3aed;border-radius:7px;padding:7px 10px;font-size:0.85rem;cursor:pointer;flex-shrink:0" title="Import from Vyapar"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-3px">upload_file</span></button>
-                <button class="btn btn-primary btn-sm" onclick="openPaymentModal()" style="white-space:nowrap;padding:7px 14px;flex-shrink:0">+ Record</button>
+            <div style="display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr) auto;gap:6px;align-items:center;margin-bottom:6px">
+                <input type="date" id="pay-f-from" value="${monthStart}" onchange="filterPayTable()" style="min-width:0;font-size:0.78rem;padding:7px 8px;border:1px solid var(--border);border-radius:7px;background:var(--bg-input)">
+                <span style="color:var(--text-muted);font-size:0.8rem;text-align:center">to</span>
+                <input type="date" id="pay-f-to" value="${today1}" onchange="filterPayTable()" style="min-width:0;font-size:0.78rem;padding:7px 8px;border:1px solid var(--border);border-radius:7px;background:var(--bg-input)">
+                <button onclick="togglePayFilters()" id="pay-filter-toggle" style="border:1px solid var(--border);background:var(--bg-input);border-radius:7px;padding:7px 10px;font-size:0.85rem;cursor:pointer;min-width:44px"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-3px">tune</span></button>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px">
+                <button onclick="openVyaparPaymentImport()" style="border:1px solid #7c3aed;background:transparent;color:#7c3aed;border-radius:7px;padding:8px 10px;font-size:0.82rem;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:6px;min-width:0" title="Import from Vyapar"><span class="material-symbols-outlined" style="font-size:1rem">upload_file</span> Import</button>
+                <button class="btn btn-primary btn-sm" onclick="openPaymentModal()" style="padding:8px 12px;justify-content:center;min-width:0">+ Record</button>
             </div>
             ${isSalesman ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:0 0 8px">
                 <button class="btn btn-primary btn-sm" onclick="openCollectionRoutePage()" style="justify-content:center"><span class="material-symbols-outlined" style="font-size:1rem">route</span> Collection Route</button>
@@ -14729,10 +14731,14 @@ function renderPayCards(pays) {
         const typeBg = isIn ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)';
         const typeColor = isIn ? 'var(--success)' : 'var(--danger)';
         const invCell = getPaymentInvoiceSummary(p);
+        const noteText = String(p.notes || p.note || '').trim();
         const collectorLabel = getUserDisplayName(getPaymentCollectorValue(p));
         const detailParts = [fmtDate(p.date)];
-        if (invCell && invCell !== 'Advance / Unallocated') detailParts.push(escapeHtml(invCell));
+        if (noteText) detailParts.push(escapeHtml(noteText));
         if (collectorLabel) detailParts.push(escapeHtml(collectorLabel));
+        const invoiceMeta = invCell && invCell !== 'Advance / Unallocated'
+            ? `<div style="font-size:0.72rem;color:var(--text-muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><strong style="color:var(--text-primary)">Inv:</strong> ${escapeHtml(invCell)}</div>`
+            : '';
         return `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:8px;display:flex;align-items:center;gap:12px" onclick="viewPaymentDetails('${p.id}')">
             <div style="flex:1;min-width:0">
                 <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
@@ -14741,7 +14747,8 @@ function renderPayCards(pays) {
                     ${p.mode && p.mode !== 'Cash' ? `<span style="font-size:0.68rem;color:var(--text-muted);background:var(--bg-secondary);padding:2px 6px;border-radius:10px">${escapeHtml(p.mode)}</span>` : ''}
                 </div>
                 <div style="font-weight:600;font-size:0.88rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(p.partyName || '')}</div>
-                <div style="font-size:0.75rem;color:var(--text-muted);margin-top:2px">${detailParts.join(' | ')}</div>
+                <div style="font-size:0.75rem;color:var(--text-muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${detailParts.join(' | ')}</div>
+                ${invoiceMeta}
             </div>
             <div style="text-align:right;flex-shrink:0">
                 <div style="font-size:1.1rem;font-weight:800;color:${amtColor}">${amtSign}${currency(p.amount)}</div>
@@ -15121,11 +15128,11 @@ async function openPaymentModal(prefillPartyId) {
         <!-- Sticky top bar -->
         <div class="pay-page-header">
             <button class="btn-icon pay-back-btn" onclick="${returnAction}"><span class="material-symbols-outlined">arrow_back</span></button>
-            <div style="flex:1">
+            <div class="pay-page-title">
                 <div style="font-size:1rem;font-weight:700;color:var(--text-primary)">Record Payment</div>
                 <div style="font-size:0.75rem;color:var(--text-muted)" id="pay-co-name">${escapeHtml(co.name || '')}</div>
             </div>
-            <div style="display:flex;gap:6px">
+            <div class="pay-page-actions">
                 <button class="btn btn-outline btn-sm" style="padding:6px 10px" onclick="onPayTypeChange()" id="pay-type-toggle-btn" title="Switch type">
                     <span id="pay-type-label"> Payment In</span>
                 </button>
@@ -28105,13 +28112,15 @@ async function openVyaparPaymentImport() {
     pageContent.innerHTML = `
         <div class="pay-page-header">
             <button class="btn-icon pay-back-btn" onclick="renderPayments()"><span class="material-symbols-outlined">arrow_back</span></button>
-            <div style="flex:1">
+            <div class="pay-page-title">
                 <div style="font-size:1rem;font-weight:700;color:var(--text-primary)">Import Payments from Vyapar</div>
                 <div style="font-size:0.75rem;color:var(--text-muted)">Upload Excel → Review → Post</div>
             </div>
-            <button class="btn btn-outline btn-sm" onclick="downloadVyaparPaymentTemplate()" style="border-color:#16a34a;color:#16a34a;white-space:nowrap">
-                <span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-3px">download</span> Template
-            </button>
+            <div class="pay-page-actions">
+                <button class="btn btn-outline btn-sm" onclick="downloadVyaparPaymentTemplate()" style="border-color:#16a34a;color:#16a34a;white-space:nowrap">
+                    <span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-3px">download</span> Template
+                </button>
+            </div>
         </div>
 
         <div id="vyapar-import-body" style="padding:0 0 100px 0">
