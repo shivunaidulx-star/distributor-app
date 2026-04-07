@@ -65,8 +65,8 @@
         <div style="display:flex;align-items:center;gap:10px">
             <span style="font-size:1.3rem">🚀</span>
             <div>
-                <div style="font-weight:700;font-size:0.9rem">v163 is ready!</div>
-                <div style="font-size:0.75rem;opacity:0.9">Login shows an offline banner instead of forcing setup.</div>
+                <div style="font-weight:700;font-size:0.9rem">v164 is ready!</div>
+                <div style="font-size:0.75rem;opacity:0.9">Login now offers an offline retry button and cached users fallback.</div>
             </div>
         </div>
         <button onclick="forceHardRefresh()" style="background:#fff;color:#f97316;border:none;border-radius:8px;padding:8px 16px;font-weight:700;font-size:0.85rem;cursor:pointer;white-space:nowrap;flex-shrink:0">
@@ -112,7 +112,8 @@
                 <div style="font-size:0.72rem;color:var(--text-muted);margin-top:6px;font-weight:600">App Version: <span id="login-app-version"></span></div>
             </div>
             <div id="offline-login-banner" style="display:none;margin-bottom:14px;padding:10px 12px;border-radius:10px;border:1px solid #f59e0b;background:rgba(245,158,11,0.12);color:#92400e;font-size:0.82rem;font-weight:600;line-height:1.4">
-                <span id="offline-login-msg">Offline mode: cannot reach users now. Check internet and reload.</span>
+                <div id="offline-login-msg">Offline mode: cannot reach users now. Check internet and reload.</div>
+                <button onclick="retryBootConnection()" style="margin-top:8px;background:#fff;color:#92400e;border:1px solid #f59e0b;border-radius:8px;padding:6px 10px;font-size:0.78rem;font-weight:700;cursor:pointer">Retry Connection</button>
             </div>
             <div class="login-form">
                 <div class="form-group">
@@ -244,7 +245,7 @@
                 </div>
                 <button id="btn-logout" class="btn btn-sm btn-outline">Logout</button>
             </div>
-            <div style="text-align:center;padding:4px 0 8px;font-size:0.65rem;color:var(--text-muted);opacity:0.6;letter-spacing:0.3px" id="sidebar-version">v163</div>
+            <div style="text-align:center;padding:4px 0 8px;font-size:0.65rem;color:var(--text-muted);opacity:0.6;letter-spacing:0.3px" id="sidebar-version">v164</div>
         </aside>
 
         <!-- Main Content -->
@@ -316,10 +317,10 @@
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" defer></script>
     <script src="qrcode.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js"></script>
-    <script src="app.js?v=163"></script>
+    <script src="app.js?v=164"></script>
     <script>
-        window.APP_VERSION = 'v163';
-        window.APP_RELEASE_NOTE = 'Login shows an offline banner instead of forcing setup.';
+        window.APP_VERSION = 'v164';
+        window.APP_RELEASE_NOTE = 'Login now offers an offline retry button and cached users fallback.';
 
         const loginAppVersion = document.getElementById('login-app-version');
         if (loginAppVersion) loginAppVersion.textContent = window.APP_VERSION;
@@ -380,7 +381,7 @@
                     await disableCachedShellForLocalhost();
                     return;
                 }
-                navigator.serviceWorker.register(`sw.js?v=${encodeURIComponent(window.APP_VERSION || 'v163')}`).then(reg => {
+                navigator.serviceWorker.register(`sw.js?v=${encodeURIComponent(window.APP_VERSION || 'v164')}`).then(reg => {
                     console.log('SW registered');
                     reg.update(); // Trigger check
 

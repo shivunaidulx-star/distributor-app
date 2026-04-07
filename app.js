@@ -1154,7 +1154,7 @@ const ROLE_NAME_MAP = {
 };
 const CUSTOMER_PORTAL_ENABLED = false; // Feature kept in codebase for future relaunch, disabled for current live release.
 function getAppVersion() {
-    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v163';
+    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v164';
 }
 
 const PAGE_LABELS = {
@@ -1516,6 +1516,18 @@ async function checkFirstLaunch() {
         const fetchMeta = DB.getFetchMeta('users');
         const fetchFailed = fetchMeta && (fetchMeta.ok === false || fetchMeta.timedOut);
         if (fetchFailed) {
+            let cachedUsers = DB.get('db_users') || DB.cache['users'];
+            if (!Array.isArray(cachedUsers) || cachedUsers.length === 0) {
+                cachedUsers = await DB.loadTableFromIDB('users');
+            }
+            if (Array.isArray(cachedUsers) && cachedUsers.length > 0) {
+                DB.cache['users'] = cachedUsers;
+                window._offlineBootWarning = true;
+                await showLoginScreen();
+                showOfflineLoginBanner('Offline mode: using last cached users. Data may be stale.');
+                showToast('Offline mode: using last cached users.', 'warning', 6000);
+                return;
+            }
             window._offlineBootWarning = true;
             await showLoginScreen();
             showToast('Cannot load users right now. Check internet and reload.', 'warning', 6000);
@@ -1547,6 +1559,27 @@ function hideOfflineLoginBanner() {
     const banner = $('offline-login-banner');
     if (!banner) return;
     banner.style.display = 'none';
+}
+
+async function retryBootConnection() {
+    showToast('Retrying connection...', 'info', 2500);
+    try {
+        await DB.refresh({ nonBlockingBoot: false });
+    } catch (e) {
+        console.warn('Retry boot refresh failed:', e?.message || e);
+    }
+    const users = await DB.getAll('users');
+    const fetchMeta = DB.getFetchMeta('users');
+    const fetchOk = fetchMeta && fetchMeta.ok;
+    if (users.length > 0 && fetchOk) {
+        window._offlineBootWarning = false;
+        hideOfflineLoginBanner();
+        showToast('Connected. You can sign in now.', 'success', 4000);
+        return;
+    }
+    window._offlineBootWarning = true;
+    showOfflineLoginBanner('Offline mode: cannot reach users now. Check internet and retry.');
+    showToast('Still offline. Please check internet and retry.', 'warning', 4000);
 }
 
 function renderSetupStep1() {
