@@ -1154,7 +1154,7 @@ const ROLE_NAME_MAP = {
 };
 const CUSTOMER_PORTAL_ENABLED = false; // Feature kept in codebase for future relaunch, disabled for current live release.
 function getAppVersion() {
-    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v162';
+    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v163';
 }
 
 const PAGE_LABELS = {
@@ -1510,11 +1510,13 @@ const sidebar = $('sidebar');
 //  SETUP WIZARD (First Launch)
 // =============================================
 async function checkFirstLaunch() {
+    window._offlineBootWarning = false;
     const users = await DB.getAll('users');
     if (users.length === 0) {
         const fetchMeta = DB.getFetchMeta('users');
         const fetchFailed = fetchMeta && (fetchMeta.ok === false || fetchMeta.timedOut);
         if (fetchFailed) {
+            window._offlineBootWarning = true;
             await showLoginScreen();
             showToast('Cannot load users right now. Check internet and reload.', 'warning', 6000);
             return;
@@ -1531,6 +1533,20 @@ function showSetupWizard() {
     loginScreen.classList.add('hidden');
     appEl.classList.add('hidden');
     renderSetupStep1();
+}
+
+function showOfflineLoginBanner(message = '') {
+    const banner = $('offline-login-banner');
+    if (!banner) return;
+    const msgEl = $('offline-login-msg');
+    if (msgEl && message) msgEl.textContent = message;
+    banner.style.display = 'block';
+}
+
+function hideOfflineLoginBanner() {
+    const banner = $('offline-login-banner');
+    if (!banner) return;
+    banner.style.display = 'none';
 }
 
 function renderSetupStep1() {
@@ -1632,6 +1648,11 @@ async function showLoginScreen() {
 
     const co = DB.ls.getObj('db_company'); // Keeping company info local for now as it's static
     if (co.name) $('login-company-name').textContent = co.name;
+    if (window._offlineBootWarning) {
+        showOfflineLoginBanner('Offline mode: cannot reach users now. Check internet and reload.');
+    } else {
+        hideOfflineLoginBanner();
+    }
 
     const logoEl = document.querySelector('#login-screen .logo-icon');
     if (logoEl && (co.name || co.logo)) {
