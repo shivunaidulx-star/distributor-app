@@ -1154,7 +1154,7 @@ const ROLE_NAME_MAP = {
 };
 const CUSTOMER_PORTAL_ENABLED = false; // Feature kept in codebase for future relaunch, disabled for current live release.
 function getAppVersion() {
-    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v164';
+    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v165';
 }
 
 const PAGE_LABELS = {
@@ -25218,7 +25218,7 @@ async function confirmDeleteLedgerEntry(partyId, ledgerId) {
     let ledger = DB.get('db_party_ledger');
     ledger = ledger.filter(x => String(x.id) !== String(ledgerId));
     DB.set('db_party_ledger', ledger);
-    recalculatePartyLedger(partyId);
+    await syncPartyBalanceFromLedger(partyId);
     closeModal();
     renderPartyLedgerLayout(); // Refresh UI
     showToast('Ledger entry deleted successfully.', 'success');
@@ -25230,6 +25230,7 @@ function recalculatePartyLedger(partyId) {
     if (partyIdx === -1) return;
 
     let ledger = DB.get('db_party_ledger');
+    if (!Array.isArray(ledger)) return;
 
     // Extract this party's ledger lines and sort strictly chronologically ascending
     const partyLines = ledger.filter(l => String(l.partyId) === String(partyId)).sort((a, b) => new Date(a.date) - new Date(b.date) || String(a.id).localeCompare(String(b.id))); // Fallback to id to maintain stable sort
@@ -25255,6 +25256,17 @@ function recalculatePartyLedger(partyId) {
     // Update party's total current balance
     parties[partyIdx].balance = runningBalance;
     DB.set('db_parties', parties);
+    return runningBalance;
+}
+
+async function syncPartyBalanceFromLedger(partyId) {
+    const runningBalance = recalculatePartyLedger(partyId);
+    if (!Number.isFinite(runningBalance)) return;
+    try {
+        await DB.adminUpdate('parties', partyId, { balance: runningBalance });
+    } catch (e) {
+        console.warn('Party balance sync failed:', e?.message || e);
+    }
 }
 
 // =============================================
