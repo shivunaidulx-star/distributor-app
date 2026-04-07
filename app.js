@@ -762,6 +762,7 @@ const ColumnManager = {
             { key: 'collectedBy', label: 'User', visible: true },
             { key: 'amount', label: 'Amount', visible: true },
             { key: 'status', label: 'Status', visible: true },
+            { key: 'vyapar', label: 'Vyapar', visible: true },
             { key: 'actions', label: 'Actions', required: true },
         ],
         expenses: [
@@ -940,13 +941,26 @@ async function nextNumber(prefix) {
             console.error('Sequence RPC Error:', error);
             // Non-blocking log instead of alert during boot
             console.warn('Numbering Error: Using fallback. Check No. Series table.');
-            return prefix + Date.now().toString().slice(-4);
+            return ensureUniquePaymentNo(prefix + Date.now().toString().slice(-6), prefix);
         }
-        return data;
+        return ensureUniquePaymentNo(data, prefix);
     } finally {
         resolveLock();
         delete _nextNumLocks[prefix];
     }
+}
+
+function ensureUniquePaymentNo(payNo, prefix = '') {
+    const isPayPrefix = prefix === 'PAY-IN' || prefix === 'PAY-' || prefix === 'PTR-26-';
+    if (!isPayPrefix) return payNo;
+    const payments = DB.get('db_payments') || DB.cache['payments'] || [];
+    const exists = (ref) => (payments || []).some(p => String(p.payNo || p.pay_no || p.receiptNo || p.receipt_no || '') === String(ref));
+    if (!exists(payNo)) return payNo;
+    for (let i = 0; i < 3; i++) {
+        const candidate = `${payNo}-${String(i + 1).padStart(2, '0')}`;
+        if (!exists(candidate)) return candidate;
+    }
+    return `${payNo}-${Date.now().toString().slice(-3)}`;
 }
 
 // --- Toast Notification System ---
@@ -1154,7 +1168,7 @@ const ROLE_NAME_MAP = {
 };
 const CUSTOMER_PORTAL_ENABLED = false; // Feature kept in codebase for future relaunch, disabled for current live release.
 function getAppVersion() {
-    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v165';
+    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v166';
 }
 
 const PAGE_LABELS = {
@@ -3622,6 +3636,75 @@ function getPaymentCollectorValue(payment) {
 function getPaymentReferenceNo(payment) {
     if (!payment) return '';
     return String(payment.payNo || payment.receiptNo || payment.id || '').trim();
+}
+
+function getVyaparPostedMap() {
+    try { return JSON.parse(localStorage.getItem('vyapar_posted_map') || '{}') || {}; } catch (e) { return {}; }
+}
+function setVyaparPostedMap(map) {
+    try { localStorage.setItem('vyapar_posted_map', JSON.stringify(map || {})); } catch (e) { }
+}
+function getVyaparPostedFlag(payment) {
+    if (!payment) return false;
+    if (typeof payment.vyaparPosted !== 'undefined') return !!payment.vyaparPosted;
+    if (typeof payment.vyapar_posted !== 'undefined') return !!payment.vyapar_posted;
+    const map = getVyaparPostedMap();
+    const key = String(payment.id || payment.payNo || payment.receiptNo || '');
+    return !!map[key];
+}
+function setVyaparPostedLocal(ids = [], value = false) {
+    const map = getVyaparPostedMap();
+    ids.forEach(id => { if (id) map[String(id)] = !!value; });
+    setVyaparPostedMap(map);
+}
+async function updateVyaparPostedForPayments(ids = [], value = false) {
+    if (!canEdit()) return alert('Access denied');
+    if (!ids.length) return alert('Select at least one payment.');
+    const failures = [];
+    for (const id of ids) {
+        try {
+            await DB.adminUpdate('payments', id, { vyaparPosted: !!value });
+        } catch (e) {
+            failures.push(id);
+        }
+    }
+    if (failures.length) {
+        setVyaparPostedLocal(failures, value);
+        console.warn('Vyapar posting saved locally for:', failures);
+    }
+    await DB.refreshTables(['payments']);
+    if (currentPage === 'payments') await renderPayments();
+    if (currentPage === 'reports' && typeof generateUserPaymentReport === 'function') await generateUserPaymentReport();
+    showToast(value ? 'Marked as Vyapar Posted.' : 'Marked as Vyapar Not Posted.', 'success');
+}
+
+function getSelectedPaymentIds(selector) {
+    return Array.from(document.querySelectorAll(selector))
+        .filter(cb => cb.checked)
+        .map(cb => cb.dataset.payId)
+        .filter(Boolean);
+}
+function togglePaySelectAll(checked = false) {
+    const ids = (window._payFilteredCache || []).map(p => p.id);
+    document.querySelectorAll('.pay-row-select').forEach(cb => {
+        cb.checked = checked;
+    });
+    if (checked && ids.length) {
+        document.querySelectorAll('.pay-row-select').forEach(cb => {
+            cb.checked = ids.includes(cb.dataset.payId);
+        });
+    }
+}
+function toggleUserPaySelectAll(checked = false) {
+    const ids = (window._userPayFilteredCache || []).map(p => p.id);
+    document.querySelectorAll('.rep-pay-row-select').forEach(cb => {
+        cb.checked = checked;
+    });
+    if (checked && ids.length) {
+        document.querySelectorAll('.rep-pay-row-select').forEach(cb => {
+            cb.checked = ids.includes(cb.dataset.payId);
+        });
+    }
 }
 function findInvoiceByAnyNo(invoiceRef, invoices = DB.cache['invoices'] || []) {
     const key = normalizeIdentityValue(invoiceRef);
@@ -14430,6 +14513,8 @@ async function renderPayments() {
     document.body.classList.remove('pay-form-open');
     const payments = getActivePayments(await DB.getAll('payments'));
     const isSalesman = currentUser && userHasRole(currentUser, 'Salesman') && !canEdit();
+    const showVyaparBulk = canEdit();
+    window._payShowSelect = showVyaparBulk;
     // Salesman sees only their own payments
     const visiblePayments = isSalesman
         ? payments.filter(p => matchesAnyUserIdentity([p.collectedBy, p.createdBy], currentUser))
@@ -14523,9 +14608,12 @@ async function renderPayments() {
                 <div class="pay-filter-group"><label>Type</label><select id="pay-type-filter" onchange="filterPayTable()"><option value="">All Types</option><option value="in">Payment In</option><option value="out">Payment Out</option></select></div>
                 <div class="pay-filter-group"><label>Mode</label><select id="pay-mode-filter" onchange="filterPayTable()"><option value="">All Modes</option><option>Cash</option><option>UPI</option><option>Cheque</option><option>Bank Transfer</option></select></div>
                 ${!isSalesman ? `<div class="pay-filter-group"><label>Collector</label><select id="pay-collector-filter" onchange="filterPayTable()">${collectorOptions}</select></div>` : ''}
-                <div style="display:flex;gap:6px;align-items:center;padding-top:14px">
+                <div style="display:flex;gap:6px;align-items:center;padding-top:14px;flex-wrap:wrap">
                     ${isSalesman ? `<button class="btn btn-primary btn-sm" onclick="openCollectionRoutePage()" title="Collection Route"><span class="material-symbols-outlined" style="font-size:1.1rem">route</span> Collection Route</button>` : ''}
                     ${isSalesman ? `<button class="btn btn-outline btn-sm" onclick="openCollectionBillsReportFromPayments()" title="Bills Report" style="border-color:var(--primary);color:var(--primary)"><span class="material-symbols-outlined" style="font-size:1.1rem">assignment</span> Bills Report</button>` : ''}
+                    ${showVyaparBulk ? `<button class="btn btn-outline btn-sm" onclick="togglePaySelectAll(true)" title="Select All Filtered" style="border-color:var(--primary);color:var(--primary)"><span class="material-symbols-outlined" style="font-size:1.1rem">select_all</span> Select All</button>` : ''}
+                    ${showVyaparBulk ? `<button class="btn btn-outline btn-sm" onclick="updateVyaparPostedForPayments(getSelectedPaymentIds('.pay-row-select'), true)" title="Mark Vyapar Posted" style="border-color:#16a34a;color:#16a34a"><span class="material-symbols-outlined" style="font-size:1.1rem">task_alt</span> Vyapar Yes</button>` : ''}
+                    ${showVyaparBulk ? `<button class="btn btn-outline btn-sm" onclick="updateVyaparPostedForPayments(getSelectedPaymentIds('.pay-row-select'), false)" title="Mark Vyapar Not Posted" style="border-color:#f97316;color:#f97316"><span class="material-symbols-outlined" style="font-size:1.1rem">close</span> Vyapar No</button>` : ''}
                     <button class="btn btn-outline btn-sm" onclick="DB.exportToExcel('tbl-payments', 'payments')" title="Export Excel" style="border-color:#16a34a;color:#16a34a"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span></button>
                     <button class="btn btn-outline btn-sm" onclick="openColumnPersonalizer('payments','renderPayments')" title="Column Config" style="border-color:var(--accent);color:var(--accent)"><span class="material-symbols-outlined" style="font-size:1.1rem">view_column</span></button>
                     <button class="btn btn-outline btn-sm" onclick="openVyaparPaymentImport()" title="Import Payments from Vyapar" style="border-color:#7c3aed;color:#7c3aed"><span class="material-symbols-outlined" style="font-size:1.1rem">upload_file</span></button>
@@ -14535,7 +14623,7 @@ async function renderPayments() {
         </div>
         <div class="card" style="margin-top:12px"><div class="card-body">
             <div class="table-wrapper">
-                <table class="data-table" id="tbl-payments"><thead><tr>${ColumnManager.get('payments').filter(c => c.visible).map(c => `<th>${c.label}</th>`).join('')}</tr></thead>
+                <table class="data-table" id="tbl-payments"><thead><tr>${showVyaparBulk ? '<th style="width:36px"><input type="checkbox" id="pay-select-all" onchange="togglePaySelectAll(this.checked)"></th>' : ''}${ColumnManager.get('payments').filter(c => c.visible).map(c => `<th>${c.label}</th>`).join('')}</tr></thead>
                 <tbody id="pay-tbody">${renderPayRows(visiblePayments)}</tbody></table>
             </div>
         </div></div>
@@ -14898,16 +14986,19 @@ function getPaymentPartyExportMeta(payment, parties = DB.get('db_parties') || DB
 }
 
 function renderPayRows(pays) {
-    if (!pays.length) return '<tr><td colspan="9" class="empty-state"><p>No payments found</p></td></tr>';
+    const showSelect = !!window._payShowSelect;
     const cols = ColumnManager.get('payments').filter(c => c.visible);
+    if (!pays.length) return `<tr><td colspan="${cols.length + (showSelect ? 1 : 0)}" class="empty-state"><p>No payments found</p></td></tr>`;
     return pays.map(p => {
         const viewBtn = `<button class="btn-icon" onclick="event.stopPropagation();viewPaymentDetails('${p.id}')" title="View Receipt"><span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--primary)">visibility</span></button>`;
         const printBtn = `<button class="btn-icon" onclick="event.stopPropagation();printPaymentReceipt('${p.id}')" title="Print Receipt"><span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--accent)">print</span></button>`;
         const editBtn = canEdit() ? `<button class="btn-icon" onclick="event.stopPropagation();openEditPaymentModal('${p.id}')" title="Edit"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button>` : '';
         const deleteBtn = canEdit() ? `<button class="btn-icon" onclick="event.stopPropagation();deletePayment('${p.id}')" title="Delete Payment" style="color:var(--danger)"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button>` : '';
+        const vyaparFlag = getVyaparPostedFlag(p);
+        const vyaparBadge = `<span class="badge ${vyaparFlag ? 'badge-success' : 'badge-warning'}" style="font-size:0.7rem">${vyaparFlag ? 'Yes' : 'No'}</span>`;
         const cellMap = {
             date: `<td>${fmtDate(p.date)}</td>`,
-            receiptNo: `<td style="font-weight:600;color:var(--accent)">${p.payNo || (p.id ? p.id.substring(0, 8) : '-')}</td>`,
+            receiptNo: `<td style="font-weight:600;color:var(--accent);white-space:nowrap">${p.payNo || (p.id ? p.id.substring(0, 8) : '-')}</td>`,
             party: `<td style="font-weight:600">${escapeHtml(p.partyName)}</td>`,
             type: `<td style="min-width:120px"><span class="badge ${p.type === 'in' ? 'badge-success' : 'badge-danger'}">${p.type === 'in' ? 'Payment In' : 'Payment Out'}</span></td>`,
             invoiceNo: `<td>${buildPayInvoiceCell(p)}</td>`,
@@ -14915,9 +15006,11 @@ function renderPayRows(pays) {
             collectedBy: `<td style="font-size:0.82rem;color:var(--text-secondary)">${escapeHtml(getUserDisplayName(getPaymentCollectorValue(p)) || '-')}</td>`,
             amount: `<td class="${p.type === 'in' ? 'amount-green' : 'amount-red'}">${currency(p.amount)}</td>`,
             status: `<td><span class="badge ${p.status === 'posted' ? 'badge-success' : p.status === 'cancelled' ? 'badge-danger' : 'badge-warning'}" style="font-size:0.72rem">${p.status || 'pending'}</span></td>`,
+            vyapar: `<td>${vyaparBadge}</td>`,
             actions: `<td><div class="action-btns">${viewBtn}${printBtn}${editBtn}${deleteBtn}</div></td>`,
         };
-        return `<tr>${cols.map(c => cellMap[c.key] || '').join('')}</tr>`;
+        const selectCell = showSelect ? `<td><input type="checkbox" class="pay-row-select" data-pay-id="${p.id}" /></td>` : '';
+        return `<tr>${selectCell}${cols.map(c => cellMap[c.key] || '').join('')}</tr>`;
     }).join('');
 }
 async function getFilteredPaymentsForView() {
@@ -14995,6 +15088,7 @@ async function exportPaymentsToExcel(filename = 'payments') {
 
 async function filterPayTable() {
     const pays = await getFilteredPaymentsForView();
+    window._payFilteredCache = pays.slice();
     // Update table or cards depending on view
     const listEl = $('pay-list');
     const tbodyEl = $('pay-tbody');
@@ -23218,6 +23312,11 @@ function renderUserPaymentReportUI(el, users, payments) {
                     <div><label style="font-size:0.8rem;color:var(--text-muted);display:block;margin-bottom:4px">User</label><select id="rep-up-user" class="search-box" style="width:160px">${userOptions}</select></div>
                     <div><label style="font-size:0.8rem;color:var(--text-muted);display:block;margin-bottom:4px">Mode</label><select id="rep-up-mode" class="search-box" style="width:160px"><option value="">All Modes</option>${modes.map(m => `<option value="${m}">${m}</option>`).join('')}</select></div>
                     <div><button class="btn btn-primary" onclick="generateUserPaymentReport()">Generate</button></div>
+                    ${isSalesAdmin ? `<div style="display:flex;gap:6px;align-items:flex-end">
+                        <button class="btn btn-outline btn-sm" onclick="toggleUserPaySelectAll(true)" style="border-color:var(--primary);color:var(--primary)"><span class="material-symbols-outlined" style="font-size:1.1rem">select_all</span> Select All</button>
+                        <button class="btn btn-outline btn-sm" onclick="updateVyaparPostedForPayments(getSelectedPaymentIds('.rep-pay-row-select'), true)" style="border-color:#16a34a;color:#16a34a"><span class="material-symbols-outlined" style="font-size:1.1rem">task_alt</span> Vyapar Yes</button>
+                        <button class="btn btn-outline btn-sm" onclick="updateVyaparPostedForPayments(getSelectedPaymentIds('.rep-pay-row-select'), false)" style="border-color:#f97316;color:#f97316"><span class="material-symbols-outlined" style="font-size:1.1rem">close</span> Vyapar No</button>
+                    </div>` : ''}
                 </div>
             </div>
         </div>
@@ -23237,6 +23336,8 @@ async function generateUserPaymentReport() {
     if (mode) {
         payments = payments.filter(p => (p.mode || 'Cash') === mode);
     }
+    window._userPayFilteredCache = payments.slice();
+    const showSelect = canEdit();
 
     const totalCollected = payments.reduce((sum, p) => sum + p.amount, 0);
     const totalPaymentValue = payments.reduce((sum, p) => sum + (p.totalReduction || p.amount || 0), 0);
@@ -23269,7 +23370,7 @@ async function generateUserPaymentReport() {
             <div class="card-body">
                 <table class="data-table" id="tbl-pay-report" style="font-size:0.85rem">
                     <thead>
-                        <tr><th style="min-width:90px">Date</th><th style="min-width:100px">Voucher No</th><th style="min-width:100px">Mode</th><th style="min-width:150px">Allocated Invoices</th><th style="min-width:150px">Party</th><th style="min-width:120px">Collected By</th><th style="min-width:110px;text-align:right">Amt Received</th><th style="min-width:100px;text-align:right">Discount</th><th style="min-width:120px;text-align:right">Total Payment</th><th style="min-width:160px">Note</th></tr>
+                        <tr>${showSelect ? '<th style="width:36px"><input type="checkbox" onchange="toggleUserPaySelectAll(this.checked)"></th>' : ''}<th style="min-width:90px">Date</th><th style="min-width:100px">Voucher No</th><th style="min-width:100px">Mode</th><th style="min-width:150px">Allocated Invoices</th><th style="min-width:150px">Party</th><th style="min-width:120px">Collected By</th><th style="min-width:110px;text-align:right">Amt Received</th><th style="min-width:100px;text-align:right">Discount</th><th style="min-width:120px;text-align:right">Total Payment</th><th style="min-width:110px">Vyapar</th><th style="min-width:160px">Note</th></tr>
                     </thead>
                     <tbody>${payments.map(p => {
         const allocKeys = p.allocations ? Object.keys(p.allocations) : [];
@@ -23282,10 +23383,13 @@ async function generateUserPaymentReport() {
             : (p.invoiceNo && p.invoiceNo !== 'Multi/Disc' && p.invoiceNo !== 'Advance'
                 ? `<a href="#" onclick="viewInvoiceByNo('${p.invoiceNo}');return false" style="color:var(--primary);text-decoration:underline">${escapeHtml(getInvoiceDisplayNo(p.invoiceNo) || p.invoiceNo)}</a>`
                 : `<span style="color:var(--text-muted)">${p.invoiceNo || p.note || '-'}</span>`);
+        const vyaparFlag = getVyaparPostedFlag(p);
+        const vyaparBadge = `<span class="badge ${vyaparFlag ? 'badge-success' : 'badge-warning'}" style="font-size:0.7rem">${vyaparFlag ? 'Yes' : 'No'}</span>`;
         return `
                         <tr>
+                            ${showSelect ? `<td><input type="checkbox" class="rep-pay-row-select" data-pay-id="${p.id}"></td>` : ''}
                             <td>${fmtDate(p.date)}</td>
-                            <td style="font-family:monospace;font-weight:600;color:var(--primary)">${escapeHtml(p.payNo || p.id?.substring(0, 8) || '-')}</td>
+                            <td style="font-family:monospace;font-weight:600;color:var(--primary);white-space:nowrap">${escapeHtml(p.payNo || p.id?.substring(0, 8) || '-')}</td>
                             <td><span class="badge badge-info">${p.mode || 'Cash'}</span></td>
                             <td>${refCell}</td>
                             <td style="font-weight:600">${escapeHtml(p.partyName)}</td>
@@ -23293,14 +23397,16 @@ async function generateUserPaymentReport() {
                             <td class="amount-green" style="text-align:right">${currency(p.amount)}</td>
                             <td style="text-align:right;color:var(--danger)">${p.discount > 0 ? currency(p.discount) : '-'}</td>
                             <td class="amount-green" style="text-align:right;font-weight:700">${currency(p.totalReduction || p.amount)}</td>
+                            <td>${vyaparBadge}</td>
                             <td style="font-size:0.8rem;color:var(--text-muted)">${escapeHtml(p.notes || p.note || '-')}</td>
                         </tr>`;
-    }).join('') || '<tr><td colspan="10"><div class="empty-state"><span class="empty-icon"></span><p>No payments collected in this range</p></div></td></tr>'}
+    }).join('') || `<tr><td colspan="${showSelect ? 12 : 11}"><div class="empty-state"><span class="empty-icon"></span><p>No payments collected in this range</p></div></td></tr>`}
                     ${payments.length ? `<tr style="font-weight:800;background:rgba(249,115,22,0.04);border-top:2px solid var(--border)">
-                        <td colspan="6" style="text-align:right;font-size:0.85rem;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted)">Grand Total</td>
+                        <td colspan="${showSelect ? 7 : 6}" style="text-align:right;font-size:0.85rem;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted)">Grand Total</td>
                         <td class="amount-green" style="text-align:right">${currency(payments.reduce((s, p) => s + (p.amount || 0), 0))}</td>
                         <td style="text-align:right;color:var(--danger)">${currency(payments.reduce((s, p) => s + (p.discount || 0), 0))}</td>
                         <td class="amount-green" style="text-align:right;font-size:1rem">${currency(totalPaymentValue)}</td>
+                        <td></td>
                         <td></td>
                     </tr>` : ''}
                     </tbody>
