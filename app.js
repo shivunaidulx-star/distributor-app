@@ -1154,7 +1154,7 @@ const ROLE_NAME_MAP = {
 };
 const CUSTOMER_PORTAL_ENABLED = false; // Feature kept in codebase for future relaunch, disabled for current live release.
 function getAppVersion() {
-    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v161';
+    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v162';
 }
 
 const PAGE_LABELS = {
@@ -1512,11 +1512,18 @@ const sidebar = $('sidebar');
 async function checkFirstLaunch() {
     const users = await DB.getAll('users');
     if (users.length === 0) {
+        const fetchMeta = DB.getFetchMeta('users');
+        const fetchFailed = fetchMeta && (fetchMeta.ok === false || fetchMeta.timedOut);
+        if (fetchFailed) {
+            await showLoginScreen();
+            showToast('Cannot load users right now. Check internet and reload.', 'warning', 6000);
+            return;
+        }
         showSetupWizard();
-    } else {
-        await initRealtime();
-        await showLoginScreen();
+        return;
     }
+    await initRealtime();
+    await showLoginScreen();
 }
 
 function showSetupWizard() {
