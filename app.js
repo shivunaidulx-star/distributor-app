@@ -386,6 +386,23 @@ const DB = {
         return allSuccess;
     },
 
+    _rememberFetchMeta(table, meta = {}) {
+        if (!this.cache._fetchMeta) this.cache._fetchMeta = {};
+        this.cache._fetchMeta[this.mapTable(table)] = {
+            at: Date.now(),
+            ...meta
+        };
+    },
+    getFetchMeta(table) {
+        return this.cache._fetchMeta?.[this.mapTable(table)] || null;
+    },
+    async runQueryWithTimeout(query, ms = 15000) {
+        return await Promise.race([
+            Promise.resolve(query),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ms))
+        ]);
+    },
+
     get(key) {
         const actual = this.mapTable(key.replace(/^db_/, ''));
         if (this.cache[actual]) return this.cache[actual];
@@ -478,18 +495,32 @@ const DB = {
         const actualTable = this.mapTable(table);
         // Return from cache if available (populated by background refresh)
         if (this.cache[actualTable] && this.cache[actualTable].length > 0) return this.cache[actualTable];
-        const query = this.buildFetchQuery(actualTable);
-        const { data, error } = await query;
-        if (error) {
-            console.warn(`Offline or Error fetching ${actualTable}. Falling back to IDB Cache.`);
+        const timeoutMs = actualTable === 'users' ? 8000 : 15000;
+        try {
+            const query = this.buildFetchQuery(actualTable);
+            const { data, error } = await this.runQueryWithTimeout(query, timeoutMs);
+            if (error) {
+                this._rememberFetchMeta(actualTable, { ok: false, timedOut: false, error: error.message || String(error) });
+                console.warn(`Offline or Error fetching ${actualTable}. Falling back to IDB Cache.`);
+                const idbFallback = await this.loadTableFromIDB(actualTable);
+                if (Array.isArray(idbFallback)) return idbFallback;
+                const localFallback = this.get('db_' + actualTable);
+                return Array.isArray(localFallback) ? localFallback : [];
+            }
+            const camelData = this._toCamel(data) || [];
+            this.cache[actualTable] = camelData;
+            this.idb.set('db_' + actualTable, camelData).catch(console.error);
+            this._rememberFetchMeta(actualTable, { ok: true, timedOut: false, count: camelData.length });
+            return camelData;
+        } catch (error) {
+            const timedOut = String(error?.message || '').toLowerCase().includes('timeout');
+            this._rememberFetchMeta(actualTable, { ok: false, timedOut, error: error?.message || String(error) });
+            console.warn(`Fetch fallback for ${actualTable}:`, error?.message || error);
             const idbFallback = await this.loadTableFromIDB(actualTable);
             if (Array.isArray(idbFallback)) return idbFallback;
-            return this.get(actualTable) || [];
+            const localFallback = this.get('db_' + actualTable);
+            return Array.isArray(localFallback) ? localFallback : [];
         }
-        const camelData = this._toCamel(data) || [];
-        this.cache[actualTable] = camelData;
-        this.idb.set('db_' + actualTable, camelData).catch(console.error);
-        return camelData;
     },
 
     async insert(table, row) {
@@ -632,10 +663,13 @@ const DB = {
     },
 
     // --- EXPORT TO EXCEL ---
-    exportToExcel(tableId, filename = 'export') {
+    async exportToExcel(tableId, filename = 'export') {
         const tbl = document.getElementById(tableId);
         if (!tbl) return alert('Table not found for export');
         try {
+            if (tableId === 'tbl-payments' && typeof exportPaymentsToExcel === 'function') {
+                return await exportPaymentsToExcel(filename);
+            }
             const wb = XLSX.utils.table_to_book(tbl, { sheet: "Sheet1" });
             XLSX.writeFile(wb, `${filename}_${new Date().toISOString().split('T')[0]}.xlsx`);
         } catch (e) {
@@ -1120,7 +1154,7 @@ const ROLE_NAME_MAP = {
 };
 const CUSTOMER_PORTAL_ENABLED = false; // Feature kept in codebase for future relaunch, disabled for current live release.
 function getAppVersion() {
-    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v160';
+    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v161';
 }
 
 const PAGE_LABELS = {
@@ -14767,6 +14801,41 @@ function buildPayInvoiceCell(p) {
 }
 function AMT(v) { return (+v).toFixed(0); }
 
+function splitPartyLabelAndCode(rawLabel = '') {
+    const label = String(rawLabel || '').trim();
+    if (!label) return { name: '', partyCode: '' };
+    const match = label.match(/^(.*?)(?:\s*\[([^\]]+)\])$/);
+    if (!match) return { name: label, partyCode: '' };
+    return {
+        name: (match[1] || '').trim(),
+        partyCode: (match[2] || '').trim()
+    };
+}
+
+function getPaymentPartyExportMeta(payment, parties = DB.get('db_parties') || DB.cache['parties'] || []) {
+    const rawPartyName = payment?.partyName || payment?.party_name || '';
+    const rawPartyCode = payment?.partyCode || payment?.party_code || '';
+    const parsed = splitPartyLabelAndCode(rawPartyName);
+    let party = null;
+    const partyId = payment?.partyId || payment?.party_id || '';
+    if (partyId) {
+        party = (parties || []).find(entry => sameIdValue(entry?.id, partyId)) || null;
+    }
+    if (!party && rawPartyCode) {
+        party = (parties || []).find(entry => normalizeIdentityValue(entry?.partyCode) === normalizeIdentityValue(rawPartyCode)) || null;
+    }
+    if (!party && parsed.partyCode) {
+        party = (parties || []).find(entry => normalizeIdentityValue(entry?.partyCode) === normalizeIdentityValue(parsed.partyCode)) || null;
+    }
+    if (!party && parsed.name) {
+        party = (parties || []).find(entry => normalizeIdentityValue(entry?.name) === normalizeIdentityValue(parsed.name)) || null;
+    }
+    return {
+        partyName: party?.name || parsed.name || rawPartyName || '-',
+        partyCode: party?.partyCode || rawPartyCode || parsed.partyCode || ''
+    };
+}
+
 function renderPayRows(pays) {
     if (!pays.length) return '<tr><td colspan="9" class="empty-state"><p>No payments found</p></td></tr>';
     const cols = ColumnManager.get('payments').filter(c => c.visible);
@@ -14790,7 +14859,7 @@ function renderPayRows(pays) {
         return `<tr>${cols.map(c => cellMap[c.key] || '').join('')}</tr>`;
     }).join('');
 }
-async function filterPayTable() {
+async function getFilteredPaymentsForView() {
     const s = ($('pay-search') || {}).value?.toLowerCase() || '';
     const t = ($('pay-type-filter') || {}).value || '';
     const modeF = ($('pay-mode-filter') || {}).value || '';
@@ -14813,6 +14882,58 @@ async function filterPayTable() {
     if (t) pays = pays.filter(p => p.type === t);
     if (modeF) pays = pays.filter(p => (p.mode || 'Cash') === modeF);
     if (collF) pays = pays.filter(p => matchesAnyUserIdentity([p.collectedBy, p.createdBy], collF));
+    return pays;
+}
+
+async function exportPaymentsToExcel(filename = 'payments') {
+    const payments = await getFilteredPaymentsForView();
+    const parties = DB.get('db_parties') || DB.cache['parties'] || await DB.getAll('parties');
+    const rows = payments.map(payment => {
+        const partyMeta = getPaymentPartyExportMeta(payment, parties);
+        return {
+            'Date': fmtDate(payment.date),
+            'Receipt #': getPaymentReferenceNo(payment) || '-',
+            'Party': partyMeta.partyName || '-',
+            'Customer ID': partyMeta.partyCode || '-',
+            'Type': payment.type === 'in' ? 'Payment In' : 'Payment Out',
+            'Invoice': buildPayInvoiceCell(payment),
+            'Mode': payment.mode || 'Cash',
+            'User': getUserDisplayName(getPaymentCollectorValue(payment)) || '-',
+            'Amount': +(payment.amount || 0),
+            'Status': payment.status || 'pending'
+        };
+    });
+    const ws = XLSX.utils.json_to_sheet(rows.length ? rows : [{
+        'Date': '',
+        'Receipt #': '',
+        'Party': '',
+        'Customer ID': '',
+        'Type': '',
+        'Invoice': '',
+        'Mode': '',
+        'User': '',
+        'Amount': '',
+        'Status': ''
+    }]);
+    ws['!cols'] = [
+        { wch: 14 },
+        { wch: 18 },
+        { wch: 34 },
+        { wch: 16 },
+        { wch: 14 },
+        { wch: 30 },
+        { wch: 14 },
+        { wch: 18 },
+        { wch: 14 },
+        { wch: 14 }
+    ];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Payments');
+    XLSX.writeFile(wb, `${filename}_${new Date().toISOString().split('T')[0]}.xlsx`);
+}
+
+async function filterPayTable() {
+    const pays = await getFilteredPaymentsForView();
     // Update table or cards depending on view
     const listEl = $('pay-list');
     const tbodyEl = $('pay-tbody');
