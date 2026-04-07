@@ -127,14 +127,36 @@ const DB = {
         return val;
     },
 
-    async loadCacheFromIDB(keys = null) {
+    async loadCacheFromIDB(keys = null, options = {}) {
         try {
             await this.idb.init();
+            const perKeyTimeoutMs = Math.max(100, +(options?.perKeyTimeoutMs || 1200));
             const cacheKeys = Array.isArray(keys) && keys.length
                 ? keys
                 : ['db_users', 'db_categories', 'db_uom', 'db_company', 'db_tax_settings', 'db_parties', 'db_inventory', 'db_sales_orders', 'db_invoices', 'db_payments', 'db_expenses', 'db_packers', 'db_delivery_persons', 'db_delivery'];
             await Promise.all(cacheKeys.map(async k => {
-                const val = await this.idb.get(k);
+                const val = await new Promise(resolve => {
+                    let settled = false;
+                    const timer = setTimeout(() => {
+                        if (settled) return;
+                        settled = true;
+                        console.warn(`IDB get timed out for ${k}`);
+                        resolve(undefined);
+                    }, perKeyTimeoutMs);
+
+                    this.idb.get(k).then(result => {
+                        if (settled) return;
+                        settled = true;
+                        clearTimeout(timer);
+                        resolve(result);
+                    }).catch(err => {
+                        if (settled) return;
+                        settled = true;
+                        clearTimeout(timer);
+                        console.warn(`IDB get failed for ${k}:`, err?.message || err);
+                        resolve(undefined);
+                    });
+                });
                 if (val) this._hydrateIdbCache(k, val);
             }));
         } catch (e) { console.error('IDB load error', e); }
@@ -198,6 +220,8 @@ const DB = {
     },
     async refresh(options = {}) {
         const { nonBlockingBoot = false } = options;
+        const bootCacheKeys = ['db_users', 'db_company', 'db_categories', 'db_uom', 'db_tax_settings'];
+        const deferredCacheKeys = ['db_parties', 'db_inventory', 'db_sales_orders', 'db_invoices', 'db_payments', 'db_expenses', 'db_packers', 'db_delivery_persons', 'db_delivery'];
         // Core tables needed for Login & Dashboard basic structure
         const coreTables = ['users', 'categories', 'uom'];
         // Batch 1: high-priority tables needed for first page render
@@ -209,7 +233,15 @@ const DB = {
         this.cache._lastRefresh = Date.now();
 
         // 1. Pre-load local cache from IndexedDB so offline mode responds instantly
-        await this.loadCacheFromIDB();
+        await this.loadCacheFromIDB(nonBlockingBoot ? bootCacheKeys : null, {
+            perKeyTimeoutMs: nonBlockingBoot ? 250 : 1200
+        });
+        if (nonBlockingBoot) {
+            setTimeout(() => {
+                this.loadCacheFromIDB(deferredCacheKeys, { perKeyTimeoutMs: 750 })
+                    .catch(err => console.warn('Deferred IDB warmup failed:', err?.message || err));
+            }, 0);
+        }
 
         const withT = (q, ms = 20000) => Promise.race([q, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]);
         const loadCoreAndSettings = async () => {
@@ -516,7 +548,17 @@ const DB = {
             p_id: id,
             p_user_role: role
         });
-        if (error) throw error;
+        if (error) {
+            const errMsg = String(error.message || '').toLowerCase();
+            const isLegacyIdMismatch = errMsg.includes('operator does not exist') && errMsg.includes('uuid = text');
+            if (!isLegacyIdMismatch) throw error;
+            console.warn(`adminDelete RPC id mismatch for ${actualTable}; trying direct delete fallback.`, error.message);
+            const { error: directError } = await supabaseClient.from(actualTable).delete().eq('id', id);
+            if (directError) {
+                error.directFallbackError = directError;
+                throw error;
+            }
+        }
         await this.refreshTables([actualTable]);
     },
 
@@ -1078,7 +1120,7 @@ const ROLE_NAME_MAP = {
 };
 const CUSTOMER_PORTAL_ENABLED = false; // Feature kept in codebase for future relaunch, disabled for current live release.
 function getAppVersion() {
-    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v158';
+    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v159';
 }
 
 const PAGE_LABELS = {
@@ -3205,6 +3247,19 @@ function today() {
     const offset = d.getTimezoneOffset() * 60000;
     return new Date(d.getTime() - offset).toISOString().split('T')[0];
 }
+function sameIdValue(left, right) {
+    return String(left ?? '') === String(right ?? '');
+}
+function isCancelledRecord(record) {
+    return String(record?.status || '').toLowerCase() === 'cancelled';
+}
+function getActivePayments(payments = []) {
+    return (payments || []).filter(payment => payment && !isCancelledRecord(payment));
+}
+function isLegacyDeleteRpcIdMismatch(error) {
+    const message = String(error?.message || error || '').toLowerCase();
+    return message.includes('operator does not exist') && message.includes('uuid = text');
+}
 function getPaymentGroupKey(payment) {
     const payRef = payment?.payNo || payment?.pay_no || payment?.receiptNo || payment?.receipt_no || '';
     if (payRef) {
@@ -3300,7 +3355,7 @@ function findPaymentGroupRows(payments = [], paymentOrId) {
 }
 function buildInvoicePaidMap(payments = []) {
     const paidMap = {};
-    const activePayments = (payments || []).filter(payment => payment && payment.status !== 'cancelled');
+    const activePayments = getActivePayments(payments);
     for (const groupRows of groupPaymentsByReference(activePayments).values()) {
         const summary = summarizePaymentGroup(groupRows);
         if (summary.allocations && Object.keys(summary.allocations).length > 0) {
@@ -14278,7 +14333,7 @@ async function _invPdfShare(title) {
 async function renderPayments() {
     // Restore bottom nav hidden by openPaymentModal
     document.body.classList.remove('pay-form-open');
-    const payments = await DB.getAll('payments');
+    const payments = getActivePayments(await DB.getAll('payments'));
     const isSalesman = currentUser && userHasRole(currentUser, 'Salesman') && !canEdit();
     // Salesman sees only their own payments
     const visiblePayments = isSalesman
@@ -14735,7 +14790,7 @@ async function filterPayTable() {
     const collF = ($('pay-collector-filter') || {}).value || '';
     const from = ($('pay-f-from') || {}).value || '';
     const to = ($('pay-f-to') || {}).value || '';
-    let pays = await DB.getAll('payments');
+    let pays = getActivePayments(await DB.getAll('payments'));
     if (currentUser && userHasRole(currentUser, 'Salesman') && !canEdit()) {
         pays = pays.filter(p => matchesAnyUserIdentity([p.collectedBy, p.createdBy], currentUser) && p.type !== 'out');
     }
@@ -15988,7 +16043,7 @@ async function linkPaymentToInvoice(payId) {
     const invNo = $('f-link-invoice').value; if (!invNo) return alert('Select an invoice');
     try {
         const payments = await DB.getAll('payments');
-        const pay = payments.find(p => p.id === payId);
+        const pay = payments.find(p => sameIdValue(p.id, payId));
         if (!pay) return alert('Payment not found');
         const groupRows = findPaymentGroupRows(payments, pay);
         for (const row of groupRows) {
@@ -16002,6 +16057,51 @@ async function linkPaymentToInvoice(payId) {
         alert('Error: ' + err.message);
     }
 }
+async function cancelPaymentGroupFallback(pay, groupRows, summary, party, payRefNo) {
+    const [ledger, expenses] = await Promise.all([
+        DB.getAll('party_ledger'),
+        DB.getAll('expenses')
+    ]);
+
+    const ledgerEntries = ledger.filter(entry =>
+        sameIdValue(entry.partyId, pay.partyId)
+        && String(entry.documentNo || entry.docNo || '') === String(payRefNo || '')
+    );
+    for (const entry of ledgerEntries) {
+        const reasonText = [entry.reason || entry.notes || '', `Cancelled payment ${payRefNo}`].filter(Boolean).join(' | ');
+        await DB.adminUpdate('party_ledger', entry.id, {
+            amount: 0,
+            type: entry.type || (pay.type === 'in' ? 'Payment In' : 'Payment Out'),
+            documentNo: payRefNo,
+            reason: reasonText,
+            createdBy: entry.createdBy || entry.created_by || pay.createdBy || currentUser?.userId || currentUser?.name || 'System'
+        });
+    }
+
+    if (summary.totalDiscount > 0 && pay.type === 'in') {
+        const discExp = expenses.find(entry => entry.category === 'Payment Discount' && sameIdValue(entry.docNo, payRefNo));
+        if (discExp) {
+            const cancelNote = [discExp.description || discExp.notes || '', `Cancelled payment ${payRefNo}`].filter(Boolean).join(' | ');
+            await DB.adminUpdate('expenses', discExp.id, {
+                amount: 0,
+                status: 'cancelled',
+                description: cancelNote
+            });
+        }
+    }
+
+    for (const row of groupRows) {
+        const cancelNote = [row.note || row.notes || '', `Cancelled payment ${payRefNo}`].filter(Boolean).join(' | ');
+        await DB.adminUpdate('payments', row.id, {
+            status: 'cancelled',
+            note: cancelNote
+        });
+    }
+
+    if (party && typeof recalculatePartyLedger === 'function') {
+        await recalculatePartyLedger(party.id);
+    }
+}
 async function deletePayment(id) {
     if (!canEdit()) {
         return alert("Access Denied: Only Admin or users with Edit permission can delete records.");
@@ -16010,50 +16110,68 @@ async function deletePayment(id) {
     if (!beginSave()) return;
     try {
         const payments = await DB.getAll('payments');
-        const pay = payments.find(p => p.id === id);
+        const pay = payments.find(p => sameIdValue(p.id, id));
+        let usedCancelFallback = false;
+        let affectedPartyId = '';
         if (pay) {
+            affectedPartyId = pay.partyId || '';
             const groupRows = findPaymentGroupRows(payments, pay);
             const summary = summarizePaymentGroup(groupRows);
 
             // 1. Reverse party balance using the grouped payment reduction
             const parties = await DB.getAll('parties');
-            const party = parties.find(p => p.id === pay.partyId);
+            const party = parties.find(p => sameIdValue(p.id, pay.partyId));
             if (party) {
                 const balChange = pay.type === 'in' ? summary.totalReduction : -summary.totalReduction;
                 const newBal = (party.balance || 0) + balChange;
                 await DB.update('parties', party.id, { balance: newBal });
             }
 
-            // 2. Delete related party_ledger entries via admin RPC (bypasses RLS)
             const payRefNo = summary.payNo || pay.id.substring(0, 8);
-            const ledger = await DB.getAll('party_ledger');
-            const ledgerEntries = ledger.filter(e => (e.documentNo || e.docNo) === payRefNo && e.partyId === pay.partyId);
-            for (const entry of ledgerEntries) {
-                await DB.adminDelete('party_ledger', entry.id);
-            }
-            if (party && typeof recalculatePartyLedger === 'function') {
-                await recalculatePartyLedger(party.id);
-            }
-
-            // 3. Delete related expense entries (discount expenses)
-            if (summary.totalDiscount > 0 && pay.type === 'in') {
-                const expenses = await DB.getAll('expenses');
-                const discExp = expenses.find(e => e.category === 'Payment Discount' && e.docNo === payRefNo);
-                if (discExp) {
-                    await DB.adminDelete('expenses', discExp.id);
+            try {
+                // 2. Delete related party_ledger entries via admin RPC (bypasses RLS)
+                const ledger = await DB.getAll('party_ledger');
+                const ledgerEntries = ledger.filter(entry =>
+                    String(entry.documentNo || entry.docNo || '') === String(payRefNo)
+                    && sameIdValue(entry.partyId, pay.partyId)
+                );
+                for (const entry of ledgerEntries) {
+                    await DB.adminDelete('party_ledger', entry.id);
                 }
-            }
 
-            // 4. Delete all payment rows that belong to the same payment reference
-            for (const row of groupRows) {
-                await DB.adminDelete('payments', row.id);
+                // 3. Delete related expense entries (discount expenses)
+                if (summary.totalDiscount > 0 && pay.type === 'in') {
+                    const expenses = await DB.getAll('expenses');
+                    const discExp = expenses.find(entry => entry.category === 'Payment Discount' && sameIdValue(entry.docNo, payRefNo));
+                    if (discExp) {
+                        await DB.adminDelete('expenses', discExp.id);
+                    }
+                }
+
+                // 4. Delete all payment rows that belong to the same payment reference
+                for (const row of groupRows) {
+                    await DB.adminDelete('payments', row.id);
+                }
+            } catch (err) {
+                if (!isLegacyDeleteRpcIdMismatch(err)) throw err;
+                usedCancelFallback = true;
+                await cancelPaymentGroupFallback(pay, groupRows, summary, party, payRefNo);
             }
         } else {
             await DB.adminDelete('payments', id);
         }
+        await DB.refreshTables(['payments', 'parties', 'party_ledger', 'expenses']);
+        if (affectedPartyId && typeof recalculatePartyLedger === 'function') {
+            recalculatePartyLedger(affectedPartyId);
+        }
         await renderPayments();
         endSave();
-        showToast('Payment deleted and all related entries reversed!', 'warning');
+        showToast(
+            usedCancelFallback
+                ? 'Payment reversed and cancelled from active lists.'
+                : 'Payment deleted and all related entries reversed!',
+            'warning'
+        );
     } catch (err) {
         endSave();
         alert('Error: ' + err.message);
@@ -16062,7 +16180,7 @@ async function deletePayment(id) {
 
 async function openEditPaymentModal(id) {
     const payments = await DB.getAll('payments');
-    const pay = payments.find(p => p.id === id);
+    const pay = payments.find(p => sameIdValue(p.id, id));
     if (!pay) return alert('Payment not found');
     const groupRows = findPaymentGroupRows(payments, pay);
     const summary = summarizePaymentGroup(groupRows);
@@ -16259,14 +16377,14 @@ window.saveEditedPayment = async function (id) {
 
     try {
         const payments = await DB.getAll('payments');
-        const oldPay = payments.find(p => p.id === id);
+        const oldPay = payments.find(p => sameIdValue(p.id, id));
         if (!oldPay) { endSave(); return alert('Payment not found'); }
         const existingRows = findPaymentGroupRows(payments, oldPay);
         const oldSummary = summarizePaymentGroup(existingRows);
 
         // Update party balance
         const parties = await DB.getAll('parties');
-        const party = parties.find(p => p.id === oldPay.partyId);
+        const party = parties.find(p => sameIdValue(p.id, oldPay.partyId));
         const payRefNo = oldSummary.payNo || oldPay.id.substring(0, 8);
         const noteVal = $('f-pay-note').value.trim();
         const collectedBy = $('f-pay-collected-by')?.value?.trim() || oldSummary.primary.collectedBy || oldSummary.primary.createdBy || '';
@@ -16285,7 +16403,10 @@ window.saveEditedPayment = async function (id) {
 
             // Find the original ledger entry and update it
             const ledger = await DB.getAll('party_ledger');
-            const ledgerEntry = ledger.find(e => (e.documentNo || e.docNo) === payRefNo && e.partyId === party.id);
+            const ledgerEntry = ledger.find(entry =>
+                String(entry.documentNo || entry.docNo || '') === String(payRefNo)
+                && sameIdValue(entry.partyId, party.id)
+            );
             if (ledgerEntry) {
                 await DB.adminUpdate('party_ledger', ledgerEntry.id, {
                     date: editedDate,
@@ -16373,6 +16494,9 @@ window.saveEditedPayment = async function (id) {
 
         closeModal();
         await DB.refreshTables(['payments', 'parties', 'party_ledger']);
+        if (party && typeof recalculatePartyLedger === 'function') {
+            recalculatePartyLedger(party.id);
+        }
         await renderPayments();
         endSave();
         showToast('Payment updated successfully!', 'success');
@@ -20195,6 +20319,46 @@ function consumeReportBackNavigation() {
     setReportBackNavigation('renderReports()', 'Back');
     return nav;
 }
+const REPORT_TABLE_REQUIREMENTS = {
+    sales: ['invoices', 'users'],
+    'item-ledger': [],
+    'gps-tracking': [],
+    'collection-allocations': ['invoices', 'payments', 'parties', 'users'],
+    'stock-aging': ['inventory'],
+    purchases: ['invoices', 'users'],
+    'salesman-ach': ['invoices', 'payments', 'users'],
+    'party-soa': ['parties'],
+    'abc-analysis': ['inventory', 'invoices'],
+    indent: ['inventory', 'invoices', 'categories'],
+    pnl: ['invoices', 'expenses', 'inventory'],
+    'invoice-pnl': ['invoices', 'inventory', 'users'],
+    stock: ['inventory'],
+    outstanding: ['parties', 'invoices', 'payments'],
+    expenses: ['expenses', 'users'],
+    usersales: ['users', 'categories', 'sales_orders', 'invoices', 'payments', 'inventory'],
+    userpayments: ['users', 'payments'],
+    chequeregister: ['payments'],
+    'vyapar-sales': ['invoices', 'users'],
+    'vyapar-payments': ['payments', 'users'],
+    salesman: ['invoices', 'payments', 'users'],
+    daybook: ['invoices', 'payments', 'expenses'],
+    'user-outstanding': ['invoices', 'payments', 'users'],
+    'payment-trend': ['payments', 'users'],
+    'payment-report': ['payments', 'users'],
+    'zero-sales': ['invoices', 'parties', 'users']
+};
+async function loadReportDatasets(type) {
+    const tables = REPORT_TABLE_REQUIREMENTS[type] || ['inventory', 'invoices', 'payments', 'expenses', 'users', 'categories', 'parties'];
+    if (!tables.length) return {};
+    const loaded = await Promise.all(tables.map(table => DB.getAll(table)));
+    const data = {};
+    tables.forEach((table, index) => {
+        data[table] = loaded[index] || [];
+    });
+    if (Array.isArray(data.payments)) data.payments = getActivePayments(data.payments);
+    if (Array.isArray(data.expenses)) data.expenses = data.expenses.filter(expense => !isCancelledRecord(expense));
+    return data;
+}
 function getCollectionAllocationCollector(invoice) {
     return String(invoice?.allocatedTo || invoice?.assignedTo || '').trim();
 }
@@ -20320,7 +20484,7 @@ function clearCollectionRoutePartyStatus(routeKey, date = today(), user = curren
 }
 function getCollectionRouteTodayPaymentSummary(payments = [], user = currentUser, users = getCachedUsers()) {
     const summary = new Map();
-    (payments || [])
+    getActivePayments(payments)
         .filter(payment =>
             payment.type === 'in'
             && payment.date === today()
@@ -20625,16 +20789,14 @@ async function showReport(type) {
         <div id="report-detail"></div>`;
     const el = $('report-detail'); if (!el) return;
 
-    // Fetch common data needed by multiple reports
-    const [inventory, invoices, payments, expenses, users, categories, parties] = await Promise.all([
-        DB.getAll('inventory'),
-        DB.getAll('invoices'),
-        DB.getAll('payments'),
-        DB.getAll('expenses'),
-        DB.getAll('users'),
-        DB.getAll('categories'),
-        DB.getAll('parties')
-    ]);
+    const reportData = await loadReportDatasets(type);
+    const inventory = reportData.inventory || [];
+    const invoices = reportData.invoices || [];
+    const payments = reportData.payments || [];
+    const expenses = reportData.expenses || [];
+    const users = reportData.users || [];
+    const categories = reportData.categories || [];
+    const parties = reportData.parties || [];
 
     if (type === 'sales') {
         window._rSalesAll = invoices.filter(i => i.type === 'sale' && i.status !== 'cancelled');
@@ -21229,7 +21391,7 @@ async function showReport(type) {
     }
 
     if (type === 'usersales') {
-        renderUserSalesReportUI(el, users, categories);
+        renderUserSalesReportUI(el, users, categories, reportData.sales_orders || [], invoices, payments, inventory);
     }
     if (type === 'userpayments') {
         renderUserPaymentReportUI(el, users, payments);
@@ -21351,8 +21513,7 @@ async function showReport(type) {
     }
 
     if (type === 'payment-trend') {
-        const allPayments = await DB.getAll('payments');
-        const users = await DB.getAll('users');
+        const allPayments = payments;
         const salesmen = users.filter(u => isSalesOpsUser(u));
 
         pageContent.innerHTML = `
@@ -22721,12 +22882,16 @@ function renderDayBook() {
     </div></div>`;
 }
 
-function renderUserSalesReportUI(el, users, categories) {
+function renderUserSalesReportUI(el, users, categories, salesOrders = [], invoices = [], payments = [], inventory = []) {
     // Only admins/managers can filter by all users, explicitly.
     // If it's a salesman, they should only see themselves initially.
     const isSalesAdmin = canEdit();
     const userOptions = isSalesAdmin ? `<option value="">All Users</option>` + users.map(u => `<option value="${u.name}">${u.name}</option>`).join('') : `<option value="${currentUser.name}">${currentUser.name}</option>`;
     const monthStart = currentMonthStart();
+    window._rUserSalesOrders = (salesOrders || []).filter(order => order.status !== 'cancelled');
+    window._rUserSalesInvoices = (invoices || []).filter(inv => inv.type === 'sale' && inv.status !== 'cancelled');
+    window._rUserSalesPayments = getActivePayments(payments).filter(payment => payment.type === 'in');
+    window._rUserSalesInventory = inventory || [];
 
     el.innerHTML = `
         <div class="card" style="margin-bottom:15px">
@@ -22751,13 +22916,10 @@ async function generateUserSalesReport() {
     const user = $('rep-us-user').value;
     const catSearch = $('rep-us-cat').value;
     const users = getCachedUsers();
-
-    const [orders, invoices, payments, inventory] = await Promise.all([
-        DB.getAll('salesorders'),
-        DB.getAll('invoices'),
-        DB.getAll('payments'),
-        DB.getAll('inventory')
-    ]);
+    const orders = window._rUserSalesOrders || [];
+    const invoices = window._rUserSalesInvoices || [];
+    const payments = window._rUserSalesPayments || [];
+    const inventory = window._rUserSalesInventory || [];
 
     const filteredOrders = orders.filter(o => o.status !== 'cancelled' && (from ? o.date >= from : true) && (to ? o.date <= to : true) && (user ? matchesUserIdentity(o.createdBy, user, users) : true));
     const filteredInvoices = invoices.filter(i => i.type === 'sale' && i.status !== 'cancelled' && (from ? i.date >= from : true) && (to ? i.date <= to : true) && (user ? matchesUserIdentity(i.createdBy, user, users) : true));
@@ -22853,9 +23015,10 @@ function renderUserPaymentReportUI(el, users, payments) {
     const isSalesAdmin = canEdit();
     const userOptions = isSalesAdmin ? `<option value="">All Users</option>` + users.map(u => `<option value="${u.name}">${u.name}</option>`).join('') : `<option value="${currentUser.name}">${currentUser.name}</option>`;
     const monthStart = currentMonthStart();
+    window._rUserPayAll = getActivePayments(payments).filter(payment => payment.type === 'in');
 
     // Get unique modes used across all payments
-    const modes = [...new Set(payments.map(p => p.mode || 'Cash'))];
+    const modes = [...new Set((window._rUserPayAll || []).map(p => p.mode || 'Cash'))];
 
     el.innerHTML = `
         <div class="card" style="margin-bottom:15px">
@@ -22880,14 +23043,14 @@ async function generateUserPaymentReport() {
     const user = $('rep-up-user').value;
     const mode = $('rep-up-mode').value;
     const users = getCachedUsers();
-
-    let payments = (await DB.getAll('payments')).filter(p => p.type === 'in' && (from ? p.date >= from : true) && (to ? p.date <= to : true) && (user ? matchesAnyUserIdentity([p.collectedBy, p.createdBy], user, users) : true));
+    let payments = (window._rUserPayAll || []).filter(p => (from ? p.date >= from : true) && (to ? p.date <= to : true) && (user ? matchesAnyUserIdentity([p.collectedBy, p.createdBy], user, users) : true));
 
     if (mode) {
         payments = payments.filter(p => (p.mode || 'Cash') === mode);
     }
 
     const totalCollected = payments.reduce((sum, p) => sum + p.amount, 0);
+    const totalPaymentValue = payments.reduce((sum, p) => sum + (p.totalReduction || p.amount || 0), 0);
     const modewise = {};
     payments.forEach(p => {
         const m = p.mode || 'Cash';
@@ -22917,7 +23080,7 @@ async function generateUserPaymentReport() {
             <div class="card-body">
                 <table class="data-table" id="tbl-pay-report" style="font-size:0.85rem">
                     <thead>
-                        <tr><th style="min-width:90px">Date</th><th style="min-width:100px">Voucher No</th><th style="min-width:100px">Mode</th><th style="min-width:150px">Allocated Invoices</th><th style="min-width:150px">Party</th><th style="min-width:120px">Collected By</th><th style="min-width:110px;text-align:right">Amt Received</th><th style="min-width:100px;text-align:right">Discount</th><th style="min-width:120px;text-align:right">Total Payment</th></tr>
+                        <tr><th style="min-width:90px">Date</th><th style="min-width:100px">Voucher No</th><th style="min-width:100px">Mode</th><th style="min-width:150px">Allocated Invoices</th><th style="min-width:150px">Party</th><th style="min-width:120px">Collected By</th><th style="min-width:110px;text-align:right">Amt Received</th><th style="min-width:100px;text-align:right">Discount</th><th style="min-width:120px;text-align:right">Total Payment</th><th style="min-width:160px">Note</th></tr>
                     </thead>
                     <tbody>${payments.map(p => {
         const allocKeys = p.allocations ? Object.keys(p.allocations) : [];
@@ -22941,13 +23104,15 @@ async function generateUserPaymentReport() {
                             <td class="amount-green" style="text-align:right">${currency(p.amount)}</td>
                             <td style="text-align:right;color:var(--danger)">${p.discount > 0 ? currency(p.discount) : '-'}</td>
                             <td class="amount-green" style="text-align:right;font-weight:700">${currency(p.totalReduction || p.amount)}</td>
+                            <td style="font-size:0.8rem;color:var(--text-muted)">${escapeHtml(p.notes || p.note || '-')}</td>
                         </tr>`;
-    }).join('') || '<tr><td colspan="9"><div class="empty-state"><span class="empty-icon"></span><p>No payments collected in this range</p></div></td></tr>'}
+    }).join('') || '<tr><td colspan="10"><div class="empty-state"><span class="empty-icon"></span><p>No payments collected in this range</p></div></td></tr>'}
                     ${payments.length ? `<tr style="font-weight:800;background:rgba(249,115,22,0.04);border-top:2px solid var(--border)">
                         <td colspan="6" style="text-align:right;font-size:0.85rem;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted)">Grand Total</td>
                         <td class="amount-green" style="text-align:right">${currency(payments.reduce((s, p) => s + (p.amount || 0), 0))}</td>
                         <td style="text-align:right;color:var(--danger)">${currency(payments.reduce((s, p) => s + (p.discount || 0), 0))}</td>
-                        <td class="amount-green" style="text-align:right;font-size:1rem">${currency(totalCollected)}</td>
+                        <td class="amount-green" style="text-align:right;font-size:1rem">${currency(totalPaymentValue)}</td>
+                        <td></td>
                     </tr>` : ''}
                     </tbody>
                 </table>
@@ -24667,7 +24832,7 @@ async function renderPartyLedgerLayout() {
 
 // --- Payment History Modal ---
 async function showPaymentHistory(partyId, invoiceNo) {
-    const payments = await DB.getAll('payments');
+    const payments = getActivePayments(await DB.getAll('payments'));
     let partyPayments = payments.filter(p => String(p.partyId) === String(partyId));
 
     if (invoiceNo) {
