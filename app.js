@@ -1168,7 +1168,7 @@ const ROLE_NAME_MAP = {
 };
 const CUSTOMER_PORTAL_ENABLED = false; // Feature kept in codebase for future relaunch, disabled for current live release.
 function getAppVersion() {
-    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v166';
+    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v167';
 }
 
 const PAGE_LABELS = {
@@ -1525,33 +1525,27 @@ const sidebar = $('sidebar');
 // =============================================
 async function checkFirstLaunch() {
     window._offlineBootWarning = false;
-    const users = await DB.getAll('users');
-    if (users.length === 0) {
-        const fetchMeta = DB.getFetchMeta('users');
-        const fetchFailed = fetchMeta && (fetchMeta.ok === false || fetchMeta.timedOut);
-        if (fetchFailed) {
-            let cachedUsers = DB.get('db_users') || DB.cache['users'];
-            if (!Array.isArray(cachedUsers) || cachedUsers.length === 0) {
-                cachedUsers = await DB.loadTableFromIDB('users');
-            }
-            if (Array.isArray(cachedUsers) && cachedUsers.length > 0) {
-                DB.cache['users'] = cachedUsers;
-                window._offlineBootWarning = true;
-                await showLoginScreen();
-                showOfflineLoginBanner('Offline mode: using last cached users. Data may be stale.');
-                showToast('Offline mode: using last cached users.', 'warning', 6000);
-                return;
-            }
-            window._offlineBootWarning = true;
-            await showLoginScreen();
-            showToast('Cannot load users right now. Check internet and reload.', 'warning', 6000);
-            return;
-        }
-        showSetupWizard();
+    const cachedUsers = await getCachedUsersFast();
+    if (cachedUsers.length) {
+        DB.cache['users'] = cachedUsers;
+        await initRealtime();
+        await showLoginScreen();
         return;
     }
-    await initRealtime();
-    await showLoginScreen();
+    try {
+        const users = await withTimeout(DB.getAll('users'), 4000);
+        if (users.length === 0) {
+            showSetupWizard();
+            return;
+        }
+        await initRealtime();
+        await showLoginScreen();
+    } catch (e) {
+        window._offlineBootWarning = true;
+        await showLoginScreen();
+        showOfflineLoginBanner('Offline mode: cannot reach users now. Check internet and retry.');
+        showToast('Cannot load users right now. Check internet and retry.', 'warning', 6000);
+    }
 }
 
 function showSetupWizard() {
@@ -1559,6 +1553,24 @@ function showSetupWizard() {
     loginScreen.classList.add('hidden');
     appEl.classList.add('hidden');
     renderSetupStep1();
+}
+
+function withTimeout(promise, ms) {
+    return Promise.race([
+        promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ms))
+    ]);
+}
+
+async function getCachedUsersFast(timeoutMs = 1200) {
+    const cached = DB.cache['users'] || DB.get('db_users');
+    if (Array.isArray(cached) && cached.length) return cached;
+    try {
+        const idb = await withTimeout(DB.loadTableFromIDB('users'), timeoutMs);
+        return Array.isArray(idb) ? idb : [];
+    } catch (e) {
+        return [];
+    }
 }
 
 function showOfflineLoginBanner(message = '') {
@@ -1718,7 +1730,16 @@ async function login() {
     const pin = $('login-pin').value.trim();
     if (!inputId) return alert('Enter your User ID');
     if (!pin) return alert('Enter your PIN');
-    const users = await DB.getAll('users');
+    let users = await getCachedUsersFast();
+    if (!users.length) {
+        try {
+            users = await withTimeout(DB.getAll('users'), 4000);
+        } catch (e) {
+            showOfflineLoginBanner('Offline mode: cannot reach users now. Check internet and retry.');
+            showToast('Cannot reach users right now. Check internet and retry.', 'warning', 5000);
+            return;
+        }
+    }
     const user = users.find(u => (u.userId && u.userId.toLowerCase() === inputId.toLowerCase()) || u.name.toLowerCase() === inputId.toLowerCase());
 
     if (!user || user.pin !== pin) return alert('Invalid User ID or PIN');
@@ -1926,7 +1947,7 @@ async function initApp() {
             return;
         }
 
-        await DB.refresh({ nonBlockingBoot: true }); // Warm boot from IDB immediately; finish cloud refresh in background
+        DB.refresh({ nonBlockingBoot: true }).catch(err => console.warn('Boot refresh failed:', err?.message || err));
 
         // Check for main app session
         if (dmRestoreSession()) {
