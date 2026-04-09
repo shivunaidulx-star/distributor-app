@@ -1533,7 +1533,7 @@ async function checkFirstLaunch() {
         return;
     }
     try {
-        const users = await withTimeout(DB.getAll('users'), 4000);
+        const users = await DB.getAll('users');
         if (users.length === 0) {
             showSetupWizard();
             return;
@@ -1543,8 +1543,9 @@ async function checkFirstLaunch() {
     } catch (e) {
         window._offlineBootWarning = true;
         await showLoginScreen();
-        showOfflineLoginBanner('Offline mode: cannot reach users now. Check internet and retry.');
-        showToast('Cannot load users right now. Check internet and retry.', 'warning', 6000);
+        const msg = getUsersOfflineMessage();
+        showOfflineLoginBanner(msg.banner);
+        showToast(msg.toast, msg.level, 6000);
     }
 }
 
@@ -1587,6 +1588,31 @@ function hideOfflineLoginBanner() {
     banner.style.display = 'none';
 }
 
+function getUsersOfflineMessage() {
+    const meta = DB.getFetchMeta('users') || {};
+    const err = String(meta.error || '');
+    const lower = err.toLowerCase();
+    if (lower.includes('402') || lower.includes('payment required') || lower.includes('quota') || lower.includes('egress') || lower.includes('exceeded')) {
+        return {
+            banner: 'Server usage limit reached. Contact admin or upgrade the plan.',
+            toast: 'Server usage limit reached. Contact admin or try later.',
+            level: 'warning'
+        };
+    }
+    if (meta.timedOut) {
+        return {
+            banner: 'Server is taking too long to respond. Please retry in a moment.',
+            toast: 'Server is slow right now. Please retry.',
+            level: 'warning'
+        };
+    }
+    return {
+        banner: 'Offline mode: cannot reach users now. Check internet and retry.',
+        toast: 'Cannot reach users right now. Check internet and retry.',
+        level: 'warning'
+    };
+}
+
 async function retryBootConnection() {
     showToast('Retrying connection...', 'info', 2500);
     try {
@@ -1604,8 +1630,9 @@ async function retryBootConnection() {
         return;
     }
     window._offlineBootWarning = true;
-    showOfflineLoginBanner('Offline mode: cannot reach users now. Check internet and retry.');
-    showToast('Still offline. Please check internet and retry.', 'warning', 4000);
+    const msg = getUsersOfflineMessage();
+    showOfflineLoginBanner(msg.banner);
+    showToast(msg.toast, msg.level, 4000);
 }
 
 function renderSetupStep1() {
@@ -1708,7 +1735,8 @@ async function showLoginScreen() {
     const co = DB.ls.getObj('db_company'); // Keeping company info local for now as it's static
     if (co.name) $('login-company-name').textContent = co.name;
     if (window._offlineBootWarning) {
-        showOfflineLoginBanner('Offline mode: cannot reach users now. Check internet and reload.');
+        const msg = getUsersOfflineMessage();
+        showOfflineLoginBanner(msg.banner.replace('retry', 'reload'));
     } else {
         hideOfflineLoginBanner();
     }
@@ -1733,10 +1761,11 @@ async function login() {
     let users = await getCachedUsersFast();
     if (!users.length) {
         try {
-            users = await withTimeout(DB.getAll('users'), 4000);
+            users = await DB.getAll('users');
         } catch (e) {
-            showOfflineLoginBanner('Offline mode: cannot reach users now. Check internet and retry.');
-            showToast('Cannot reach users right now. Check internet and retry.', 'warning', 5000);
+            const msg = getUsersOfflineMessage();
+            showOfflineLoginBanner(msg.banner);
+            showToast(msg.toast, msg.level, 5000);
             return;
         }
     }
@@ -1778,6 +1807,8 @@ async function doLoginSuccess(user, isRestore = false) {
     buildSidebar();
     showBottomNav();
 
+    DB.refresh({ nonBlockingBoot: true })
+        .catch(err => console.warn('Post-login refresh failed:', err?.message || err));
     await navigateTo('dashboard');
 }
 
@@ -1947,7 +1978,14 @@ async function initApp() {
             return;
         }
 
-        DB.refresh({ nonBlockingBoot: true }).catch(err => console.warn('Boot refresh failed:', err?.message || err));
+        const bootCacheKeys = ['db_users', 'db_company', 'db_categories', 'db_uom', 'db_tax_settings'];
+        const deferredCacheKeys = ['db_parties', 'db_inventory', 'db_sales_orders', 'db_invoices', 'db_payments', 'db_expenses', 'db_packers', 'db_delivery_persons', 'db_delivery'];
+        DB.loadCacheFromIDB(bootCacheKeys, { perKeyTimeoutMs: 250 })
+            .catch(err => console.warn('Boot cache warmup failed:', err?.message || err));
+        setTimeout(() => {
+            DB.loadCacheFromIDB(deferredCacheKeys, { perKeyTimeoutMs: 750 })
+                .catch(err => console.warn('Deferred cache warmup failed:', err?.message || err));
+        }, 0);
 
         // Check for main app session
         if (dmRestoreSession()) {
@@ -3650,6 +3688,32 @@ function matchesAnyUserIdentity(values, userLike, users = getCachedUsers()) {
 function getUserDisplayName(value, users = getCachedUsers()) {
     const matched = findUserByIdentity(value, users);
     return matched?.name || String(value || '');
+}
+function getPackingPersonsList() {
+    const allUsers = getCachedUsers();
+    const fromUsers = allUsers
+        .filter(u => userHasRole(u, 'Packing') || userHasRole(u, 'Helper'))
+        .map(u => ({ name: u.name, phone: u.phone || '', source: 'user', userId: u.userId || u.id }))
+        .filter(p => p.name);
+    const legacyPackers = DB.cache['packers'] || [];
+    const userNames = new Set(fromUsers.map(p => (p.name || '').trim().toLowerCase()));
+    const fromLegacy = legacyPackers
+        .filter(p => p.name && !userNames.has(p.name.trim().toLowerCase()))
+        .map(p => ({ name: p.name, phone: p.phone || '', source: 'legacy', id: p.id }));
+    return [...fromUsers, ...fromLegacy];
+}
+function getDeliveryPersonsList() {
+    const allUsers = getCachedUsers();
+    const fromUsers = allUsers
+        .filter(u => userHasRole(u, 'Delivery'))
+        .map(u => ({ name: u.name, phone: u.phone || '', source: 'user', userId: u.userId || u.id }))
+        .filter(p => p.name);
+    const legacyDPs = DB.cache['delivery_persons'] || [];
+    const userNames = new Set(fromUsers.map(p => (p.name || '').trim().toLowerCase()));
+    const fromLegacy = legacyDPs
+        .filter(p => p.name && !userNames.has(p.name.trim().toLowerCase()))
+        .map(p => ({ name: p.name, phone: p.phone || '', vehicle: p.vehicle || '', source: 'legacy', id: p.id }));
+    return [...fromUsers, ...fromLegacy];
 }
 function getPaymentCollectorValue(payment) {
     return payment ? (payment.collectedBy || payment.createdBy || '') : '';
@@ -19159,7 +19223,7 @@ async function openChangeDeliveryPerson(id) {
     const dels = DB.cache['delivery'] || [];
     const d = dels.find(x => x.id === id);
     if (!d) return;
-    const dp = await DB.getAll('delivery_persons');
+    const dp = getDeliveryPersonsList();
     openModal(' Change Delivery Person', `
         <div style="margin-bottom:14px;padding:12px;background:var(--bg-secondary);border-radius:8px;font-size:0.85rem">
             <strong>${d.orderNo}</strong>  ${escapeHtml(d.partyName)}<br>
@@ -19168,10 +19232,10 @@ async function openChangeDeliveryPerson(id) {
         <div class="form-group"><label>New Delivery Person *</label>
             <select id="f-chg-person">
                 <option value="">-- Select --</option>
-                ${dp.map(p => `<option value="${escapeHtml(p.name)}" ${p.name === d.deliveryPerson ? 'selected' : ''}>${escapeHtml(p.name)}${p.phone ? ' (' + p.phone + ')' : ''}</option>`).join('')}
+                ${dp.map(p => `<option value="${escapeHtml(p.name)}" ${p.name === d.deliveryPerson ? 'selected' : ''}>${escapeHtml(p.name)}${p.phone ? ' (' + p.phone + ')' : ''}${p.source === 'legacy' ? ' [legacy]' : ''}</option>`).join('')}
             </select>
         </div>
-        ${!dp.length ? '<div style="font-size:0.8rem;color:var(--warning);margin-bottom:10px"> No delivery persons. <a href="#" onclick="closeModal();navigateTo(\'deliverypersons\')" style="color:var(--accent)">Add Now</a></div>' : ''}
+        ${!dp.length ? '<div style="font-size:0.8rem;color:var(--warning);margin-bottom:10px"> No delivery persons. <a href="#" onclick="closeModal();navigateTo(\'users\')" style="color:var(--accent)">Add a User with Delivery role</a></div>' : ''}
         <div class="modal-actions">
             <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
             <button class="btn btn-primary" onclick="saveChangeDeliveryPerson('${id}')">Save</button>
@@ -19920,13 +19984,13 @@ async function saveQuickGps(partyId, returnId, returnSource) {
 async function openDispatchModal(orderId) {
     const orders = await DB.getAll('salesorders');
     const o = orders.find(x => x.id === orderId); if (!o) return;
-    const dp = await DB.getAll('delivery_persons');
+    const dp = getDeliveryPersonsList();
     openModal(`Dispatch ${o.orderNo}`, `
         <div style="margin-bottom:14px"><strong>Customer:</strong> ${o.partyName} | <strong>Invoice:</strong> ${o.invoiceNo || '-'}</div>
         <div class="form-group"><label>Delivery Person *</label>
-            <select id="f-del-person"><option value="">Select</option>${dp.map(p => `<option value="${p.name}">${p.name} (${p.phone || ''})</option>`).join('')}</select>
+            <select id="f-del-person"><option value="">Select</option>${dp.map(p => `<option value="${p.name}">${p.name}${p.phone ? ' (' + p.phone + ')' : ''}${p.source === 'legacy' ? ' [legacy]' : ''}</option>`).join('')}</select>
         </div>
-        ${!dp.length ? '<div style="font-size:0.8rem;color:var(--warning);margin-bottom:10px"> No delivery persons. <a href="#" onclick="closeModal();navigateTo(\'deliverypersons\')" style="color:var(--accent)">Add Now</a></div>' : ''}
+        ${!dp.length ? '<div style="font-size:0.8rem;color:var(--warning);margin-bottom:10px"> No delivery persons. <a href="#" onclick="closeModal();navigateTo(\'users\')" style="color:var(--accent)">Add a User with Delivery role</a></div>' : ''}
         <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button>
         <button class="btn btn-primary" onclick="dispatchOrder('${orderId}')"> Dispatch</button></div>`);
 }
@@ -20121,7 +20185,8 @@ async function printDeliveryRouteSheet() {
 }
 
 async function openDispatchModalUnified(id, source) {
-    const [dp, parties] = await Promise.all([DB.getAll('delivery_persons'), DB.getAll('parties')]);
+    const [parties] = await Promise.all([DB.getAll('parties')]);
+    const dp = getDeliveryPersonsList();
     let label, partyName, partyId, invoiceNo;
     if (source === 'order') {
         const orders = await DB.getAll('salesorders');
@@ -20151,9 +20216,9 @@ async function openDispatchModalUnified(id, source) {
         <div style="margin-bottom:14px"><strong>Customer:</strong> ${escapeHtml(partyName)} | <strong>Invoice:</strong> ${invoiceNo}</div>
         ${gpsHtml}
         <div class="form-group"><label>Delivery Person *</label>
-            <select id="f-del-person"><option value="">Select</option>${dp.map(p => `<option value="${p.name}">${p.name} (${p.phone || ''})</option>`).join('')}</select>
+            <select id="f-del-person"><option value="">Select</option>${dp.map(p => `<option value="${p.name}">${p.name}${p.phone ? ' (' + p.phone + ')' : ''}${p.source === 'legacy' ? ' [legacy]' : ''}</option>`).join('')}</select>
         </div>
-        ${!dp.length ? '<div style="font-size:0.8rem;color:var(--warning);margin-bottom:10px"> No delivery persons. <a href="#" onclick="closeModal();navigateTo(\'deliverypersons\')" style="color:var(--accent)">Add Now</a></div>' : ''}
+        ${!dp.length ? '<div style="font-size:0.8rem;color:var(--warning);margin-bottom:10px"> No delivery persons. <a href="#" onclick="closeModal();navigateTo(\'users\')" style="color:var(--accent)">Add a User with Delivery role</a></div>' : ''}
         <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button>
         <button class="btn btn-primary" onclick="dispatchOrderUnified('${id}','${source}')"> Dispatch</button></div>`);
 }
@@ -20338,7 +20403,7 @@ async function executeConfirmReturn(id) {
 async function openBulkDispatchModal() {
     const selected = [...document.querySelectorAll('.chk-disp-row:checked')];
     if (!selected.length) return alert('Select at least one order to dispatch.');
-    const dp = await DB.getAll('delivery_persons');
+    const dp = getDeliveryPersonsList();
     const rows = selected.map(c => ({
         id: c.value, source: c.dataset.source,
         orderNo: c.dataset.orderno, party: c.dataset.party
@@ -20357,9 +20422,9 @@ async function openBulkDispatchModal() {
         <label>Delivery Person *</label>
         <select id="f-bulk-del-person" class="form-control">
             <option value=""> Select Person </option>
-            ${dp.map(p => `<option value="${p.name}">${p.name}${p.phone ? ' (' + p.phone + ')' : ''}</option>`).join('')}
+            ${dp.map(p => `<option value="${p.name}">${p.name}${p.phone ? ' (' + p.phone + ')' : ''}${p.source === 'legacy' ? ' [legacy]' : ''}</option>`).join('')}
         </select>
-        ${!dp.length ? '<p style="font-size:0.78rem;color:var(--warning);margin-top:6px"> No delivery persons found. <a href="#" onclick="closeModal();navigateTo(\'deliverypersons\')" style="color:var(--accent)">Add Now</a></p>' : ''}
+        ${!dp.length ? '<p style="font-size:0.78rem;color:var(--warning);margin-top:6px"> No delivery persons found. <a href="#" onclick="closeModal();navigateTo(\'users\')" style="color:var(--accent)">Add a User with Delivery role</a></p>' : ''}
     </div>
     <input type="hidden" id="bulk-disp-rows" value="${encodeURIComponent(JSON.stringify(rows))}">
     <div class="modal-actions">
@@ -20436,7 +20501,7 @@ async function reDispatchOrder(id) {
     const dels = await DB.getAll('delivery');
     const d = dels.find(x => x.id === id);
     if (!d) { alert('Delivery record not found'); return; }
-    const dp = await DB.getAll('delivery_persons');
+    const dp = getDeliveryPersonsList();
     openModal('Re-Dispatch — ' + d.orderNo, `
         <div style="margin-bottom:14px;padding:10px;background:rgba(255,193,7,0.1);border:1px solid rgba(255,193,7,0.3);border-radius:8px;font-size:0.85rem">
             <div><strong>Party:</strong> ${escapeHtml(d.partyName)}</div>
@@ -20444,9 +20509,9 @@ async function reDispatchOrder(id) {
             <div><strong>Reason:</strong> ${escapeHtml(d.undeliveredReason || 'N/A')}</div>
         </div>
         <div class="form-group"><label>Delivery Person *</label>
-            <select id="f-redel-person"><option value="">Select</option>${dp.map(p => `<option value="${p.name}">${p.name} (${p.phone || ''})</option>`).join('')}</select>
+            <select id="f-redel-person"><option value="">Select</option>${dp.map(p => `<option value="${p.name}">${p.name}${p.phone ? ' (' + p.phone + ')' : ''}${p.source === 'legacy' ? ' [legacy]' : ''}</option>`).join('')}</select>
         </div>
-        ${!dp.length ? '<div style="font-size:0.8rem;color:var(--warning);margin-bottom:10px"> No delivery persons. <a href="#" onclick="closeModal();navigateTo(\'deliverypersons\')" style="color:var(--accent)">Add Now</a></div>' : ''}
+        ${!dp.length ? '<div style="font-size:0.8rem;color:var(--warning);margin-bottom:10px"> No delivery persons. <a href="#" onclick="closeModal();navigateTo(\'users\')" style="color:var(--accent)">Add a User with Delivery role</a></div>' : ''}
         <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button>
         <button class="btn btn-primary" onclick="executeReDispatch('${id}')"> Re-Dispatch</button></div>`);
 }
@@ -23438,138 +23503,110 @@ async function generateUserPaymentReport() {
 }
 
 // =============================================
-//  PACKERS MASTER TABLE
+//  PACKERS MASTER TABLE (Read-only - derived from Users)
 // =============================================
 function renderPackers() {
-    const packers = DB.cache['packers'] || [];
+    const combined = getPackingPersonsList();
     const isMobile = window.innerWidth < 768;
-    const mobileCards = packers.length ? packers.map(p => `
+    const infoBanner = `
+        <div style="margin-bottom:14px;padding:14px 16px;border-radius:12px;background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.18)">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+                <span class="material-symbols-outlined" style="font-size:1.1rem;color:#3b82f6">info</span>
+                <span style="font-weight:800;font-size:0.92rem;color:var(--text-primary)">Packers are now managed via Users &amp; Roles</span>
+            </div>
+            <div style="font-size:0.82rem;color:var(--text-muted);margin-bottom:8px">Add a user with the <strong>Packing</strong> role to make them appear here automatically. Legacy packer records that don't match a user are shown for reference.</div>
+            <button class="btn btn-outline btn-sm" onclick="navigateTo('users')">Go to Users &amp; Roles</button>
+        </div>`;
+    const renderCard = (p) => `
         <div class="card" style="margin-bottom:8px;display:flex;align-items:center;gap:12px;padding:12px 14px">
-            <div style="width:40px;height:40px;border-radius:50%;background:var(--bg-secondary);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:1.2rem;font-weight:700;color:var(--accent)">${(p.name || '?')[0].toUpperCase()}</div>
+            <div style="width:40px;height:40px;border-radius:50%;background:${p.source === 'user' ? 'rgba(59,130,246,0.12)' : 'var(--bg-secondary)'};display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:1.2rem;font-weight:700;color:${p.source === 'user' ? '#3b82f6' : 'var(--accent)'}">${(p.name || '?')[0].toUpperCase()}</div>
             <div style="flex:1;min-width:0">
                 <div style="font-weight:700">${escapeHtml(p.name)}</div>
-                ${p.phone ? `<a href="tel:${p.phone}" style="font-size:0.82rem;color:var(--success)">${p.phone}</a>` : '<span style="font-size:0.82rem;color:var(--text-muted)">No phone</span>'}
+                ${p.phone ? `<span style="font-size:0.82rem;color:var(--success)">${p.phone}</span>` : ''}
             </div>
-            <div style="display:flex;gap:4px">
-                <button class="btn-icon" onclick="openPackerModal('${p.id}')"><span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--warning)">edit</span></button>
-                <button class="btn-icon" onclick="deletePacker('${p.id}')"><span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--danger)">delete</span></button>
-            </div>
-        </div>`).join('') : '<div class="empty-state"><p>No packers added yet</p></div>';
-
+            <span class="badge ${p.source === 'user' ? 'badge-info' : 'badge-warning'}" style="font-size:0.68rem">${p.source === 'user' ? 'User' : 'Legacy'}</span>
+        </div>`;
+    const cards = combined.length ? combined.map(renderCard).join('') : '<div class="empty-state"><p>No packers found</p><p class="empty-subtitle">Add a user with the Packing role to get started.</p></div>';
     if (isMobile) {
-        pageContent.innerHTML = `
-        <div style="display:flex;justify-content:flex-end;margin-bottom:10px">
-            <button class="btn btn-primary" onclick="openPackerModal()">+ Add Packer</button>
-        </div>
-        ${mobileCards}`;
+        pageContent.innerHTML = `${infoBanner}${cards}`;
         return;
     }
     pageContent.innerHTML = `
+        ${infoBanner}
         <div class="section-toolbar">
-            <h3 style="font-size:1rem">Manage Packers</h3>
-            <button class="btn btn-primary" onclick="openPackerModal()">+ Add Packer</button>
+            <h3 style="font-size:1rem">Packers (${combined.length})</h3>
         </div>
         <div class="card"><div class="card-body">
             <div class="table-wrapper">
-                <table class="data-table"><thead><tr><th>Name</th><th>Phone</th><th>Actions</th></tr></thead>
-                <tbody>${packers.length ? packers.map(p => `<tr>
-                    <td style="color:var(--text-primary);font-weight:600">${p.name}</td><td>${p.phone || '-'}</td>
-                    <td><div class="action-btns"><button class="btn-icon" onclick="openPackerModal('${p.id}')" title="Edit"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button><button class="btn-icon" onclick="deletePacker('${p.id}')" title="Delete" style="color:var(--danger)"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button></div></td>
-                </tr>`).join('') : '<tr><td colspan="3"><div class="empty-state"><div class="empty-icon"></div><p>No packers added yet</p></div></td></tr>'}</tbody></table>
+                <table class="data-table"><thead><tr><th>Name</th><th>Phone</th><th>Source</th></tr></thead>
+                <tbody>${combined.length ? combined.map(p => `<tr>
+                    <td style="color:var(--text-primary);font-weight:600">${escapeHtml(p.name)}</td><td>${p.phone || '-'}</td>
+                    <td><span class="badge ${p.source === 'user' ? 'badge-info' : 'badge-warning'}" style="font-size:0.72rem">${p.source === 'user' ? 'User' : 'Legacy'}</span></td>
+                </tr>`).join('') : '<tr><td colspan="3"><div class="empty-state"><p>No packers found</p></div></td></tr>'}</tbody></table>
             </div>
         </div></div>`;
 }
 function openPackerModal(id) {
-    const p = id ? (DB.cache['packers'] || []).find(x => x.id === id) : null;
-    openModal(p ? 'Edit Packer' : 'Add Packer', `
-        <div class="form-group"><label>Name *</label><input id="f-packer-name" value="${p ? p.name : ''}"></div>
-        <div class="form-group"><label>Phone</label><input id="f-packer-phone" value="${p ? p.phone || '' : ''}"></div>
-        <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-        ${!id ? `<button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;savePacker('')"> Save & New</button>` : ''}
-        <button class="btn btn-primary" onclick="savePacker('${id || ''}')">Save Packer</button></div>`);
+    showToast('Packers are now managed via Users & Roles', 'info');
+    navigateTo('users');
 }
-async function savePacker(id) {
-    const name = $('f-packer-name').value.trim(); if (!name) return alert('Name required');
-    try {
-        if (id) { await DB.update('packers', id, { name, phone: $('f-packer-phone').value.trim() }); }
-        else { await DB.insert('packers', { name, phone: $('f-packer-phone').value.trim() }); }
-        closeModal(); renderPackers();
-        if (window._saveAndNew) { window._saveAndNew = false; openPackerModal(); }
-    } catch (e) { window._saveAndNew = false; alert('Error saving packer: ' + e.message); }
-}
+async function savePacker(id) { openPackerModal(); }
 async function deletePacker(id) {
-    if (!confirm('Delete packer?')) return;
-    try { await DB.delete('packers', id); renderPackers(); }
-    catch (e) { alert('Error deleting packer: ' + e.message); }
+    showToast('Packers are now managed via Users & Roles. Remove the Packing role from the user instead.', 'info');
 }
 
 // =============================================
-//  DELIVERY PERSONS MASTER TABLE
+//  DELIVERY PERSONS MASTER TABLE (Read-only - derived from Users)
 // =============================================
 function renderDeliveryPersons() {
-    const persons = DB.cache['delivery_persons'] || [];
+    const combined = getDeliveryPersonsList();
     const isMobile = window.innerWidth < 768;
-    const mobileCards = persons.length ? persons.map(p => `
+    const infoBanner = `
+        <div style="margin-bottom:14px;padding:14px 16px;border-radius:12px;background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.18)">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+                <span class="material-symbols-outlined" style="font-size:1.1rem;color:#3b82f6">info</span>
+                <span style="font-weight:800;font-size:0.92rem;color:var(--text-primary)">Delivery Persons are now managed via Users &amp; Roles</span>
+            </div>
+            <div style="font-size:0.82rem;color:var(--text-muted);margin-bottom:8px">Add a user with the <strong>Delivery</strong> role to make them appear here automatically. Legacy records that don't match a user are shown for reference.</div>
+            <button class="btn btn-outline btn-sm" onclick="navigateTo('users')">Go to Users &amp; Roles</button>
+        </div>`;
+    const renderCard = (p) => `
         <div class="card" style="margin-bottom:8px;display:flex;align-items:center;gap:12px;padding:12px 14px">
-            <div style="width:40px;height:40px;border-radius:50%;background:var(--bg-secondary);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:1.2rem;font-weight:700;color:var(--accent)">${(p.name || '?')[0].toUpperCase()}</div>
+            <div style="width:40px;height:40px;border-radius:50%;background:${p.source === 'user' ? 'rgba(59,130,246,0.12)' : 'var(--bg-secondary)'};display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:1.2rem;font-weight:700;color:${p.source === 'user' ? '#3b82f6' : 'var(--accent)'}">${(p.name || '?')[0].toUpperCase()}</div>
             <div style="flex:1;min-width:0">
                 <div style="font-weight:700">${escapeHtml(p.name)}</div>
-                ${p.phone ? `<a href="tel:${p.phone}" style="font-size:0.82rem;color:var(--success)">${p.phone}</a>` : ''}
+                ${p.phone ? `<span style="font-size:0.82rem;color:var(--success)">${p.phone}</span>` : ''}
                 ${p.vehicle ? `<span style="font-size:0.78rem;color:var(--text-muted);margin-left:6px">${p.vehicle}</span>` : ''}
             </div>
-            <div style="display:flex;gap:4px">
-                <button class="btn-icon" onclick="openDelPersonModal('${p.id}')"><span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--warning)">edit</span></button>
-                <button class="btn-icon" onclick="deleteDelPerson('${p.id}')"><span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--danger)">delete</span></button>
-            </div>
-        </div>`).join('') : '<div class="empty-state"><p>No delivery persons added yet</p></div>';
-
+            <span class="badge ${p.source === 'user' ? 'badge-info' : 'badge-warning'}" style="font-size:0.68rem">${p.source === 'user' ? 'User' : 'Legacy'}</span>
+        </div>`;
+    const cards = combined.length ? combined.map(renderCard).join('') : '<div class="empty-state"><p>No delivery persons found</p><p class="empty-subtitle">Add a user with the Delivery role to get started.</p></div>';
     if (isMobile) {
-        pageContent.innerHTML = `
-        <div style="display:flex;justify-content:flex-end;margin-bottom:10px">
-            <button class="btn btn-primary" onclick="openDelPersonModal()">+ Add Delivery Person</button>
-        </div>
-        ${mobileCards}`;
+        pageContent.innerHTML = `${infoBanner}${cards}`;
         return;
     }
     pageContent.innerHTML = `
+        ${infoBanner}
         <div class="section-toolbar">
-            <h3 style="font-size:1rem">Manage Delivery Persons</h3>
-            <button class="btn btn-primary" onclick="openDelPersonModal()">+ Add Delivery Person</button>
+            <h3 style="font-size:1rem">Delivery Persons (${combined.length})</h3>
         </div>
         <div class="card"><div class="card-body">
             <div class="table-wrapper">
-                <table class="data-table"><thead><tr><th>Name</th><th>Phone</th><th>Vehicle</th><th>Actions</th></tr></thead>
-                <tbody>${persons.length ? persons.map(p => `<tr>
-                    <td style="color:var(--text-primary);font-weight:600">${p.name}</td><td>${p.phone || '-'}</td><td>${p.vehicle || '-'}</td>
-                    <td><div class="action-btns"><button class="btn-icon" onclick="openDelPersonModal('${p.id}')" title="Edit"><span class="material-symbols-outlined" style="font-size:1.1rem">edit</span></button><button class="btn-icon" onclick="deleteDelPerson('${p.id}')" title="Delete" style="color:var(--danger)"><span class="material-symbols-outlined" style="font-size:1.1rem">delete</span></button></div></td>
-                </tr>`).join('') : '<tr><td colspan="4"><div class="empty-state"><div class="empty-icon"></div><p>No delivery persons added yet</p></div></td></tr>'}</tbody></table>
+                <table class="data-table"><thead><tr><th>Name</th><th>Phone</th><th>Vehicle</th><th>Source</th></tr></thead>
+                <tbody>${combined.length ? combined.map(p => `<tr>
+                    <td style="color:var(--text-primary);font-weight:600">${escapeHtml(p.name)}</td><td>${p.phone || '-'}</td><td>${p.vehicle || '-'}</td>
+                    <td><span class="badge ${p.source === 'user' ? 'badge-info' : 'badge-warning'}" style="font-size:0.72rem">${p.source === 'user' ? 'User' : 'Legacy'}</span></td>
+                </tr>`).join('') : '<tr><td colspan="4"><div class="empty-state"><p>No delivery persons found</p></div></td></tr>'}</tbody></table>
             </div>
         </div></div>`;
 }
 function openDelPersonModal(id) {
-    const p = id ? (DB.cache['delivery_persons'] || []).find(x => x.id === id) : null;
-    openModal(p ? 'Edit Delivery Person' : 'Add Delivery Person', `
-        <div class="form-group"><label>Name *</label><input id="f-dp-name" value="${p ? p.name : ''}"></div>
-        <div class="form-row"><div class="form-group"><label>Phone</label><input id="f-dp-phone" value="${p ? p.phone || '' : ''}"></div>
-        <div class="form-group"><label>Vehicle</label><input id="f-dp-vehicle" value="${p ? p.vehicle || '' : ''}" placeholder="e.g. Tempo, Bike"></div></div>
-        <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-        ${!id ? `<button class="btn btn-outline btn-save-new" onclick="window._saveAndNew=true;saveDelPerson('')"> Save & New</button>` : ''}
-        <button class="btn btn-primary" onclick="saveDelPerson('${id || ''}')">Save</button></div>`);
+    showToast('Delivery persons are now managed via Users & Roles', 'info');
+    navigateTo('users');
 }
-async function saveDelPerson(id) {
-    const name = $('f-dp-name').value.trim(); if (!name) return alert('Name required');
-    const data = { name, phone: $('f-dp-phone').value.trim(), vehicle: $('f-dp-vehicle').value.trim() };
-    try {
-        if (id) { await DB.update('delivery_persons', id, data); }
-        else { await DB.insert('delivery_persons', data); }
-        closeModal(); renderDeliveryPersons();
-        if (window._saveAndNew) { window._saveAndNew = false; openDelPersonModal(); }
-    } catch (e) { window._saveAndNew = false; alert('Error saving delivery person: ' + e.message); }
-}
+async function saveDelPerson(id) { openDelPersonModal(); }
 async function deleteDelPerson(id) {
-    if (!confirm('Delete?')) return;
-    try { await DB.delete('delivery_persons', id); renderDeliveryPersons(); }
-    catch (e) { alert('Error deleting: ' + e.message); }
+    showToast('Delivery persons are now managed via Users & Roles. Remove the Delivery role from the user instead.', 'info');
 }
 
 // =============================================
@@ -23751,6 +23788,14 @@ async function ensureUserRoleMasterRecords(userData, selectedRoles = []) {
             await DB.insert('delivery_persons', { name: staffName });
         }
     }
+    // Suggest creating Staff Master record if one doesn't exist
+    try {
+        const staffList = DB.cache['staff'] || [];
+        const hasStaffRecord = staffList.some(s => normalizeDashboardStaffLink(s?.name) === normalizedName);
+        if (!hasStaffRecord) {
+            showToast(`${staffName} saved. No Staff Master record found \u2014 add one in Staff Master for attendance/payroll tracking.`, 'info', 5000);
+        }
+    } catch(e) { /* non-blocking */ }
 }
 async function saveUser(id) {
     if (!hasPerm('action.users.manage')) return alert('Access denied');
