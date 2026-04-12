@@ -219,7 +219,9 @@ const DB = {
         }
     },
     async refresh(options = {}) {
-        const { nonBlockingBoot = false } = options;
+        const { nonBlockingBoot = false, light = false } = options;
+        const now = Date.now();
+        const syncSuspended = this.cache._suspendSyncUntil && now < this.cache._suspendSyncUntil;
         const bootCacheKeys = ['db_users', 'db_company', 'db_categories', 'db_uom', 'db_tax_settings'];
         const deferredCacheKeys = ['db_parties', 'db_inventory', 'db_sales_orders', 'db_invoices', 'db_payments', 'db_expenses', 'db_packers', 'db_delivery_persons', 'db_delivery'];
         // Core tables needed for Login & Dashboard basic structure
@@ -230,7 +232,7 @@ const DB = {
         const batch2 = ['expenses', 'packers', 'delivery_persons', 'delivery'];
 
         // Mark last refresh time
-        this.cache._lastRefresh = Date.now();
+        this.cache._lastRefresh = now;
 
         // 1. Pre-load local cache from IndexedDB so offline mode responds instantly
         await this.loadCacheFromIDB(nonBlockingBoot ? bootCacheKeys : null, {
@@ -250,7 +252,12 @@ const DB = {
             } catch (e) {
                 console.warn('Settings refresh skipped:', e.message);
             }
-            const coreResults = await Promise.allSettled(coreTables.map(t => withT(this.buildFetchQuery(t), 12000)));
+            const coreResults = await Promise.allSettled(coreTables.map(t => {
+                if (!this._shouldRefreshTable(t, 5 * 60 * 1000)) {
+                    return Promise.resolve({ data: this.cache[this.mapTable(t)] || [] });
+                }
+                return withT(this.buildFetchQuery(t), 12000);
+            }));
             coreResults.forEach((result, i) => {
                 if (result.status === 'rejected') {
                     console.warn(`Core table load timeout/error (${coreTables[i]}):`, result.reason?.message || result.reason);
@@ -264,18 +271,25 @@ const DB = {
                 const camelData = this._toCamel(res.data || []);
                 this.cache[coreTables[i]] = camelData;
                 this.idb.set('db_' + coreTables[i], camelData).catch(console.error);
+                this._markTableRefreshed(coreTables[i]);
             });
         };
 
-        if (nonBlockingBoot) loadCoreAndSettings().catch(e => console.warn('Deferred core refresh failed:', e.message));
-        else await loadCoreAndSettings();
+        if (!syncSuspended) {
+            if (nonBlockingBoot) loadCoreAndSettings().catch(e => console.warn('Deferred core refresh failed:', e.message));
+            else await loadCoreAndSettings();
+        } else {
+            console.warn('Remote refresh paused due to quota/egress limits.');
+        }
 
-        const _bgLoad = (actualTable, query) => {
+        const _bgLoad = (actualTable, query, minAgeMs = 10 * 60 * 1000) => {
+            if (!this._shouldRefreshTable(actualTable, minAgeMs)) return;
             Promise.resolve(query).then(res => {
                 if (!res || res.error) { console.warn(`Bg Refresh Error ${actualTable}:`, res?.error?.message || 'unknown'); return; }
                 const camel = this._toCamel(res.data || []);
                 this.cache[actualTable] = camel;
                 this.idb.set('db_' + actualTable, camel).catch(console.error);
+                this._markTableRefreshed(actualTable);
                 // Only trigger silent re-render on safe read-only pages — never during active form editing
                 const safePages = ['salesorders', 'invoices', 'payments', 'parties', 'inventory', 'delivery', 'catalog', 'dashboard'];
                 const isFormActive = document.querySelector('.sub-modal.active') !== null
@@ -303,19 +317,21 @@ const DB = {
             });
         };
 
-        // 3. Batch 1: fire immediately (most-needed tables)
-        batch1.forEach(t => _bgLoad(this.mapTable(t), withT(this.buildFetchQuery(t))));
+        if (!light && !syncSuspended) {
+            // 3. Batch 1: fire immediately (most-needed tables)
+            batch1.forEach(t => _bgLoad(this.mapTable(t), withT(this.buildFetchQuery(t))));
 
-        // 4. Batch 2: fire after 2s delay so batch1 gets bandwidth priority
-        setTimeout(() => {
-            batch2.forEach(t => _bgLoad(this.mapTable(t), withT(this.buildFetchQuery(t))));
-        }, 2000);
+            // 4. Batch 2: fire after 2s delay so batch1 gets bandwidth priority
+            setTimeout(() => {
+                batch2.forEach(t => _bgLoad(this.mapTable(t), withT(this.buildFetchQuery(t))));
+            }, 2000);
 
-        // 5. Ledger tables: load last 6 months only (unbounded = very slow on large data)
-        setTimeout(() => {
-            _bgLoad('party_ledger', withT(this.buildFetchQuery('party_ledger')));
-            _bgLoad('stock_ledger', withT(this.buildFetchQuery('stock_ledger')));
-        }, 4000);
+            // 5. Ledger tables: load last 6 months only (unbounded = very slow on large data)
+            setTimeout(() => {
+                _bgLoad('party_ledger', withT(this.buildFetchQuery('party_ledger')));
+                _bgLoad('stock_ledger', withT(this.buildFetchQuery('stock_ledger')));
+            }, 4000);
+        }
 
         // gps_logs: NOT auto-loaded — fetch on demand in GPS admin view only
 
@@ -340,11 +356,15 @@ const DB = {
     backgroundSync: async function () {
         // Guard: only one sync at a time
         if (this._bgSyncing) { console.log('Background sync already running, skipping.'); return; }
+        if (this.cache._suspendSyncUntil && Date.now() < this.cache._suspendSyncUntil) {
+            console.warn('Background sync paused due to quota/egress limits.');
+            return;
+        }
         this._bgSyncing = true;
         console.log('Running background sync...');
         try {
             const tables = ['sales_orders', 'invoices', 'payments', 'inventory', 'parties'];
-            const success = await this.refreshTables(tables);
+            const success = await this.refreshTables(tables, { minAgeMs: 10 * 60 * 1000 });
             if (success) {
                 this.cache._lastRefresh = Date.now();
                 console.log('Background sync completed.');
@@ -356,32 +376,35 @@ const DB = {
         }
     },
 
-    async refreshTables(tableList) {
+    async refreshTables(tableList, options = {}) {
+        const { minAgeMs = 0 } = options;
         // Wrap each query with a 15-second timeout so a hanging request doesn't freeze the app
         const withTimeout = (promise, ms = 15000) => {
             const t = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms));
             return Promise.race([promise, t]);
         };
+        const targets = (tableList || []).filter(t => this._shouldRefreshTable(t, minAgeMs));
         const results = await Promise.allSettled(
-            tableList.map(t => withTimeout(this.buildFetchQuery(t)))
+            targets.map(t => withTimeout(this.buildFetchQuery(t)))
         );
         let allSuccess = true;
         results.forEach((result, i) => {
             if (result.status === 'rejected') {
-                console.warn(`Bg refresh timeout/error (${tableList[i]}):`, result.reason?.message);
+                console.warn(`Bg refresh timeout/error (${targets[i]}):`, result.reason?.message);
                 allSuccess = false;
                 return;
             }
             const res = result.value;
             if (res.error) {
-                console.error(`Error refreshing ${tableList[i]}:`, res.error);
+                console.error(`Error refreshing ${targets[i]}:`, res.error);
                 allSuccess = false;
                 return;
             }
-            const actual = this.mapTable(tableList[i]);
+            const actual = this.mapTable(targets[i]);
             const camelData = this._toCamel(res.data || []);
             this.cache[actual] = camelData;
             this.idb.set('db_' + actual, camelData).catch(console.error);
+            this._markTableRefreshed(actual);
         });
         return allSuccess;
     },
@@ -392,6 +415,25 @@ const DB = {
             at: Date.now(),
             ...meta
         };
+        const err = String(meta?.error || '').toLowerCase();
+        const isQuota = err.includes('402') || err.includes('payment required') || err.includes('quota') || err.includes('egress') || err.includes('exceeded');
+        if (!meta?.ok && isQuota) {
+            this.cache._suspendSyncUntil = Date.now() + (60 * 60 * 1000);
+        }
+    },
+    _shouldRefreshTable(table, minAgeMs = 0) {
+        const actual = this.mapTable(table);
+        const last = this.cache._tableRefreshAt?.[actual] || 0;
+        if (!minAgeMs) return true;
+        if (Date.now() - last < minAgeMs && Array.isArray(this.cache[actual]) && this.cache[actual].length) {
+            return false;
+        }
+        return true;
+    },
+    _markTableRefreshed(table) {
+        const actual = this.mapTable(table);
+        if (!this.cache._tableRefreshAt) this.cache._tableRefreshAt = {};
+        this.cache._tableRefreshAt[actual] = Date.now();
     },
     getFetchMeta(table) {
         return this.cache._fetchMeta?.[this.mapTable(table)] || null;
@@ -520,6 +562,50 @@ const DB = {
             if (Array.isArray(idbFallback)) return idbFallback;
             const localFallback = this.get('db_' + actualTable);
             return Array.isArray(localFallback) ? localFallback : [];
+        }
+    },
+    async getList(table, options = {}) {
+        const actualTable = this.mapTable(table);
+        const {
+            select = '*',
+            days = 0,
+            dateField = 'date',
+            orderBy = null,
+            ascending = false,
+            limit = 0,
+            filters = []
+        } = options;
+        try {
+            let query = supabaseClient.from(actualTable).select(select);
+            if (days && dateField) {
+                const cutoff = new Date();
+                cutoff.setDate(cutoff.getDate() - days);
+                const cutoffStr = cutoff.toISOString().split('T')[0];
+                query = query.gte(dateField, cutoffStr);
+            }
+            (filters || []).forEach(f => {
+                if (!f || !f.op || !f.column) return;
+                if (f.op === 'eq') query = query.eq(f.column, f.value);
+                else if (f.op === 'in') query = query.in(f.column, f.value);
+                else if (f.op === 'gte') query = query.gte(f.column, f.value);
+                else if (f.op === 'lte') query = query.lte(f.column, f.value);
+                else if (f.op === 'is') query = query.is(f.column, f.value);
+            });
+            if (orderBy) query = query.order(orderBy, { ascending });
+            if (limit) query = query.limit(limit);
+            const { data, error } = await this.runQueryWithTimeout(query, 12000);
+            if (error) {
+                this._rememberFetchMeta(actualTable, { ok: false, timedOut: false, error: error.message || String(error), list: true });
+                const fallback = this.get('db_' + actualTable);
+                return Array.isArray(fallback) ? fallback : [];
+            }
+            this._rememberFetchMeta(actualTable, { ok: true, timedOut: false, count: (data || []).length, list: true });
+            return this._toCamel(data || []);
+        } catch (error) {
+            const timedOut = String(error?.message || '').toLowerCase().includes('timeout');
+            this._rememberFetchMeta(actualTable, { ok: false, timedOut, error: error?.message || String(error), list: true });
+            const fallback = this.get('db_' + actualTable);
+            return Array.isArray(fallback) ? fallback : [];
         }
     },
 
@@ -1168,7 +1254,7 @@ const ROLE_NAME_MAP = {
 };
 const CUSTOMER_PORTAL_ENABLED = false; // Feature kept in codebase for future relaunch, disabled for current live release.
 function getAppVersion() {
-    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v167';
+    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v170';
 }
 
 const PAGE_LABELS = {
@@ -1616,7 +1702,7 @@ function getUsersOfflineMessage() {
 async function retryBootConnection() {
     showToast('Retrying connection...', 'info', 2500);
     try {
-        await DB.refresh({ nonBlockingBoot: false });
+        await DB.refresh({ nonBlockingBoot: false, light: true });
     } catch (e) {
         console.warn('Retry boot refresh failed:', e?.message || e);
     }
@@ -1807,7 +1893,7 @@ async function doLoginSuccess(user, isRestore = false) {
     buildSidebar();
     showBottomNav();
 
-    DB.refresh({ nonBlockingBoot: true })
+    DB.refresh({ nonBlockingBoot: true, light: true })
         .catch(err => console.warn('Post-login refresh failed:', err?.message || err));
     await navigateTo('dashboard');
 }
@@ -7123,9 +7209,13 @@ async function renderInventory() {
     // Fetch all required data in parallel
     const [items, salesOrders, categories] = await Promise.all([
         DB.getAll('inventory'),
-        DB.getAll('salesorders'),
+        DB.getList('salesorders', {
+            select: 'id,items,status,invoice_no',
+            filters: [{ op: 'in', column: 'status', value: ['pending', 'approved'] }]
+        }),
         DB.getAll('categories')
     ]);
+    window._invListItems = items;
 
     updateNavBadges(items);
     const totalItems = items.length;
@@ -7297,7 +7387,7 @@ function filterInvTable() {
     const s = ($('inv-search') || {}).value?.toLowerCase() || '';
     const cat = ($('inv-cat-filter') || {}).value || '';
     const sub = ($('inv-subcat-filter') || {}).value || '';
-    let items = DB.get('db_inventory') || [];
+    let items = window._invListItems || DB.get('db_inventory') || [];
 
     if (s && s === '__low__') items = items.filter(i => (i.stock - (window._inventoryReservedMap?.[i.id] || 0)) <= (i.lowStockAlert || 5));
     else if (s) items = items.filter(i => i.name.toLowerCase().includes(s) || (i.hsn || '').toLowerCase().includes(s) || (i.itemCode || '').toLowerCase().includes(s) || (i.category || '').toLowerCase().includes(s));
@@ -7318,7 +7408,7 @@ function filterInvTableMobile(preset) {
 
     const cat = ($('inv-cat-filter') || {}).value || '';
     const sub = ($('inv-subcat-filter') || {}).value || '';
-    let items = DB.get('db_inventory') || [];
+    let items = window._invListItems || DB.get('db_inventory') || [];
     const s = searchEl ? searchEl.value.toLowerCase() : '';
 
     if (s) items = items.filter(i =>
@@ -9347,8 +9437,18 @@ async function commitItemImport() {
 //  SALES ORDERS (Approval  no invoice on approve)
 // =============================================
 let soItems = [];
-async function renderSalesOrders() {
-    const orders = await DB.getAll('salesorders');
+async function renderSalesOrders(forceFull = false) {
+    const orders = forceFull
+        ? await DB.getAll('salesorders')
+        : await DB.getList('salesorders', { days: 120, dateField: 'date', orderBy: 'date', ascending: false });
+    window._soList = orders;
+    window._soListLimited = !forceFull;
+    const limitBanner = forceFull
+        ? ''
+        : `<div style="margin-bottom:10px;padding:10px 12px;border-radius:10px;border:1px solid rgba(59,130,246,0.3);background:rgba(59,130,246,0.08);font-size:0.82rem;color:var(--text-muted);display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+            <span>Showing recent 120 days to reduce data usage.</span>
+            <button class="btn btn-outline btn-sm" onclick="renderSalesOrders(true)">Load All Orders</button>
+        </div>`;
     const soStatusRank = o => {
         if (o.status === 'pending') return 0;
         if (o.status === 'approved' && !o.packed && !o.invoiceNo) return 1;
@@ -9365,6 +9465,7 @@ async function renderSalesOrders() {
 
     if (isMobile) {
         pageContent.innerHTML = `
+        ${limitBanner}
         <!-- Compact Stats -->
         <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:10px 12px;margin-bottom:10px">
             <div style="display:flex;gap:0">
@@ -9404,6 +9505,7 @@ async function renderSalesOrders() {
         <table id="tbl-salesorders" style="display:none"><tbody></tbody></table>`;
     } else {
         pageContent.innerHTML = `
+        ${limitBanner}
         <div class="stats-grid" style="margin-bottom:18px">
             <div class="stat-card amber"><div class="stat-icon"></div><div class="stat-value">${p.length}</div><div class="stat-label">Pending</div></div>
             <div class="stat-card green"><div class="stat-icon"></div><div class="stat-value">${a.length}</div><div class="stat-label">Approved</div></div>
@@ -9585,7 +9687,12 @@ async function filterSOTable() {
     const s = $('so-search').value.toLowerCase(), st = $('so-status-filter').value;
     const pf = $('so-priority-filter') ? $('so-priority-filter').value : '';
     const sort = $('so-sort') ? $('so-sort').value : 'date-desc';
-    let orders = await DB.getAll('salesorders');
+    let orders = window._soList;
+    if (!orders || !orders.length) {
+        orders = await DB.getList('salesorders', { days: 120, dateField: 'date', orderBy: 'date', ascending: false });
+        window._soList = orders;
+        window._soListLimited = true;
+    }
     if (s) orders = orders.filter(o => o.orderNo.toLowerCase().includes(s) || o.partyName.toLowerCase().includes(s));
     if (st) orders = orders.filter(o => o.status === st);
     if (pf) orders = orders.filter(o => (o.priority || 'Normal') === pf);
@@ -11612,8 +11719,22 @@ async function deletePO(id) {
 //  INVOICES (Sale & Purchase  purchase adds stock)
 // =============================================
 let invoiceItems = [];
-async function renderInvoices() {
-    const [invoices, payments, deliveries] = await Promise.all([DB.getAll('invoices'), DB.getAll('payments'), DB.getAll('delivery')]);
+async function renderInvoices(forceFull = false) {
+    const [invoices, payments, deliveries] = await Promise.all([
+        forceFull ? DB.getAll('invoices') : DB.getList('invoices', { days: 180, dateField: 'date', orderBy: 'date', ascending: false }),
+        forceFull ? DB.getAll('payments') : DB.getList('payments', { days: 180, dateField: 'date', orderBy: 'date', ascending: false }),
+        forceFull ? DB.getAll('delivery') : DB.getList('delivery', { days: 180, dateField: 'dispatched_at', orderBy: 'dispatched_at', ascending: false })
+    ]);
+    window._invList = invoices;
+    window._invPayments = payments;
+    window._invDeliveries = deliveries;
+    window._invListLimited = !forceFull;
+    const limitBanner = forceFull
+        ? ''
+        : `<div style="margin-bottom:10px;padding:10px 12px;border-radius:10px;border:1px solid rgba(59,130,246,0.3);background:rgba(59,130,246,0.08);font-size:0.82rem;color:var(--text-muted);display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+            <span>Showing recent 180 days to reduce data usage.</span>
+            <button class="btn btn-outline btn-sm" onclick="renderInvoices(true)">Load All Invoices</button>
+        </div>`;
 
     // Build payments map: invoiceNo → paid amount
     const pm = {};
@@ -11640,6 +11761,7 @@ async function renderInvoices() {
 
     if (isMobile) {
         pageContent.innerHTML = `
+        ${limitBanner}
         <!-- Compact Stats -->
         <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:10px 12px;margin-bottom:10px">
             <div style="display:flex;gap:0">
@@ -11675,6 +11797,7 @@ async function renderInvoices() {
         <div id="invoice-list">${renderInvoiceCards(visibleInvoices)}</div>`;
     } else {
         pageContent.innerHTML = `
+        ${limitBanner}
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
             <div style="background:#fff;border-radius:12px;padding:14px 16px;box-shadow:0 1px 6px rgba(0,0,0,0.08)">
                 <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:4px">Total Sale</div>
@@ -11729,7 +11852,9 @@ function toggleInvFilters() {
 function exportInvoiceList() {
     const invs = Array.from(document.querySelectorAll('[data-inv-id]')).map(el => el.dataset.invId);
     // Fall back to full export
-    const allInvs = DB.cache['invoices'] || [];
+    const allInvs = (DB.cache['invoices'] && DB.cache['invoices'].length)
+        ? DB.cache['invoices']
+        : (window._invList || []);
     const rows = [['Invoice No', 'Date', 'Party', 'Type', 'Total', 'Status']];
     allInvs.forEach(i => rows.push([i.invoiceNo, i.date, i.partyName, i.type, i.total, i.status]));
     const ws = XLSX.utils.aoa_to_sheet(rows);
@@ -11738,7 +11863,7 @@ function exportInvoiceList() {
     XLSX.writeFile(wb, 'Invoices_Export.xlsx');
 }
 async function getInvoicePaidAmount(invNo) {
-    const payments = await DB.getAll('payments');
+    const payments = window._invPayments || window._payList || await DB.getAll('payments');
     const paidMap = buildInvoicePaidMap(payments);
     return +(paidMap[invNo] || 0);
 }
@@ -11890,7 +12015,12 @@ async function filterInvTable2() {
     const from = ($('inv-f-from') || {}).value || '';
     const to = ($('inv-f-to') || {}).value || '';
 
-    let invs = await DB.getAll('invoices');
+    let invs = window._invList;
+    if (!invs || !invs.length) {
+        invs = await DB.getList('invoices', { days: 180, dateField: 'date', orderBy: 'date', ascending: false });
+        window._invList = invs;
+        window._invListLimited = true;
+    }
     if (from) invs = invs.filter(i => (i.date || '') >= from);
     if (to) invs = invs.filter(i => (i.date || '') <= to);
     if (s) invs = invs.filter(i => (i.invoiceNo || '').toLowerCase().includes(s) || (i.partyName || '').toLowerCase().includes(s));
@@ -11906,7 +12036,7 @@ async function filterInvTable2() {
 }
 
 async function viewInvoicePaymentHistory(invoiceNo) {
-    const payments = await DB.getAll('payments');
+    const payments = window._payList || await DB.getAll('payments');
     const history = payments.filter(p => p.invoiceNo === invoiceNo || (p.allocations && p.allocations[invoiceNo]));
     const titleInvoiceNo = getInvoiceDisplayNo(invoiceNo);
 
@@ -14593,10 +14723,22 @@ async function _invPdfShare(title) {
 // =============================================
 //  PAYMENTS
 // =============================================
-async function renderPayments() {
+async function renderPayments(forceFull = false) {
     // Restore bottom nav hidden by openPaymentModal
     document.body.classList.remove('pay-form-open');
-    const payments = getActivePayments(await DB.getAll('payments'));
+    const payments = getActivePayments(
+        forceFull
+            ? await DB.getAll('payments')
+            : await DB.getList('payments', { days: 180, dateField: 'date', orderBy: 'date', ascending: false })
+    );
+    window._payList = payments;
+    window._payListLimited = !forceFull;
+    const limitBanner = forceFull
+        ? ''
+        : `<div style="margin-bottom:10px;padding:10px 12px;border-radius:10px;border:1px solid rgba(59,130,246,0.3);background:rgba(59,130,246,0.08);font-size:0.82rem;color:var(--text-muted);display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+            <span>Showing recent 180 days to reduce data usage.</span>
+            <button class="btn btn-outline btn-sm" onclick="renderPayments(true)">Load All Payments</button>
+        </div>`;
     const isSalesman = currentUser && userHasRole(currentUser, 'Salesman') && !canEdit();
     const showVyaparBulk = canEdit();
     window._payShowSelect = showVyaparBulk;
@@ -14625,6 +14767,7 @@ async function renderPayments() {
 
     if (isMobile) {
         pageContent.innerHTML = `
+        ${limitBanner}
         <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:10px 12px;margin-bottom:10px">
             <div style="display:flex;gap:0;margin-bottom:${modeChips ? '8px' : '0'}">
                 <div style="flex:1;text-align:center;border-right:1px solid var(--border);padding-right:8px">
@@ -14672,6 +14815,7 @@ async function renderPayments() {
         <table id="tbl-payments" style="display:none"><tbody></tbody></table>`;
     } else {
         pageContent.innerHTML = `
+        ${limitBanner}
         <div class="stats-grid" style="margin-bottom:14px" id="pay-stat-tiles">
             <div class="stat-card green"><div class="stat-icon"></div><div class="stat-value" id="pay-stat-in">${currency(totalIn)}</div><div class="stat-label">Payment In</div></div>
             ${!isSalesman ? `<div class="stat-card red"><div class="stat-icon"></div><div class="stat-value" id="pay-stat-out">${currency(totalOut)}</div><div class="stat-label">Payment Out</div></div>` : ''}
@@ -15105,7 +15249,12 @@ async function getFilteredPaymentsForView() {
     const collF = ($('pay-collector-filter') || {}).value || '';
     const from = ($('pay-f-from') || {}).value || '';
     const to = ($('pay-f-to') || {}).value || '';
-    let pays = getActivePayments(await DB.getAll('payments'));
+    let pays = window._payList;
+    if (!pays || !pays.length) {
+        pays = getActivePayments(await DB.getList('payments', { days: 180, dateField: 'date', orderBy: 'date', ascending: false }));
+        window._payList = pays;
+        window._payListLimited = true;
+    }
     if (currentUser && userHasRole(currentUser, 'Salesman') && !canEdit()) {
         pays = pays.filter(p => matchesAnyUserIdentity([p.collectedBy, p.createdBy], currentUser) && p.type !== 'out');
     }
@@ -15213,7 +15362,7 @@ function viewInvoiceByNo(invoiceNo) {
 }
 
 async function viewPaymentDetails(id) {
-    const payments = await DB.getAll('payments');
+    const payments = window._payList || await DB.getAll('payments');
     const p = payments.find(x => x.id === id);
     if (!p) return;
     const receipt = getPaymentReceiptModel(payments, p);

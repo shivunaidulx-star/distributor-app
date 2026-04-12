@@ -1,11 +1,15 @@
 {
   "name": "distributor-app",
-  "version": "1.106.32",
+  "version": "1.106.33",
   "description": "Distributor Business Management App",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "tunnel": "npx localtunnel --port 8081 --subdomain distro-manager"
+    "tunnel": "npx localtunnel --port 8081 --subdomain distro-manager",
+    "test": "playwright test"
   },
-  "dependencies": {}
+  "dependencies": {},
+  "devDependencies": {
+    "@playwright/test": "^1.46.0"
+  }
 }

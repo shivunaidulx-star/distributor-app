@@ -931,6 +931,14 @@ table { border-collapse: collapse; width: 100%; }
     word-break: break-word;
 }
 
+/* Payments table: keep rows compact on desktop by avoiding aggressive word-wrap */
+#tbl-payments th,
+#tbl-payments td {
+    white-space: nowrap;
+    word-break: normal;
+    overflow-wrap: normal;
+}
+
 .data-table tbody tr {
     transition: var(--transition);
 }
