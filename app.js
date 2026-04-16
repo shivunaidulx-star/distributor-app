@@ -21274,6 +21274,12 @@ const REPORT_TABLE_REQUIREMENTS = {
 async function loadReportDatasets(type) {
     const tables = REPORT_TABLE_REQUIREMENTS[type] || ['inventory', 'invoices', 'payments', 'expenses', 'users', 'categories', 'parties'];
     if (!tables.length) return {};
+    // cash_handovers: always fetch fresh so newly submitted records appear immediately
+    if (type === 'cash-handovers') {
+        try {
+            delete DB.cache['cash_handovers'];
+        } catch (e) { /* ignore */ }
+    }
     const loaded = await Promise.all(tables.map(table => DB.getAll(table)));
     const data = {};
     tables.forEach((table, index) => {
@@ -21283,6 +21289,7 @@ async function loadReportDatasets(type) {
     if (Array.isArray(data.expenses)) data.expenses = data.expenses.filter(expense => !isCancelledRecord(expense));
     return data;
 }
+
 function getCollectionAllocationCollector(invoice) {
     return String(invoice?.allocatedTo || invoice?.assignedTo || '').trim();
 }
