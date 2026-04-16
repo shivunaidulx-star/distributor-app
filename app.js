@@ -529,6 +529,9 @@ const DB = {
         if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return obj;
         const res = {};
         for (const key in obj) {
+            // Strip client-side UI attributes to prevent schema mismatch on insert/update
+            if (key === 'idx') continue;
+            
             const v = obj[key];
             res[key] = (v === '' && (key.includes('date') || key.includes('at') || key.includes('_at') || key === 'item_code' || key === 'party_code' || key === 'group')) ? null : v;
         }
