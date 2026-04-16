@@ -21716,8 +21716,12 @@ async function createCashHandoverRecord(row) {
         return DB._toCamel(data);
     } catch (err) {
         const msg = String(err?.message || err || '');
-        const missingRpc = /create_cash_handover|function .*does not exist|schema cache/i.test(msg);
-        if (missingRpc) {
+        // Fall back to direct insert if:
+        // 1. The RPC function doesn't exist (initial setup, schema cache stale), OR
+        // 2. The RPC function body references a stale/wrong column name (old Supabase function version)
+        const useDirectInsert = /create_cash_handover|function .*does not exist|schema cache/i.test(msg)
+            || /column .* of relation|does not exist/i.test(msg);
+        if (useDirectInsert) {
             try {
                 return await DB.insert('cash_handovers', row);
             } catch (fallbackErr) {
