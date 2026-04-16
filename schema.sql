@@ -239,6 +239,13 @@ CREATE TABLE IF NOT EXISTS payments (
     cheque_status TEXT DEFAULT 'Pending',
     cheque_deposit_date DATE,
     allocations JSONB DEFAULT '{}',
+    upi_ref TEXT,
+    attachment_url TEXT,
+    attachment_name TEXT,
+    verification_status TEXT,
+    verified_by TEXT,
+    verified_at TIMESTAMPTZ,
+    verification_note TEXT,
     created_by TEXT
 );
 ALTER TABLE payments ADD COLUMN IF NOT EXISTS pay_no TEXT;
@@ -251,6 +258,40 @@ ALTER TABLE payments ADD COLUMN IF NOT EXISTS cheque_deposit_date DATE;
 ALTER TABLE payments ADD COLUMN IF NOT EXISTS allocations JSONB DEFAULT '{}';
 ALTER TABLE payments ADD COLUMN IF NOT EXISTS discount NUMERIC DEFAULT 0;
 ALTER TABLE payments ADD COLUMN IF NOT EXISTS total_reduction NUMERIC DEFAULT 0;
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS upi_ref TEXT;
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS attachment_url TEXT;
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS attachment_name TEXT;
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS verification_status TEXT;
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS verified_by TEXT;
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPTZ;
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS verification_note TEXT;
+
+-- â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- 7B. CASH HANDOVERS
+-- â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+CREATE TABLE IF NOT EXISTS cash_handovers (
+    id TEXT PRIMARY KEY,
+    collection_date DATE NOT NULL,
+    handover_date DATE NOT NULL,
+    salesman_name TEXT NOT NULL,
+    salesman_id TEXT,
+    expected_amount NUMERIC DEFAULT 0,
+    declared_amount NUMERIC DEFAULT 0,
+    counted_amount NUMERIC DEFAULT 0,
+    variance_amount NUMERIC DEFAULT 0,
+    denomination_counts JSONB DEFAULT '{}',
+    admin_denomination_counts JSONB DEFAULT '{}',
+    payment_row_ids JSONB DEFAULT '[]',
+    payment_refs JSONB DEFAULT '[]',
+    status TEXT DEFAULT 'submitted',
+    note TEXT,
+    admin_note TEXT,
+    submitted_at TIMESTAMPTZ DEFAULT NOW(),
+    submitted_by TEXT,
+    received_by TEXT,
+    received_at TIMESTAMPTZ,
+    created_by TEXT
+);
 
 -- ─────────────────────────────────────────────
 -- 8. EXPENSES
@@ -393,6 +434,73 @@ CREATE INDEX IF NOT EXISTS idx_invoices_date ON invoices(date);
 CREATE INDEX IF NOT EXISTS idx_invoices_type ON invoices(type);
 CREATE INDEX IF NOT EXISTS idx_payments_party ON payments(party_id);
 CREATE INDEX IF NOT EXISTS idx_payments_date ON payments(date);
+CREATE INDEX IF NOT EXISTS idx_cash_handovers_collection_date ON cash_handovers(collection_date);
+CREATE INDEX IF NOT EXISTS idx_cash_handovers_handover_date ON cash_handovers(handover_date);
+CREATE INDEX IF NOT EXISTS idx_cash_handovers_salesman_name ON cash_handovers(salesman_name);
+CREATE INDEX IF NOT EXISTS idx_cash_handovers_status ON cash_handovers(status);
+
+CREATE OR REPLACE FUNCTION public.create_cash_handover(p_data JSONB)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    inserted_row JSONB;
+BEGIN
+    INSERT INTO public.cash_handovers (
+        id,
+        collection_date,
+        handover_date,
+        salesman_name,
+        salesman_id,
+        expected_amount,
+        declared_amount,
+        counted_amount,
+        variance_amount,
+        denomination_counts,
+        admin_denomination_counts,
+        payment_row_ids,
+        payment_refs,
+        status,
+        note,
+        admin_note,
+        submitted_at,
+        submitted_by,
+        received_by,
+        received_at,
+        created_by
+    )
+    VALUES (
+        COALESCE(NULLIF(p_data->>'id', ''), md5(random()::text || clock_timestamp()::text)),
+        NULLIF(p_data->>'collection_date', '')::DATE,
+        NULLIF(p_data->>'handover_date', '')::DATE,
+        COALESCE(NULLIF(p_data->>'salesman_name', ''), 'Unknown'),
+        NULLIF(p_data->>'salesman_id', ''),
+        COALESCE(NULLIF(p_data->>'expected_amount', ''), '0')::NUMERIC,
+        COALESCE(NULLIF(p_data->>'declared_amount', ''), '0')::NUMERIC,
+        COALESCE(NULLIF(p_data->>'counted_amount', ''), '0')::NUMERIC,
+        COALESCE(NULLIF(p_data->>'variance_amount', ''), '0')::NUMERIC,
+        COALESCE(p_data->'denomination_counts', '{}'::JSONB),
+        COALESCE(p_data->'admin_denomination_counts', '{}'::JSONB),
+        COALESCE(p_data->'payment_row_ids', '[]'::JSONB),
+        COALESCE(p_data->'payment_refs', '[]'::JSONB),
+        COALESCE(NULLIF(p_data->>'status', ''), 'submitted'),
+        NULLIF(p_data->>'note', ''),
+        NULLIF(p_data->>'admin_note', ''),
+        COALESCE(NULLIF(p_data->>'submitted_at', '')::TIMESTAMPTZ, NOW()),
+        NULLIF(p_data->>'submitted_by', ''),
+        NULLIF(p_data->>'received_by', ''),
+        NULLIF(p_data->>'received_at', '')::TIMESTAMPTZ,
+        NULLIF(p_data->>'created_by', '')
+    )
+    RETURNING to_jsonb(cash_handovers.*) INTO inserted_row;
+
+    RETURN inserted_row;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.create_cash_handover(JSONB) TO anon, authenticated, service_role;
 CREATE INDEX IF NOT EXISTS idx_stock_ledger_item ON stock_ledger(item_id);
 CREATE INDEX IF NOT EXISTS idx_party_ledger_party ON party_ledger(party_id);
 CREATE INDEX IF NOT EXISTS idx_sales_orders_status ON sales_orders(status);

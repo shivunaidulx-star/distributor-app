@@ -133,7 +133,7 @@ const DB = {
             const perKeyTimeoutMs = Math.max(100, +(options?.perKeyTimeoutMs || 1200));
             const cacheKeys = Array.isArray(keys) && keys.length
                 ? keys
-                : ['db_users', 'db_categories', 'db_uom', 'db_company', 'db_tax_settings', 'db_parties', 'db_inventory', 'db_sales_orders', 'db_invoices', 'db_payments', 'db_expenses', 'db_packers', 'db_delivery_persons', 'db_delivery'];
+                : ['db_users', 'db_categories', 'db_uom', 'db_company', 'db_tax_settings', 'db_parties', 'db_inventory', 'db_sales_orders', 'db_invoices', 'db_payments', 'db_expenses', 'db_packers', 'db_delivery_persons', 'db_delivery', 'db_cash_handovers'];
             await Promise.all(cacheKeys.map(async k => {
                 const val = await new Promise(resolve => {
                     let settled = false;
@@ -188,6 +188,8 @@ const DB = {
             const cutoff = new Date();
             cutoff.setDate(cutoff.getDate() - 7);
             query = query.gte('timestamp', cutoff.toISOString()).order('timestamp', { ascending: false }).limit(500);
+        } else if (actualTable === 'cash_handovers') {
+            query = query.order('handover_date', { ascending: false }).order('submitted_at', { ascending: false });
         }
         return query;
     },
@@ -223,13 +225,13 @@ const DB = {
         const now = Date.now();
         const syncSuspended = this.cache._suspendSyncUntil && now < this.cache._suspendSyncUntil;
         const bootCacheKeys = ['db_users', 'db_company', 'db_categories', 'db_uom', 'db_tax_settings'];
-        const deferredCacheKeys = ['db_parties', 'db_inventory', 'db_sales_orders', 'db_invoices', 'db_payments', 'db_expenses', 'db_packers', 'db_delivery_persons', 'db_delivery'];
+        const deferredCacheKeys = ['db_parties', 'db_inventory', 'db_sales_orders', 'db_invoices', 'db_payments', 'db_expenses', 'db_packers', 'db_delivery_persons', 'db_delivery', 'db_cash_handovers'];
         // Core tables needed for Login & Dashboard basic structure
         const coreTables = ['users', 'categories', 'uom'];
         // Batch 1: high-priority tables needed for first page render
         const batch1 = ['parties', 'inventory', 'sales_orders', 'invoices', 'payments'];
         // Batch 2: lower-priority tables loaded after a short delay
-        const batch2 = ['expenses', 'packers', 'delivery_persons', 'delivery'];
+        const batch2 = ['expenses', 'packers', 'delivery_persons', 'delivery', 'cash_handovers'];
 
         // Mark last refresh time
         this.cache._lastRefresh = now;
@@ -495,7 +497,7 @@ const DB = {
             let val = obj[key];
 
             // 🚀 FIX: Global safety net to catch and parse corrupted JSON strings from the DB
-            if (typeof val === 'string' && ['items', 'packed_items', 'allocations', 'price_tiers', 'batches', 'package_numbers', 'cannot_complete_lines', 'sub_categories', 'roles', 'extra_perms', 'allow_perms', 'deny_perms'].includes(key)) {
+            if (typeof val === 'string' && ['items', 'packed_items', 'allocations', 'price_tiers', 'batches', 'package_numbers', 'cannot_complete_lines', 'sub_categories', 'roles', 'extra_perms', 'allow_perms', 'deny_perms', 'payment_row_ids', 'payment_refs', 'denomination_counts', 'admin_denomination_counts'].includes(key)) {
                 try {
                     const parsed = JSON.parse(val);
                     if (typeof parsed === 'object' && parsed !== null) val = parsed;
@@ -2065,7 +2067,7 @@ async function initApp() {
         }
 
         const bootCacheKeys = ['db_users', 'db_company', 'db_categories', 'db_uom', 'db_tax_settings'];
-        const deferredCacheKeys = ['db_parties', 'db_inventory', 'db_sales_orders', 'db_invoices', 'db_payments', 'db_expenses', 'db_packers', 'db_delivery_persons', 'db_delivery'];
+        const deferredCacheKeys = ['db_parties', 'db_inventory', 'db_sales_orders', 'db_invoices', 'db_payments', 'db_expenses', 'db_packers', 'db_delivery_persons', 'db_delivery', 'db_cash_handovers'];
         DB.loadCacheFromIDB(bootCacheKeys, { perKeyTimeoutMs: 250 })
             .catch(err => console.warn('Boot cache warmup failed:', err?.message || err));
         setTimeout(() => {
@@ -3592,6 +3594,7 @@ function getPaymentReceiptModel(payments = [], paymentOrId) {
         groupRows,
         summary,
         invoiceSummary: summarizePaymentInvoices(groupRows),
+        upiMeta: getPaymentUpiMeta(groupRows),
         referenceNo: summary.payNo || summary.primary?.id || '',
         date: summary.primary?.date || '',
         type: summary.primary?.type || 'in',
@@ -3607,6 +3610,298 @@ function findPaymentGroupRows(payments = [], paymentOrId) {
     const key = getPaymentGroupKey(payment);
     return (payments || []).filter(row => getPaymentGroupKey(row) === key);
 }
+const CASH_HANDOVER_DENOMINATIONS = [
+    { value: 500, label: '500' },
+    { value: 200, label: '200' },
+    { value: 100, label: '100' },
+    { value: 50, label: '50' },
+    { value: 20, label: '20' },
+    { value: 10, label: '10' },
+    { value: 5, label: '5' },
+    { value: 2, label: '2' },
+    { value: 1, label: '1' }
+];
+function isAdminLikeUser(user = currentUser) {
+    return userHasRole(user, 'Admin') || userHasRole(user, 'Manager');
+}
+function getSafeAttachmentHref(url = '') {
+    const trimmed = String(url || '').trim();
+    return /^(https?:\/\/|data:image\/)/i.test(trimmed) ? trimmed : '';
+}
+function isImageLikeProof(url = '') {
+    const safeUrl = getSafeAttachmentHref(url);
+    if (!safeUrl) return false;
+    return /^data:image\//i.test(safeUrl) || /\.(png|jpe?g|gif|webp|bmp)(\?|$)/i.test(safeUrl);
+}
+function renderUpiVerificationBadge(status = '', compact = false) {
+    const normalized = String(status || '').trim().toLowerCase();
+    const config = normalized === 'confirmed'
+        ? { label: compact ? 'UPI OK' : 'UPI Confirmed', cls: 'badge-success' }
+        : normalized === 'rejected'
+            ? { label: compact ? 'UPI Rejected' : 'UPI Rejected', cls: 'badge-danger' }
+            : { label: compact ? 'UPI Pending' : 'UPI Pending', cls: 'badge-warning' };
+    return `<span class="badge ${config.cls}" style="font-size:0.68rem">${config.label}</span>`;
+}
+function getPaymentProofPreviewHtml(url = '', name = '') {
+    const safeHref = getSafeAttachmentHref(url);
+    if (!safeHref) {
+        return `<div style="font-size:0.78rem;color:var(--text-muted)">Attach the customer UPI receipt screenshot for admin verification.</div>`;
+    }
+    const safeName = escapeHtml(name || 'View proof');
+    if (isImageLikeProof(safeHref)) {
+        return `
+            <div style="display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap">
+                <img src="${safeHref}" alt="UPI proof" style="width:88px;height:88px;object-fit:cover;border-radius:10px;border:1px solid var(--border);background:#fff">
+                <div style="display:flex;flex-direction:column;gap:6px;min-width:0">
+                    <div style="font-size:0.78rem;color:var(--text-secondary);font-weight:600">${safeName}</div>
+                    <a href="${safeHref}" target="_blank" rel="noopener" style="font-size:0.78rem;color:var(--primary);text-decoration:underline">Open Attachment</a>
+                </div>
+            </div>`;
+    }
+    return `<a href="${safeHref}" target="_blank" rel="noopener" style="font-size:0.8rem;color:var(--primary);text-decoration:underline">${safeName}</a>`;
+}
+function getPaymentUpiMeta(groupRows = []) {
+    const rows = [...(groupRows || [])];
+    const primary = rows.find(row =>
+        String(row.mode || '').trim() === 'UPI'
+        || row.upiRef
+        || row.attachmentUrl
+        || row.verificationStatus
+        || row.verifiedBy
+    ) || null;
+    const hasUpi = rows.some(row => String(row.mode || '').trim() === 'UPI') || !!primary;
+    return {
+        hasUpi,
+        upiRef: primary?.upiRef || '',
+        attachmentUrl: primary?.attachmentUrl || '',
+        attachmentName: primary?.attachmentName || '',
+        verificationStatus: primary?.verificationStatus || (hasUpi ? 'pending' : ''),
+        verifiedBy: primary?.verifiedBy || '',
+        verifiedAt: primary?.verifiedAt || '',
+        verificationNote: primary?.verificationNote || ''
+    };
+}
+function renderPaymentUpiFields(existing = {}) {
+    const meta = {
+        hasUpi: !!existing.hasUpi,
+        upiRef: existing.upiRef || '',
+        attachmentUrl: existing.attachmentUrl || '',
+        attachmentName: existing.attachmentName || '',
+        verificationStatus: existing.verificationStatus || '',
+        verifiedBy: existing.verifiedBy || '',
+        verifiedAt: existing.verifiedAt || '',
+        verificationNote: existing.verificationNote || ''
+    };
+    const statusLine = meta.verificationStatus
+        ? `
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+                ${renderUpiVerificationBadge(meta.verificationStatus)}
+                ${meta.verifiedBy ? `<span style="font-size:0.76rem;color:var(--text-muted)">By ${escapeHtml(meta.verifiedBy)}${meta.verifiedAt ? ` on ${fmtDate(meta.verifiedAt)}` : ''}</span>` : ''}
+            </div>`
+        : '';
+    return `
+        <div id="pay-upi-fields" style="display:${meta.hasUpi ? 'block' : 'none'};margin-top:12px;padding:12px;border:1px solid var(--border);border-radius:12px;background:rgba(59,130,246,0.04)">
+            <div style="font-size:0.78rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.4px;margin-bottom:10px">UPI Proof</div>
+            ${statusLine}
+            <div class="form-group">
+                <label>UPI Reference / UTR No *</label>
+                <input id="f-pay-upi-ref" value="${escapeHtml(meta.upiRef)}" placeholder="e.g. 412345678901">
+            </div>
+            <div class="form-group">
+                <label>Attachment</label>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+                    <label class="btn btn-outline btn-sm" style="cursor:pointer">
+                        <span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-3px">upload</span> Upload Proof
+                        <input type="file" id="f-pay-upi-proof" accept="image/*" style="display:none" onchange="onPaymentProofSelected(this)">
+                    </label>
+                    <button type="button" class="btn btn-outline btn-sm" onclick="clearPaymentProofSelection()" style="border-color:var(--danger);color:var(--danger)">Remove</button>
+                </div>
+                <div id="pay-upi-proof-preview" style="margin-top:10px">${getPaymentProofPreviewHtml(meta.attachmentUrl, meta.attachmentName)}</div>
+                <div style="font-size:0.74rem;color:var(--text-muted);margin-top:8px">Salesman uploads proof. Admin or Manager can confirm it later from the payment receipt.</div>
+            </div>
+            <input type="hidden" id="f-pay-proof-existing-url" value="${escapeHtml(meta.attachmentUrl)}">
+            <input type="hidden" id="f-pay-proof-existing-name" value="${escapeHtml(meta.attachmentName)}">
+            <input type="hidden" id="f-pay-existing-upi-ref" value="${escapeHtml(meta.upiRef)}">
+            <input type="hidden" id="f-pay-existing-verification-status" value="${escapeHtml(meta.verificationStatus)}">
+            <input type="hidden" id="f-pay-existing-verified-by" value="${escapeHtml(meta.verifiedBy)}">
+            <input type="hidden" id="f-pay-existing-verified-at" value="${escapeHtml(meta.verifiedAt)}">
+            <input type="hidden" id="f-pay-existing-verification-note" value="${escapeHtml(meta.verificationNote)}">
+        </div>`;
+}
+function clearPaymentProofDraftState() {
+    if (window._paymentProofObjectUrl) {
+        try { URL.revokeObjectURL(window._paymentProofObjectUrl); } catch (err) { }
+    }
+    window._paymentProofObjectUrl = '';
+    window._paymentProofFile = null;
+}
+function syncPaymentProofPreview(url = '', name = '') {
+    const preview = $('pay-upi-proof-preview');
+    if (preview) preview.innerHTML = getPaymentProofPreviewHtml(url, name);
+}
+window.onPaymentProofSelected = function (input) {
+    const file = input?.files?.[0];
+    if (!file) return;
+    clearPaymentProofDraftState();
+    window._paymentProofFile = file;
+    try {
+        window._paymentProofObjectUrl = URL.createObjectURL(file);
+    } catch (err) {
+        window._paymentProofObjectUrl = '';
+    }
+    syncPaymentProofPreview(window._paymentProofObjectUrl || '', file.name || 'UPI proof');
+};
+window.clearPaymentProofSelection = function () {
+    clearPaymentProofDraftState();
+    const input = $('f-pay-upi-proof');
+    if (input) input.value = '';
+    const existingUrl = $('f-pay-proof-existing-url');
+    const existingName = $('f-pay-proof-existing-name');
+    if (existingUrl) existingUrl.value = '';
+    if (existingName) existingName.value = '';
+    syncPaymentProofPreview('', '');
+};
+async function uploadPaymentProofAsset(file, payRefNo = '') {
+    if (!file) return { attachmentUrl: null, attachmentName: null };
+    const ext = (file.name || 'proof.jpg').split('.').pop() || 'jpg';
+    const safeRef = String(payRefNo || Date.now()).replace(/[^a-z0-9_-]/gi, '').toLowerCase();
+    const fileName = `payment_${safeRef}_${Math.random().toString(36).slice(2, 8)}.${ext}`;
+    try {
+        const { error: uploadError } = await supabaseClient.storage
+            .from('payment-proofs')
+            .upload(fileName, file, { upsert: true });
+        if (uploadError) throw uploadError;
+        const { data: urlData } = supabaseClient.storage.from('payment-proofs').getPublicUrl(fileName);
+        return { attachmentUrl: urlData?.publicUrl || null, attachmentName: file.name || fileName };
+    } catch (err) {
+        console.warn('Payment proof upload fallback:', err?.message || err);
+        const dataUrl = await compressImage(file, { maxWidth: 1080, maxHeight: 1080, quality: 0.78 });
+        showToast('Payment proof kept inline because storage upload is unavailable right now.', 'warning', 4500);
+        return { attachmentUrl: dataUrl, attachmentName: file.name || fileName };
+    }
+}
+async function resolvePaymentUpiMeta({ hasUpi = false, payRefNo = '' } = {}) {
+    if (!hasUpi) {
+        return {
+            upiRef: null,
+            attachmentUrl: null,
+            attachmentName: null,
+            verificationStatus: null,
+            verifiedBy: null,
+            verifiedAt: null,
+            verificationNote: null
+        };
+    }
+    const upiRef = ($('f-pay-upi-ref')?.value || '').trim();
+    const existingUpiRef = ($('f-pay-existing-upi-ref')?.value || '').trim();
+    const existingStatus = ($('f-pay-existing-verification-status')?.value || '').trim();
+    const existingVerifiedBy = ($('f-pay-existing-verified-by')?.value || '').trim();
+    const existingVerifiedAt = ($('f-pay-existing-verified-at')?.value || '').trim();
+    const existingVerificationNote = ($('f-pay-existing-verification-note')?.value || '').trim();
+    const existingUrl = ($('f-pay-proof-existing-url')?.value || '').trim();
+    const existingName = ($('f-pay-proof-existing-name')?.value || '').trim();
+    if (!upiRef) throw new Error('Enter UPI reference / UTR number.');
+    let attachmentUrl = existingUrl || null;
+    let attachmentName = existingName || null;
+    if (window._paymentProofFile) {
+        const uploaded = await uploadPaymentProofAsset(window._paymentProofFile, payRefNo);
+        attachmentUrl = uploaded.attachmentUrl;
+        attachmentName = uploaded.attachmentName;
+    }
+    if (!attachmentUrl && !isAdminLikeUser()) {
+        throw new Error('Attach UPI proof screenshot for admin confirmation.');
+    }
+    const hasChanged = upiRef !== existingUpiRef || !!window._paymentProofFile || (!attachmentUrl && !!existingUrl);
+    let verificationStatus = existingStatus || (isAdminLikeUser() ? 'confirmed' : 'pending');
+    let verifiedBy = existingVerifiedBy || null;
+    let verifiedAt = existingVerifiedAt || null;
+    if (hasChanged) {
+        if (isAdminLikeUser()) {
+            verificationStatus = 'confirmed';
+            verifiedBy = currentUser?.name || verifiedBy || null;
+            verifiedAt = new Date().toISOString();
+        } else {
+            verificationStatus = 'pending';
+            verifiedBy = null;
+            verifiedAt = null;
+        }
+    }
+    if (verificationStatus === 'confirmed' && !verifiedAt) {
+        verifiedAt = new Date().toISOString();
+        verifiedBy = currentUser?.name || verifiedBy || null;
+    }
+    return {
+        upiRef,
+        attachmentUrl,
+        attachmentName,
+        verificationStatus,
+        verifiedBy,
+        verifiedAt,
+        verificationNote: existingVerificationNote || null
+    };
+}
+function togglePaymentUpiFields(modeValues = []) {
+    const upiFields = $('pay-upi-fields');
+    if (upiFields) upiFields.style.display = modeValues.includes('UPI') ? 'block' : 'none';
+}
+function normalizeDenominationCounts(counts = {}) {
+    const normalized = {};
+    CASH_HANDOVER_DENOMINATIONS.forEach(denom => {
+        const key = String(denom.value);
+        const value = Math.max(0, parseInt(counts?.[key] ?? counts?.[denom.value] ?? 0, 10) || 0);
+        if (value) normalized[key] = value;
+    });
+    return normalized;
+}
+function calculateDenominationTotal(counts = {}) {
+    return +CASH_HANDOVER_DENOMINATIONS.reduce((sum, denom) => {
+        const count = +(counts?.[String(denom.value)] || 0);
+        return sum + (count * denom.value);
+    }, 0).toFixed(2);
+}
+function renderDenominationCalculator(prefix, counts = {}, title = 'Denomination Calculator') {
+    const normalized = normalizeDenominationCounts(counts);
+    const total = calculateDenominationTotal(normalized);
+    return `
+        <div style="margin-top:14px;padding:12px;border:1px solid var(--border);border-radius:12px;background:rgba(249,115,22,0.04)">
+            <div style="font-size:0.78rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.4px;margin-bottom:10px">${escapeHtml(title)}</div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(95px,1fr));gap:8px">
+                ${CASH_HANDOVER_DENOMINATIONS.map(denom => `
+                    <div style="padding:8px;border:1px solid var(--border);border-radius:10px;background:var(--bg-card)">
+                        <label style="display:block;font-size:0.72rem;color:var(--text-muted);margin-bottom:6px">Rs ${denom.label}</label>
+                        <input type="number" min="0" step="1" data-denom-prefix="${prefix}" data-denom-value="${denom.value}" value="${normalized[String(denom.value)] || ''}" oninput="updateDenominationTotal('${prefix}')" style="width:100%;padding:7px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);color:var(--text-primary)">
+                    </div>`).join('')}
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px">
+                <div style="font-size:0.78rem;color:var(--text-muted)">Auto total from denomination counts</div>
+                <div style="text-align:right">
+                    <div style="font-size:0.72rem;color:var(--text-muted)">Total</div>
+                    <div id="${prefix}-denom-total" style="font-size:1.05rem;font-weight:800;color:var(--primary)">${currency(total)}</div>
+                    <div id="${prefix}-denom-diff" style="font-size:0.74rem;color:var(--text-muted);min-height:1.1em"></div>
+                </div>
+            </div>
+        </div>`;
+}
+function readDenominationCountsFromDom(prefix) {
+    const counts = {};
+    document.querySelectorAll(`[data-denom-prefix="${prefix}"]`).forEach(input => {
+        const key = String(input.dataset.denomValue || '');
+        const value = Math.max(0, parseInt(input.value || 0, 10) || 0);
+        if (key && value) counts[key] = value;
+    });
+    return counts;
+}
+window.updateDenominationTotal = function (prefix) {
+    const total = calculateDenominationTotal(readDenominationCountsFromDom(prefix));
+    const totalEl = document.getElementById(`${prefix}-denom-total`);
+    if (totalEl) totalEl.textContent = currency(total);
+    if (prefix === 'cash-handover-submit' && typeof window.updateCashHandoverDraftSummary === 'function') {
+        window.updateCashHandoverDraftSummary();
+    }
+    if (prefix === 'cash-handover-admin' && typeof window.updateCashHandoverAdminSummary === 'function') {
+        window.updateCashHandoverAdminSummary();
+    }
+};
 function buildInvoicePaidMap(payments = []) {
     const paidMap = {};
     const activePayments = getActivePayments(payments);
@@ -14799,7 +15094,10 @@ async function renderPayments(forceFull = false) {
             ${isSalesman ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:0 0 8px">
                 <button class="btn btn-primary btn-sm" onclick="openCollectionRoutePage()" style="justify-content:center"><span class="material-symbols-outlined" style="font-size:1rem">route</span> Collection Route</button>
                 <button class="btn btn-outline btn-sm" onclick="openCollectionBillsReportFromPayments()" style="justify-content:center;border-color:var(--primary);color:var(--primary)"><span class="material-symbols-outlined" style="font-size:1rem">assignment</span> Bills Report</button>
-            </div>` : ''}
+                <button class="btn btn-outline btn-sm" onclick="openCashHandoverReportFromPayments()" style="justify-content:center;border-color:#f97316;color:#ea580c"><span class="material-symbols-outlined" style="font-size:1rem">account_balance_wallet</span> Cash Handover</button>
+            </div>` : (canEdit() ? `<div style="display:grid;grid-template-columns:1fr;gap:8px;margin:0 0 8px">
+                <button class="btn btn-outline btn-sm" onclick="openCashHandoverReportFromPayments()" style="justify-content:center;border-color:#f97316;color:#ea580c"><span class="material-symbols-outlined" style="font-size:1rem">account_balance_wallet</span> Cash Handover</button>
+            </div>` : '')}
             <div id="pay-extra-filters" style="display:none">
                 <input id="pay-search" placeholder="Search parties/receipts..." oninput="filterPayTable()" style="width:100%;margin-bottom:6px;padding:7px 10px;border:1px solid var(--border);border-radius:7px;font-size:0.82rem;background:var(--bg-input);box-sizing:border-box">
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
@@ -14840,6 +15138,7 @@ async function renderPayments(forceFull = false) {
                 <div style="display:flex;gap:6px;align-items:center;padding-top:14px;flex-wrap:wrap">
                     ${isSalesman ? `<button class="btn btn-primary btn-sm" onclick="openCollectionRoutePage()" title="Collection Route"><span class="material-symbols-outlined" style="font-size:1.1rem">route</span> Collection Route</button>` : ''}
                     ${isSalesman ? `<button class="btn btn-outline btn-sm" onclick="openCollectionBillsReportFromPayments()" title="Bills Report" style="border-color:var(--primary);color:var(--primary)"><span class="material-symbols-outlined" style="font-size:1.1rem">assignment</span> Bills Report</button>` : ''}
+                    ${(isSalesman || canEdit()) ? `<button class="btn btn-outline btn-sm" onclick="openCashHandoverReportFromPayments()" title="Cash Handovers" style="border-color:#f97316;color:#ea580c"><span class="material-symbols-outlined" style="font-size:1.1rem">account_balance_wallet</span> Cash Handover</button>` : ''}
                     ${showVyaparBulk ? `<button class="btn btn-outline btn-sm" onclick="togglePaySelectAll(true)" title="Select All Filtered" style="border-color:var(--primary);color:var(--primary)"><span class="material-symbols-outlined" style="font-size:1.1rem">select_all</span> Select All</button>` : ''}
                     ${showVyaparBulk ? `<button class="btn btn-outline btn-sm" onclick="updateVyaparPostedForPayments(getSelectedPaymentIds('.pay-row-select'), true)" title="Mark Vyapar Posted" style="border-color:#16a34a;color:#16a34a"><span class="material-symbols-outlined" style="font-size:1.1rem">task_alt</span> Vyapar Yes</button>` : ''}
                     ${showVyaparBulk ? `<button class="btn btn-outline btn-sm" onclick="updateVyaparPostedForPayments(getSelectedPaymentIds('.pay-row-select'), false)" title="Mark Vyapar Not Posted" style="border-color:#f97316;color:#f97316"><span class="material-symbols-outlined" style="font-size:1.1rem">close</span> Vyapar No</button>` : ''}
@@ -15148,6 +15447,7 @@ function renderPayCards(pays) {
         const detailParts = [fmtDate(p.date)];
         if (noteText) detailParts.push(escapeHtml(noteText));
         if (collectorLabel) detailParts.push(escapeHtml(collectorLabel));
+        if (p.mode === 'UPI' && p.upiRef) detailParts.push(`UTR ${escapeHtml(p.upiRef)}`);
         const invoiceMeta = invCell && invCell !== 'Advance / Unallocated'
             ? `<div style="font-size:0.72rem;color:var(--text-muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><strong style="color:var(--text-primary)">Inv:</strong> ${escapeHtml(invCell)}</div>`
             : '';
@@ -15157,6 +15457,7 @@ function renderPayCards(pays) {
                     <span style="font-weight:700;font-size:0.9rem;color:var(--accent)">${escapeHtml(getPaymentReferenceNo(p) || '-')}</span>
                     <span style="font-size:0.68rem;font-weight:700;background:${typeBg};color:${typeColor};padding:2px 7px;border-radius:20px">${typeLabel}</span>
                     ${p.mode && p.mode !== 'Cash' ? `<span style="font-size:0.68rem;color:var(--text-muted);background:var(--bg-secondary);padding:2px 6px;border-radius:10px">${escapeHtml(p.mode)}</span>` : ''}
+                    ${p.mode === 'UPI' ? renderUpiVerificationBadge(p.verificationStatus || 'pending', true) : ''}
                 </div>
                 <div style="font-weight:600;font-size:0.88rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(p.partyName || '')}</div>
                 <div style="font-size:0.75rem;color:var(--text-muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${detailParts.join(' | ')}</div>
@@ -15231,7 +15532,7 @@ function renderPayRows(pays) {
             party: `<td style="font-weight:600">${escapeHtml(p.partyName)}</td>`,
             type: `<td style="min-width:120px"><span class="badge ${p.type === 'in' ? 'badge-success' : 'badge-danger'}">${p.type === 'in' ? 'Payment In' : 'Payment Out'}</span></td>`,
             invoiceNo: `<td>${buildPayInvoiceCell(p)}</td>`,
-            mode: `<td>${p.mode || 'Cash'}${p.mode === 'Cheque' && p.chequeNo ? `<br><span style="font-size:0.75rem;color:var(--text-muted)">#${p.chequeNo} | ${p.chequeBank || ''}</span><br><span class="badge ${p.chequeStatus === 'Cleared' ? 'badge-success' : p.chequeStatus === 'Deposited' ? 'badge-warning' : 'badge-danger'}" style="font-size:0.65rem">${p.chequeStatus || 'Pending'}</span>` : ''}</td>`,
+            mode: `<td>${p.mode || 'Cash'}${p.mode === 'Cheque' && p.chequeNo ? `<br><span style="font-size:0.75rem;color:var(--text-muted)">#${p.chequeNo} | ${p.chequeBank || ''}</span><br><span class="badge ${p.chequeStatus === 'Cleared' ? 'badge-success' : p.chequeStatus === 'Deposited' ? 'badge-warning' : 'badge-danger'}" style="font-size:0.65rem">${p.chequeStatus || 'Pending'}</span>` : ''}${p.mode === 'UPI' ? `${p.upiRef ? `<br><span style="font-size:0.75rem;color:var(--text-muted)">UTR: ${escapeHtml(p.upiRef)}</span>` : ''}<br>${renderUpiVerificationBadge(p.verificationStatus || 'pending', true)}${p.attachmentUrl ? `<br><a href="${getSafeAttachmentHref(p.attachmentUrl)}" target="_blank" rel="noopener" style="font-size:0.72rem;color:var(--primary);text-decoration:underline">Proof</a>` : ''}` : ''}</td>`,
             collectedBy: `<td style="font-size:0.82rem;color:var(--text-secondary)">${escapeHtml(getUserDisplayName(getPaymentCollectorValue(p)) || '-')}</td>`,
             amount: `<td class="${p.type === 'in' ? 'amount-green' : 'amount-red'}">${currency(p.amount)}</td>`,
             status: `<td><span class="badge ${p.status === 'posted' ? 'badge-success' : p.status === 'cancelled' ? 'badge-danger' : 'badge-warning'}" style="font-size:0.72rem">${p.status || 'pending'}</span></td>`,
@@ -15386,6 +15687,15 @@ async function viewPaymentDetails(id) {
             <td style="padding:6px 0;text-align:right;font-weight:700">${currency(row.amount || 0)}</td>
         </tr>`;
     }).join('');
+    const upiMeta = receipt.upiMeta || getPaymentUpiMeta(receipt.groupRows);
+    const proofHref = getSafeAttachmentHref(upiMeta.attachmentUrl || '');
+    const upiInfoHtml = upiMeta.hasUpi
+        ? `
+            <tr style="border-bottom:1px dashed var(--border)"><td style="padding:8px 0;color:var(--text-secondary)">UPI Ref</td><td style="padding:8px 0;text-align:right;font-weight:600">${escapeHtml(upiMeta.upiRef || '-')}</td></tr>
+            <tr style="border-bottom:1px dashed var(--border)"><td style="padding:8px 0;color:var(--text-secondary)">UPI Status</td><td style="padding:8px 0;text-align:right">${renderUpiVerificationBadge(upiMeta.verificationStatus || 'pending')}${upiMeta.verifiedBy ? `<div style="font-size:0.74rem;color:var(--text-muted);margin-top:4px">By ${escapeHtml(upiMeta.verifiedBy)}${upiMeta.verifiedAt ? ` on ${fmtDate(upiMeta.verifiedAt)}` : ''}</div>` : ''}</td></tr>
+            <tr style="border-bottom:1px dashed var(--border)"><td style="padding:8px 0;color:var(--text-secondary)">Proof</td><td style="padding:8px 0;text-align:right">${proofHref ? `<a href="${proofHref}" target="_blank" rel="noopener" style="color:var(--primary);text-decoration:underline">${escapeHtml(upiMeta.attachmentName || 'Open Attachment')}</a>` : '<span style="color:var(--warning)">No attachment</span>'}</td></tr>`
+        : '';
+    const canVerifyUpi = upiMeta.hasUpi && isAdminLikeUser();
     openModal('Payment Receipt', `
         <div style="background:var(--bg-card);padding:20px;border-radius:var(--radius-md);border:1px solid var(--border)">
             <div style="display:flex;justify-content:space-between;margin-bottom:15px;border-bottom:1px solid var(--border);padding-bottom:10px">
@@ -15404,16 +15714,50 @@ async function viewPaymentDetails(id) {
                 <tr style="border-bottom:1px dashed var(--border)"><td style="padding:8px 0;color:var(--text-secondary)">Balance Reduction</td><td style="padding:8px 0;text-align:right;font-weight:800;font-size:1.1rem;color:${receipt.type === 'in' ? 'var(--success)' : 'var(--danger)'}">${currency(receipt.summary.totalReduction)}</td></tr>
                 <tr style="border-bottom:1px dashed var(--border)"><td style="padding:8px 0;color:var(--text-secondary)">Reference</td><td style="padding:8px 0;text-align:right;font-weight:600">${escapeHtml(receipt.referenceNo || '-')}</td></tr>
                 <tr style="border-bottom:1px dashed var(--border)"><td style="padding:8px 0;color:var(--text-secondary);vertical-align:top">Invoice(s)</td><td style="padding:8px 0;text-align:right">${invoiceHtml}</td></tr>
+                ${upiInfoHtml}
                 <tr><td style="padding:8px 0;color:var(--text-secondary)">Note</td><td style="padding:8px 0;text-align:right">${escapeHtml(receipt.note || '-')}</td></tr>
             </table>
         </div>
         <div class="modal-actions">
             <button class="btn btn-outline" onclick="closeModal()">Close</button>
+            ${canVerifyUpi && (upiMeta.verificationStatus || 'pending').toLowerCase() !== 'confirmed' ? `<button class="btn btn-outline" style="border-color:var(--success);color:var(--success)" onclick="updatePaymentUpiVerification('${p.id}','confirmed')">Confirm UPI</button>` : ''}
+            ${canVerifyUpi && (upiMeta.verificationStatus || 'pending').toLowerCase() !== 'rejected' ? `<button class="btn btn-outline" style="border-color:var(--danger);color:var(--danger)" onclick="updatePaymentUpiVerification('${p.id}','rejected')">Reject UPI</button>` : ''}
             ${canEdit() ? `<button class="btn btn-outline" style="color:var(--danger);border-color:var(--danger)" onclick="closeModal();deletePayment('${p.id}')"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-2px">delete</span> Delete</button>` : ''}
             ${canEdit() ? `<button class="btn btn-outline" onclick="closeModal();openEditPaymentModal('${p.id}')"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-2px">edit</span> Edit</button>` : ''}
             <button class="btn btn-primary" onclick="printPaymentReceipt('${p.id}')"> Print Receipt</button>
         </div>
     `);
+}
+async function updatePaymentUpiVerification(id, status = 'confirmed') {
+    if (!isAdminLikeUser()) return alert('Only Admin or Manager can confirm UPI payments.');
+    const payments = await DB.getAll('payments');
+    const pay = payments.find(row => sameIdValue(row.id, id));
+    if (!pay) return alert('Payment not found');
+    const groupRows = findPaymentGroupRows(payments, pay);
+    const targetRows = groupRows.filter(row =>
+        String(row.mode || '').trim() === 'UPI'
+        || row.upiRef
+        || row.attachmentUrl
+        || row.verificationStatus
+    );
+    if (!targetRows.length) return alert('This receipt does not contain a UPI payment row.');
+    const note = status === 'rejected'
+        ? prompt('Reason for rejecting this UPI proof (optional):', targetRows[0]?.verificationNote || '') : (targetRows[0]?.verificationNote || '');
+    if (note === null && status === 'rejected') return;
+    const nowIso = new Date().toISOString();
+    for (const row of targetRows) {
+        await DB.adminUpdate('payments', row.id, {
+            verificationStatus: status,
+            verifiedBy: currentUser?.name || '',
+            verifiedAt: nowIso,
+            verificationNote: (note || '').trim() || null
+        });
+    }
+    if (currentPage === 'payments') {
+        await renderPayments();
+    }
+    showToast(status === 'confirmed' ? 'UPI payment confirmed.' : 'UPI payment marked as rejected.', status === 'confirmed' ? 'success' : 'warning');
+    await viewPaymentDetails(id);
 }
 function _getPaymentPrintCss() {
     return `
@@ -15531,7 +15875,7 @@ function printPaymentReceipt(id) {
         type: receipt.type,
         partyName: receipt.partyName,
         mode: receipt.summary.modeSummary,
-        note: receipt.note,
+        note: [receipt.note, receipt.upiMeta?.upiRef ? `UPI Ref: ${receipt.upiMeta.upiRef}` : ''].filter(Boolean).join(' | '),
         amount: receipt.summary.totalReduction,
         allocations: invoiceKeys.length ? receipt.invoiceSummary.allocationMap : null,
         invoiceNo: invoiceKeys.length === 1 ? invoiceKeys[0] : 'Advance'
@@ -15624,6 +15968,7 @@ async function openPaymentModal(prefillPartyId) {
     const fab = $('app-fab');
     if (fab) fab.classList.add('hidden');
     document.body.classList.add('pay-form-open');
+    clearPaymentProofDraftState();
 
     // Render as full page (Vyapar-style) instead of a modal bottom sheet
     const [parties, users] = await Promise.all([DB.getAll('parties'), DB.getAll('users')]);
@@ -15705,6 +16050,7 @@ async function openPaymentModal(prefillPartyId) {
                 <div class="form-group"><label>Bank Name *</label><input id="f-pay-cheque-bank" placeholder="e.g. SBI"></div></div>
                 <div class="form-group"><label>Cheque Date *</label><input type="date" id="f-pay-cheque-date" value="${today()}"></div>
             </div>
+            ${renderPaymentUpiFields()}
         </div>
 
         <!-- Invoice allocation section -->
@@ -15804,7 +16150,7 @@ window.addPaymentModeRow = function () {
         <div class="form-group" style="margin-bottom:0">
             <select class="f-pay-row-mode" onchange="onPayModeChange()"><option>Cash</option><option>UPI</option><option>Bank Transfer</option><option>Cheque</option></select>
         </div>
-        <button class="btn-icon" onclick="this.parentNode.remove();onPayAmountChange()" style="height:38px;color:var(--danger)"><span class="material-symbols-outlined">delete</span></button>
+        <button class="btn-icon" onclick="this.parentNode.remove();onPayAmountChange();onPayModeChange()" style="height:38px;color:var(--danger)"><span class="material-symbols-outlined">delete</span></button>
     `;
     container.appendChild(div);
 };
@@ -16097,6 +16443,7 @@ window.updatePaymentQR = function () {
 window.onPayModeChange = function () {
     updatePaymentQR();
     const modes = [...document.querySelectorAll('.f-pay-row-mode')].map(s => s.value);
+    togglePaymentUpiFields(modes);
 
     // Auto-scroll to QR if UPI selected
     if (modes.some(m => m.includes('UPI'))) {
@@ -16179,9 +16526,11 @@ async function savePayment(id) {
 
     const payType = $('f-pay-type').value; // 'in' or 'out'
     const invNoStr = Object.keys(allocations).join(', ');
+    const hasUpi = payRows.some(row => row.mode === 'UPI');
 
     try {
         const payRefNo = await nextNumber(payType === 'in' ? 'PAY-IN' : 'PAY-');
+        const upiMeta = await resolvePaymentUpiMeta({ hasUpi, payRefNo });
         const ops = [];
 
         // 5. Create Database Records per Payment Mode
@@ -16189,6 +16538,7 @@ async function savePayment(id) {
             const row = payRows[i];
             const rowDisc = i === 0 ? disc : 0; // Only attach discount to the first row to avoid double counting
             const rowAllocations = i === 0 && Object.keys(allocations).length > 0 ? allocations : null;
+            const isUpiRow = row.mode === 'UPI';
 
             const payData = {
                 pay_no: payRefNo,
@@ -16214,6 +16564,15 @@ async function savePayment(id) {
                 payData.cheque_bank = $('f-pay-cheque-bank')?.value?.trim() || null;
                 payData.cheque_deposit_date = $('f-pay-cheque-date')?.value || null;
                 payData.cheque_status = 'Pending';
+            }
+            if (isUpiRow) {
+                payData.upi_ref = upiMeta.upiRef;
+                payData.attachment_url = upiMeta.attachmentUrl;
+                payData.attachment_name = upiMeta.attachmentName;
+                payData.verification_status = upiMeta.verificationStatus;
+                payData.verified_by = upiMeta.verifiedBy;
+                payData.verified_at = upiMeta.verifiedAt;
+                payData.verification_note = upiMeta.verificationNote;
             }
 
             ops.push(DB.rawInsert('payments', payData));
@@ -16264,6 +16623,7 @@ async function savePayment(id) {
 
         const andNew = window._saveAndNew;
         window._saveAndNew = false;
+        clearPaymentProofDraftState();
 
         showToast(`Payment ${payRefNo} saved successfully!`, 'success');
         endSave(); // Reset saving flag after success
@@ -16324,6 +16684,7 @@ async function openReceivePaymentForInvoice(invoiceId) {
     const invoices = await DB.getAll('invoices');
     const inv = invoices.find(i => i.id === invoiceId);
     if (!inv) return;
+    clearPaymentProofDraftState();
     const displayNo = getInvoiceDisplayNo(inv) || inv.invoiceNo;
     const paid = await getInvoicePaidAmount(inv.invoiceNo);
     const due = inv.total - paid;
@@ -16360,9 +16721,10 @@ async function openReceivePaymentForInvoice(invoiceId) {
         <div class="form-group"><label>Date *</label><input type="date" id="f-pay-date" value="${today()}"></div>
 
         <div class="form-row">
-            <div class="form-group"><label>Mode</label><select id="f-pay-mode"><option>Cash</option><option>UPI</option><option>Bank Transfer</option><option>Cheque</option></select></div>
+            <div class="form-group"><label>Mode</label><select id="f-pay-mode" onchange="onDirectPayModeChange()"><option>Cash</option><option>UPI</option><option>Bank Transfer</option><option>Cheque</option></select></div>
             <div class="form-group"><label>Note</label><input id="f-pay-note" placeholder="Optional note"></div>
         </div>
+        ${renderPaymentUpiFields()}
         <input type="hidden" id="f-pay-inv-id" value="${inv.id}">
         <div class="modal-actions">
             <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
@@ -16375,6 +16737,11 @@ async function openReceivePaymentForInvoice(invoiceId) {
         const disc = +($('f-pay-discount').value) || 0;
         $('direct-pay-total-display').textContent = currency(amt + disc);
     };
+    window.onDirectPayModeChange = function () {
+        const mode = $('f-pay-mode')?.value || 'Cash';
+        togglePaymentUpiFields([mode]);
+    };
+    window.onDirectPayModeChange();
 }
 
 async function saveDirectPayment() {
@@ -16392,26 +16759,37 @@ async function saveDirectPayment() {
     const isSale = inv.type === 'sale';
     const payType = isSale ? 'in' : 'out';
 
-    const payRefNo = await nextNumber(payType === 'in' ? 'PAY-IN' : 'PAY-');
-    const payData = {
-        pay_no: payRefNo,
-        date: $('f-pay-date').value,
-        type: payType,
-        partyId: inv.partyId,
-        partyName: inv.partyName,
-        amount: amt,
-        discount: disc,
-        total_reduction: totalReduction,
-        mode: $('f-pay-mode').value,
-        note: $('f-pay-note').value.trim(),
-        invoice_no: inv.invoiceNo,
-        created_by: currentUser.userId,
-        collected_by: currentUser.name
-    };
-
     try {
+        const mode = $('f-pay-mode').value;
+        const hasUpi = mode === 'UPI';
+        const payRefNo = await nextNumber(payType === 'in' ? 'PAY-IN' : 'PAY-');
+        const upiMeta = await resolvePaymentUpiMeta({ hasUpi, payRefNo });
+        const payData = {
+            pay_no: payRefNo,
+            date: $('f-pay-date').value,
+            type: payType,
+            partyId: inv.partyId,
+            partyName: inv.partyName,
+            amount: amt,
+            discount: disc,
+            total_reduction: totalReduction,
+            mode,
+            note: $('f-pay-note').value.trim(),
+            invoice_no: inv.invoiceNo,
+            created_by: currentUser.userId,
+            collected_by: currentUser.name
+        };
         // ✅ ADD STATUS HERE
         payData.status = 'posted';
+        if (hasUpi) {
+            payData.upiRef = upiMeta.upiRef;
+            payData.attachmentUrl = upiMeta.attachmentUrl;
+            payData.attachmentName = upiMeta.attachmentName;
+            payData.verificationStatus = upiMeta.verificationStatus;
+            payData.verifiedBy = upiMeta.verifiedBy;
+            payData.verifiedAt = upiMeta.verifiedAt;
+            payData.verificationNote = upiMeta.verificationNote;
+        }
 
         await DB.insert('payments', payData);
 
@@ -16439,6 +16817,7 @@ async function saveDirectPayment() {
         }
 
         closeModal();
+        clearPaymentProofDraftState();
         if ($('invoice-list')) {
             await filterInvTable2();
         } else if ($('invoice-tbody')) {
@@ -16699,9 +17078,11 @@ async function openEditPaymentModal(id) {
     const payments = await DB.getAll('payments');
     const pay = payments.find(p => sameIdValue(p.id, id));
     if (!pay) return alert('Payment not found');
+    clearPaymentProofDraftState();
     const groupRows = findPaymentGroupRows(payments, pay);
     const summary = summarizePaymentGroup(groupRows);
     const paymentInvoices = summarizePaymentInvoices(groupRows);
+    const upiMeta = getPaymentUpiMeta(groupRows);
 
     const invType = pay.type === 'in' ? 'sale' : 'purchase';
     const invoices = (await DB.getAll('invoices')).filter(i => i.type === invType && i.partyId === pay.partyId && i.status !== 'cancelled');
@@ -16809,6 +17190,7 @@ async function openEditPaymentModal(id) {
                 </div>
             </div>
         </div>
+        ${renderPaymentUpiFields(upiMeta)}
         <div class="form-group"><label>Note</label><input id="f-pay-note" placeholder="Optional note" value="${escapeHtml(summary.primary.note || '')}"></div>
         <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="saveEditedPayment('${pay.id}')">Save Changes</button></div>
     `);
@@ -16818,6 +17200,8 @@ async function openEditPaymentModal(id) {
         if (!cf) return;
         const hasCheque = [...document.querySelectorAll('.f-pay-edit-row-mode')].some(sel => sel.value === 'Cheque');
         cf.style.display = hasCheque ? 'block' : 'none';
+        const hasUpi = [...document.querySelectorAll('.f-pay-edit-row-mode')].some(sel => sel.value === 'UPI');
+        togglePaymentUpiFields(hasUpi ? ['UPI'] : []);
     };
 
     window.addEditPaymentModeRow = function () {
@@ -16881,6 +17265,7 @@ window.saveEditedPayment = async function (id) {
     const amt = +payRows.reduce((sum, row) => sum + row.amount, 0).toFixed(2);
     const disc = +($('f-pay-discount')?.value) || 0;
     const totalReduction = amt + disc;
+    const hasUpi = payRows.some(row => row.mode === 'UPI');
 
     let allocations = {};
     let totalAlloc = 0;
@@ -16907,6 +17292,7 @@ window.saveEditedPayment = async function (id) {
         const collectedBy = $('f-pay-collected-by')?.value?.trim() || oldSummary.primary.collectedBy || oldSummary.primary.createdBy || '';
         const editedDate = $('f-pay-date').value;
         const hasAllocations = Object.keys(allocations).length > 0;
+        const upiMeta = await resolvePaymentUpiMeta({ hasUpi, payRefNo });
         if (party) {
             // Revert old reduction: if it was "in", we add it back to balance.
             const revBalChange = oldPay.type === 'in' ? oldSummary.totalReduction : -oldSummary.totalReduction;
@@ -16978,6 +17364,7 @@ window.saveEditedPayment = async function (id) {
 
             const rowDisc = idx === 0 ? disc : 0;
             const isChequeRow = row.mode === 'Cheque';
+            const isUpiRow = row.mode === 'UPI';
             const rowData = {
                 pay_no: payRefNo,
                 date: editedDate,
@@ -16997,6 +17384,23 @@ window.saveEditedPayment = async function (id) {
                 cheque_deposit_date: isChequeRow ? ($('f-pay-cheque-date')?.value || null) : null,
                 cheque_status: isChequeRow ? ($('f-pay-cheque-status')?.value || 'Pending') : null
             };
+            if (isUpiRow) {
+                rowData.upi_ref = upiMeta.upiRef;
+                rowData.attachment_url = upiMeta.attachmentUrl;
+                rowData.attachment_name = upiMeta.attachmentName;
+                rowData.verification_status = upiMeta.verificationStatus;
+                rowData.verified_by = upiMeta.verifiedBy;
+                rowData.verified_at = upiMeta.verifiedAt;
+                rowData.verification_note = upiMeta.verificationNote;
+            } else {
+                rowData.upi_ref = null;
+                rowData.attachment_url = null;
+                rowData.attachment_name = null;
+                rowData.verification_status = null;
+                rowData.verified_by = null;
+                rowData.verified_at = null;
+                rowData.verification_note = null;
+            }
 
             if (existing) {
                 await DB.adminUpdate('payments', existing.id, rowData);
@@ -17010,6 +17414,7 @@ window.saveEditedPayment = async function (id) {
         }
 
         closeModal();
+        clearPaymentProofDraftState();
         await DB.refreshTables(['payments', 'parties', 'party_ledger']);
         if (party && typeof recalculatePartyLedger === 'function') {
             recalculatePartyLedger(party.id);
@@ -20863,6 +21268,7 @@ const REPORT_TABLE_REQUIREMENTS = {
     'user-outstanding': ['invoices', 'payments', 'users'],
     'payment-trend': ['payments', 'users'],
     'payment-report': ['payments', 'users'],
+    'cash-handovers': ['cash_handovers', 'payments', 'users'],
     'zero-sales': ['invoices', 'parties', 'users']
 };
 async function loadReportDatasets(type) {
@@ -21244,12 +21650,437 @@ function openCollectionBillsReportFromPayments() {
     pageTitle.textContent = 'My Collection Bills';
     showReport('collection-allocations');
 }
+function openCashHandoverReportFromPayments() {
+    setReportBackNavigation(`pageTitle.textContent='Payments';renderPayments()`, 'Back to Payments');
+    pageTitle.textContent = 'Cash Handovers';
+    showReport('cash-handovers');
+}
 function openCollectionBillsReportFromDashboard() {
     setReportBackNavigation(`pageTitle.textContent='Dashboard';renderDashboard()`, 'Back to Dashboard');
     pageTitle.textContent = 'My Collection Bills';
     showReport('collection-allocations');
 }
+function getYesterdayDate() {
+    const dt = new Date();
+    dt.setDate(dt.getDate() - 1);
+    return new Date(dt.getTime() - dt.getTimezoneOffset() * 60000).toISOString().split('T')[0];
+}
+function getCashHandoverSalesUsers(users = getCachedUsers()) {
+    return (users || []).filter(user => isSalesOpsUser(user));
+}
+function renderCashHandoverStatusBadge(status = '') {
+    const normalized = String(status || 'submitted').trim().toLowerCase();
+    if (normalized === 'received') return `<span class="badge badge-success">Received</span>`;
+    if (normalized === 'draft') return `<span class="badge badge-info">Draft</span>`;
+    return `<span class="badge badge-warning">Submitted</span>`;
+}
+function renderDenominationBreakupHtml(counts = {}) {
+    const normalized = normalizeDenominationCounts(counts);
+    const chips = CASH_HANDOVER_DENOMINATIONS
+        .map(denom => {
+            const count = +(normalized[String(denom.value)] || 0);
+            if (!count) return '';
+            return `<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:999px;background:var(--bg-body);border:1px solid var(--border);font-size:0.74rem;color:var(--text-secondary)">Rs ${denom.label} x ${count}</span>`;
+        })
+        .filter(Boolean)
+        .join('');
+    return chips || `<span style="font-size:0.76rem;color:var(--text-muted)">No denomination breakdown</span>`;
+}
+function getCashHandoverEligibleRows(payments = [], handovers = [], salesUser = currentUser, collectionDate = today(), users = getCachedUsers()) {
+    const usedRowIds = new Set();
+    (handovers || [])
+        .filter(row => String(row?.status || '').toLowerCase() !== 'cancelled')
+        .forEach(row => {
+            const ids = Array.isArray(row?.paymentRowIds) ? row.paymentRowIds : [];
+            ids.forEach(id => usedRowIds.add(String(id)));
+        });
+    return getActivePayments(payments)
+        .filter(payment =>
+            payment.type === 'in'
+            && String(payment.mode || 'Cash') === 'Cash'
+            && String(payment.date || '') === String(collectionDate || '')
+            && matchesAnyUserIdentity([payment.collectedBy, payment.createdBy], salesUser, users)
+            && !usedRowIds.has(String(payment.id))
+        )
+        .sort((left, right) =>
+            String(left.date || '').localeCompare(String(right.date || ''))
+            || String(getPaymentReferenceNo(left) || '').localeCompare(String(getPaymentReferenceNo(right) || ''))
+        );
+}
+async function createCashHandoverRecord(row) {
+    const payload = DB._clean(DB._toSnake(row));
+    try {
+        const { data, error } = await supabaseClient.rpc('create_cash_handover', { p_data: payload });
+        if (error) throw error;
+        await DB.refreshTables(['cash_handovers']);
+        return DB._toCamel(data);
+    } catch (err) {
+        const msg = String(err?.message || err || '');
+        const missingRpc = /create_cash_handover|function .*does not exist|schema cache/i.test(msg);
+        if (missingRpc) {
+            try {
+                return await DB.insert('cash_handovers', row);
+            } catch (fallbackErr) {
+                if (/row-level security/i.test(String(fallbackErr?.message || fallbackErr || ''))) {
+                    throw new Error('Cash handover DB policy is missing. Run the latest cash handover SQL migration in Supabase.');
+                }
+                throw fallbackErr;
+            }
+        }
+        if (/row-level security/i.test(msg)) {
+            throw new Error('Cash handover DB policy is missing. Run the latest cash handover SQL migration in Supabase.');
+        }
+        throw err;
+    }
+}
+async function refreshCashHandoverReportIfOpen() {
+    if (currentPage === 'reports' && window._activeReportType === 'cash-handovers') {
+        await showReport('cash-handovers');
+    }
+}
+async function openCashHandoverModal(prefill = {}) {
+    clearPaymentProofDraftState();
+    const [payments, handovers, users] = await Promise.all([
+        DB.getAll('payments'),
+        DB.getAll('cash_handovers'),
+        DB.getAll('users')
+    ]);
+    window._cashHandoverPaymentsSource = payments || [];
+    window._cashHandoversSource = handovers || [];
+    window._cashHandoverUsersSource = users || [];
+    const salesUsers = getCashHandoverSalesUsers(users);
+    const defaultSalesman = isAdminLikeUser()
+        ? (prefill.salesmanName || currentUser?.name || salesUsers[0]?.name || '')
+        : (currentUser?.name || '');
+    const collectionDate = prefill.collectionDate || getYesterdayDate();
+    openModal('Submit Cash Handover', `
+        <div class="form-row">
+            <div class="form-group"><label>Collection Date</label><input type="date" id="f-handover-collection-date" value="${collectionDate}" onchange="refreshCashHandoverEligibleRows()"></div>
+            <div class="form-group"><label>Handover Date</label><input type="date" id="f-handover-date" value="${today()}"></div>
+        </div>
+        <div class="form-group">
+            <label>Salesman / Collector</label>
+            ${isAdminLikeUser()
+            ? `<select id="f-handover-salesman" onchange="refreshCashHandoverEligibleRows()">${salesUsers.map(user => `<option value="${escapeHtml(user.name)}" ${user.name === defaultSalesman ? 'selected' : ''}>${escapeHtml(user.name)} (${escapeHtml(user.role || 'User')})</option>`).join('')}</select>`
+            : `<input id="f-handover-salesman" value="${escapeHtml(defaultSalesman)}" readonly style="background:var(--bg-input);font-weight:600">`}
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px">
+            <div style="padding:12px;border:1px solid var(--border);border-radius:12px;background:var(--bg-card)"><div style="font-size:0.74rem;color:var(--text-muted)">Selected Receipts</div><div id="handover-selected-count" style="font-size:1.1rem;font-weight:800;color:var(--primary)">0</div></div>
+            <div style="padding:12px;border:1px solid var(--border);border-radius:12px;background:var(--bg-card)"><div style="font-size:0.74rem;color:var(--text-muted)">Expected Cash</div><div id="handover-expected-amount" style="font-size:1.1rem;font-weight:800;color:var(--success)">0.00</div></div>
+            <div style="padding:12px;border:1px solid var(--border);border-radius:12px;background:var(--bg-card)"><div style="font-size:0.74rem;color:var(--text-muted)">Declared Cash</div><div id="handover-declared-amount" style="font-size:1.1rem;font-weight:800;color:var(--primary)">0.00</div></div>
+            <div style="padding:12px;border:1px solid var(--border);border-radius:12px;background:var(--bg-card)"><div style="font-size:0.74rem;color:var(--text-muted)">Difference</div><div id="handover-difference-amount" style="font-size:1.1rem;font-weight:800;color:var(--text-primary)">0.00</div></div>
+        </div>
+        <div style="margin-bottom:12px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                <div style="font-size:0.78rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.4px">Cash Payments Included</div>
+                <label style="font-size:0.78rem;color:var(--text-secondary);display:flex;align-items:center;gap:6px"><input type="checkbox" id="handover-select-all" checked onchange="document.querySelectorAll('.handover-pay-check').forEach(cb => cb.checked = this.checked); updateCashHandoverDraftSummary()"> Select All</label>
+            </div>
+            <div id="cash-handover-payment-list" style="max-height:220px;overflow:auto;border:1px solid var(--border);border-radius:12px;background:var(--bg-card)"></div>
+        </div>
+        ${renderDenominationCalculator('cash-handover-submit', {}, 'Salesman Denomination Count')}
+        <div class="form-group" style="margin-top:12px;margin-bottom:0">
+            <label>Note</label>
+            <textarea id="f-handover-note" rows="3" placeholder="Optional shortage/excess note, bag reference, shop-wise explanation..."></textarea>
+        </div>
+    `, `
+        <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="submitCashHandover()">Submit Handover</button>
+    `);
+    window.refreshCashHandoverEligibleRows = function () {
+        const sourcePayments = window._cashHandoverPaymentsSource || [];
+        const sourceHandovers = window._cashHandoversSource || [];
+        const sourceUsers = window._cashHandoverUsersSource || getCachedUsers();
+        const selectedUser = ($('f-handover-salesman')?.value || currentUser?.name || '').trim();
+        const collectionDateValue = ($('f-handover-collection-date')?.value || collectionDate).trim();
+        const salesUser = findUserByIdentity(selectedUser, sourceUsers) || { name: selectedUser, userId: selectedUser };
+        const rows = getCashHandoverEligibleRows(sourcePayments, sourceHandovers, salesUser, collectionDateValue, sourceUsers);
+        window._cashHandoverEligibleRows = rows;
+        const listEl = $('cash-handover-payment-list');
+        if (!listEl) return;
+        if (!rows.length) {
+            listEl.innerHTML = `<div class="empty-state" style="padding:18px"><p>No unsubmitted cash payments found for this date and user.</p></div>`;
+            window.updateCashHandoverDraftSummary();
+            return;
+        }
+        listEl.innerHTML = rows.map(row => `
+            <label style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border-bottom:1px solid var(--border);cursor:pointer">
+                <input type="checkbox" class="handover-pay-check" value="${escapeHtml(String(row.id))}" checked onchange="updateCashHandoverDraftSummary()">
+                <div style="flex:1;min-width:0">
+                    <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
+                        <div>
+                            <div style="font-weight:700;color:var(--accent)">${escapeHtml(getPaymentReferenceNo(row) || '-')}</div>
+                            <div style="font-size:0.76rem;color:var(--text-muted)">${escapeHtml(row.partyName || '')}</div>
+                        </div>
+                        <div style="text-align:right;font-weight:800;color:var(--success)">${currency(row.amount || 0)}</div>
+                    </div>
+                    <div style="font-size:0.74rem;color:var(--text-muted);margin-top:4px">${fmtDate(row.date)}${row.note ? ` | ${escapeHtml(row.note)}` : ''}</div>
+                </div>
+            </label>`).join('');
+        const selectAll = $('handover-select-all');
+        if (selectAll) selectAll.checked = true;
+        window.updateCashHandoverDraftSummary();
+    };
+    window.updateCashHandoverDraftSummary = function () {
+        const rows = window._cashHandoverEligibleRows || [];
+        const selectedIds = new Set(Array.from(document.querySelectorAll('.handover-pay-check:checked')).map(cb => String(cb.value)));
+        const selectedRows = rows.filter(row => selectedIds.has(String(row.id)));
+        const expectedAmount = +selectedRows.reduce((sum, row) => sum + (+row.amount || 0), 0).toFixed(2);
+        const declaredAmount = calculateDenominationTotal(readDenominationCountsFromDom('cash-handover-submit'));
+        const diffAmount = +(declaredAmount - expectedAmount).toFixed(2);
+        if ($('handover-selected-count')) $('handover-selected-count').textContent = `${selectedRows.length}`;
+        if ($('handover-expected-amount')) $('handover-expected-amount').textContent = currency(expectedAmount);
+        if ($('handover-declared-amount')) $('handover-declared-amount').textContent = currency(declaredAmount);
+        const diffEl = $('handover-difference-amount');
+        if (diffEl) {
+            diffEl.textContent = currency(diffAmount);
+            diffEl.style.color = diffAmount === 0 ? 'var(--success)' : (diffAmount > 0 ? 'var(--warning)' : 'var(--danger)');
+        }
+    };
+    window.refreshCashHandoverEligibleRows();
+    window.updateCashHandoverDraftSummary();
+}
+async function submitCashHandover() {
+    if (!beginSave()) return;
+    try {
+        const rows = window._cashHandoverEligibleRows || [];
+        const selectedIds = new Set(Array.from(document.querySelectorAll('.handover-pay-check:checked')).map(cb => String(cb.value)));
+        const selectedRows = rows.filter(row => selectedIds.has(String(row.id)));
+        if (!selectedRows.length) {
+            endSave();
+            return alert('Select at least one cash receipt for this handover.');
+        }
+        const users = window._cashHandoverUsersSource || getCachedUsers();
+        const selectedUser = ($('f-handover-salesman')?.value || currentUser?.name || '').trim();
+        const salesUser = findUserByIdentity(selectedUser, users) || { name: selectedUser, userId: selectedUser };
+        const denominationCounts = normalizeDenominationCounts(readDenominationCountsFromDom('cash-handover-submit'));
+        const expectedAmount = +selectedRows.reduce((sum, row) => sum + (+row.amount || 0), 0).toFixed(2);
+        const declaredAmount = calculateDenominationTotal(denominationCounts);
+        const payRefs = [...new Set(selectedRows.map(row => getPaymentReferenceNo(row)).filter(Boolean))];
+        await createCashHandoverRecord({
+            id: DB.id(),
+            collectionDate: $('f-handover-collection-date')?.value || getYesterdayDate(),
+            handoverDate: $('f-handover-date')?.value || today(),
+            salesmanName: salesUser?.name || selectedUser,
+            salesmanId: salesUser?.userId || salesUser?.id || '',
+            expectedAmount,
+            declaredAmount,
+            countedAmount: 0,
+            varianceAmount: +(declaredAmount - expectedAmount).toFixed(2),
+            denominationCounts,
+            adminDenominationCounts: {},
+            paymentRowIds: selectedRows.map(row => String(row.id)),
+            paymentRefs: payRefs,
+            status: 'submitted',
+            note: ($('f-handover-note')?.value || '').trim(),
+            submittedAt: new Date().toISOString(),
+            submittedBy: currentUser?.name || '',
+            createdBy: currentUser?.userId || currentUser?.name || ''
+        });
+        endSave();
+        closeModal();
+        showToast('Cash handover submitted.', 'success');
+        await refreshCashHandoverReportIfOpen();
+    } catch (err) {
+        endSave();
+        alert('Error: ' + err.message);
+    }
+}
+async function openCashHandoverDetails(id) {
+    const handovers = window._rCashHandoversAll || await DB.getAll('cash_handovers');
+    const handover = (handovers || []).find(row => sameIdValue(row.id, id));
+    if (!handover) return alert('Cash handover not found.');
+    const paymentRefs = Array.isArray(handover.paymentRefs) ? handover.paymentRefs : [];
+    const declaredDiff = +(((handover.declaredAmount || 0) - (handover.expectedAmount || 0)).toFixed(2));
+    const countedDiff = +(((handover.countedAmount || 0) - (handover.expectedAmount || 0)).toFixed(2));
+    openModal(`Cash Handover - ${escapeHtml(handover.salesmanName || '')}`, `
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:14px">
+            <div style="padding:12px;border:1px solid var(--border);border-radius:12px;background:var(--bg-card)"><div style="font-size:0.74rem;color:var(--text-muted)">Collection Date</div><div style="font-size:1rem;font-weight:700">${fmtDate(handover.collectionDate)}</div></div>
+            <div style="padding:12px;border:1px solid var(--border);border-radius:12px;background:var(--bg-card)"><div style="font-size:0.74rem;color:var(--text-muted)">Handover Date</div><div style="font-size:1rem;font-weight:700">${fmtDate(handover.handoverDate)}</div></div>
+            <div style="padding:12px;border:1px solid var(--border);border-radius:12px;background:var(--bg-card)"><div style="font-size:0.74rem;color:var(--text-muted)">Status</div><div style="font-size:1rem;font-weight:700">${renderCashHandoverStatusBadge(handover.status || 'submitted')}</div></div>
+        </div>
+        <table style="width:100%;font-size:0.9rem;border-collapse:collapse;margin-bottom:14px">
+            <tr style="border-bottom:1px dashed var(--border)"><td style="padding:8px 0;color:var(--text-secondary)">Expected Cash</td><td style="padding:8px 0;text-align:right;font-weight:700">${currency(handover.expectedAmount || 0)}</td></tr>
+            <tr style="border-bottom:1px dashed var(--border)"><td style="padding:8px 0;color:var(--text-secondary)">Declared Cash</td><td style="padding:8px 0;text-align:right;font-weight:700">${currency(handover.declaredAmount || 0)} <span style="font-size:0.74rem;color:${declaredDiff === 0 ? 'var(--success)' : (declaredDiff > 0 ? 'var(--warning)' : 'var(--danger)')}">(${declaredDiff >= 0 ? '+' : ''}${currency(declaredDiff)})</span></td></tr>
+            <tr style="border-bottom:1px dashed var(--border)"><td style="padding:8px 0;color:var(--text-secondary)">Admin Counted</td><td style="padding:8px 0;text-align:right;font-weight:700">${String(handover.status || '').toLowerCase() === 'received' ? `${currency(handover.countedAmount || 0)} <span style="font-size:0.74rem;color:${countedDiff === 0 ? 'var(--success)' : (countedDiff > 0 ? 'var(--warning)' : 'var(--danger)')}">(${countedDiff >= 0 ? '+' : ''}${currency(countedDiff)})</span>` : '<span style="color:var(--text-muted)">Pending</span>'}</td></tr>
+            <tr style="border-bottom:1px dashed var(--border)"><td style="padding:8px 0;color:var(--text-secondary);vertical-align:top">Receipts</td><td style="padding:8px 0;text-align:right">${paymentRefs.length ? paymentRefs.map(ref => `<span style="display:inline-block;margin:2px 0 2px 6px;padding:3px 8px;border-radius:999px;background:var(--bg-body);border:1px solid var(--border);font-size:0.74rem">${escapeHtml(ref)}</span>`).join('') : '<span style="color:var(--text-muted)">No payment refs</span>'}</td></tr>
+            <tr style="border-bottom:1px dashed var(--border)"><td style="padding:8px 0;color:var(--text-secondary);vertical-align:top">Salesman Counts</td><td style="padding:8px 0;text-align:right">${renderDenominationBreakupHtml(handover.denominationCounts || {})}</td></tr>
+            ${String(handover.status || '').toLowerCase() === 'received' ? `<tr style="border-bottom:1px dashed var(--border)"><td style="padding:8px 0;color:var(--text-secondary);vertical-align:top">Admin Counts</td><td style="padding:8px 0;text-align:right">${renderDenominationBreakupHtml(handover.adminDenominationCounts || {})}</td></tr>` : ''}
+            <tr style="border-bottom:1px dashed var(--border)"><td style="padding:8px 0;color:var(--text-secondary)">Salesman Note</td><td style="padding:8px 0;text-align:right">${escapeHtml(handover.note || '-')}</td></tr>
+            <tr><td style="padding:8px 0;color:var(--text-secondary)">Admin Note</td><td style="padding:8px 0;text-align:right">${escapeHtml(handover.adminNote || '-')}</td></tr>
+        </table>
+    `, `
+        <button class="btn btn-outline" onclick="closeModal()">Close</button>
+        ${isAdminLikeUser() && String(handover.status || '').toLowerCase() !== 'received' ? `<button class="btn btn-primary" onclick="closeModal();openCashHandoverReceiveModal('${handover.id}')">Confirm Received</button>` : ''}
+    `);
+}
+async function openCashHandoverReceiveModal(id) {
+    if (!isAdminLikeUser()) return alert('Only Admin or Manager can confirm handovers.');
+    const handovers = window._rCashHandoversAll || await DB.getAll('cash_handovers');
+    const handover = (handovers || []).find(row => sameIdValue(row.id, id));
+    if (!handover) return alert('Cash handover not found.');
+    openModal(`Confirm Cash Received - ${escapeHtml(handover.salesmanName || '')}`, `
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:12px">
+            <div style="padding:12px;border:1px solid var(--border);border-radius:12px;background:var(--bg-card)"><div style="font-size:0.74rem;color:var(--text-muted)">Expected</div><div style="font-size:1.05rem;font-weight:800;color:var(--success)">${currency(handover.expectedAmount || 0)}</div></div>
+            <div style="padding:12px;border:1px solid var(--border);border-radius:12px;background:var(--bg-card)"><div style="font-size:0.74rem;color:var(--text-muted)">Declared</div><div style="font-size:1.05rem;font-weight:800;color:var(--primary)">${currency(handover.declaredAmount || 0)}</div></div>
+            <div style="padding:12px;border:1px solid var(--border);border-radius:12px;background:var(--bg-card)"><div style="font-size:0.74rem;color:var(--text-muted)">Counted</div><div id="handover-admin-counted-amount" style="font-size:1.05rem;font-weight:800;color:var(--primary)">0.00</div><div id="handover-admin-diff" style="font-size:0.74rem;color:var(--text-muted);margin-top:4px"></div></div>
+        </div>
+        ${renderDenominationCalculator('cash-handover-admin', handover.adminDenominationCounts || handover.denominationCounts || {}, 'Admin Denomination Count')}
+        <div class="form-group" style="margin-top:12px;margin-bottom:0">
+            <label>Admin Note</label>
+            <textarea id="f-handover-admin-note" rows="3" placeholder="Optional shortage / excess reason, envelope note, mismatch explanation...">${escapeHtml(handover.adminNote || '')}</textarea>
+        </div>
+    `, `
+        <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="confirmCashHandoverReceipt('${handover.id}')">Confirm Received</button>
+    `);
+    window.updateCashHandoverAdminSummary = function () {
+        const countedAmount = calculateDenominationTotal(readDenominationCountsFromDom('cash-handover-admin'));
+        const diffAmount = +(countedAmount - (+handover.expectedAmount || 0)).toFixed(2);
+        if ($('handover-admin-counted-amount')) $('handover-admin-counted-amount').textContent = currency(countedAmount);
+        const diffEl = $('handover-admin-diff');
+        if (diffEl) {
+            diffEl.textContent = diffAmount === 0 ? 'Matches expected' : (diffAmount > 0 ? `Excess ${currency(diffAmount)}` : `Short ${currency(Math.abs(diffAmount))}`);
+            diffEl.style.color = diffAmount === 0 ? 'var(--success)' : (diffAmount > 0 ? 'var(--warning)' : 'var(--danger)');
+        }
+    };
+    window.updateCashHandoverAdminSummary();
+}
+async function confirmCashHandoverReceipt(id) {
+    if (!beginSave()) return;
+    try {
+        const handovers = window._rCashHandoversAll || await DB.getAll('cash_handovers');
+        const handover = (handovers || []).find(row => sameIdValue(row.id, id));
+        if (!handover) {
+            endSave();
+            return alert('Cash handover not found.');
+        }
+        const adminCounts = normalizeDenominationCounts(readDenominationCountsFromDom('cash-handover-admin'));
+        const countedAmount = calculateDenominationTotal(adminCounts);
+        const expectedAmount = +(handover.expectedAmount || 0);
+        await DB.adminUpdate('cash_handovers', id, {
+            status: 'received',
+            countedAmount,
+            varianceAmount: +(countedAmount - expectedAmount).toFixed(2),
+            adminDenominationCounts: adminCounts,
+            adminNote: ($('f-handover-admin-note')?.value || '').trim(),
+            receivedBy: currentUser?.name || '',
+            receivedAt: new Date().toISOString()
+        });
+        endSave();
+        closeModal();
+        showToast('Cash handover confirmed as received.', 'success');
+        await refreshCashHandoverReportIfOpen();
+    } catch (err) {
+        endSave();
+        alert('Error: ' + err.message);
+    }
+}
+function renderCashHandoverReportUI(el, handovers = [], payments = [], users = getCachedUsers()) {
+    window._rCashHandoversAll = (handovers || []).slice().sort((left, right) =>
+        String(right.handoverDate || '').localeCompare(String(left.handoverDate || ''))
+        || String(right.submittedAt || '').localeCompare(String(left.submittedAt || ''))
+    );
+    window._rCashPaymentsAll = payments || [];
+    window._rCashUsersAll = users || [];
+    const salesUsers = getCashHandoverSalesUsers(users);
+    const userOptions = isAdminLikeUser()
+        ? `<option value="">All</option>${salesUsers.map(user => `<option value="${escapeHtml(user.name)}">${escapeHtml(user.name)}</option>`).join('')}`
+        : `<option value="${escapeHtml(currentUser?.name || '')}">${escapeHtml(currentUser?.name || '')}</option>`;
+    el.innerHTML = `
+        <div class="card" style="margin-bottom:14px"><div class="card-body padded" style="padding-bottom:12px">
+            <div class="form-row" style="margin-bottom:0;flex-wrap:wrap;gap:10px">
+                <div class="form-group"><label>From</label><input type="date" id="ch-from" value="${currentMonthStart()}" onchange="renderCashHandoverReportTable()"></div>
+                <div class="form-group"><label>To</label><input type="date" id="ch-to" value="${today()}" onchange="renderCashHandoverReportTable()"></div>
+                <div class="form-group"><label>Status</label><select id="ch-status" onchange="renderCashHandoverReportTable()"><option value="">All</option><option value="submitted">Submitted</option><option value="received">Received</option></select></div>
+                <div class="form-group"><label>Salesman</label><select id="ch-user" onchange="renderCashHandoverReportTable()">${userOptions}</select></div>
+                <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+                    <button class="btn btn-primary btn-sm" onclick="openCashHandoverModal()"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-2px">payments</span> New Handover</button>
+                    <button class="btn btn-outline btn-sm" onclick="exportTableToExcel('tbl-cash-handovers','CashHandovers_${today()}')" style="border-color:#16a34a;color:#16a34a"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:-2px">download</span> Export</button>
+                </div>
+            </div>
+        </div></div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:14px">
+            <div class="stat-card blue"><div class="stat-icon"></div><div class="stat-value" id="ch-stat-count">0</div><div class="stat-label">Handovers</div></div>
+            <div class="stat-card green"><div class="stat-icon"></div><div class="stat-value" id="ch-stat-expected">0.00</div><div class="stat-label">Expected Cash</div></div>
+            <div class="stat-card red"><div class="stat-icon"></div><div class="stat-value" id="ch-stat-pending">0.00</div><div class="stat-label">Pending Receipt</div></div>
+            <div class="stat-card orange"><div class="stat-icon"></div><div class="stat-value" id="ch-stat-variance">0.00</div><div class="stat-label">Net Variance</div></div>
+        </div>
+        <div class="card"><div class="card-body">
+            <div class="table-wrapper">
+                <table class="data-table" id="tbl-cash-handovers">
+                    <thead>
+                        <tr>
+                            <th>Collection</th>
+                            <th>Handover</th>
+                            <th>Salesman</th>
+                            <th>Receipts</th>
+                            <th>Expected</th>
+                            <th>Declared</th>
+                            <th>Counted</th>
+                            <th>Variance</th>
+                            <th>Status</th>
+                            <th>Confirmed By</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tbl-cash-handovers-body"></tbody>
+                </table>
+            </div>
+        </div></div>`;
+    window.renderCashHandoverReportTable = function () {
+        const from = ($('ch-from')?.value || '').trim();
+        const to = ($('ch-to')?.value || '').trim();
+        const status = ($('ch-status')?.value || '').trim().toLowerCase();
+        const userFilter = ($('ch-user')?.value || '').trim();
+        let rows = (window._rCashHandoversAll || []).slice();
+        if (from) rows = rows.filter(row => String(row.handoverDate || row.collectionDate || '') >= from);
+        if (to) rows = rows.filter(row => String(row.handoverDate || row.collectionDate || '') <= to);
+        if (status) rows = rows.filter(row => String(row.status || '').toLowerCase() === status);
+        if (userFilter) rows = rows.filter(row => matchesAnyUserIdentity([row.salesmanName, row.salesmanId], userFilter, users));
+        const expectedTotal = rows.reduce((sum, row) => sum + (+row.expectedAmount || 0), 0);
+        const pendingTotal = rows.filter(row => String(row.status || '').toLowerCase() !== 'received').reduce((sum, row) => sum + (+row.expectedAmount || 0), 0);
+        const varianceTotal = rows.reduce((sum, row) => {
+            if (String(row.status || '').toLowerCase() === 'received') return sum + (+row.varianceAmount || 0);
+            return sum + (((+row.declaredAmount || 0) - (+row.expectedAmount || 0)) || 0);
+        }, 0);
+        if ($('ch-stat-count')) $('ch-stat-count').textContent = `${rows.length}`;
+        if ($('ch-stat-expected')) $('ch-stat-expected').textContent = currency(expectedTotal);
+        if ($('ch-stat-pending')) $('ch-stat-pending').textContent = currency(pendingTotal);
+        if ($('ch-stat-variance')) {
+            $('ch-stat-variance').textContent = `${varianceTotal >= 0 ? '+' : '-'}${currency(Math.abs(varianceTotal))}`;
+            $('ch-stat-variance').style.color = varianceTotal === 0 ? 'var(--text-primary)' : (varianceTotal > 0 ? 'var(--warning)' : 'var(--danger)');
+        }
+        const tbody = $('tbl-cash-handovers-body');
+        if (!tbody) return;
+        tbody.innerHTML = rows.map(row => {
+            const paymentRefs = Array.isArray(row.paymentRefs) ? row.paymentRefs : [];
+            const variance = String(row.status || '').toLowerCase() === 'received'
+                ? (+row.varianceAmount || 0)
+                : +(((+row.declaredAmount || 0) - (+row.expectedAmount || 0)).toFixed(2));
+            return `<tr>
+                <td>${fmtDate(row.collectionDate)}</td>
+                <td>${fmtDate(row.handoverDate)}</td>
+                <td><div style="font-weight:700">${escapeHtml(getUserDisplayName(row.salesmanName || row.salesmanId || '', users) || row.salesmanName || '-')}</div><div style="font-size:0.72rem;color:var(--text-muted)">${escapeHtml(row.salesmanId || '')}</div></td>
+                <td><div style="font-weight:700">${paymentRefs.length}</div><div style="font-size:0.72rem;color:var(--text-muted)">${escapeHtml(paymentRefs.slice(0, 2).join(', ') || '-')}</div></td>
+                <td class="amount-green">${currency(row.expectedAmount || 0)}</td>
+                <td>${currency(row.declaredAmount || 0)}</td>
+                <td>${String(row.status || '').toLowerCase() === 'received' ? currency(row.countedAmount || 0) : '<span style="color:var(--text-muted)">Pending</span>'}</td>
+                <td style="font-weight:700;color:${variance === 0 ? 'var(--success)' : (variance > 0 ? 'var(--warning)' : 'var(--danger)')}">${variance >= 0 ? '+' : '-'}${currency(Math.abs(variance))}</td>
+                <td>${renderCashHandoverStatusBadge(row.status || 'submitted')}</td>
+                <td>${escapeHtml(row.receivedBy || '-')}</td>
+                <td>
+                    <div class="action-btns">
+                        <button class="btn-icon" title="View" onclick="openCashHandoverDetails('${row.id}')"><span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--primary)">visibility</span></button>
+                        ${isAdminLikeUser() && String(row.status || '').toLowerCase() !== 'received' ? `<button class="btn-icon" title="Confirm Received" onclick="openCashHandoverReceiveModal('${row.id}')"><span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--success)">task_alt</span></button>` : ''}
+                    </div>
+                </td>
+            </tr>`;
+        }).join('') || `<tr><td colspan="11"><div class="empty-state"><p>No cash handovers found for the selected filters.</p></div></td></tr>`;
+    };
+    window.renderCashHandoverReportTable();
+}
 function renderReports() {
+    window._activeReportType = '';
     setReportBackNavigation('renderReports()', 'Back');
     pageContent.innerHTML = `
         <div class="report-grid">
@@ -21272,6 +22103,7 @@ function renderReports() {
             <div class="report-card" onclick="showReport('daybook')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(20,184,166,0.12),rgba(6,182,212,0.08))"><div class="report-icon">📅</div></div><div class="report-text"><h4>Day Book</h4><p>Date-wise transaction summary</p></div></div>
             <div class="report-card" onclick="showReport('stock-aging')"><div class="report-icon-wrap" style="background:var(--bg-primary)"><div class="report-icon">🕰️</div></div><div class="report-text"><h4>Stock Aging</h4><p>Stock staying >30/60/90 days</p></div></div>
             <div class="report-card" onclick="showReport('salesman-ach')"><div class="report-icon-wrap" style="background:var(--bg-primary)"><div class="report-icon"><span class="material-symbols-outlined">track_changes</span></div></div><div class="report-text"><h4>Target vs Achievement</h4><p>Salesman performance vs targets</p></div></div>
+            <div class="report-card" onclick="showReport('cash-handovers')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(249,115,22,0.14),rgba(251,191,36,0.08))"><div class="report-icon"><span class="material-symbols-outlined">account_balance_wallet</span></div></div><div class="report-text"><h4>Cash Handovers</h4><p>Track salesman cash handover and admin receipt confirmation</p></div></div>
             <div class="report-card" onclick="showReport('party-soa')"><div class="report-icon-wrap" style="background:var(--bg-primary)"><div class="report-icon"><span class="material-symbols-outlined">description</span></div></div><div class="report-text"><h4>Statement of Account</h4><p>Full party ledger with print</p></div></div>
             <div class="report-card" onclick="showReport('abc-analysis')"><div class="report-icon-wrap" style="background:var(--bg-primary)"><div class="report-icon"><span class="material-symbols-outlined">sort_by_alpha</span></div></div><div class="report-text"><h4>ABC Analysis</h4><p>Revenue-based item classification</p></div></div>
             <div class="report-card" onclick="showReport('indent')"><div class="report-icon-wrap" style="background:linear-gradient(135deg,rgba(249,115,22,0.12),rgba(234,88,12,0.08))"><div class="report-icon"><span class="material-symbols-outlined">edit_document</span></div></div><div class="report-text"><h4>Purchase Indent</h4><p>Suggested PO based on 30d sales</p></div></div>
@@ -21298,6 +22130,7 @@ function renderReports() {
 `;
 }
 async function showReport(type) {
+    window._activeReportType = type;
     const reportBack = consumeReportBackNavigation();
     // Each report opens as a full page  replace page content entirely
     pageContent.innerHTML = `
@@ -21315,6 +22148,11 @@ async function showReport(type) {
     const users = reportData.users || [];
     const categories = reportData.categories || [];
     const parties = reportData.parties || [];
+    const cashHandovers = reportData.cash_handovers || [];
+
+    if (type === 'cash-handovers') {
+        renderCashHandoverReportUI(el, cashHandovers, payments, users);
+    }
 
     if (type === 'sales') {
         window._rSalesAll = invoices.filter(i => i.type === 'sale' && i.status !== 'cancelled');
