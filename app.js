@@ -3636,6 +3636,15 @@ function isImageLikeProof(url = '') {
     if (!safeUrl) return false;
     return /^data:image\//i.test(safeUrl) || /\.(png|jpe?g|gif|webp|bmp)(\?|$)/i.test(safeUrl);
 }
+window.openImageViewer = function(url) {
+    if (!url) return;
+    const div = document.createElement('div');
+    div.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:999999;display:flex;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(4px);cursor:zoom-out;';
+    div.onclick = () => div.remove();
+    div.innerHTML = `<img src="${url}" style="max-width:100%;max-height:100%;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,0.5);" onclick="event.stopPropagation()">
+                     <div style="position:absolute;top:20px;right:20px;color:#fff;background:rgba(0,0,0,0.5);border-radius:50%;width:36px;height:36px;display:flex;align-items:center;justify-content:center;cursor:pointer">&times;</div>`;
+    document.body.appendChild(div);
+};
 function renderUpiVerificationBadge(status = '', compact = false) {
     const normalized = String(status || '').trim().toLowerCase();
     const config = normalized === 'confirmed'
@@ -15535,7 +15544,7 @@ function renderPayRows(pays) {
             party: `<td style="font-weight:600">${escapeHtml(p.partyName)}</td>`,
             type: `<td style="min-width:120px"><span class="badge ${p.type === 'in' ? 'badge-success' : 'badge-danger'}">${p.type === 'in' ? 'Payment In' : 'Payment Out'}</span></td>`,
             invoiceNo: `<td>${buildPayInvoiceCell(p)}</td>`,
-            mode: `<td>${p.mode || 'Cash'}${p.mode === 'Cheque' && p.chequeNo ? `<br><span style="font-size:0.75rem;color:var(--text-muted)">#${p.chequeNo} | ${p.chequeBank || ''}</span><br><span class="badge ${p.chequeStatus === 'Cleared' ? 'badge-success' : p.chequeStatus === 'Deposited' ? 'badge-warning' : 'badge-danger'}" style="font-size:0.65rem">${p.chequeStatus || 'Pending'}</span>` : ''}${p.mode === 'UPI' ? `${p.upiRef ? `<br><span style="font-size:0.75rem;color:var(--text-muted)">UTR: ${escapeHtml(p.upiRef)}</span>` : ''}<br>${renderUpiVerificationBadge(p.verificationStatus || 'pending', true)}${p.attachmentUrl ? `<br><a href="${getSafeAttachmentHref(p.attachmentUrl)}" target="_blank" rel="noopener" download="proof" style="font-size:0.72rem;color:var(--primary);text-decoration:underline">Proof</a>` : ''}` : ''}</td>`,
+            mode: `<td>${p.mode || 'Cash'}${p.mode === 'Cheque' && p.chequeNo ? `<br><span style="font-size:0.75rem;color:var(--text-muted)">#${p.chequeNo} | ${p.chequeBank || ''}</span><br><span class="badge ${p.chequeStatus === 'Cleared' ? 'badge-success' : p.chequeStatus === 'Deposited' ? 'badge-warning' : 'badge-danger'}" style="font-size:0.65rem">${p.chequeStatus || 'Pending'}</span>` : ''}${p.mode === 'UPI' ? `${p.upiRef ? `<br><span style="font-size:0.75rem;color:var(--text-muted)">UTR: ${escapeHtml(p.upiRef)}</span>` : ''}<br>${renderUpiVerificationBadge(p.verificationStatus || 'pending', true)}${p.attachmentUrl ? `<br><a href="javascript:void(0)" onclick="openImageViewer('${getSafeAttachmentHref(p.attachmentUrl)}'); event.stopPropagation();" style="font-size:0.72rem;color:var(--primary);text-decoration:underline">Proof</a>` : ''}` : ''}</td>`,
             collectedBy: `<td style="font-size:0.82rem;color:var(--text-secondary)">${escapeHtml(getUserDisplayName(getPaymentCollectorValue(p)) || '-')}</td>`,
             amount: `<td class="${p.type === 'in' ? 'amount-green' : 'amount-red'}">${currency(p.amount)}</td>`,
             status: `<td><span class="badge ${p.status === 'posted' ? 'badge-success' : p.status === 'cancelled' ? 'badge-danger' : 'badge-warning'}" style="font-size:0.72rem">${p.status || 'pending'}</span></td>`,
@@ -15696,7 +15705,7 @@ async function viewPaymentDetails(id) {
         ? `
             <tr style="border-bottom:1px dashed var(--border)"><td style="padding:8px 0;color:var(--text-secondary)">UPI Ref</td><td style="padding:8px 0;text-align:right;font-weight:600">${escapeHtml(upiMeta.upiRef || '-')}</td></tr>
             <tr style="border-bottom:1px dashed var(--border)"><td style="padding:8px 0;color:var(--text-secondary)">UPI Status</td><td style="padding:8px 0;text-align:right">${renderUpiVerificationBadge(upiMeta.verificationStatus || 'pending')}${upiMeta.verifiedBy ? `<div style="font-size:0.74rem;color:var(--text-muted);margin-top:4px">By ${escapeHtml(upiMeta.verifiedBy)}${upiMeta.verifiedAt ? ` on ${fmtDate(upiMeta.verifiedAt)}` : ''}</div>` : ''}</td></tr>
-            <tr style="border-bottom:1px dashed var(--border)"><td style="padding:8px 0;color:var(--text-secondary)">Proof</td><td style="padding:8px 0;text-align:right">${proofHref ? `<a href="${proofHref}" target="_blank" rel="noopener" download="${escapeHtml(upiMeta.attachmentName || 'proof')}" style="color:var(--primary);text-decoration:underline">${escapeHtml(upiMeta.attachmentName || 'Open Attachment')}</a>` : '<span style="color:var(--warning)">No attachment</span>'}</td></tr>`
+            <tr style="border-bottom:1px dashed var(--border)"><td style="padding:8px 0;color:var(--text-secondary)">Proof</td><td style="padding:8px 0;text-align:right">${proofHref ? `<a href="javascript:void(0)" onclick="openImageViewer('${proofHref}')" style="color:var(--primary);text-decoration:underline">${escapeHtml(upiMeta.attachmentName || 'Open Attachment')}</a>` : '<span style="color:var(--warning)">No attachment</span>'}</td></tr>`
         : '';
     const canVerifyUpi = upiMeta.hasUpi && isAdminLikeUser();
     openModal('Payment Receipt', `
@@ -15755,9 +15764,16 @@ async function updatePaymentUpiVerification(id, status = 'confirmed') {
             verifiedAt: nowIso,
             verificationNote: (note || '').trim() || null
         });
+        const cachedRow = (DB.cache['payments'] || []).find(r => sameIdValue(r.id, row.id));
+        if (cachedRow) {
+            cachedRow.verificationStatus = status;
+            cachedRow.verifiedBy = currentUser?.name || '';
+            cachedRow.verifiedAt = nowIso;
+            cachedRow.verificationNote = (note || '').trim() || null;
+        }
     }
-    if (currentPage === 'payments') {
-        await renderPayments();
+    if (currentPage === 'payments' && typeof filterPayTable === 'function') {
+        filterPayTable();
     }
     showToast(status === 'confirmed' ? 'UPI payment confirmed.' : 'UPI payment marked as rejected.', status === 'confirmed' ? 'success' : 'warning');
     await viewPaymentDetails(id);
