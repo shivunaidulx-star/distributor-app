@@ -3803,7 +3803,7 @@ async function resolvePaymentUpiMeta({ hasUpi = false, payRefNo = '' } = {}) {
     const existingVerificationNote = ($('f-pay-existing-verification-note')?.value || '').trim();
     const existingUrl = ($('f-pay-proof-existing-url')?.value || '').trim();
     const existingName = ($('f-pay-proof-existing-name')?.value || '').trim();
-    if (!upiRef) throw new Error('Enter UPI reference / UTR number.');
+    // if (!upiRef) throw new Error('Enter UPI reference / UTR number.');
     let attachmentUrl = existingUrl || null;
     let attachmentName = existingName || null;
     if (window._paymentProofFile) {
@@ -3811,9 +3811,9 @@ async function resolvePaymentUpiMeta({ hasUpi = false, payRefNo = '' } = {}) {
         attachmentUrl = uploaded.attachmentUrl;
         attachmentName = uploaded.attachmentName;
     }
-    if (!attachmentUrl && !isAdminLikeUser()) {
-        throw new Error('Attach UPI proof screenshot for admin confirmation.');
-    }
+    // if (!attachmentUrl && !isAdminLikeUser()) {
+    //     throw new Error('Attach UPI proof screenshot for admin confirmation.');
+    // }
     const hasChanged = upiRef !== existingUpiRef || !!window._paymentProofFile || (!attachmentUrl && !!existingUrl);
     let verificationStatus = existingStatus || (isAdminLikeUser() ? 'confirmed' : 'pending');
     let verifiedBy = existingVerifiedBy || null;
@@ -15535,7 +15535,7 @@ function renderPayRows(pays) {
             party: `<td style="font-weight:600">${escapeHtml(p.partyName)}</td>`,
             type: `<td style="min-width:120px"><span class="badge ${p.type === 'in' ? 'badge-success' : 'badge-danger'}">${p.type === 'in' ? 'Payment In' : 'Payment Out'}</span></td>`,
             invoiceNo: `<td>${buildPayInvoiceCell(p)}</td>`,
-            mode: `<td>${p.mode || 'Cash'}${p.mode === 'Cheque' && p.chequeNo ? `<br><span style="font-size:0.75rem;color:var(--text-muted)">#${p.chequeNo} | ${p.chequeBank || ''}</span><br><span class="badge ${p.chequeStatus === 'Cleared' ? 'badge-success' : p.chequeStatus === 'Deposited' ? 'badge-warning' : 'badge-danger'}" style="font-size:0.65rem">${p.chequeStatus || 'Pending'}</span>` : ''}${p.mode === 'UPI' ? `${p.upiRef ? `<br><span style="font-size:0.75rem;color:var(--text-muted)">UTR: ${escapeHtml(p.upiRef)}</span>` : ''}<br>${renderUpiVerificationBadge(p.verificationStatus || 'pending', true)}${p.attachmentUrl ? `<br><a href="${getSafeAttachmentHref(p.attachmentUrl)}" target="_blank" rel="noopener" style="font-size:0.72rem;color:var(--primary);text-decoration:underline">Proof</a>` : ''}` : ''}</td>`,
+            mode: `<td>${p.mode || 'Cash'}${p.mode === 'Cheque' && p.chequeNo ? `<br><span style="font-size:0.75rem;color:var(--text-muted)">#${p.chequeNo} | ${p.chequeBank || ''}</span><br><span class="badge ${p.chequeStatus === 'Cleared' ? 'badge-success' : p.chequeStatus === 'Deposited' ? 'badge-warning' : 'badge-danger'}" style="font-size:0.65rem">${p.chequeStatus || 'Pending'}</span>` : ''}${p.mode === 'UPI' ? `${p.upiRef ? `<br><span style="font-size:0.75rem;color:var(--text-muted)">UTR: ${escapeHtml(p.upiRef)}</span>` : ''}<br>${renderUpiVerificationBadge(p.verificationStatus || 'pending', true)}${p.attachmentUrl ? `<br><a href="${getSafeAttachmentHref(p.attachmentUrl)}" target="_blank" rel="noopener" download="proof" style="font-size:0.72rem;color:var(--primary);text-decoration:underline">Proof</a>` : ''}` : ''}</td>`,
             collectedBy: `<td style="font-size:0.82rem;color:var(--text-secondary)">${escapeHtml(getUserDisplayName(getPaymentCollectorValue(p)) || '-')}</td>`,
             amount: `<td class="${p.type === 'in' ? 'amount-green' : 'amount-red'}">${currency(p.amount)}</td>`,
             status: `<td><span class="badge ${p.status === 'posted' ? 'badge-success' : p.status === 'cancelled' ? 'badge-danger' : 'badge-warning'}" style="font-size:0.72rem">${p.status || 'pending'}</span></td>`,
@@ -15696,11 +15696,11 @@ async function viewPaymentDetails(id) {
         ? `
             <tr style="border-bottom:1px dashed var(--border)"><td style="padding:8px 0;color:var(--text-secondary)">UPI Ref</td><td style="padding:8px 0;text-align:right;font-weight:600">${escapeHtml(upiMeta.upiRef || '-')}</td></tr>
             <tr style="border-bottom:1px dashed var(--border)"><td style="padding:8px 0;color:var(--text-secondary)">UPI Status</td><td style="padding:8px 0;text-align:right">${renderUpiVerificationBadge(upiMeta.verificationStatus || 'pending')}${upiMeta.verifiedBy ? `<div style="font-size:0.74rem;color:var(--text-muted);margin-top:4px">By ${escapeHtml(upiMeta.verifiedBy)}${upiMeta.verifiedAt ? ` on ${fmtDate(upiMeta.verifiedAt)}` : ''}</div>` : ''}</td></tr>
-            <tr style="border-bottom:1px dashed var(--border)"><td style="padding:8px 0;color:var(--text-secondary)">Proof</td><td style="padding:8px 0;text-align:right">${proofHref ? `<a href="${proofHref}" target="_blank" rel="noopener" style="color:var(--primary);text-decoration:underline">${escapeHtml(upiMeta.attachmentName || 'Open Attachment')}</a>` : '<span style="color:var(--warning)">No attachment</span>'}</td></tr>`
+            <tr style="border-bottom:1px dashed var(--border)"><td style="padding:8px 0;color:var(--text-secondary)">Proof</td><td style="padding:8px 0;text-align:right">${proofHref ? `<a href="${proofHref}" target="_blank" rel="noopener" download="${escapeHtml(upiMeta.attachmentName || 'proof')}" style="color:var(--primary);text-decoration:underline">${escapeHtml(upiMeta.attachmentName || 'Open Attachment')}</a>` : '<span style="color:var(--warning)">No attachment</span>'}</td></tr>`
         : '';
     const canVerifyUpi = upiMeta.hasUpi && isAdminLikeUser();
     openModal('Payment Receipt', `
-        <div style="background:var(--bg-card);padding:20px;border-radius:var(--radius-md);border:1px solid var(--border)">
+        <div style="background:var(--bg-card);padding:20px;border-radius:var(--radius-md);border:1px solid var(--border);max-height:65vh;overflow-y:auto">
             <div style="display:flex;justify-content:space-between;margin-bottom:15px;border-bottom:1px solid var(--border);padding-bottom:10px">
                 <div>
                     <h3 style="margin:0;font-size:1.1rem">${escapeHtml(receipt.partyName || '')}</h3>
