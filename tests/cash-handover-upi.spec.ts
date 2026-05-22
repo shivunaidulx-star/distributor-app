@@ -124,11 +124,15 @@ test('upi confirmation and cash handover flow', async ({ page }) => {
         const handovers = await DB.getAll('cash_handovers');
         const related = (handovers || []).filter(row => Array.isArray(row.paymentRefs) && row.paymentRefs.includes(ids.cashPayNo));
         for (const row of related) {
-          try { await DB.delete('cash_handovers', row.id); } catch (err) { console.warn('Cleanup failed cash_handovers', row.id, err?.message || err); }
+          try { await DB.adminDelete('cash_handovers', row.id); } catch (adminErr) {
+            try { await DB.delete('cash_handovers', row.id); } catch (err) { console.warn('Cleanup failed cash_handovers', row.id, err?.message || adminErr?.message || err); }
+          }
         }
         const safeDelete = async (table, id) => {
           if (!id) return;
-          try { await DB.delete(table, id); } catch (err) { console.warn('Cleanup failed', table, id, err?.message || err); }
+          try { await DB.adminDelete(table, id); } catch (adminErr) {
+            try { await DB.delete(table, id); } catch (err) { console.warn('Cleanup failed', table, id, err?.message || adminErr?.message || err); }
+          }
         };
         await safeDelete('payments', ids.upiPaymentId);
         await safeDelete('payments', ids.cashPaymentId);

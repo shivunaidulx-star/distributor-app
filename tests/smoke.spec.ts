@@ -170,7 +170,9 @@ test('login / inventory / order to payment / invoices', async ({ page }) => {
   await page.evaluate(async (ids) => {
     const safeDelete = async (table, id) => {
       if (!id) return;
-      try { await DB.delete(table, id); } catch (err) { console.warn('Cleanup failed', table, id, err?.message || err); }
+      try { await DB.adminDelete(table, id); } catch (adminErr) {
+        try { await DB.delete(table, id); } catch (err) { console.warn('Cleanup failed', table, id, err?.message || adminErr?.message || err); }
+      }
     };
     await safeDelete('payments', ids.paymentId);
     await safeDelete('invoices', ids.invoiceId);

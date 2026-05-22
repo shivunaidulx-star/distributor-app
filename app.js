@@ -3,18 +3,25 @@
    ============================================ */
 
 // --- Supabase Config ---
-//  SECURITY WARNING: The SUPABASE_KEY is an 'anon' key and is visible in the frontend. 
-// To prevent data breaches, you MUST enable Row Level Security (RLS) on your Supabase dashboard.
-// Each table (parties, inventory, invoices, etc.) should have an RLS policy that restricts 
-// access to the 'anon' role with appropriate 'USING' and 'CHECK' expressions.
-const SUPABASE_URL = 'https://pfukfcnxvrkefcmevcxq.supabase.co';
-const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBmdWtmY254dnJrZWZjbWV2Y3hxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM0NTk2MjksImV4cCI6MjA4OTAzNTYyOX0.tPCMJ431g5iHb9qkRSzMWlV0dL_iVPNXPnQjJ0DwZPw';
+// Credentials are loaded from supabase-config.js (excluded from git).
+// If deploying to a new environment, create supabase-config.js with your SUPABASE_URL and SUPABASE_KEY.
+if (typeof SUPABASE_URL === 'undefined' || typeof SUPABASE_KEY === 'undefined') {
+    document.body.innerHTML = '<div style="padding:40px;font-family:Inter,sans-serif;text-align:center">'
+        + '<h2 style="color:#ef4444">⚠️ Configuration Missing</h2>'
+        + '<p>Could not find <code>supabase-config.js</code>. Please create this file with your Supabase credentials.</p>'
+        + '<pre style="background:#1e293b;color:#e2e8f0;padding:16px;border-radius:8px;text-align:left;display:inline-block">'
+        + 'const SUPABASE_URL = \'https://your-project.supabase.co\';\nconst SUPABASE_KEY = \'your-anon-key\';</pre>'
+        + '</div>';
+    throw new Error('supabase-config.js not loaded. Cannot start app.');
+}
 const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // --- Database Layer (Modified for Supabase) ---
 const DB = {
     //  Centralised Cache for Sync Access
     cache: {},
+    _fetchInflight: {},
+    _refreshInflight: {},
 
     //  Centralised Table Mapping (Scaleable)
     mapTable(alias) {
@@ -284,9 +291,13 @@ const DB = {
             console.warn('Remote refresh paused due to quota/egress limits.');
         }
 
-        const _bgLoad = (actualTable, query, minAgeMs = 10 * 60 * 1000) => {
+        const _bgLoad = (actualTable, queryOrFactory, minAgeMs = 10 * 60 * 1000) => {
             if (!this._shouldRefreshTable(actualTable, minAgeMs)) return;
-            Promise.resolve(query).then(res => {
+            const queryPromise = this._refreshInflight[actualTable]
+                || (this._refreshInflight[actualTable] = Promise.resolve()
+                    .then(() => typeof queryOrFactory === 'function' ? queryOrFactory() : queryOrFactory)
+                    .finally(() => { delete this._refreshInflight[actualTable]; }));
+            queryPromise.then(res => {
                 if (!res || res.error) { console.warn(`Bg Refresh Error ${actualTable}:`, res?.error?.message || 'unknown'); return; }
                 const camel = this._toCamel(res.data || []);
                 this.cache[actualTable] = camel;
@@ -321,17 +332,17 @@ const DB = {
 
         if (!light && !syncSuspended) {
             // 3. Batch 1: fire immediately (most-needed tables)
-            batch1.forEach(t => _bgLoad(this.mapTable(t), withT(this.buildFetchQuery(t))));
+            batch1.forEach(t => _bgLoad(this.mapTable(t), () => withT(this.buildFetchQuery(t))));
 
             // 4. Batch 2: fire after 2s delay so batch1 gets bandwidth priority
             setTimeout(() => {
-                batch2.forEach(t => _bgLoad(this.mapTable(t), withT(this.buildFetchQuery(t))));
+                batch2.forEach(t => _bgLoad(this.mapTable(t), () => withT(this.buildFetchQuery(t))));
             }, 2000);
 
             // 5. Ledger tables: load last 6 months only (unbounded = very slow on large data)
             setTimeout(() => {
-                _bgLoad('party_ledger', withT(this.buildFetchQuery('party_ledger')));
-                _bgLoad('stock_ledger', withT(this.buildFetchQuery('stock_ledger')));
+                _bgLoad('party_ledger', () => withT(this.buildFetchQuery('party_ledger')));
+                _bgLoad('stock_ledger', () => withT(this.buildFetchQuery('stock_ledger')));
             }, 4000);
         }
 
@@ -387,7 +398,13 @@ const DB = {
         };
         const targets = (tableList || []).filter(t => this._shouldRefreshTable(t, minAgeMs));
         const results = await Promise.allSettled(
-            targets.map(t => withTimeout(this.buildFetchQuery(t)))
+            targets.map(t => {
+                const actual = this.mapTable(t);
+                if (this._refreshInflight[actual]) return this._refreshInflight[actual];
+                this._refreshInflight[actual] = withTimeout(this.buildFetchQuery(actual))
+                    .finally(() => { delete this._refreshInflight[actual]; });
+                return this._refreshInflight[actual];
+            })
         );
         let allSuccess = true;
         results.forEach((result, i) => {
@@ -533,6 +550,7 @@ const DB = {
             if (key === 'idx') continue;
             
             const v = obj[key];
+            if (typeof v === 'undefined') continue;
             res[key] = (v === '' && (key.includes('date') || key.includes('at') || key.includes('_at') || key === 'item_code' || key === 'party_code' || key === 'group')) ? null : v;
         }
         return res;
@@ -540,10 +558,26 @@ const DB = {
 
     async getAll(table) {
         const actualTable = this.mapTable(table);
-        // Return from cache if available (populated by background refresh)
-        if (this.cache[actualTable] && this.cache[actualTable].length > 0) return this.cache[actualTable];
+        // Return from memory even when the table is legitimately empty.
+        if (Object.prototype.hasOwnProperty.call(this.cache, actualTable) && Array.isArray(this.cache[actualTable])) {
+            return this.cache[actualTable];
+        }
+
+        // Prefer the last IndexedDB snapshot for first paint, then refresh remotely in the background.
+        // This keeps dashboard/list pages responsive on slow mobile data while still healing stale cache.
+        const cachedSnapshot = await this._getIdbArrayQuick(actualTable, actualTable === 'users' ? 900 : 350);
+        if (Array.isArray(cachedSnapshot)) {
+            this.cache[actualTable] = cachedSnapshot;
+            if (this._shouldRefreshTable(actualTable, 2 * 60 * 1000)) {
+                this.refreshTables([actualTable], { minAgeMs: 2 * 60 * 1000 })
+                    .catch(err => console.warn(`Deferred refresh failed (${actualTable}):`, err?.message || err));
+            }
+            return cachedSnapshot;
+        }
+
+        if (this._fetchInflight[actualTable]) return this._fetchInflight[actualTable];
         const timeoutMs = actualTable === 'users' ? 8000 : 15000;
-        try {
+        this._fetchInflight[actualTable] = (async () => {
             const query = this.buildFetchQuery(actualTable);
             const { data, error } = await this.runQueryWithTimeout(query, timeoutMs);
             if (error) {
@@ -559,6 +593,9 @@ const DB = {
             this.idb.set('db_' + actualTable, camelData).catch(console.error);
             this._rememberFetchMeta(actualTable, { ok: true, timedOut: false, count: camelData.length });
             return camelData;
+        })();
+        try {
+            return await this._fetchInflight[actualTable];
         } catch (error) {
             const timedOut = String(error?.message || '').toLowerCase().includes('timeout');
             this._rememberFetchMeta(actualTable, { ok: false, timedOut, error: error?.message || String(error) });
@@ -567,6 +604,23 @@ const DB = {
             if (Array.isArray(idbFallback)) return idbFallback;
             const localFallback = this.get('db_' + actualTable);
             return Array.isArray(localFallback) ? localFallback : [];
+        } finally {
+            delete this._fetchInflight[actualTable];
+        }
+    },
+    async _getIdbArrayQuick(table, timeoutMs = 350) {
+        const actualTable = this.mapTable(table);
+        const key = 'db_' + actualTable;
+        try {
+            const val = await Promise.race([
+                this.idb.get(key),
+                new Promise(resolve => setTimeout(() => resolve(undefined), timeoutMs))
+            ]);
+            if (!Array.isArray(val) || val.length === 0) return null;
+            this._hydrateIdbCache(key, val);
+            return val;
+        } catch (e) {
+            return null;
         }
     },
     async getList(table, options = {}) {
@@ -618,8 +672,13 @@ const DB = {
         const actualTable = this.mapTable(table);
         const { data, error } = await supabaseClient.from(actualTable).insert(this._clean(this._toSnake(row))).select();
         if (error) { console.error(`Error inserting into ${actualTable}:`, error.message, '| sent:', JSON.stringify(this._toSnake(row))); throw error; }
-        await this.refreshTables([actualTable]);
-        return this._toCamel(data[0]);
+        const inserted = this._toCamel(data[0]);
+        if (this.cache[actualTable] && Array.isArray(this.cache[actualTable])) {
+            this.cache[actualTable].push(inserted);
+            this.idb.set('db_' + actualTable, this.cache[actualTable]).catch(console.error);
+        }
+        this.refreshTables([actualTable]).catch(err => console.warn(`Post-insert refresh failed (${actualTable}):`, err?.message || err));
+        return inserted;
     },
 
     async update(table, id, row) {
@@ -635,7 +694,10 @@ const DB = {
             if (idx >= 0) this.cache[actualTable][idx] = { ...this.cache[actualTable][idx], ...updatedItem };
             else this.cache[actualTable].push(updatedItem);
         }
-        await this.refreshTables([actualTable]);
+        if (this.cache[actualTable] && Array.isArray(this.cache[actualTable])) {
+            this.idb.set('db_' + actualTable, this.cache[actualTable]).catch(console.error);
+        }
+        this.refreshTables([actualTable]).catch(err => console.warn(`Post-update refresh failed (${actualTable}):`, err?.message || err));
         return updatedItem;
     },
 
@@ -658,7 +720,11 @@ const DB = {
 
         if (error) throw error;
 
-        await this.refreshTables([actualTable]);
+        if (this.cache[actualTable] && Array.isArray(this.cache[actualTable])) {
+            this.cache[actualTable] = this.cache[actualTable].filter(r => String(r.id) !== String(id));
+            this.idb.set('db_' + actualTable, this.cache[actualTable]).catch(console.error);
+        }
+        this.refreshTables([actualTable]).catch(err => console.warn(`Post-delete refresh failed (${actualTable}):`, err?.message || err));
     },
 
     // 🔑 Admin Delete — uses SECURITY DEFINER RPC to bypass RLS in a single transaction
@@ -681,7 +747,11 @@ const DB = {
                 throw error;
             }
         }
-        await this.refreshTables([actualTable]);
+        if (this.cache[actualTable] && Array.isArray(this.cache[actualTable])) {
+            this.cache[actualTable] = this.cache[actualTable].filter(r => String(r.id) !== String(id));
+            this.idb.set('db_' + actualTable, this.cache[actualTable]).catch(console.error);
+        }
+        this.refreshTables([actualTable]).catch(err => console.warn(`Post-admin-delete refresh failed (${actualTable}):`, err?.message || err));
     },
 
     // 🔑 Admin Update — uses SECURITY DEFINER RPC to bypass RLS in a single transaction
@@ -696,7 +766,12 @@ const DB = {
             p_user_role: role
         });
         if (error) throw error;
-        await this.refreshTables([actualTable]);
+        if (this.cache[actualTable] && Array.isArray(this.cache[actualTable])) {
+            const idx = this.cache[actualTable].findIndex(r => String(r.id) === String(id));
+            if (idx >= 0) this.cache[actualTable][idx] = { ...this.cache[actualTable][idx], ...row, id };
+            this.idb.set('db_' + actualTable, this.cache[actualTable]).catch(console.error);
+        }
+        this.refreshTables([actualTable]).catch(err => console.warn(`Post-admin-update refresh failed (${actualTable}):`, err?.message || err));
         return { id };
     },
 
@@ -1007,14 +1082,19 @@ function endSave() {
 function populateUomSelect(uomSel, item) {
     if (!uomSel) return;
     const u = item.unit || 'Pcs';
-    uomSel.innerHTML = `<option value="${u}">${u}</option>`;
-    if (item.secUom) uomSel.innerHTML += `<option value="${item.secUom}">${item.secUom}</option>`;
+    // Security: Escape UOM values to prevent XSS via crafted unit names
+    uomSel.innerHTML = `<option value="${escapeHtml(u)}">${escapeHtml(u)}</option>`;
+    if (item.secUom) uomSel.innerHTML += `<option value="${escapeHtml(item.secUom)}">${escapeHtml(item.secUom)}</option>`;
 }
 
 // --- Collision-proof sequential number generator ---
+// BUG-006 Fix: Proper mutex that holds the lock until resolved, preventing race conditions
 const _nextNumLocks = {};
 async function nextNumber(prefix) {
-    if (_nextNumLocks[prefix]) { await _nextNumLocks[prefix]; }
+    // Wait for any existing lock on this prefix
+    while (_nextNumLocks[prefix]) {
+        await _nextNumLocks[prefix];
+    }
     let resolveLock;
     _nextNumLocks[prefix] = new Promise(r => { resolveLock = r; });
 
@@ -1036,8 +1116,8 @@ async function nextNumber(prefix) {
         }
         return ensureUniquePaymentNo(data, prefix);
     } finally {
-        resolveLock();
         delete _nextNumLocks[prefix];
+        resolveLock();
     }
 }
 
@@ -1259,7 +1339,7 @@ const ROLE_NAME_MAP = {
 };
 const CUSTOMER_PORTAL_ENABLED = false; // Feature kept in codebase for future relaunch, disabled for current live release.
 function getAppVersion() {
-    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v170';
+    return (typeof window !== 'undefined' && window.APP_VERSION) ? window.APP_VERSION : 'v176';
 }
 
 const PAGE_LABELS = {
@@ -1787,9 +1867,17 @@ async function completeSetup() {
 }
 
 // --- Session Persistence ---
+// SEC-005 Fix: Strip sensitive fields (PIN) from the session object before saving.
+// Only store identity info needed to restore the session.
+function _sanitizeUserForSession(user) {
+    if (!user) return null;
+    const { pin, _permCache, _permCacheSig, ...safeUser } = user;
+    return safeUser;
+}
+
 function dmSaveSession(user) {
     const session = {
-        user: user,
+        user: _sanitizeUserForSession(user),
         expiry: Date.now() + (4 * 60 * 60 * 1000) // 4 hours
     };
     localStorage.setItem('dm_session', JSON.stringify(session));
@@ -1805,6 +1893,32 @@ function dmRestoreSession() {
             localStorage.removeItem('dm_session');
             return false;
         }
+
+        // SEC-005 Fix: Re-validate the session user against the server-side user list
+        // to prevent privilege escalation via localStorage tampering.
+        // If IDB/cache has users, verify the role matches before trusting the session.
+        const cachedUsers = DB.cache['users'] || DB.get('db_users') || [];
+        if (cachedUsers.length > 0) {
+            const sessionUserId = (session.user.userId || session.user.id || '').toLowerCase();
+            const serverUser = cachedUsers.find(u =>
+                (u.userId && u.userId.toLowerCase() === sessionUserId) || String(u.id) === String(session.user.id)
+            );
+            if (serverUser) {
+                // Overwrite role/permissions from server data — never trust localStorage
+                session.user.role = serverUser.role;
+                session.user.roles = serverUser.roles;
+                session.user.allowPerms = serverUser.allowPerms;
+                session.user.denyPerms = serverUser.denyPerms;
+                session.user.extraPerms = serverUser.extraPerms;
+                session.user.canEdit = serverUser.canEdit;
+            } else {
+                // User ID not found in server list — session is stale or tampered
+                console.warn('Session user not found in cached users. Forcing re-login.');
+                localStorage.removeItem('dm_session');
+                return false;
+            }
+        }
+
         doLoginSuccess(session.user, true); // true = silent/restore
         // Session restoration also needs secure context
         DB.setSecureSession(session.user);
@@ -1835,7 +1949,12 @@ async function showLoginScreen() {
     const logoEl = document.querySelector('#login-screen .logo-icon');
     if (logoEl && (co.name || co.logo)) {
         if (co.logo) {
-            logoEl.innerHTML = `<img src="${co.logo}" style="width:100%;height:100%;object-fit:cover;border-radius:12px">`;
+            // BUG-001 Fix: Sanitize logo URL to prevent XSS via crafted logo value
+            const img = document.createElement('img');
+            img.src = co.logo;
+            img.style.cssText = 'width:100%;height:100%;object-fit:cover;border-radius:12px';
+            logoEl.innerHTML = '';
+            logoEl.appendChild(img);
         } else {
             logoEl.textContent = co.name.charAt(0).toUpperCase();
         }
@@ -1844,7 +1963,20 @@ async function showLoginScreen() {
 
 async function populateLoginUsers() { /* replaced by userId text input */ }
 
+// BUG-008 Fix: Login rate limiting to prevent brute-force PIN attacks
+let _loginAttempts = 0;
+let _loginLockoutUntil = 0;
+const LOGIN_MAX_ATTEMPTS = 5;
+const LOGIN_LOCKOUT_DURATIONS = [30000, 60000, 120000, 300000]; // 30s, 1m, 2m, 5m escalating
+let _loginLockoutLevel = 0;
+
 async function login() {
+    // Check lockout
+    if (Date.now() < _loginLockoutUntil) {
+        const secsLeft = Math.ceil((_loginLockoutUntil - Date.now()) / 1000);
+        return alert(`Too many failed attempts. Please wait ${secsLeft} seconds before trying again.`);
+    }
+
     const inputId = ($('login-userid') || { value: '' }).value.trim();
     const pin = $('login-pin').value.trim();
     if (!inputId) return alert('Enter your User ID');
@@ -1862,7 +1994,23 @@ async function login() {
     }
     const user = users.find(u => (u.userId && u.userId.toLowerCase() === inputId.toLowerCase()) || u.name.toLowerCase() === inputId.toLowerCase());
 
-    if (!user || user.pin !== pin) return alert('Invalid User ID or PIN');
+    if (!user || user.pin !== pin) {
+        _loginAttempts++;
+        if (_loginAttempts >= LOGIN_MAX_ATTEMPTS) {
+            const lockDuration = LOGIN_LOCKOUT_DURATIONS[Math.min(_loginLockoutLevel, LOGIN_LOCKOUT_DURATIONS.length - 1)];
+            _loginLockoutUntil = Date.now() + lockDuration;
+            _loginLockoutLevel = Math.min(_loginLockoutLevel + 1, LOGIN_LOCKOUT_DURATIONS.length - 1);
+            _loginAttempts = 0;
+            const secs = Math.round(lockDuration / 1000);
+            return alert(`Too many failed attempts. Account locked for ${secs} seconds.`);
+        }
+        return alert('Invalid User ID or PIN');
+    }
+
+    // Successful login — reset counters
+    _loginAttempts = 0;
+    _loginLockoutLevel = 0;
+    _loginLockoutUntil = 0;
 
     dmSaveSession(user);
     doLoginSuccess(user);
@@ -1887,7 +2035,12 @@ async function doLoginSuccess(user, isRestore = false) {
     const sidebarLogo = document.querySelector('#sidebar .logo-icon-sm');
     if (sidebarLogo && (co.name || co.logo)) {
         if (co.logo) {
-            sidebarLogo.innerHTML = `<img src="${co.logo}" style="width:100%;height:100%;object-fit:cover;border-radius:6px">`;
+            // BUG-001 Fix: Sanitize logo URL to prevent XSS
+            const sideImg = document.createElement('img');
+            sideImg.src = co.logo;
+            sideImg.style.cssText = 'width:100%;height:100%;object-fit:cover;border-radius:6px';
+            sidebarLogo.innerHTML = '';
+            sidebarLogo.appendChild(sideImg);
             sidebarLogo.style.background = 'transparent';
         } else {
             sidebarLogo.textContent = co.name.charAt(0).toUpperCase();
@@ -1945,9 +2098,15 @@ async function saveChangedPin() {
     try {
         await DB.update('users', currentUser.id, { pin: newPin });
         currentUser.pin = newPin;
+        // Update session without PIN
+        dmSaveSession(currentUser);
         closeModal();
         showToast('PIN updated successfully!', 'success');
-    } catch (e) { alert('Error updating PIN: ' + e.message); }
+    } catch (e) {
+        // MED-002 Fix: Don't expose internal error details to users
+        console.error('Error updating PIN:', e);
+        alert('Failed to update PIN. Please try again.');
+    }
 }
 
 function logout() {
@@ -13157,7 +13316,8 @@ async function saveInvoice(id) {
     if (!beginSave()) return;
     const dateVal = $('f-inv-date').value;
 
-    if (currentUser.role !== 'Admin' && !DB.canPostBackDate(dateVal)) {
+    // BUG-005 Fix: Use DB.canPostBackDate consistently (it already handles Admin check internally)
+    if (!DB.canPostBackDate(dateVal)) {
         endSave();
         return alert("Access Denied: Only Admin can post invoices for a past date.");
     }
@@ -16497,7 +16657,8 @@ async function savePayment(id) {
     const dateVal = $('f-pay-date').value;
 
     // 2. Back-date Restriction Check
-    if (currentUser.role !== 'Admin' && !DB.canPostBackDate(dateVal)) {
+    // BUG-005 Fix: Use DB.canPostBackDate consistently (it already handles Admin check internally)
+    if (!DB.canPostBackDate(dateVal)) {
         endSave();
         return alert("Access Denied: Only Admin can post payments for a past date.");
     }
@@ -17204,6 +17365,7 @@ async function openEditPaymentModal(id) {
                         <option ${(summary.primary.chequeStatus || 'Pending') === 'Pending' ? 'selected' : ''}>Pending</option>
                         <option ${summary.primary.chequeStatus === 'Deposited' ? 'selected' : ''}>Deposited</option>
                         <option ${summary.primary.chequeStatus === 'Cleared' ? 'selected' : ''}>Cleared</option>
+                        <option ${summary.primary.chequeStatus === 'Closed' ? 'selected' : ''}>Closed</option>
                         <option ${summary.primary.chequeStatus === 'Bounced' ? 'selected' : ''}>Bounced</option>
                     </select>
                 </div>
@@ -21293,10 +21455,10 @@ const REPORT_TABLE_REQUIREMENTS = {
 async function loadReportDatasets(type) {
     const tables = REPORT_TABLE_REQUIREMENTS[type] || ['inventory', 'invoices', 'payments', 'expenses', 'users', 'categories', 'parties'];
     if (!tables.length) return {};
-    // cash_handovers: always fetch fresh so newly submitted records appear immediately
-    if (type === 'cash-handovers') {
+    // cash_handovers / cheques: always fetch fresh so newly submitted/status-updated records appear immediately
+    if (type === 'cash-handovers' || type === 'chequeregister') {
         try {
-            delete DB.cache['cash_handovers'];
+            delete DB.cache[type === 'cash-handovers' ? 'cash_handovers' : 'payments'];
         } catch (e) { /* ignore */ }
     }
     const loaded = await Promise.all(tables.map(table => DB.getAll(table)));
@@ -22791,7 +22953,7 @@ async function showReport(type) {
                 <div class="form-group"><label>From Date</label><input type="date" id="r-chq-from" value="${monthStart}" onchange="renderChequeRpt()"></div>
                 <div class="form-group"><label>To Date</label><input type="date" id="r-chq-to" value="${today()}" onchange="renderChequeRpt()"></div>
                 <div class="form-group"><label>Party</label><input id="r-chq-party" placeholder="All parties..." oninput="renderChequeRpt()" style="width:160px"></div>
-                <div class="form-group"><label>Status</label><select id="r-chq-status" onchange="renderChequeRpt()"><option value="">All</option><option>Pending</option><option>Deposited</option><option>Cleared</option></select></div>
+                <div class="form-group"><label>Status</label><select id="r-chq-status" onchange="renderChequeRpt()"><option value="">All</option><option>Pending</option><option>Deposited</option><option>Cleared</option><option>Closed</option><option>Bounced</option></select></div>
                 <div class="form-group" style="align-self:flex-end"><button class="btn btn-primary btn-sm" onclick="exportTableToExcel('cheque-reg-table','ChequeRegister_${today()}')"><span class="material-symbols-outlined" style="font-size:1.1rem">download</span> Export</button></div>
             </div>
         </div></div>
@@ -24128,15 +24290,15 @@ function renderChequeRpt() {
     if (status) cheques = cheques.filter(c => (c.chequeStatus || 'Pending') === status);
     const pending = cheques.filter(c => !c.chequeStatus || c.chequeStatus === 'Pending').length;
     const deposited = cheques.filter(c => c.chequeStatus === 'Deposited').length;
-    const cleared = cheques.filter(c => c.chequeStatus === 'Cleared').length;
+    const cleared = cheques.filter(c => c.chequeStatus === 'Cleared' || c.chequeStatus === 'Closed').length;
     const totalAmt = cheques.reduce((s, c) => s + c.amount, 0);
     const rows = cheques.map(c => {
-        const statusBadge = c.chequeStatus === 'Cleared' ? 'badge-success' : c.chequeStatus === 'Deposited' ? 'badge-warning' : 'badge-danger';
+        const statusBadge = (c.chequeStatus === 'Cleared' || c.chequeStatus === 'Closed') ? 'badge-success' : c.chequeStatus === 'Deposited' ? 'badge-warning' : 'badge-danger';
         let actionBtns = '';
-        if (!c.chequeStatus || c.chequeStatus === 'Pending') actionBtns = `<button class="btn btn-outline btn-sm" onclick="updateChequeStatus('${c.id}','Deposited')">Mark Deposited</button>`;
-        else if (c.chequeStatus === 'Deposited') actionBtns = `<button class="btn btn-primary btn-sm" onclick="updateChequeStatus('${c.id}','Cleared')">Mark Cleared</button>`;
+        if (!c.chequeStatus || c.chequeStatus === 'Pending') actionBtns = `<div style="display:flex;gap:4px;flex-wrap:wrap"><button class="btn btn-outline btn-sm" onclick="updateChequeStatus('${c.id}','Deposited')">Mark Deposited</button><button class="btn btn-outline btn-sm" onclick="updateChequeStatus('${c.id}','Closed')">Close</button><button class="btn btn-danger btn-sm" onclick="updateChequeStatus('${c.id}','Bounced')">Bounce</button></div>`;
+        else if (c.chequeStatus === 'Deposited') actionBtns = `<div style="display:flex;gap:4px;flex-wrap:wrap"><button class="btn btn-primary btn-sm" onclick="updateChequeStatus('${c.id}','Cleared')">Mark Cleared</button><button class="btn btn-outline btn-sm" onclick="updateChequeStatus('${c.id}','Closed')">Close</button><button class="btn btn-danger btn-sm" onclick="updateChequeStatus('${c.id}','Bounced')">Bounce</button></div>`;
         else actionBtns = '<span style="color:var(--success);font-weight:600"> Done</span>';
-        return `<tr><td style="font-size:0.8rem;color:var(--text-muted)">${c.payNo || c.id.substring(0, 8)}</td><td>${fmtDate(c.date)}</td><td style="font-weight:600">${c.chequeNo || '-'}</td><td>${escapeHtml(c.partyName)}</td><td>${c.chequeBank || '-'}</td><td>${c.chequeDepositDate ? fmtDate(c.chequeDepositDate) : '-'}</td><td class="${c.type === 'in' ? 'amount-green' : 'amount-red'}" style="text-align:right">${currency(c.amount)}</td><td><span class="badge ${statusBadge}">${c.chequeStatus || 'Pending'}</span></td><td>${actionBtns}</td></tr>`;
+        return `<tr><td style="font-size:0.8rem;color:var(--text-muted)">${c.payNo || c.id.substring(0, 8)}</td><td>${fmtDate(c.date)}</td><td style="font-weight:600">${escapeHtml(c.chequeNo || '-')}</td><td>${escapeHtml(c.partyName)}</td><td>${escapeHtml(c.chequeBank || '-')}</td><td>${c.chequeDepositDate ? fmtDate(c.chequeDepositDate) : '-'}</td><td class="${c.type === 'in' ? 'amount-green' : 'amount-red'}" style="text-align:right">${currency(c.amount)}</td><td><span class="badge ${statusBadge}">${c.chequeStatus || 'Pending'}</span></td><td>${actionBtns}</td></tr>`;
     }).join('');
     out.innerHTML = `
     <div class="stats-grid-sm">
@@ -24157,7 +24319,25 @@ function renderChequeRpt() {
 
 async function updateChequeStatus(payId, newStatus) {
     try {
-        await DB.update('payments', payId, { chequeStatus: newStatus, chequeDepositDate: newStatus === 'Deposited' ? today() : undefined });
+        const { data, error } = await supabaseClient.rpc('update_cheque_status', {
+            p_payment_id: payId,
+            p_status: newStatus,
+            p_status_by: currentUser?.name || currentUser?.userId || '',
+            p_note: '',
+            p_status_date: today()
+        });
+        if (error) {
+            console.warn('Cheque status RPC failed, using direct update fallback:', error.message);
+            await DB.update('payments', payId, {
+                chequeStatus: newStatus,
+                chequeDepositDate: ['Deposited', 'Cleared', 'Closed'].includes(newStatus) ? today() : null
+            });
+        }
+        if (DB.cache['payments'] && data) {
+            const updated = DB._toCamel(data);
+            const idx = DB.cache['payments'].findIndex(p => String(p.id) === String(payId));
+            if (idx >= 0) DB.cache['payments'][idx] = { ...DB.cache['payments'][idx], ...updated };
+        }
         showToast(`Cheque status updated to ${newStatus}`, 'success');
         await showReport('chequeregister');
     } catch (err) {
@@ -28551,10 +28731,22 @@ async function rejectCustReg(regId) {
 // HR MODULE: STAFF MASTER, ATTENDANCE, PAYROLL
 // ============================================================
 
+function renderHrLoadError(context, errors) {
+    const messages = (Array.isArray(errors) ? errors : [errors])
+        .filter(Boolean)
+        .map(err => typeof err === 'string' ? err : (err.message || JSON.stringify(err)))
+        .filter(Boolean);
+    pageContent.innerHTML = `
+    <div class="empty-state">
+        <p style="color:var(--danger);font-weight:700">Could not load ${escapeHtml(context)}.</p>
+        <p style="color:var(--text-muted);font-size:0.85rem">${escapeHtml(messages.join(' | ') || 'Supabase request failed.')}</p>
+    </div>`;
+}
+
 // ---- STAFF MASTER ----
 async function renderStaffMaster() {
     const { data: staff, error } = await supabaseClient.from('staff').select('*').order('name');
-    if (error) { pageContent.innerHTML = `<p style="color:red">Error: ${error.message}</p>`; return; }
+    if (error) { renderHrLoadError('staff master', error); return; }
     const isAdmin = currentUser && currentUser.role === 'Admin';
     const isMobile = window.innerWidth < 768;
 
@@ -28688,6 +28880,20 @@ function dedupeAttendanceRecords(records) {
 }
 
 async function saveAttendanceEntry(staffId, staffName, date, status) {
+    try {
+        const { data, error } = await supabaseClient.rpc('upsert_attendance_entry', {
+            p_staff_id: staffId,
+            p_staff_name: staffName,
+            p_date: date,
+            p_status: status,
+            p_marked_by: currentUser?.name || currentUser?.userId || ''
+        });
+        if (!error) return { updated: data ? 1 : 0, inserted: data ? 0 : 1 };
+        console.warn('Attendance RPC failed, falling back to direct save:', error.message);
+    } catch (rpcErr) {
+        console.warn('Attendance RPC unavailable, falling back to direct save:', rpcErr?.message || rpcErr);
+    }
+
     const { data: existingRows, error: fetchErr } = await supabaseClient
         .from('attendance')
         .select('id')
@@ -28726,7 +28932,8 @@ async function renderAttendance() {
     const selMonth = selDate.substring(0, 7);
     const monthRange = getMonthDateRange(selMonth);
 
-    const { data: staff } = await supabaseClient.from('staff').select('*').eq('status', 'active').order('name');
+    const { data: staff, error: staffErr } = await supabaseClient.from('staff').select('*').eq('status', 'active').order('name');
+    if (staffErr) { renderHrLoadError('attendance', staffErr); return; }
     const allStaff = staff || [];
     const requestedStaffFilter = window._attStaffFilter || '';
     const selectedStaff = requestedStaffFilter ? allStaff.find(s => String(s.id) === String(requestedStaffFilter)) : null;
@@ -28735,15 +28942,17 @@ async function renderAttendance() {
     const filteredStaff = staffFilter ? allStaff.filter(s => String(s.id) === staffFilter) : allStaff;
 
     // Single-day data
-    const { data: attRecs } = await supabaseClient.from('attendance').select('*').eq('date', selDate);
+    const { data: attRecs, error: attErr } = await supabaseClient.from('attendance').select('*').eq('date', selDate);
+    if (attErr) { renderHrLoadError('attendance records', attErr); return; }
     const dayRecords = dedupeAttendanceRecords(attRecs || []);
     const attMap = {}; dayRecords.forEach(r => attMap[r.staff_id] = r);
 
     // Monthly summary
-    const { data: monthRecs } = await supabaseClient.from('attendance')
+    const { data: monthRecs, error: monthErr } = await supabaseClient.from('attendance')
         .select('*')
         .gte('date', monthRange.start)
         .lte('date', monthRange.end);
+    if (monthErr) { renderHrLoadError('monthly attendance', monthErr); return; }
     const monthRecords = dedupeAttendanceRecords(monthRecs || []);
     const monthMap = {};
     monthRecords.forEach(r => {
@@ -28944,7 +29153,8 @@ async function _applyRangeAttendance(staffId, staffName, dates, status) {
     if (staffId) {
         targets = [{ id: staffId, name: staffName }];
     } else {
-        const { data: allStaff } = await supabaseClient.from('staff').select('id,name').eq('status', 'active');
+        const { data: allStaff, error: staffErr } = await supabaseClient.from('staff').select('id,name').eq('status', 'active');
+        if (staffErr) throw new Error(staffErr.message);
         targets = allStaff || [];
     }
 
@@ -29041,6 +29251,17 @@ async function renderHRPayroll() {
         supabaseClient.from('salary_advances').select('*').order('date', { ascending: true }), // ALL advances (all months)
         supabaseClient.from('salary_records').select('*').eq('month', selMonth)
     ]);
+
+    const payrollErrors = [
+        ['staff', staffRes.error],
+        ['attendance', attRes.error],
+        ['salary advances', advRes.error],
+        ['salary records', salRes.error]
+    ].filter(([, error]) => error).map(([label, error]) => `${label}: ${error.message}`);
+    if (payrollErrors.length) {
+        renderHrLoadError('payroll', payrollErrors);
+        return;
+    }
 
     const staff = staffRes.data || [];
     const attRecs = attRes.data || [];
@@ -29334,12 +29555,46 @@ function updateNetPayable(staffId, earned) {
     const netEl = document.getElementById('net-' + staffId);
     if (!deductEl || !netEl) return;
     const deduct = Math.min(Math.max(0, +deductEl.value || 0), earned);
+    deductEl.value = deduct;
     netEl.textContent = currency(Math.max(0, earned - deduct));
 }
 
 // --- Payroll Process: Mark Salary as Paid (Unified & Secured) ---
 async function markSalaryPaid(staffId, staffName, month, monthlySalary, workingDays, daysEff, earned) {
     try {
+        const { data: rpcAdvs, error: rpcAdvErr } = await supabaseClient
+            .from('salary_advances').select('*')
+            .eq('staff_id', staffId)
+            .order('date', { ascending: true });
+        if (rpcAdvErr) throw rpcAdvErr;
+
+        const pendingAdvsRpc = (rpcAdvs || []).filter(a => ((a.amount || 0) - (a.deducted || 0)) > 0.01);
+        const deductInputRpc = document.getElementById('deduct-' + staffId);
+        const totalPendingRpc = pendingAdvsRpc.reduce((t, a) => t + ((a.amount || 0) - (a.deducted || 0)), 0);
+        const rawDeductionRpc = deductInputRpc ? parseFloat(deductInputRpc.value || 0) : totalPendingRpc;
+        const finalDeductionRpc = +Math.min(Math.max(0, rawDeductionRpc || 0), totalPendingRpc, earned).toFixed(2);
+        if (deductInputRpc) deductInputRpc.value = finalDeductionRpc;
+        const netPayableRpc = +Math.max(0, earned - finalDeductionRpc).toFixed(2);
+
+        if (!confirm(`Confirm Salary for ${staffName}?\nEarned: ${currency(earned)}\nAdv Deducted: ${currency(finalDeductionRpc)}\nNet Payable: ${currency(netPayableRpc)}`)) return;
+
+        const { error: rpcErr } = await supabaseClient.rpc('mark_salary_paid_atomic', {
+            p_staff_id: staffId,
+            p_staff_name: staffName,
+            p_month: month,
+            p_monthly_salary: monthlySalary,
+            p_working_days: workingDays,
+            p_days_present: daysEff,
+            p_earned_salary: earned,
+            p_requested_deduction: finalDeductionRpc,
+            p_paid_by: currentUser?.name || currentUser?.userId || ''
+        });
+        if (rpcErr) throw new Error(rpcErr.message);
+
+        showToast('Salary Paid!', 'success');
+        renderHRPayroll();
+        return;
+
         // Guard: prevent duplicate — clean up any stuck 'processing' record first
         const { data: existingRec } = await supabaseClient.from('salary_records')
             .select('id,status').eq('staff_id', staffId).eq('month', month).maybeSingle();
@@ -29432,6 +29687,16 @@ async function markSalaryPaid(staffId, staffName, month, monthlySalary, workingD
 async function resetSalaryPaid(staffId, staffName, month) {
     if (!confirm(`Reset salary for ${staffName} (${month})? This reverses advance deductions.`)) return;
     try {
+        const { error: rpcErr } = await supabaseClient.rpc('reset_salary_paid_atomic', {
+            p_staff_id: staffId,
+            p_month: month,
+            p_reset_by: currentUser?.name || currentUser?.userId || ''
+        });
+        if (rpcErr) throw new Error(rpcErr.message);
+        showToast('Salary reset successfully', 'success');
+        renderHRPayroll();
+        return;
+
         const { data: sr } = await supabaseClient.from('salary_records').select('*').eq('staff_id', staffId).eq('month', month).single();
         if (!sr) return alert('Record not found');
 

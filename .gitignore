@@ -1,2 +1,25 @@
 # Local Netlify folder
 .netlify
+
+# Sensitive credentials — NEVER commit these
+admin_cred.txt
+keys.txt
+supabase-config.js
+old_app.js
+*.env
+.env*
+
+# Node modules
+node_modules/
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Temporary / scratch files
+*.log
+tmp_*.js
+temp*.txt
+out*.txt
+diff*.txt
+log.txt
