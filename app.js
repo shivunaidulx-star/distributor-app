@@ -1724,11 +1724,19 @@ async function checkFirstLaunch() {
         return;
     }
     try {
-        const users = await DB.getAll('users');
-        if (users.length === 0) {
+        // Fetch directly from network to bypass any stale empty [] cache in IDB
+        const { data: users, error } = await supabaseClient.from('users').select('*');
+        if (error) throw error;
+        
+        if (!users || users.length === 0) {
             showSetupWizard();
             return;
         }
+        
+        const camelUsers = DB._toCamel(users) || [];
+        DB.cache['users'] = camelUsers;
+        DB.idb.set('db_users', camelUsers).catch(() => {});
+        
         await initRealtime();
         await showLoginScreen();
     } catch (e) {
