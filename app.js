@@ -256,9 +256,9 @@ const DB = {
         // Core tables needed for Login & Dashboard basic structure
         const coreTables = ['users', 'categories', 'uom'];
         // Batch 1: high-priority tables needed for first page render
-        const batch1 = ['parties', 'inventory', 'sales_orders', 'invoices', 'payments'];
+        const batch1 = []; // 'parties', 'inventory', 'sales_orders', 'invoices', 'payments' commented out for perf
         // Batch 2: lower-priority tables loaded after a short delay
-        const batch2 = ['expenses', 'packers', 'delivery_persons', 'delivery', 'cash_handovers'];
+        const batch2 = ['expenses']; // 'packers', 'delivery_persons', 'delivery', 'cash_handovers' commented out
 
         // Mark last refresh time
         this.cache._lastRefresh = now;
@@ -361,8 +361,8 @@ const DB = {
 
             // 5. Ledger tables: load last 6 months only (unbounded = very slow on large data)
             setTimeout(() => {
-                _bgLoad('party_ledger', () => withT(this.buildFetchQuery('party_ledger')));
-                _bgLoad('stock_ledger', () => withT(this.buildFetchQuery('stock_ledger')));
+                // _bgLoad('party_ledger', () => withT(this.buildFetchQuery('party_ledger')));
+                // _bgLoad('stock_ledger', () => withT(this.buildFetchQuery('stock_ledger')));
             }, 4000);
         }
 
@@ -3122,11 +3122,11 @@ const ALL_QUICK_ACTIONS = [
     { key: 'update-item-photo', icon: 'add_a_photo', label: 'Update Photo', fn: "openItemPhotoModal()" },
 ];
 const DEFAULT_QUICK_ACTIONS = {
-    Admin: ['payment-in', 'salesorders', 'new-sale', 'parties', 'catalog', 'inventory', 'delivery', 'reports', 'update-party-gps', 'update-item-photo'],
-    Manager: ['payment-in', 'salesorders', 'new-sale', 'parties', 'payments', 'catalog', 'update-party-gps', 'update-item-photo'],
-    Salesman: ['payment-in', 'collection-bills', 'salesorders', 'parties', 'catalog', 'update-item-photo'],
-    Packing: ['packing', 'salesorders'],
-    Delivery: ['delivery', 'salesorders'],
+    Admin: ['expenses'],
+    Manager: ['expenses'],
+    Salesman: ['expenses'],
+    Packing: [],
+    Delivery: [],
 };
 const ADMIN_HOME_TILE_GROUPS = {
     signals: {
@@ -4856,13 +4856,13 @@ async function renderDashboard() {
     setDashboardSingleViewMode(false);
     // Batch fetch data from Supabase
     const [invoices, payments, expenses, inventory, salesOrders, dels, parties] = await Promise.all([
-        DB.getAll('invoices'),
-        DB.getAll('payments'),
-        DB.getAll('expenses'),
-        DB.getAll('inventory'),
-        DB.getAll('sales_orders'),
-        DB.getAll('delivery'),
-        DB.getAll('parties')
+        Promise.resolve([]), // DB.getAll('invoices'),
+        Promise.resolve([]), // DB.getAll('payments'),
+        DB.getAll('expenses'), // Keep expenses
+        Promise.resolve([]), // DB.getAll('inventory'),
+        Promise.resolve([]), // DB.getAll('sales_orders'),
+        Promise.resolve([]), // DB.getAll('delivery'),
+        Promise.resolve([])  // DB.getAll('parties')
     ]);
 
     // ── SALESMAN DASHBOARD ──
@@ -29002,7 +29002,8 @@ async function renderAttendance() {
         <input type="date" value="${selDate}" onchange="window._attDate=this.value;renderAttendance()" class="form-control" style="width:160px">
         <button class="btn btn-outline btn-sm" onclick="window._attDate='${today()}';renderAttendance()">Today</button>
         <button class="btn btn-outline btn-sm" onclick="markAllAttendance('Present','${selDate}')"> All Present</button>
-        <button class="btn btn-outline btn-sm" onclick="markAllAttendance('Holiday','${selDate}')"> Holiday</button>`;
+        <button class="btn btn-outline btn-sm" onclick="markAllAttendance('Holiday','${selDate}')"> Holiday</button>
+        <button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger)" onclick="clearAllAttendance('${selDate}')"> Clear Filtered</button>`;
 
     const rangeToolbar = `
         <label style="font-size:0.82rem;color:var(--text-muted);margin:0">From</label>
@@ -29262,6 +29263,29 @@ async function markAllAttendance(status, date) {
         await renderAttendance();
     } catch (err) {
         alert('Error saving attendance: ' + err.message);
+    }
+}
+
+async function clearAllAttendance(date) {
+    const { data: staff, error: staffErr } = await supabaseClient.from('staff').select('id,name').eq('status', 'active');
+    if (staffErr) return alert('Error loading staff: ' + staffErr.message);
+    const staffFilter = window._attStaffFilter || '';
+    const targets = staffFilter ? (staff || []).filter(s => String(s.id) === String(staffFilter)) : (staff || []);
+    if (!targets.length) return;
+    
+    if (!confirm(`Are you sure you want to clear attendance for ${targets.length === 1 ? targets[0].name : 'all employees'} on ${date}?`)) return;
+
+    try {
+        const targetIds = targets.map(t => t.id);
+        const { error } = await supabaseClient.from('attendance')
+            .delete()
+            .in('staff_id', targetIds)
+            .eq('date', date);
+        if (error) throw error;
+        showToast(`Attendance cleared for ${targets.length === 1 ? targets[0].name : 'all employees'}!`, 'success');
+        await renderAttendance();
+    } catch (err) {
+        alert('Error clearing attendance: ' + err.message);
     }
 }
 

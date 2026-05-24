@@ -160,10 +160,10 @@
                 <a href="#" class="nav-item active" data-page="dashboard">
                     <span class="nav-icon material-symbols-outlined">bar_chart</span><span class="nav-label">Dashboard</span>
                 </a>
-                <a href="#" class="nav-item" data-page="parties">
+                <!-- <a href="#" class="nav-item" data-page="parties">
                     <span class="nav-icon material-symbols-outlined">group</span><span class="nav-label">Parties</span>
-                </a>
-                <a href="#" class="nav-item" data-page="inventory">
+                </a> -->
+                <!-- <a href="#" class="nav-item" data-page="inventory">
                     <span class="nav-icon material-symbols-outlined">inventory_2</span><span class="nav-label">Inventory</span><span
                         id="nav-badge-inventory"
                         style="display:none;margin-left:auto;background:#ef4444;color:#fff;font-size:0.65rem;font-weight:700;padding:1px 6px;border-radius:10px;line-height:1.6"></span>
@@ -185,11 +185,11 @@
                 </a>
                 <a href="#" class="nav-item" data-page="payments">
                     <span class="nav-icon material-symbols-outlined">payments</span><span class="nav-label">Payments</span>
-                </a>
+                </a> -->
                 <a href="#" class="nav-item" data-page="expenses">
                     <span class="nav-icon material-symbols-outlined">account_balance_wallet</span><span class="nav-label">Expenses</span>
                 </a>
-                <a href="#" class="nav-item" data-page="packing">
+                <!-- <a href="#" class="nav-item" data-page="packing">
                     <span class="nav-icon material-symbols-outlined">assignment</span><span class="nav-label">Packing</span>
                 </a>
                 <a href="#" class="nav-item" data-page="delivery">
@@ -207,7 +207,7 @@
                 </a>
                 <a href="#" class="nav-item" data-page="customerrequests" style="display:none">
                     <span class="nav-icon material-symbols-outlined">local_mall</span><span class="nav-label">Customer Requests</span>
-                </a>
+                </a> -->
                 <a href="#" class="nav-item" data-page="staffmaster">
                     <span class="nav-icon material-symbols-outlined">person</span><span class="nav-label">Staff Master</span>
                 </a>
@@ -217,7 +217,7 @@
                 <a href="#" class="nav-item" data-page="hrpayroll">
                     <span class="nav-icon material-symbols-outlined">payments</span><span class="nav-label">HR & Payroll</span>
                 </a>
-                <a href="#" class="nav-item" data-page="users">
+                <!-- <a href="#" class="nav-item" data-page="users">
                     <span class="nav-icon material-symbols-outlined">admin_panel_settings</span><span class="nav-label">Users & Roles</span>
                 </a>
                 <a href="#" class="nav-item" data-page="setup">
@@ -225,7 +225,7 @@
                 </a>
                 <a href="#" class="nav-item" data-page="noseries">
                     <span class="nav-icon material-symbols-outlined">format_list_numbered</span><span class="nav-label">No. Series Setup</span>
-                </a>
+                </a> -->
                 <a href="#" class="nav-item" onclick="forceHardRefresh()">
                     <span class="nav-icon material-symbols-outlined">refresh</span><span class="nav-label">Hard Refresh</span>
                 </a>
@@ -276,14 +276,14 @@
         <a class="bn-item active" data-page="dashboard" onclick="navigateTo('dashboard')">
             <span class="bn-icon material-symbols-outlined">bar_chart</span><span class="bn-label">Home</span>
         </a>
-        <a class="bn-item" data-page="salesorders" onclick="navigateTo('salesorders')">
-            <span class="bn-icon material-symbols-outlined">receipt_long</span><span class="bn-label">Orders</span>
+        <a class="bn-item" data-page="staffmaster" onclick="navigateTo('staffmaster')">
+            <span class="bn-icon material-symbols-outlined">person</span><span class="bn-label">Staff</span>
         </a>
-        <a class="bn-item" data-page="invoices" onclick="navigateTo('invoices')">
-            <span class="bn-icon material-symbols-outlined">request_quote</span><span class="bn-label">Invoices</span>
+        <a class="bn-item" data-page="attendance" onclick="navigateTo('attendance')">
+            <span class="bn-icon material-symbols-outlined">calendar_month</span><span class="bn-label">Attendance</span>
         </a>
-        <a class="bn-item" data-page="payments" onclick="navigateTo('payments')">
-            <span class="bn-icon material-symbols-outlined">payments</span><span class="bn-label">Payments</span>
+        <a class="bn-item" data-page="expenses" onclick="navigateTo('expenses')">
+            <span class="bn-icon material-symbols-outlined">account_balance_wallet</span><span class="bn-label">Expenses</span>
         </a>
         <a class="bn-item" id="bn-more-btn" onclick="toggleMoreSheet()">
             <span class="bn-icon material-symbols-outlined">menu</span><span class="bn-label">More</span>
@@ -318,10 +318,10 @@
     <script src="qrcode.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js"></script>
     <script src="supabase-config.js"></script>
-    <script src="app.js?v=177"></script>
+    <script src="app.js?v=181"></script>
     <script>
-        window.APP_VERSION = 'v177';
-        window.APP_RELEASE_NOTE = 'Attendance, payroll, cheque status, and posting stability fixes.';
+        window.APP_VERSION = 'v181';
+        window.APP_RELEASE_NOTE = 'Disabled unused modules and added attendance reset button.';
 
         const loginAppVersion = document.getElementById('login-app-version');
         if (loginAppVersion) loginAppVersion.textContent = window.APP_VERSION;
