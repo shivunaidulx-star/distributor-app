@@ -2,115 +2,21 @@
    Prakash Traders  Core Application (Refactored)
    ============================================ */
 
-/// --- Supabase Config ---
-// Credentials can be loaded from:
-// 1. supabase-config.js (loaded via script tag, gitignored)
-// 2. URL hash parameters (#url=...&key=...) on initial load
-// 3. localStorage (cached for persistence)
-// 4. Client-side database setup wizard if all else is missing
+// --- Supabase Config ---
+// Credentials are loaded from supabase-config.js (if present).
+// If missing or empty, the hardcoded production defaults below are used.
+// The anon key is designed to be public (like Firebase API keys).
+// Database security is enforced via Row Level Security (RLS) policies.
 
-let activeSupabaseUrl = (typeof window.SUPABASE_URL !== 'undefined' && window.SUPABASE_URL) ? window.SUPABASE_URL : undefined;
-let activeSupabaseKey = (typeof window.SUPABASE_KEY !== 'undefined' && window.SUPABASE_KEY) ? window.SUPABASE_KEY : undefined;
+const _FALLBACK_SUPABASE_URL = 'https://pfukfcnxvrkefcmevcxq.supabase.co';
+const _FALLBACK_SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBmdWtmY254dnJrZWZjbWV2Y3hxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM0NTk2MjksImV4cCI6MjA4OTAzNTYyOX0.tPCMJ431g5iHb9qkRSzMWlV0dL_iVPNXPnQjJ0DwZPw';
 
-// 1. Try parsing hash parameters on startup
-function getHashParams() {
-    const hash = window.location.hash.substring(1);
-    const params = {};
-    if (!hash) return params;
-    hash.split('&').forEach(pair => {
-        const [key, val] = pair.split('=');
-        if (key && val) params[decodeURIComponent(key)] = decodeURIComponent(val);
-    });
-    return params;
-}
+const SUPABASE_URL = (typeof window.SUPABASE_URL === 'string' && window.SUPABASE_URL.length > 10) ? window.SUPABASE_URL : _FALLBACK_SUPABASE_URL;
+const SUPABASE_KEY = (typeof window.SUPABASE_KEY === 'string' && window.SUPABASE_KEY.length > 10) ? window.SUPABASE_KEY : _FALLBACK_SUPABASE_KEY;
+window.SUPABASE_URL = SUPABASE_URL;
+window.SUPABASE_KEY = SUPABASE_KEY;
 
-try {
-    const hashParams = getHashParams();
-    if (hashParams.url && hashParams.key) {
-        const parsedUrl = hashParams.url.trim();
-        const parsedKey = hashParams.key.trim();
-        localStorage.setItem('SUPABASE_URL', parsedUrl);
-        localStorage.setItem('SUPABASE_KEY', parsedKey);
-        activeSupabaseUrl = parsedUrl;
-        activeSupabaseKey = parsedKey;
-        // Clear URL hash to hide credentials from address bar
-        window.history.replaceState(null, null, window.location.pathname + window.location.search);
-    }
-} catch (e) {
-    console.warn('Failed to parse or save hash parameters:', e);
-}
-
-// 2. Try loading from localStorage if not globally set by supabase-config.js
-if (!activeSupabaseUrl || !activeSupabaseKey) {
-    activeSupabaseUrl = localStorage.getItem('SUPABASE_URL') || undefined;
-    activeSupabaseKey = localStorage.getItem('SUPABASE_KEY') || undefined;
-}
-
-// Ensure global variables are set for compatibility with other files/tests
-if ((typeof window.SUPABASE_URL === 'undefined' || !window.SUPABASE_URL) && activeSupabaseUrl) {
-    window.SUPABASE_URL = activeSupabaseUrl;
-}
-if ((typeof window.SUPABASE_KEY === 'undefined' || !window.SUPABASE_KEY) && activeSupabaseKey) {
-    window.SUPABASE_KEY = activeSupabaseKey;
-}
-
-// 3. If still missing, show the setup wizard screen instead of crashing
-if (!activeSupabaseUrl || !activeSupabaseKey) {
-    const showSetupScreen = () => {
-        document.body.innerHTML = `
-            <div class="login-screen" style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#fef7ed 0%,#fdeccc 30%,#fde2b3 60%,#fef3c7 100%);padding:20px;font-family:'Inter',sans-serif;box-sizing:border-box;">
-                <div class="login-card" style="background:#fff;border:1px solid rgba(249,115,22,0.2);border-radius:18px;padding:40px;width:100%;max-width:480px;box-shadow:0 20px 60px rgba(249,115,22,0.12),0 4px 16px rgba(0,0,0,0.06);box-sizing:border-box;">
-                    <div class="login-logo" style="text-align:center;margin-bottom:28px;">
-                        <div class="logo-icon" style="width:80px;height:80px;background:#fff;border-radius:12px;display:inline-flex;align-items:center;justify-content:center;box-shadow:0 8px 32px rgba(0,0,0,0.1);margin-bottom:16px;overflow:hidden;">
-                            <img src="logo_prakash.png" alt="Logo" style="width:100%;height:100%;object-fit:contain;">
-                        </div>
-                        <h1 style="font-size:1.5rem;font-weight:700;color:#1c0a00;margin:0 0 6px;">Database Configuration</h1>
-                        <p style="color:#78350f;font-size:0.85rem;margin:0;">Connect Prakash Traders to your Supabase instance</p>
-                    </div>
-                    <form id="db-setup-form" style="display:flex;flex-direction:column;gap:18px;">
-                        <div class="form-group" style="margin:0;">
-                            <label for="db-url" style="display:block;font-size:0.75rem;font-weight:600;color:#78350f;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">Supabase URL</label>
-                            <input id="db-url" type="url" placeholder="https://your-project.supabase.co" required style="width:100%;padding:10px 14px;background:#fff8f0;border:1px solid rgba(0,0,0,0.08);border-radius:10px;font-size:0.9rem;box-sizing:border-box;">
-                        </div>
-                        <div class="form-group" style="margin:0;">
-                            <label for="db-key" style="display:block;font-size:0.75rem;font-weight:600;color:#78350f;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">Supabase Anon Key</label>
-                            <textarea id="db-key" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." rows="5" required style="width:100%;padding:10px 14px;background:#fff8f0;border:1px solid rgba(0,0,0,0.08);border-radius:10px;font-size:0.9rem;font-family:monospace;resize:none;box-sizing:border-box;"></textarea>
-                        </div>
-                        <button type="submit" class="btn btn-primary btn-block" style="width:100%;padding:12px;background:linear-gradient(135deg,#f97316 0%,#ea580c 100%);color:#fff;border:none;border-radius:10px;font-weight:600;font-size:0.9rem;cursor:pointer;box-shadow:0 4px 16px rgba(249,115,22,0.35);box-sizing:border-box;">Connect & Save</button>
-                    </form>
-                    <div style="margin-top:24px;padding-top:16px;border-top:1px solid rgba(0,0,0,0.08);font-size:0.78rem;color:#b45309;line-height:1.5;">
-                        <p style="margin:0 0 8px;font-weight:600;">How to connect:</p>
-                        <ol style="margin:0;padding-left:16px;">
-                            <li>Get the <strong>Project URL</strong> and <strong>anon/public</strong> API key from your Supabase Dashboard (Project Settings > API).</li>
-                            <li>Paste them above and click Connect.</li>
-                            <li>Alternatively, pass them via the URL: <br><code style="word-break:break-all;background:rgba(0,0,0,0.04);padding:2px 4px;border-radius:4px;font-size:0.72rem;">#url=YOUR_URL&key=YOUR_KEY</code></li>
-                        </ol>
-                    </div>
-                </div>
-            </div>
-        `;
-
-        document.getElementById('db-setup-form').addEventListener('submit', (e) => {
-            e.preventDefault();
-            const url = document.getElementById('db-url').value.trim();
-            const key = document.getElementById('db-key').value.trim();
-            if (url && key) {
-                localStorage.setItem('SUPABASE_URL', url);
-                localStorage.setItem('SUPABASE_KEY', key);
-                window.location.reload();
-            }
-        });
-    };
-
-    if (document.body) {
-        showSetupScreen();
-    } else {
-        document.addEventListener('DOMContentLoaded', showSetupScreen);
-    }
-    throw new Error('Supabase configuration is missing. Showing setup screen.');
-}
-
-const supabaseClient = supabase.createClient(activeSupabaseUrl, activeSupabaseKey);
+const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // --- Database Layer (Modified for Supabase) ---
 const DB = {
