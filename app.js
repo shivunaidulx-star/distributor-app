@@ -9,8 +9,8 @@
 // 3. localStorage (cached for persistence)
 // 4. Client-side database setup wizard if all else is missing
 
-let activeSupabaseUrl = typeof window.SUPABASE_URL !== 'undefined' ? window.SUPABASE_URL : undefined;
-let activeSupabaseKey = typeof window.SUPABASE_KEY !== 'undefined' ? window.SUPABASE_KEY : undefined;
+let activeSupabaseUrl = (typeof window.SUPABASE_URL !== 'undefined' && window.SUPABASE_URL) ? window.SUPABASE_URL : undefined;
+let activeSupabaseKey = (typeof window.SUPABASE_KEY !== 'undefined' && window.SUPABASE_KEY) ? window.SUPABASE_KEY : undefined;
 
 // 1. Try parsing hash parameters on startup
 function getHashParams() {
@@ -47,10 +47,10 @@ if (!activeSupabaseUrl || !activeSupabaseKey) {
 }
 
 // Ensure global variables are set for compatibility with other files/tests
-if (typeof window.SUPABASE_URL === 'undefined' && activeSupabaseUrl) {
+if ((typeof window.SUPABASE_URL === 'undefined' || !window.SUPABASE_URL) && activeSupabaseUrl) {
     window.SUPABASE_URL = activeSupabaseUrl;
 }
-if (typeof window.SUPABASE_KEY === 'undefined' && activeSupabaseKey) {
+if ((typeof window.SUPABASE_KEY === 'undefined' || !window.SUPABASE_KEY) && activeSupabaseKey) {
     window.SUPABASE_KEY = activeSupabaseKey;
 }
 
