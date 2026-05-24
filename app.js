@@ -11,12 +11,30 @@
 const _FALLBACK_SUPABASE_URL = 'https://pfukfcnxvrkefcmevcxq.supabase.co';
 const _FALLBACK_SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBmdWtmY254dnJrZWZjbWV2Y3hxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM0NTk2MjksImV4cCI6MjA4OTAzNTYyOX0.tPCMJ431g5iHb9qkRSzMWlV0dL_iVPNXPnQjJ0DwZPw';
 
-const SUPABASE_URL = (typeof window.SUPABASE_URL === 'string' && window.SUPABASE_URL.length > 10) ? window.SUPABASE_URL : _FALLBACK_SUPABASE_URL;
-const SUPABASE_KEY = (typeof window.SUPABASE_KEY === 'string' && window.SUPABASE_KEY.length > 10) ? window.SUPABASE_KEY : _FALLBACK_SUPABASE_KEY;
-window.SUPABASE_URL = SUPABASE_URL;
-window.SUPABASE_KEY = SUPABASE_KEY;
+let activeUrl = _FALLBACK_SUPABASE_URL;
+let activeKey = _FALLBACK_SUPABASE_KEY;
 
-const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+try {
+    if (typeof SUPABASE_URL !== 'undefined' && typeof SUPABASE_URL === 'string' && SUPABASE_URL.length > 10) {
+        activeUrl = SUPABASE_URL;
+    } else if (typeof window.SUPABASE_URL === 'string' && window.SUPABASE_URL.length > 10) {
+        activeUrl = window.SUPABASE_URL;
+    }
+} catch(e) {}
+
+try {
+    if (typeof SUPABASE_KEY !== 'undefined' && typeof SUPABASE_KEY === 'string' && SUPABASE_KEY.length > 10) {
+        activeKey = SUPABASE_KEY;
+    } else if (typeof window.SUPABASE_KEY === 'string' && window.SUPABASE_KEY.length > 10) {
+        activeKey = window.SUPABASE_KEY;
+    }
+} catch(e) {}
+
+// We don't declare SUPABASE_URL globally here to avoid SyntaxError if it was already declared as a const in supabase-config.js
+window.ACTIVE_SUPABASE_URL = activeUrl;
+window.ACTIVE_SUPABASE_KEY = activeKey;
+
+const supabaseClient = supabase.createClient(activeUrl, activeKey);
 
 // --- Database Layer (Modified for Supabase) ---
 const DB = {
