@@ -1532,7 +1532,7 @@ function getLegacyExtraPermsFromAllowKeys(allowKeys) {
 
 // --- State ---
 let currentUser = null;
-let currentPage = 'dashboard';
+let currentPage = 'staffmaster';
 let currentLedgerPartyId = null;
 let salesDocLayoutModeCache = null;
 
@@ -2081,7 +2081,7 @@ async function doLoginSuccess(user, isRestore = false) {
 
     DB.refresh({ nonBlockingBoot: true, light: true })
         .catch(err => console.warn('Post-login refresh failed:', err?.message || err));
-    await navigateTo('dashboard');
+    await navigateTo('staffmaster');
 }
 
 function openChangePinModal() {
@@ -2968,10 +2968,10 @@ async function navigateTo(page, options = {}) {
     if (!currentUser) return showLoginScreen();
     if (page === 'customerrequests' && !CUSTOMER_PORTAL_ENABLED) {
         showToast('Customer registration module is disabled for this release.', 'info');
-        page = 'dashboard';
+        page = 'staffmaster';
     }
     if (!canAccessPage(page, currentUser)) {
-        const fallback = canAccessPage('dashboard', currentUser) ? 'dashboard' : (getUserPages(currentUser)[0] || 'dashboard');
+        const fallback = canAccessPage('staffmaster', currentUser) ? 'staffmaster' : (getUserPages(currentUser)[0] || 'staffmaster');
         if (page !== fallback) {
             showToast('Access denied for this page.', 'error');
             return navigateTo(fallback, options);
@@ -2994,13 +2994,13 @@ async function navigateTo(page, options = {}) {
 
     // Mobile back button — show on sub-pages / More-sheet pages, hide on main tabs
     const MOBILE_BACK_TARGETS = {
-        collectionroute: 'dashboard',
-        parties: 'dashboard', inventory: 'dashboard', payments: 'dashboard',
-        expenses: 'dashboard', packing: 'dashboard', delivery: 'dashboard',
-        reports: 'dashboard', purchaseorders: 'dashboard', packers: 'dashboard',
-        deliverypersons: 'dashboard', users: 'dashboard', setup: 'dashboard',
-        staffmaster: 'dashboard', attendance: 'staffmaster', hrpayroll: 'staffmaster',
-        customerrequests: 'dashboard', inventorysetup: 'setup',
+        collectionroute: 'staffmaster',
+        parties: 'staffmaster', inventory: 'staffmaster', payments: 'staffmaster',
+        expenses: 'staffmaster', packing: 'staffmaster', delivery: 'staffmaster',
+        reports: 'staffmaster', purchaseorders: 'staffmaster', packers: 'staffmaster',
+        deliverypersons: 'staffmaster', setup: 'staffmaster',
+        attendance: 'staffmaster', hrpayroll: 'staffmaster', users: 'staffmaster',
+        customerrequests: 'staffmaster', inventorysetup: 'setup',
         categories: 'inventorysetup', uom: 'inventorysetup', noseries: 'setup',
         partyledger: 'parties', packorder: 'packing',
         stockledger: 'inventory',
@@ -3072,33 +3072,19 @@ window.haversine = function (lat1, lon1, lat2, lon2) {
 //  BOTTOM NAV  More Sheet & FAB
 // =============================================
 const MORE_ITEMS = [
-    { page: 'payments', icon: 'payments', label: 'Payments' },
-    { page: 'parties', icon: 'group', label: 'Parties' },
-    { page: 'inventory', icon: 'inventory_2', label: 'Inventory' },
-    { page: 'packing', icon: 'assignment', label: 'Packing' },
-    { page: 'delivery', icon: 'local_shipping', label: 'Delivery' },
-    { page: 'reports', icon: 'trending_up', label: 'Reports' },
-    { page: 'expenses', icon: 'account_balance_wallet', label: 'Expenses' },
-    { page: 'purchaseorders', icon: 'shopping_cart', label: 'Purchase' },
-    { page: 'catalog', icon: 'local_mall', label: 'Catalog' },
-    { page: 'packers', icon: 'engineering', label: 'Packers' },
-    { page: 'deliverypersons', icon: 'delivery_dining', label: 'Del.Persons' },
-    { page: 'users', icon: 'admin_panel_settings', label: 'Users' },
-    { page: 'setup', icon: 'settings', label: 'Setup' },
     { page: 'staffmaster', icon: 'person', label: 'Staff' },
     { page: 'attendance', icon: 'calendar_month', label: 'Attendance' },
     { page: 'hrpayroll', icon: 'payments', label: 'Payroll' },
-    { page: 'inventorysetup', icon: 'inventory', label: 'Inv. Setup' },
-    { page: 'noseries', icon: 'tag', label: 'No. Series' },
+    { page: 'users', icon: 'admin_panel_settings', label: 'Users' },
     { fn: 'forceHardRefresh()', icon: 'refresh', label: 'Hard Refresh' }
 ];
 
 const BOTTOM_NAV_TABS = {
-    Admin: [{ page: 'dashboard', icon: 'bar_chart', label: 'Home' }, { fn: "openPaymentModal()", icon: 'payments', label: 'Record Payment' }, { page: 'salesorders', icon: 'receipt_long', label: 'Orders' }, { page: 'invoices', icon: 'request_quote', label: 'Invoices' }, { page: 'catalog', icon: 'local_mall', label: 'Catalog' }],
-    Manager: [{ page: 'dashboard', icon: 'bar_chart', label: 'Home' }, { fn: "openPaymentModal()", icon: 'payments', label: 'Record Payment' }, { page: 'salesorders', icon: 'receipt_long', label: 'Orders' }, { page: 'invoices', icon: 'request_quote', label: 'Invoices' }, { page: 'catalog', icon: 'local_mall', label: 'Catalog' }],
-    Salesman: [{ page: 'dashboard', icon: 'bar_chart', label: 'Home' }, { fn: "openPaymentModal()", icon: 'payments', label: 'Record Payment' }, { page: 'salesorders', icon: 'receipt_long', label: 'Orders' }, { page: 'parties', icon: 'group', label: 'Parties' }, { page: 'catalog', icon: 'local_mall', label: 'Catalog' }],
-    Packing: [{ page: 'dashboard', icon: 'bar_chart', label: 'Home' }, { page: 'packing', icon: 'assignment', label: 'Packing' }],
-    Delivery: [{ page: 'dashboard', icon: 'bar_chart', label: 'Home' }, { page: 'delivery', icon: 'local_shipping', label: 'Delivery' }],
+    Admin: [{ page: 'staffmaster', icon: 'person', label: 'Staff' }, { page: 'attendance', icon: 'calendar_month', label: 'Attendance' }, { page: 'hrpayroll', icon: 'payments', label: 'Payroll' }, { page: 'users', icon: 'admin_panel_settings', label: 'Users' }],
+    Manager: [{ page: 'staffmaster', icon: 'person', label: 'Staff' }, { page: 'attendance', icon: 'calendar_month', label: 'Attendance' }, { page: 'hrpayroll', icon: 'payments', label: 'Payroll' }, { page: 'users', icon: 'admin_panel_settings', label: 'Users' }],
+    Salesman: [{ page: 'staffmaster', icon: 'person', label: 'Staff' }, { page: 'attendance', icon: 'calendar_month', label: 'Attendance' }, { page: 'hrpayroll', icon: 'payments', label: 'Payroll' }],
+    Packing: [{ page: 'staffmaster', icon: 'person', label: 'Staff' }, { page: 'attendance', icon: 'calendar_month', label: 'Attendance' }],
+    Delivery: [{ page: 'staffmaster', icon: 'person', label: 'Staff' }, { page: 'attendance', icon: 'calendar_month', label: 'Attendance' }],
 };
 
 //  All available quick actions 
@@ -3198,10 +3184,10 @@ function getBottomNavTabs(user = currentUser) {
     const configuredTabs = (BOTTOM_NAV_TABS[primaryRole] || BOTTOM_NAV_TABS['Admin'] || [])
         .filter(tab => !tab.page || allowedPages.has(tab.page));
     if (configuredTabs.length) return configuredTabs;
-    const fallback = ['dashboard', 'catalog', 'salesorders', 'payments', 'parties']
+    const fallback = ['staffmaster', 'attendance', 'hrpayroll', 'users']
         .filter(page => allowedPages.has(page))
         .map(page => ({ page, icon: (ALL_QUICK_ACTIONS.find(a => a.key === page)?.icon) || 'apps', label: PAGE_LABELS[page] || page }));
-    return fallback.length ? fallback : [{ page: 'dashboard', icon: 'bar_chart', label: 'Home' }];
+    return fallback.length ? fallback : [{ page: 'staffmaster', icon: 'person', label: 'Staff' }];
 }
 function getDashboardQuickActionRole(user = currentUser) {
     if (userHasRole(user, 'Admin')) return 'Admin';
@@ -25075,7 +25061,7 @@ async function saveUser(id) {
             buildSidebar();
             showBottomNav();
             if (!canAccessPage(currentPage, currentUser)) {
-                await navigateTo('dashboard');
+                await navigateTo('staffmaster');
             }
         }
         closeModal(); renderUsers();
@@ -28627,7 +28613,7 @@ async function cpPlaceOrder() {
 // ---- ADMIN: CUSTOMER REQUESTS ----
 async function renderCustomerRequests() {
     if (!CUSTOMER_PORTAL_ENABLED) {
-        navigateTo('dashboard');
+        navigateTo('staffmaster');
         return;
     }
     const { data: regs, error } = await supabaseClient.from('customer_registrations').select('*').order('submitted_at', { ascending: false });

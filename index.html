@@ -63,7 +63,7 @@
     <!-- Update Available Banner -->
     <div id="update-banner" style="display:none;position:fixed;top:0;left:0;right:0;z-index:99999;background:#f97316;color:#fff;padding:12px 16px;align-items:center;justify-content:space-between;gap:12px;font-family:'Inter',sans-serif;box-shadow:0 2px 8px rgba(0,0,0,0.25)">
         <div style="display:flex;align-items:center;gap:10px">
-            <span style="font-size:1.3rem">🚀</span>
+            <span style="font-size:1.3rem"></span>
             <div>
                 <div style="font-weight:700;font-size:0.9rem">v182 is ready!</div>
                 <div style="font-size:0.75rem;opacity:0.9">Payroll fix: activity_logs column error resolved.</div>
@@ -132,11 +132,11 @@
                     <p style="display:none;font-size:0.78rem;color:var(--text-muted);margin-bottom:10px">Are you a customer?</p>
                     <button onclick="showCustomerPortal()" class="btn btn-outline btn-block"
                         style="display:none;border-color:var(--accent);color:var(--accent)">
-                        ðŸ›ï¸ Customer Portal
+                        ðŸ› ï¸  Customer Portal
                     </button>
                     <button onclick="forceHardRefresh()" class="btn btn-outline btn-block"
                         style="border-style:dashed;margin-top:16px;color:var(--text-muted);font-size:0.72rem;opacity:0.8">
-                        🔄 Force Restart / Update App
+                        Force Restart / Update App
                     </button>
                 </div>
             </div>
@@ -157,58 +157,7 @@
                 <button id="sidebar-close" class="sidebar-close">&times;</button>
             </div>
             <nav class="sidebar-nav">
-                <a href="#" class="nav-item active" data-page="dashboard">
-                    <span class="nav-icon material-symbols-outlined">bar_chart</span><span class="nav-label">Dashboard</span>
-                </a>
-                <!-- <a href="#" class="nav-item" data-page="parties">
-                    <span class="nav-icon material-symbols-outlined">group</span><span class="nav-label">Parties</span>
-                </a> -->
-                <!-- <a href="#" class="nav-item" data-page="inventory">
-                    <span class="nav-icon material-symbols-outlined">inventory_2</span><span class="nav-label">Inventory</span><span
-                        id="nav-badge-inventory"
-                        style="display:none;margin-left:auto;background:#ef4444;color:#fff;font-size:0.65rem;font-weight:700;padding:1px 6px;border-radius:10px;line-height:1.6"></span>
-                </a>
-                <a href="#" class="nav-item" data-page="inventorysetup">
-                    <span class="nav-icon material-symbols-outlined">settings</span><span class="nav-label">Inventory Setup</span>
-                </a>
-                <a href="#" class="nav-item" data-page="catalog">
-                    <span class="nav-icon material-symbols-outlined">local_mall</span><span class="nav-label">Item Catalog</span>
-                </a>
-                <a href="#" class="nav-item" data-page="salesorders">
-                    <span class="nav-icon material-symbols-outlined">receipt_long</span><span class="nav-label">Sales Orders</span>
-                </a>
-                <a href="#" class="nav-item" data-page="purchaseorders">
-                    <span class="nav-icon material-symbols-outlined">shopping_cart</span><span class="nav-label">Purchase Orders</span>
-                </a>
-                <a href="#" class="nav-item" data-page="invoices">
-                    <span class="nav-icon material-symbols-outlined">request_quote</span><span class="nav-label">Invoices</span>
-                </a>
-                <a href="#" class="nav-item" data-page="payments">
-                    <span class="nav-icon material-symbols-outlined">payments</span><span class="nav-label">Payments</span>
-                </a> -->
-                <a href="#" class="nav-item" data-page="expenses">
-                    <span class="nav-icon material-symbols-outlined">account_balance_wallet</span><span class="nav-label">Expenses</span>
-                </a>
-                <!-- <a href="#" class="nav-item" data-page="packing">
-                    <span class="nav-icon material-symbols-outlined">assignment</span><span class="nav-label">Packing</span>
-                </a>
-                <a href="#" class="nav-item" data-page="delivery">
-                    <span class="nav-icon material-symbols-outlined">local_shipping</span><span class="nav-label">Delivery</span>
-                </a>
-                <a href="#" class="nav-item" data-page="reports">
-                    <span class="nav-icon material-symbols-outlined">trending_up</span><span class="nav-label">Reports</span>
-                </a>
-                <div class="nav-divider"></div>
-                <a href="#" class="nav-item" data-page="packers">
-                    <span class="nav-icon material-symbols-outlined">engineering</span><span class="nav-label">Packers Master</span>
-                </a>
-                <a href="#" class="nav-item" data-page="deliverypersons">
-                    <span class="nav-icon material-symbols-outlined">delivery_dining</span><span class="nav-label">Delivery Persons</span>
-                </a>
-                <a href="#" class="nav-item" data-page="customerrequests" style="display:none">
-                    <span class="nav-icon material-symbols-outlined">local_mall</span><span class="nav-label">Customer Requests</span>
-                </a> -->
-                <a href="#" class="nav-item" data-page="staffmaster">
+                <a href="#" class="nav-item active" data-page="staffmaster">
                     <span class="nav-icon material-symbols-outlined">person</span><span class="nav-label">Staff Master</span>
                 </a>
                 <a href="#" class="nav-item" data-page="attendance">
@@ -217,15 +166,10 @@
                 <a href="#" class="nav-item" data-page="hrpayroll">
                     <span class="nav-icon material-symbols-outlined">payments</span><span class="nav-label">HR & Payroll</span>
                 </a>
-                <!-- <a href="#" class="nav-item" data-page="users">
+                <a href="#" class="nav-item" data-page="users">
                     <span class="nav-icon material-symbols-outlined">admin_panel_settings</span><span class="nav-label">Users & Roles</span>
                 </a>
-                <a href="#" class="nav-item" data-page="setup">
-                    <span class="nav-icon material-symbols-outlined">display_settings</span><span class="nav-label">Company Setup</span>
-                </a>
-                <a href="#" class="nav-item" data-page="noseries">
-                    <span class="nav-icon material-symbols-outlined">format_list_numbered</span><span class="nav-label">No. Series Setup</span>
-                </a> -->
+                <div class="nav-divider"></div>
                 <a href="#" class="nav-item" onclick="forceHardRefresh()">
                     <span class="nav-icon material-symbols-outlined">refresh</span><span class="nav-label">Hard Refresh</span>
                 </a>
@@ -273,17 +217,17 @@
 
     <!-- Bottom Navigation Bar (mobile only) -->
     <nav id="bottom-nav" class="bottom-nav hidden">
-        <a class="bn-item active" data-page="dashboard" onclick="navigateTo('dashboard')">
-            <span class="bn-icon material-symbols-outlined">bar_chart</span><span class="bn-label">Home</span>
-        </a>
-        <a class="bn-item" data-page="staffmaster" onclick="navigateTo('staffmaster')">
+        <a class="bn-item active" data-page="staffmaster" onclick="navigateTo('staffmaster')">
             <span class="bn-icon material-symbols-outlined">person</span><span class="bn-label">Staff</span>
         </a>
         <a class="bn-item" data-page="attendance" onclick="navigateTo('attendance')">
             <span class="bn-icon material-symbols-outlined">calendar_month</span><span class="bn-label">Attendance</span>
         </a>
-        <a class="bn-item" data-page="expenses" onclick="navigateTo('expenses')">
-            <span class="bn-icon material-symbols-outlined">account_balance_wallet</span><span class="bn-label">Expenses</span>
+        <a class="bn-item" data-page="hrpayroll" onclick="navigateTo('hrpayroll')">
+            <span class="bn-icon material-symbols-outlined">payments</span><span class="bn-label">Payroll</span>
+        </a>
+        <a class="bn-item" data-page="users" onclick="navigateTo('users')">
+            <span class="bn-icon material-symbols-outlined">admin_panel_settings</span><span class="bn-label">Users</span>
         </a>
         <a class="bn-item" id="bn-more-btn" onclick="toggleMoreSheet()">
             <span class="bn-icon material-symbols-outlined">menu</span><span class="bn-label">More</span>
