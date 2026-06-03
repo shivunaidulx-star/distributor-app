@@ -29308,6 +29308,33 @@ async function renderHRPayroll() {
     const allAdvRecs = advRes.data || [];
     const salRecs = salRes.data || [];
 
+    const salRecs = salRes.data || [];
+
+    // Advance filtering and sorting state
+    window._advSort = window._advSort || 'date_desc';
+    window._advStaffFilter = window._advStaffFilter || '';
+    window._advStatusFilter = window._advStatusFilter || '';
+
+    let displayAdvRecs = [...allAdvRecs];
+    if (window._advStaffFilter) {
+        displayAdvRecs = displayAdvRecs.filter(a => String(a.staff_id) === String(window._advStaffFilter));
+    }
+    if (window._advStatusFilter) {
+        displayAdvRecs = displayAdvRecs.filter(a => {
+            const bal = Math.max(0, (a.amount || 0) - (a.deducted || 0));
+            if (window._advStatusFilter === 'cleared') return bal <= 0;
+            if (window._advStatusFilter === 'pending') return bal > 0;
+            return true;
+        });
+    }
+    displayAdvRecs.sort((a, b) => {
+        if (window._advSort === 'date_asc') return new Date(a.date) - new Date(b.date);
+        if (window._advSort === 'date_desc') return new Date(b.date) - new Date(a.date);
+        if (window._advSort === 'amt_desc') return (b.amount || 0) - (a.amount || 0);
+        if (window._advSort === 'amt_asc') return (a.amount || 0) - (b.amount || 0);
+        return 0;
+    });
+
     // Build per-staff summary
     const rows = staff.map(s => {
         const myAtt = attRecs.filter(r => r.staff_id === s.id);
@@ -29406,9 +29433,28 @@ async function renderHRPayroll() {
         </div>`).join('') : '<div class="empty-state"><p>No active staff</p></div>'}
     </div>
 
-    <h4 style="margin-bottom:10px;font-size:0.9rem">Advance Records</h4>
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:8px">
+        <h4 style="margin:0;font-size:0.9rem">Advance Records</h4>
+        <div style="display:flex; gap:6px; flex:1; justify-content:flex-end">
+            <select class="form-control" style="width:100px;padding:4px;font-size:0.75rem" onchange="window._advStaffFilter=this.value;renderHRPayroll()">
+                <option value="">All Staff</option>
+                ${staff.map(s => `<option value="${s.id}" ${window._advStaffFilter === String(s.id) ? 'selected' : ''}>${escapeHtml(s.name)}</option>`).join('')}
+            </select>
+            <select class="form-control" style="width:80px;padding:4px;font-size:0.75rem" onchange="window._advStatusFilter=this.value;renderHRPayroll()">
+                <option value="">All Status</option>
+                <option value="pending" ${window._advStatusFilter === 'pending' ? 'selected' : ''}>Pending</option>
+                <option value="cleared" ${window._advStatusFilter === 'cleared' ? 'selected' : ''}>Cleared</option>
+            </select>
+            <select class="form-control" style="width:90px;padding:4px;font-size:0.75rem" onchange="window._advSort=this.value;renderHRPayroll()">
+                <option value="date_desc" ${window._advSort === 'date_desc' ? 'selected' : ''}>Newest First</option>
+                <option value="date_asc" ${window._advSort === 'date_asc' ? 'selected' : ''}>Oldest First</option>
+                <option value="amt_desc" ${window._advSort === 'amt_desc' ? 'selected' : ''}>Amount (High)</option>
+                <option value="amt_asc" ${window._advSort === 'amt_asc' ? 'selected' : ''}>Amount (Low)</option>
+            </select>
+        </div>
+    </div>
     <div style="margin-bottom:20px">
-        ${allAdvRecs.length ? allAdvRecs.map(a => {
+        ${displayAdvRecs.length ? displayAdvRecs.map(a => {
                 const bal = Math.max(0, (a.amount || 0) - (a.deducted || 0));
                 const statusColor = bal === 0 ? '#22c55e' : bal < (a.amount || 0) ? '#f59e0b' : '#ef4444';
                 return `<div class="card" style="margin-bottom:8px;padding:12px 14px;display:flex;align-items:center;gap:10px">
@@ -29460,12 +29506,31 @@ async function renderHRPayroll() {
     </table></div>
     </div></div>
 
-    <h4 style="margin-bottom:12px;font-size:0.95rem">All Advance Records</h4>
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px">
+        <h4 style="margin:0;font-size:0.95rem">All Advance Records</h4>
+        <div style="display:flex; gap:8px">
+            <select class="form-control" style="width:150px;padding:6px;font-size:0.85rem" onchange="window._advStaffFilter=this.value;renderHRPayroll()">
+                <option value="">All Staff</option>
+                ${staff.map(s => `<option value="${s.id}" ${window._advStaffFilter === String(s.id) ? 'selected' : ''}>${escapeHtml(s.name)}</option>`).join('')}
+            </select>
+            <select class="form-control" style="width:110px;padding:6px;font-size:0.85rem" onchange="window._advStatusFilter=this.value;renderHRPayroll()">
+                <option value="">All Status</option>
+                <option value="pending" ${window._advStatusFilter === 'pending' ? 'selected' : ''}>Pending</option>
+                <option value="cleared" ${window._advStatusFilter === 'cleared' ? 'selected' : ''}>Cleared</option>
+            </select>
+            <select class="form-control" style="width:140px;padding:6px;font-size:0.85rem" onchange="window._advSort=this.value;renderHRPayroll()">
+                <option value="date_desc" ${window._advSort === 'date_desc' ? 'selected' : ''}>Newest First</option>
+                <option value="date_asc" ${window._advSort === 'date_asc' ? 'selected' : ''}>Oldest First</option>
+                <option value="amt_desc" ${window._advSort === 'amt_desc' ? 'selected' : ''}>Amount (High)</option>
+                <option value="amt_asc" ${window._advSort === 'amt_asc' ? 'selected' : ''}>Amount (Low)</option>
+            </select>
+        </div>
+    </div>
     <div class="card"><div class="card-body">
     <div class="table-wrapper"><table class="data-table">
         <thead><tr><th>Staff</th><th>Date</th><th style="text-align:right">Given</th><th style="text-align:right">Deducted</th><th style="text-align:right">Balance</th><th>Notes</th><th>Action</th></tr></thead>
         <tbody>
-        ${allAdvRecs.length ? allAdvRecs.map(a => {
+        ${displayAdvRecs.length ? displayAdvRecs.map(a => {
                     const bal = Math.max(0, (a.amount || 0) - (a.deducted || 0));
                     const statusColor = bal === 0 ? '#22c55e' : bal < (a.amount || 0) ? '#f59e0b' : '#ef4444';
                     return `<tr>
