@@ -20335,8 +20335,9 @@ async function adminMarkCashReceived(deliveryId) {
     showToast(`Cash received confirmed by ${adminName}`, 'success');
     try {
         await supabaseClient.from('activity_logs').insert({
+            id: 'log_' + Date.now() + '_' + Math.random().toString(36).slice(2,10),
             action: 'COD_CASH_RECEIVED',
-            details: `Delivery ${deliveryId} — cash received confirmed by ${adminName}`,
+            notes: `Delivery ${deliveryId} — cash received confirmed by ${adminName}`,
             user_name: currentUser ? currentUser.name : 'Unknown',
             created_at: new Date().toISOString()
         });
@@ -20658,8 +20659,9 @@ async function confirmMarkDelivered(id) {
         const partyRef = d ? d.partyName : '';
         try {
             await supabaseClient.from('activity_logs').insert({
+                id: 'log_' + Date.now() + '_' + Math.random().toString(36).slice(2,10),
                 action: 'COD_DELIVERY_OVERRIDE',
-                details: `${orderRef} (${partyRef}) delivered WITHOUT payment — approved by ${adminApprovedBy}. Delivered by ${currentUser ? currentUser.name : 'Unknown'}.`,
+                notes: `${orderRef} (${partyRef}) delivered WITHOUT payment — approved by ${adminApprovedBy}. Delivered by ${currentUser ? currentUser.name : 'Unknown'}.`,
                 user_name: currentUser ? currentUser.name : 'Unknown',
                 created_at: new Date().toISOString()
             });
