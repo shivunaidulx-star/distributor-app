@@ -1447,13 +1447,13 @@ const LEGACY_EXTRA_PERMISSION_MAP = {
     expenses: ['page.expenses']
 };
 const LEGACY_EDIT_PERMISSION_KEYS = ['action.records.edit', 'action.records.delete'];
-const ALL_PAGE_PERMISSION_KEYS = [...new Set(Object.values(PAGE_PERMISSION_MAP))];
+const ALL_PAGE_PERMISSION_KEYS = [...new Set(Object.values(PAGE_PERMISSION_MAP))].filter(k => k !== 'page.dashboard');
 const ROLE_PERMISSION_TEMPLATES = {
     Admin: [...ALL_PAGE_PERMISSION_KEYS, 'action.records.edit', 'action.records.delete', 'action.partyLedger.view', 'action.docs.backdate', 'action.users.manage', 'action.setup.manage', 'action.attendance.mark', 'action.payroll.process'],
     Manager: [...ALL_PAGE_PERMISSION_KEYS.filter(key => !['page.users', 'page.setup', 'page.noseries', 'page.staffmaster', 'page.attendance', 'page.hrpayroll'].includes(key)), 'action.records.edit', 'action.records.delete', 'action.partyLedger.view', 'action.docs.backdate'],
-    Salesman: ['page.dashboard', 'page.parties', 'page.inventory', 'page.catalog', 'page.salesorders', 'page.payments'],
-    Delivery: ['page.dashboard', 'page.delivery'],
-    Packing: ['page.dashboard', 'page.packing']
+    Salesman: ['page.parties', 'page.inventory', 'page.catalog', 'page.salesorders', 'page.payments'],
+    Delivery: ['page.delivery'],
+    Packing: ['page.packing']
 };
 const ROLE_PAGES = Object.fromEntries(Object.keys(ROLE_PERMISSION_TEMPLATES).map(role => [role, NAV_PAGE_KEYS.filter(page => (ROLE_PERMISSION_TEMPLATES[role] || []).includes(PAGE_PERMISSION_MAP[page]))]));
 
@@ -29306,8 +29306,6 @@ async function renderHRPayroll() {
     const staff = staffRes.data || [];
     const attRecs = attRes.data || [];
     const allAdvRecs = advRes.data || [];
-    const salRecs = salRes.data || [];
-
     const salRecs = salRes.data || [];
 
     // Advance filtering and sorting state
